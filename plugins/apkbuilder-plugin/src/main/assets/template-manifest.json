@@ -1,0 +1,12 @@
+{
+  "manifestVersion": 1,
+  "templateVersion": "1.0.2-265",
+  "templateBytes": 88335762,
+  "nodeRuntimeManifest": "assets/source-engine-upgrade/node24/arm64-v8a/runtime.json",
+  "nodeRuntimeHashes": {
+    "libajsnode24bridge.so": "d18673a2872eb744c73c40a4dd3165e30b2c73a4f96f6d1f654fdcb8a211bab6",
+    "libc++_shared.so": "4397241b4bd20a8e579bfb41d21107857e12985f6a01ca0c2a5f83380d1270b4",
+    "libnode.so": "d2165091a8360066bfb27ebfe381e3e509d38c7d0d4d778f9f44ece9345f7274"
+  },
+  "nodeRequiredFilesMissing": []
+}

@@ -32,6 +32,19 @@ public class Node24PackagingAssetsTest {
         assertFalse(Node24PackagingAssets.requiresRuntime(false, new JSONObject("{\"features\":{\"nodejs\":\"disabled\"}}")));
     }
 
+    /**
+     * 「只是开了 nodejs 特性位」与「明确是 Node 工程」要分开：前者运行资产不完整只告警
+     * （入口可能还是 Rhino/QuickJS），后者必须按打包错误处理（见
+     * {@code Node24TemplateConsistency.verifyWorkspace} 的 strict 参数）。
+     */
+    @Test public void distinguishesNodeProjectsFromFeatureFlags() throws Exception {
+        assertTrue(Node24PackagingAssets.isNodeProject(new JSONObject("{\"type\":\"node\"}")));
+        assertTrue(Node24PackagingAssets.isNodeProject(new JSONObject("{\"type\":\"nodejs\"}")));
+        assertFalse(Node24PackagingAssets.isNodeProject(new JSONObject("{\"features\":{\"nodejs\":\"enabled\"}}")));
+        assertFalse(Node24PackagingAssets.isNodeProject(new JSONObject("{}")));
+        assertFalse(Node24PackagingAssets.isNodeProject(null));
+    }
+
     private File host(boolean complete, boolean traversal) throws IOException {
         File file = tmp.newFile();
         try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(file))) {

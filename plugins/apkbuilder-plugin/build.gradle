@@ -69,12 +69,16 @@ android {
 }
 
 def templateApk = file('src/main/assets/template.apk')
+def templateManifest = file('src/main/assets/template-manifest.json')
 
 // 模板是打包的实际运行时：缺了或截断了，装机后只会表现为「打包失败」，所以在这里拦。
+// 同时核对模板里的 Node 运行资产与版本指纹（template-manifest.json）：模板有插件 /
+// 手动覆盖 / 宿主自带多条来路，版本会漂移（仓库里就同时存在两份不同 Node 运行时的模板）。
 tasks.register('verifyTemplateApk') {
     group = 'verification'
-    description = 'Require the runtime template before packaging the apkbuilder plugin.'
+    description = 'Require the runtime template and its Node runtime fingerprint before packaging the apkbuilder plugin.'
     inputs.file(templateApk)
+    inputs.file(templateManifest)
     doLast {
         if (!templateApk.isFile()) {
             throw new GradleException('Runtime template is missing. Run ' +
@@ -84,6 +88,12 @@ tasks.register('verifyTemplateApk') {
             throw new GradleException('Runtime template looks truncated: ' + templateApk +
                     ' (' + templateApk.length() + ' bytes)')
         }
+        // 复用打包端同一份核对逻辑（:app 的 JVM 单测也覆盖它）。这里只解析 zip 条目 +
+        // SHA-256，不重打包模板，所以不会改变 noCompress/openFd 依赖的字节布局。
+        def consistency = new GroovyClassLoader().parseClass(
+                rootProject.file('apps/app/src/main/java/com/jdkshen/aijspro/autojs/build/Node24TemplateManifest.java'))
+        consistency.verifyTemplate(templateApk)
+        consistency.verifyManifest(templateApk, templateManifest)
     }
 }
 

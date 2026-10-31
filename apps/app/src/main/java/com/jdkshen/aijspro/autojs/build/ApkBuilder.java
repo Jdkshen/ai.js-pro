@@ -129,6 +129,10 @@ public class ApkBuilder {
     // 密钥硬化用的字段：随机盐与打包时的签名证书指纹（两者都写进产物 project.json）。
     private String mScriptSalt;
     private String mSignatureFingerprint;
+    // 本次入口脚本实际写出的载荷形态（0/1/2 级 × 引擎，见 NodeScriptProtection），
+    // 主要给日志与单测用：等级 2 对 Node 不是字节码，必须能被观察出来。
+    private NodeScriptProtection.PayloadKind mPayloadKind =
+            NodeScriptProtection.PayloadKind.PLAIN_TEXT;
 
     public ApkBuilder(InputStream apkInputStream, File outApkFile, String workspacePath) {
         mOutApkFile = outApkFile;
@@ -473,6 +477,9 @@ public class ApkBuilder {
         copyProjectToWorkspace();
         copySplashIcon();
         removeDisabledFeatures();
+        // 等级 × 引擎的实际载荷形态记一条：等级 2 对 Node 不是字节码，日志里必须能看出来。
+        Log.i("C-PKG", "script protection level=" + mEncryptLevel
+                + " storage=" + mScriptStorage + " payload=" + mPayloadKind);
         return this;
     }
 
@@ -550,6 +557,10 @@ public class ApkBuilder {
     /**
      * 按当前等级写入入口脚本：0 = 明文拷贝，1 = 加密，≥ 2 = 先编译再加密。
      *
+     * <p>Node 没有可搬运的字节码（见 {@link NodeScriptPayload} 的说明），等级 2 对 Node
+     * 产出的是「自解包加载器」——同样源码不可读、同样 AES 加密，但不是 V8 字节码；
+     * 这里把实际做法记进日志，避免用户以为拿到了和 Rhino 一样的东西。
+     *
      * <p>选了 {@code scriptStorage=native} 时载荷不写成文件，而是追加到工作区里各个 ABI 的
      * {@code libaijscrypto.so} 尾部（产物里一个脚本文件都没有，见 {@link EmbeddedScriptFooter}）。
      */
@@ -562,13 +573,33 @@ public class ApkBuilder {
                 : projectConfig.getEngine(mMainScriptFile);
         entry.setPreferredEngine(preferredEngine);
         boolean nodeEntry = JavaScriptSource.ENGINE_NODE24.equals(entry.getEngineName());
-        if (nodeEntry && ScriptProtection.shouldCompile(mEncryptLevel)) {
-            throw new IOException("Node.js 暂不支持编译加密，请选择明文或普通加密");
+        if (NodeScriptProtection.mustRejectCompile(entry.getEngineName())
+                && ScriptProtection.shouldCompile(mEncryptLevel)) {
+            // 目前没有任何引擎会走到这里（Node 用自解包加载器兜住）；留着是为了「既不支持
+            // 编译产物、又不允许降级」的组合有单一拒绝点，而不是静默产出跑不起来的包。
+            throw new IOException(ScriptProtection.describeChoice(
+                    ScriptProtection.choiceOf(mEncryptLevel, mScriptStorage))
+                    + "：该引擎没有可搬运的编译产物，请改用普通加密或明文");
         }
+        mPayloadKind = NodeScriptProtection.payloadKindOf(
+                mEncryptLevel, nodeEntry, isQuickJsEngine());
         JSONObject project = projectFile.isFile()
                 ? new JSONObject(new String(PFiles.readBytes(projectFile.getPath()), "UTF-8")) : null;
         if (Node24PackagingAssets.requiresRuntime(nodeEntry, project)) {
-            Node24PackagingAssets.copyFromHost(hostApkFile(GlobalAppContext.get()), new File(mWorkspacePath));
+            File hostApk = hostApkFile(GlobalAppContext.get());
+            File workspace = new File(mWorkspacePath);
+            // 先记下模板自带的 Node 运行时哈希，再让宿主的运行资产覆盖它——否则漂移就看不出来了。
+            java.util.Map<String, String> templateRuntime =
+                    Node24TemplateConsistency.readWorkspaceRuntimeHashes(workspace);
+            Node24PackagingAssets.copyFromHost(hostApk, workspace);
+            // 模板与宿主可能不是同一版运行时（旧外置模板 / 手动放到 /sdcard 的模板）。
+            // Node 的运行库与 runtime.json 在这里对账：内容对不上就带原因失败，
+            // 只是版本漂移（已被宿主覆盖）就记日志。
+            // 入口确实是 Node 脚本（或工程 type=node）时，运行资产不完整 = 产物必崩，直接失败；
+            // 只开了 nodejs 特性位的工程按旧行为只告警，不把本来能出的包打死。
+            boolean strictRuntime = nodeEntry || Node24PackagingAssets.isNodeProject(project);
+            Node24TemplateConsistency.verifyWorkspace(hostApk, workspace, templateRuntime,
+                    strictRuntime);
         }
         File target = new File(mWorkspacePath, "assets/project/" + mMainScriptFile);
         if (!ScriptProtection.shouldEncrypt(mEncryptLevel)) {
@@ -585,8 +616,17 @@ public class ApkBuilder {
                 .getExecutionMode() & 0xFF);
         byte[] payload;
         short flags;
-        if (ScriptProtection.shouldCompile(mEncryptLevel)) {
-            if (isQuickJsEngine()) {
+        if (mPayloadKind == NodeScriptProtection.PayloadKind.RHINO_CLASS
+                || mPayloadKind == NodeScriptProtection.PayloadKind.QUICKJS_BYTECODE
+                || mPayloadKind == NodeScriptProtection.PayloadKind.SOURCE_FREE_TEXT) {
+            if (nodeEntry) {
+                // Node：没有可搬运的 V8 字节码，等级 2 = 自解包加载器（源码不可读，仍走 AES）。
+                // 载荷类型保持 TEXT，运行端解密后按普通源码执行，不引入新的引擎常量依赖。
+                payload = NodeScriptPayload.wrap(sourceText, source.getName()).getBytes("UTF-8");
+                flags = modeFlags;
+                Log.i("C-PKG", "node level=2 payload=source-free-wrapper bytes=" + payload.length
+                        + " (非 V8 字节码，见 NodeScriptPayload 说明)");
+            } else if (isQuickJsEngine()) {
                 // QuickJS 工程：编译成 QuickJS 字节码（载荷类型 2）。
                 payload = QuickJsBytecodeCompiler.compile(sourceText, source.getName());
                 flags = EncryptedScriptFileHeader.INSTANCE.flagsWithPayloadType(

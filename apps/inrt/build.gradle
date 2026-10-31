@@ -60,20 +60,46 @@ android {
     }
 }
 
+/**
+ * 把 :inrt 的 arm64 未签名产物写成打包插件用的模板，并同步它的「版本指纹」。
+ *
+ * <p>为什么要指纹：模板有多条来路（插件 /sdcard 手动覆盖 / 宿主自带），彼此版本会漂移。
+ * 仓库里就同时存在两份不同 Node 运行时的模板（见 Node24TemplateConsistency 的说明），
+ * 而 :inrt 的 versionCode 只跟主程序版本走（versions.appVersionCode - 200），
+ * 内容变了版本号也不一定变，所以不能靠 versionCode 判断模板是不是同一版。
+ *
+ * <p>这里生成 template-manifest.json（记录模板里 Node 运行资产的 SHA-256），
+ * 同时校验模板内容与清单一致；打包插件构建时会再核对一次，选到旧模板能立刻报出来。
+ */
 task buildApkPlugin {
     dependsOn 'packageRelease'
     inputs.file('build/outputs/apk/release/inrt-arm64-v8a-release-unsigned.apk')
     outputs.file(rootProject.file('plugins/apkbuilder-plugin/src/main/assets/template.apk'))
+    outputs.file(rootProject.file('plugins/apkbuilder-plugin/src/main/assets/template-manifest.json'))
     doLast {
         // 运行时模板现在随「APK 打包插件」分发（宿主 APK 不再带这 43MB）：
         // 打包插件模块的 assets/template.apk 就是这份 arm64 未签名产物，
         // ApkBuilder 会重写它再签名。改 :inrt 后编译插件即可刷新模板。
+        def assetsDir = rootProject.file('plugins/apkbuilder-plugin/src/main/assets')
+        def templateApk = new File(assetsDir, 'template.apk')
+        def manifestFile = new File(assetsDir, 'template-manifest.json')
         copy {
             from file('build/outputs/apk/release')
-            into rootProject.file('plugins/apkbuilder-plugin/src/main/assets')
+            into assetsDir
             include 'inrt-arm64-v8a-release-unsigned.apk'
             rename 'inrt-arm64-v8a-release-unsigned.apk', 'template.apk'
         }
+        // 用 Node24TemplateManifest（纯 JDK 子集）：GroovyClassLoader 按 Groovy 语法解析源码，
+        // 带 org.json/android.util.Log 的 App 侧实现编译不过。
+        def consistency = new GroovyClassLoader().parseClass(
+                rootProject.file('apps/app/src/main/java/com/jdkshen/aijspro/autojs/build/Node24TemplateManifest.java'))
+        consistency.verifyTemplate(templateApk)
+        consistency.writeManifest(templateApk,
+                project.android.defaultConfig.versionName + '-' + project.android.defaultConfig.versionCode,
+                manifestFile)
+        consistency.verifyManifest(templateApk, manifestFile)
+        logger.lifecycle('buildApkPlugin: template.apk ' + templateApk.length()
+                + ' bytes, manifest ' + manifestFile.length() + ' bytes, node runtime plan recorded')
     }
 }
 

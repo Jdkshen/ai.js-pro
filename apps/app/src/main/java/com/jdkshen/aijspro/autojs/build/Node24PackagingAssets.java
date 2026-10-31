@@ -21,15 +21,26 @@ final class Node24PackagingAssets {
     private Node24PackagingAssets() {}
 
     static boolean requiresRuntime(boolean nodeEntry, JSONObject project) {
-        if (nodeEntry) return true;
+        if (nodeEntry || isNodeProject(project)) return true;
         if (project == null) return false;
-        String type = project.optString("type", "");
-        if ("node".equalsIgnoreCase(type) || "nodejs".equalsIgnoreCase(type)) return true;
         JSONObject features = project.optJSONObject("features");
         if (features == null) return false;
         Object value = features.opt("nodejs");
         return Boolean.TRUE.equals(value) || "enabled".equalsIgnoreCase(String.valueOf(value))
                 || "auto".equalsIgnoreCase(String.valueOf(value));
+    }
+
+    /**
+     * 工程是否明确是 Node 工程（{@code type=node/nodejs}）。
+     *
+     * <p>与 {@link #requiresRuntime} 的区别：后者还包含「只是开了 nodejs 特性位」的工程。
+     * 只有本方法为真（或入口脚本本身就是 Node）时，{@code ApkBuilder} 才会把 Node 运行
+     * 资产不完整当成打包错误；只开特性位的工程按旧行为只告警，避免把本来能出的包打死。
+     */
+    static boolean isNodeProject(JSONObject project) {
+        if (project == null) return false;
+        String type = project.optString("type", "");
+        return "node".equalsIgnoreCase(type) || "nodejs".equalsIgnoreCase(type);
     }
 
     static int copyFromHost(File apk, File workspace) throws IOException {
