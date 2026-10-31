@@ -64,6 +64,74 @@
         ui.performClick = function (view) { return !!support().performClick(nativeView(view)); };
         return ui;
     }
-    if (typeof root.__aiRegisterCallback === 'function' && root.ui) install(root.ui, root);
-    else if (typeof module !== 'undefined' && module.exports) module.exports = install;
+    /**
+     * task-248：QuickJS 公开 ui.inflate(xml, parent, attachToParent)。
+     *
+     * QuickJS 的 ui.layout/findView/ui.run 由 native bootstrap 提供，之前没有 ui.inflate；
+     * 这里通过 QuickJsHostBridge.forEngine(id)（与 QuickJsApiExtensions 同一 Java.type 模式）
+     * 调到宿主 inflater，真正创建 View，语义与 Rhino 的 __ui__.js / Node 的 ui.inflate 对齐：
+     *   - xml 支持字符串，以及带 toXMLString() 的 XML 对象；
+     *   - parent 支持 ui.<id> 控件代理（取 __id 交给宿主解析）、Java View/ViewGroup 或 null；
+     *   - attachToParent 为真且 parent 是 ViewGroup 时才 addView，默认 false。
+     * 只在 QuickJS 引导路径安装：Rhino 侧 __ui__.js 已有同名实现，不能覆盖。
+     */
+    function installInflate(ui, scope) {
+        function hostBridge() {
+            var Java = scope.Java;
+            if (!Java || typeof Java.type !== 'function') {
+                throw new Error('ui.inflate 需要 QuickJS Java 桥（当前宿主不可用）');
+            }
+            var id = 0;
+            try {
+                id = Number(scope.engines.myEngine().id);
+            } catch (ignored) {
+            }
+            return Java.type('com.stardust.autojs.engine.QuickJsHostBridge').forEngine(id);
+        }
+        ui.inflate = function (xml, parent, attachToParent) {
+            if (xml === null || xml === undefined) {
+                throw new TypeError('ui.inflate 需要 XML 布局字符串');
+            }
+            if (typeof xml === 'object' && typeof xml.toXMLString === 'function') {
+                xml = xml.toXMLString();
+            }
+            if (typeof xml !== 'string') {
+                throw new TypeError('ui.inflate 第一个参数必须是 XML 字符串或 XML 对象');
+            }
+            if (xml.replace(/\s/g, '').length === 0) {
+                throw new TypeError('ui.inflate 的 XML 布局不能为空');
+            }
+            var hostParent = null;
+            if (parent !== null && parent !== undefined) {
+                if (typeof parent === 'string') {
+                    hostParent = parent;
+                } else if (typeof parent.__id === 'string') {
+                    hostParent = parent.__id;   // QuickJS 控件代理：宿主按 id 找回原生 View
+                } else if (parent.__floatyView === true && parent.javaView) {
+                    hostParent = parent.javaView;
+                } else {
+                    hostParent = parent;        // Java View/ViewGroup 代理，按引用传给宿主
+                }
+            }
+            try {
+                return hostBridge().uiInflateView(xml, hostParent, !!attachToParent);
+            } catch (error) {
+                var message = error && error.message ? error.message : String(error);
+                if (message.indexOf('ui.inflate') >= 0) {
+                    throw error;
+                }
+                var wrapped = new Error('ui.inflate 失败：' + message);
+                wrapped.cause = error;
+                throw wrapped;
+            }
+        };
+        return ui;
+    }
+
+    if (typeof root.__aiRegisterCallback === 'function' && root.ui) {
+        install(root.ui, root);
+        installInflate(root.ui, root);
+    } else if (typeof module !== 'undefined' && module.exports) {
+        module.exports = install;
+    }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

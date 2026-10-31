@@ -120,6 +120,13 @@ final class QuickJsHostBridge implements AutoCloseable,
     private final java.util.concurrent.atomic.AtomicBoolean mCloseStarted = new java.util.concurrent.atomic.AtomicBoolean();
     /** 本引擎在进程内的 id（ScriptEngine.getId()），浮窗注册表按 owner 清理用。 */
     private volatile int mOwnerEngineId;
+    /**
+     * 进程内活动 bridge 注册表：QuickJS 的 asset 层 API（{@code ui-accessibility.js} 里的
+     * {@code ui.inflate} 等）通过 {@code Java.type(...QuickJsHostBridge).forEngine(id)} 取回
+     * 当前引擎的宿主桥。沿用 {@code QuickJsApiExtensions.forEngine} 的模式，
+     * 只加 Java 方法、不需要重新编译 native。
+     */
+    private static final Map<Integer, QuickJsHostBridge> sActiveBridges = new ConcurrentHashMap<>();
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
     private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
     /** QuickJS 的 `$ocr.create()` 会话（Rhino 的 __ocr__.js 也是「每次调用一个新对象」）。 */
@@ -296,7 +303,23 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     /** engine.init() 里注入：bridge 的生命周期早于/独立于 ScriptEngine.setId。 */
     void setOwnerEngineId(int engineId) {
+        int previous = mOwnerEngineId;
         mOwnerEngineId = engineId;
+        if (engineId > 0) {
+            sActiveBridges.put(engineId, this);
+            if (previous > 0 && previous != engineId) {
+                sActiveBridges.remove(previous, this);
+            }
+        }
+    }
+
+    /** 按引擎 id 取回活动 bridge（asset 层 API 入口；引擎已结束时不可用）。 */
+    public static QuickJsHostBridge forEngine(int engineId) {
+        QuickJsHostBridge bridge = sActiveBridges.get(engineId);
+        if (bridge == null) {
+            throw new IllegalStateException("脚本引擎已经结束");
+        }
+        return bridge;
     }
 
     /** 浮窗注册表 ownerTag：qjs-<native handle>（同一脚本的宿主/worker 可区分）。 */
@@ -6534,6 +6557,98 @@ final class QuickJsHostBridge implements AutoCloseable,
         }
     }
 
+    /**
+     * QuickJS 公开 {@code ui.inflate(xml, parent, attachToParent)} 的宿主实现：
+     * 与 Rhino 的 {@code __ui__.js} / Node 的 {@code ui.inflate} 对齐，真正 inflate 出 View，
+     * 但不像 {@link #uiInflate(String)} 那样把界面 show/attach 到内容视图。
+     *
+     * <p>parent 可以是控件 id 字符串（asset 层传 {@code ui.xxx.__id}）或 Java View/ViewGroup
+     * 引用（上一次 {@code ui.inflate} 返回的 View）；{@code attachToParent} 为真且确实有父容器时
+     * 才 addView，否则只按父容器生成 LayoutParams（Android LayoutInflater 的 attachToRoot 语义）。
+     */
+    public View uiInflateView(final String xml, final Object parent, final boolean attachToParent) {
+        if (xml == null || xml.trim().isEmpty()) {
+            throw new QuickJsException("ui.inflate 需要非空的 XML 布局字符串");
+        }
+        // 与 Rhino 的 __ui__.js 一致：有宿主 Activity 时用它，否则用 ScriptTheme 的 ContextThemeWrapper。
+        final Context context = mUiHostActivity != null
+                ? mUiHostActivity
+                : new android.view.ContextThemeWrapper(mRuntime.uiHandler.getContext(),
+                        com.stardust.autojs.R.style.ScriptTheme);
+        final View[] result = new View[1];
+        final Throwable[] failure = new Throwable[1];
+        runOnMainOrThrow(() -> {
+            try {
+                android.view.ViewGroup parentGroup = resolveInflateParent(parent);
+                result[0] = uiInflaterFor(context).inflate(xml, parentGroup, attachToParent);
+            } catch (Throwable error) {
+                failure[0] = error;
+            }
+        });
+        if (failure[0] != null) {
+            Log.w("QuickJsHostBridge", "ui.inflate failed", failure[0]);
+            String message = failure[0].getMessage();
+            if (message == null || message.isEmpty()) {
+                message = failure[0].getClass().getSimpleName();
+            }
+            throw new QuickJsException("ui.inflate 失败：" + message);
+        }
+        return result[0];
+    }
+
+    /**
+     * 解析 {@code ui.inflate} 的 parent：控件 id 字符串 → 当前界面根下的原生 View；Java 引用直接用。
+     * 不是 ViewGroup / 找不到时给出可读错误，而不是让 inflater 抛空指针。
+     */
+    private android.view.ViewGroup resolveInflateParent(Object parent) {
+        if (parent == null) {
+            return null;
+        }
+        View view;
+        if (parent instanceof View) {
+            view = (View) parent;
+        } else if (parent instanceof CharSequence) {
+            String id = parent.toString().trim();
+            if (id.isEmpty()) {
+                return null;
+            }
+            view = uiFind(id);
+            if (view == null) {
+                throw new IllegalStateException("找不到 parent 控件：" + id);
+            }
+        } else {
+            throw new IllegalArgumentException("parent 必须是控件 id、View/ViewGroup 或 null");
+        }
+        if (!(view instanceof android.view.ViewGroup)) {
+            throw new IllegalArgumentException("parent 必须是 ViewGroup：" + view.getClass().getName());
+        }
+        return (android.view.ViewGroup) view;
+    }
+
+    /** 主线程执行并等待；异常由调用方从 failure 里取（ui.inflate 的错误要让脚本看到，不能吞）。 */
+    private void runOnMainOrThrow(Runnable task) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            task.run();
+            return;
+        }
+        final CountDownLatch latch = new CountDownLatch(1);
+        mDialogHandler.post(() -> {
+            try {
+                task.run();
+            } finally {
+                latch.countDown();
+            }
+        });
+        try {
+            if (!latch.await(10, TimeUnit.SECONDS)) {
+                throw new QuickJsException("ui.inflate 超时（主线程 10 秒未完成）");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new QuickJsException("ui.inflate 被中断");
+        }
+    }
+
     /** 宿主 Activity 的脚本侧句柄（脚本里的 `activity` 全局）；没有宿主时返回空串。 */
     public String hostActivityRef() {
         android.app.Activity host = mUiHostActivity;
@@ -8127,6 +8242,9 @@ final class QuickJsHostBridge implements AutoCloseable,
     @Override
     public void close() {
         if (!mCloseStarted.compareAndSet(false, true)) return;
+        if (mOwnerEngineId > 0) {
+            sActiveBridges.remove(mOwnerEngineId, this);
+        }
         // 最先关 overlay 窗口：异常/结束路径（engine.destroy -> bridge.close）里这一步必须在
         // 其它清理之前，保证即使后面的清理抛异常，全屏窗口也不会残留在屏幕上（残留=用户卡死）。
         uiClose();
