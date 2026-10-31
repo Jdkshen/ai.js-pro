@@ -1105,14 +1105,34 @@
                 event = String(event);
                 if (name === 'off' || name === 'removeListener') {
                     extras.events.removeListener(event, handler);
+                    removeViewEventHandler(view, event, handler);
                     return view;
                 }
                 if (typeof handler !== 'function') throw new TypeError('View.on/once 需要函数');
                 bindViewEvent(view, extras, event);
                 const emitterMethod = name === 'addListener' ? 'on' : name;
                 extras.events[emitterMethod](event, handler);
+                // Activity/绑定路径拿到的是真实 Java View：bindNativeViewEvent 的原生
+                // 回调从 eventHandlersOf(view) 取回调（不是 extras.events），只进
+                // EventEmitter 会导致“注册成功但永不回调”（chess-auto 6.13 真机复现）。
+                addViewEventHandler(view, event, handler);
                 return view;
             };
+        }
+
+        function addViewEventHandler(view, event, handler) {
+            if (event === 'newListener' || event === 'removeListener') return;
+            const handlers = eventHandlersOf(view);
+            const list = handlers[event] || (handlers[event] = []);
+            if (list.indexOf(handler) < 0) list.push(handler);
+        }
+
+        function removeViewEventHandler(view, event, handler) {
+            const handlers = eventHandlersOf(view);
+            const list = handlers[event];
+            if (!Array.isArray(list)) return;
+            const index = list.indexOf(handler);
+            if (index >= 0) list.splice(index, 1);
         }
         // WebView 的 JS 门面与宿主 webId 一一对应；cleanup 时必须整体清掉，
         // 否则上一脚本的 page handler/console 监听会串到下一次运行。
