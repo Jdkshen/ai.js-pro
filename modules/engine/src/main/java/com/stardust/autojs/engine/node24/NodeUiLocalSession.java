@@ -33,7 +33,45 @@ import java.util.regex.Pattern;
 
 /** Real Views and Java callbacks share an existing Node pool process. */
 public final class NodeUiLocalSession {
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    /**
+     * 主线程 Handler 延迟创建（类加载不触碰 Android Looper，便于 JVM 纯逻辑单测）。
+     *
+     * <p>2.2 的根因之一是 Node 工作线程没有 Android Looper，宿主/脚本的 postDelayed 只有落在
+     * 真实主 Looper 上才会执行；这里统一提供 {@link #postDelayed} / {@link #mainHandler()}。
+     */
+    private static volatile Handler sMainHandler;
+    private static Handler main() {
+        Handler handler = sMainHandler;
+        if (handler == null) {
+            synchronized (STATE) {
+                handler = sMainHandler;
+                if (handler == null) {
+                    handler = new Handler(Looper.getMainLooper());
+                    sMainHandler = handler;
+                }
+            }
+        }
+        return handler;
+    }
+
+    /** 2.2：把延迟任务排到主线程 Looper（Node 工作线程没有 Looper，绝不能就地 post）。 */
+    public static boolean postDelayed(Runnable task, long delayMs) {
+        if (task == null) {
+            return false;
+        }
+        return main().postDelayed(task, Math.max(0L, delayMs));
+    }
+
+    public static void removeCallbacks(Runnable task) {
+        if (task != null) {
+            main().removeCallbacks(task);
+        }
+    }
+
+    /** 会话主线程 Handler（宿主 UI 延迟操作统一走这里）。 */
+    public static Handler mainHandler() {
+        return main();
+    }
     private static final Object STATE = new Object();
     private static volatile Pending pending;
     private static volatile Activity activity;
@@ -531,7 +569,7 @@ public final class NodeUiLocalSession {
     public static void setActivityCallbacks(ActivityCallbacks listener) {
         callbacks = listener;
         Activity current = activity;
-        if (current != null) MAIN.post(() -> { if (activity == current) current.invalidateOptionsMenu(); });
+        if (current != null) main().post(() -> { if (activity == current) current.invalidateOptionsMenu(); });
     }
     public static boolean createOptionsMenu(android.view.Menu menu) {
         ActivityCallbacks listener = callbacks;
@@ -637,7 +675,7 @@ public final class NodeUiLocalSession {
         final NodeWebView web = requireWebView(webId);
         final CountDownLatch done = new CountDownLatch(1);
         final String[] value = new String[]{"null"};
-        MAIN.post(new Runnable() {
+        main().post(new Runnable() {
             @Override
             public void run() {
                 web.evaluateWithResult(script, new ValueCallback<String>() {
@@ -675,7 +713,7 @@ public final class NodeUiLocalSession {
             // 会话已关闭：页面也已被销毁，丢弃迟到响应，不串下一脚本。
             return;
         }
-        MAIN.post(new Runnable() {
+        main().post(new Runnable() {
             @Override
             public void run() {
                 web.resolvePageRequest(requestId, ok, payloadJson);
@@ -685,7 +723,7 @@ public final class NodeUiLocalSession {
 
     public static void webSend(int webId, final String event, final String argsJson) {
         final NodeWebView web = requireWebView(webId);
-        MAIN.post(new Runnable() {
+        main().post(new Runnable() {
             @Override
             public void run() {
                 web.emitPageEvent(event, argsJson);
@@ -768,7 +806,7 @@ public final class NodeUiLocalSession {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             release.run();
         } else {
-            MAIN.post(release);
+            main().post(release);
         }
     }
 
@@ -778,7 +816,7 @@ public final class NodeUiLocalSession {
             task.run();
             return;
         }
-        MAIN.post(future);
+        main().post(future);
         try {
             future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.TimeoutException timeout) {
@@ -791,7 +829,7 @@ public final class NodeUiLocalSession {
             throw new IllegalStateException("等待 Node UI " + label + " 被中断");
         } finally {
             if (!future.isDone()) future.cancel(false);
-            MAIN.removeCallbacks(future);
+            main().removeCallbacks(future);
         }
     }
     public static void close() {
@@ -868,7 +906,7 @@ public final class NodeUiLocalSession {
                 if (!closing.isFinishing()) closing.finish();
             };
             if (Looper.myLooper() == Looper.getMainLooper()) release.run();
-            else MAIN.post(release);
+            else main().post(release);
         }
     }
 

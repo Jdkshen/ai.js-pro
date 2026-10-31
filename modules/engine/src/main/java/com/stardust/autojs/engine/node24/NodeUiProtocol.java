@@ -39,6 +39,57 @@ public final class NodeUiProtocol {
     public static final String EVENT_BACK_PRESSED = "back_pressed";
     public static final String EVENT_DESTROY = "destroy";
     public static final String EVENT_CLICK = "click";
+    /** task-254：通用 View 事件（宿主监听器写入现有 pollEvents 队列）。 */
+    public static final String EVENT_CHECK = "check";
+    public static final String EVENT_TEXT_CHANGE = "text_change";
+    public static final String EVENT_ITEM_SELECTED = "item_selected";
+
+    // ------------------------------------------------------------------
+    // task-254：真实 View 树 / 通用事件宿主协议（与 assets/node24/ui.js 一致）
+    //
+    // JS 侧统一走 uiRequestView(action, params)：
+    //   op:"uiRequestView" + action/params，或 op:<action> 直接携带参数。
+    // 视图命令仍复用 op:"viewCommand" + action（旧客户端兼容）：
+    //   addView/removeView/removeAllViews/getParent/getChildCount/getChildAt
+    //   setOnClickListener/setOnCheckedChangeListener/setOnTextChangedListener/
+    //   setOnItemSelectedListener
+    //   getSelectedItemId/setSelectedItemId/getMenuSize/getMenuItemId/menuItems
+    // ------------------------------------------------------------------
+    public static final String OP_UI_REQUEST_VIEW = "uiRequestView";
+    public static final String OP_VIEW_COMMAND = "viewCommand";
+    public static final String K_ACTION = "action";
+    public static final String K_PARAMS = "params";
+    public static final String K_HANDLE = "handleId";
+    public static final String K_CHILD_HANDLE = "childHandle";
+    public static final String K_PARENT_HANDLE = "parentHandle";
+    public static final String K_ATTACH_TO_PARENT = "attachToParent";
+    public static final String K_INDEX = "index";
+    public static final String K_VIEW_ID = "viewId";
+    public static final String K_VIEW_NAME = "viewName";
+    public static final String K_CLASS_NAME = "className";
+    public static final String K_NATIVE_VIEW = "nativeView";
+    public static final String K_CHANNEL = "channel";
+    public static final String K_VALUE = "value";
+
+    public static final String ACTION_ADD_VIEW = "addView";
+    public static final String ACTION_REMOVE_VIEW = "removeView";
+    public static final String ACTION_REMOVE_ALL_VIEWS = "removeAllViews";
+    public static final String ACTION_GET_PARENT = "getParent";
+    public static final String ACTION_GET_CHILD_COUNT = "getChildCount";
+    public static final String ACTION_GET_CHILD_AT = "getChildAt";
+    public static final String ACTION_SET_ON_CLICK_LISTENER = "setOnClickListener";
+    public static final String ACTION_SET_ON_CHECKED_CHANGE_LISTENER = "setOnCheckedChangeListener";
+    public static final String ACTION_SET_ON_TEXT_CHANGED_LISTENER = "setOnTextChangedListener";
+    public static final String ACTION_SET_ON_ITEM_SELECTED_LISTENER = "setOnItemSelectedListener";
+    public static final String ACTION_GET_SELECTED_ITEM_ID = "getSelectedItemId";
+    public static final String ACTION_SET_SELECTED_ITEM_ID = "setSelectedItemId";
+    public static final String ACTION_GET_MENU_SIZE = "getMenuSize";
+    public static final String ACTION_GET_MENU_ITEM_ID = "getMenuItemId";
+    public static final String ACTION_MENU_ITEMS = "menuItems";
+    /** 2.2：把 JS 定时回调交给宿主主线程 Looper，规避 Node 工作线程没有 Looper 的问题。 */
+    public static final String ACTION_POST_DELAYED = "postDelayed";
+    public static final String ACTION_REMOVE_CALLBACKS = "removeCallbacks";
+    public static final String EVENT_TIMER = "timer";
 
     private NodeUiProtocol() {
     }

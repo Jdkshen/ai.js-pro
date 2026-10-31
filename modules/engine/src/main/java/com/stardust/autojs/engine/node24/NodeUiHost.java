@@ -14,9 +14,13 @@ import android.util.LruCache;
 import android.view.ContextThemeWrapper;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.view.WindowManager;
+import android.widget.AdapterView;
 import android.widget.CompoundButton;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -55,6 +59,7 @@ import java.util.ArrayList;
 import java.util.ArrayDeque;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -105,7 +110,24 @@ public final class NodeUiHost {
         @Override protected boolean removeEldestEntry(Map.Entry<String, ProjectResourceBundle> entry) { return size() > 8; }
     };
     private static final ArrayDeque<JSONObject> EVENTS = new ArrayDeque<>();
-    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    /**
+     * 主线程 Handler 延迟创建：类加载不触碰 Android Looper，JVM 单测可以加载本类做纯逻辑回归。
+     * 同时保证 2.2 的宿主侧 postDelayed 一定落在真实主 Looper 上。
+     */
+    private static volatile Handler sMainHandler;
+    private static Handler main() {
+        Handler handler = sMainHandler;
+        if (handler == null) {
+            synchronized (LOCK) {
+                handler = sMainHandler;
+                if (handler == null) {
+                    handler = new Handler(Looper.getMainLooper());
+                    sMainHandler = handler;
+                }
+            }
+        }
+        return handler;
+    }
 
     private static volatile WindowManager sWindowManager;
     private static volatile View sOverlayView;
@@ -151,9 +173,16 @@ public final class NodeUiHost {
      * 再由 setContentViewXml 更新真正 inflate 字符串布局。不会与正常 res 布局重名。
      */
     public static final String INLINE_LAYOUT_TOKEN = "__node24_inline_layout_xml__";
-    /** overlay 模式的真实 View 句柄（findViewById/viewCommand/bindClick）。只在主线程访问。 */
-    private static final Map<String, View> OVERLAY_VIEW_HANDLES = new LinkedHashMap<>();
-    private static int sOverlayViewHandleSeq = 1;
+    /**
+     * 真实 View 句柄表（findViewById/viewCommand/bindClick/uiRequestView）。
+     *
+     * <p>用同一张 IdentityHashMap 反查句柄，保证 {@code parent.addView(child)} 之后
+     * {@code child.getParent()} 返回的是同一个句柄（JS 侧 facade 身份一致，2.5）。
+     * 只在主线程访问；{@link ViewHandleRegistry} 是纯 Java，可在 JVM 单测里回归。
+     */
+    private static final ViewHandleRegistry VIEW_HANDLES = new ViewHandleRegistry();
+    /** 2.2：uiRequestView postDelayed 的待执行定时任务（key -> Runnable），主线程 Handler 执行。 */
+    private static final Map<String, Runnable> TIMER_CALLBACKS = new LinkedHashMap<>();
     /** Activity 模式 click 事件拉取节流：pollEvents 每 120ms 一次，Binder 不必这么频繁。 */
     private static long sLastActivityViewEventPollAt;
     private static final long ACTIVITY_VIEW_EVENT_POLL_MS = 250L;
@@ -328,8 +357,27 @@ public final class NodeUiHost {
                             .put("error", "对话框失败：" + error.getMessage());
                 }
             }
+            case "layoutName":
+                return layoutName(app, dir, request);
+            case "inflate": {
+                // task-254（2.5）：本地会话/overlay 有真实内容视图时，inflate 必须就地 inflate
+                // 并返回真实 View 句柄；主进程 Activity 模式才转发。
+                if (!sActivityMode && sessionContentView() != null) {
+                    try {
+                        return inflateForSession(app, dir, request);
+                    } catch (Throwable error) {
+                        return new org.json.JSONObject().put("ok", false)
+                                .put("error", "inflate 失败：" + describe(error));
+                    }
+                }
+                try {
+                    return NodeUiActivityClient.get().view(request);
+                } catch (Throwable error) {
+                    return new org.json.JSONObject().put("ok", false)
+                            .put("error", "View 命令失败：" + error.getMessage());
+                }
+            }
             case "setContentView":
-            case "inflate":
             case "layout": {
                 // task-135 Phase2：转发给 :node24 侧 NodeUiActivityClient（主进程 Activity 执行）。
                 try {
@@ -339,11 +387,13 @@ public final class NodeUiHost {
                             .put("error", "View 命令失败：" + error.getMessage());
                 }
             }
+            case "uiRequestView":
+                return uiRequestView(app, dir, request);
             case "findViewById":
             case "viewCommand":
             case "bindClick": {
-                // Activity 模式走真实主进程 View 句柄；overlay 回退模式在本进程维护句柄。
-                if (sActivityMode) {
+                // Activity 模式走真实主进程 View 句柄；本地会话/overlay 在本进程维护真实 View 句柄。
+                if (sActivityMode && !NodeUiLocalSession.isShowing()) {
                     try {
                         return NodeUiActivityClient.get().view(request);
                     } catch (Throwable error) {
@@ -352,12 +402,31 @@ public final class NodeUiHost {
                     }
                 }
                 try {
-                    return overlayViewCommand(request);
+                    return overlayViewCommand(app, dir, request);
                 } catch (Throwable error) {
                     return new org.json.JSONObject().put("ok", false)
                             .put("error", "View 命令失败：" + describe(error));
                 }
             }
+            // task-254：uiRequestView(action, params) 也允许直接以 action 作为 op（旧/新客户端都接受）。
+            case "addView":
+            case "removeView":
+            case "removeAllViews":
+            case "getParent":
+            case "getChildCount":
+            case "getChildAt":
+            case "setOnClickListener":
+            case "setOnCheckedChangeListener":
+            case "setOnTextChangedListener":
+            case "setOnItemSelectedListener":
+            case "getSelectedItemId":
+            case "setSelectedItemId":
+            case "getMenuSize":
+            case "getMenuItemId":
+            case "menuItems":
+            case "postDelayed":
+            case "removeCallbacks":
+                return uiRequestView(app, dir, request);
             case "close":
                 return closeCurrent();
             default:
@@ -736,10 +805,40 @@ public final class NodeUiHost {
         ProjectResourceBundle bundle = bundleOf(context, projectDir);
         if (bundle == null || bundle.getError() != null) {
             // Inline UI can use the host's bundled icons/styles without a project resource table.
-            return new JSONObject().put("ok", true).put("id",
-                    context.getResources().getIdentifier(name, type, context.getPackageName()));
+            int resolved = context.getResources().getIdentifier(name, type, context.getPackageName());
+            return new JSONObject().put("ok", true).put("id", inlineResourceIdFallback(resolved, type, name));
         }
         return new JSONObject().put("ok", true).put("id", bundle.idOf(type, name));
+    }
+
+    /**
+     * 2.7：非编译（inline）工程的 {@code ui.R.id.*} 必须与布局/菜单项同一张名字表。
+     *
+     * <p>布局 {@code @+id/xxx} 与 BottomNavigationView 的 {@code app:menu} 项 id 都走
+     * {@link Ids#parse(String)}；而 {@code getIdentifier(name, "id", hostPackage)} 只查宿主 APK 的资源表，
+     * 工程自建 id（如 navigation_home）在宿主里是 0，于是脚本里
+     * {@code ui.R.id.navigation_home} 与 {@code item.getItemId()} 对不上。这里对 id 类型补上
+     * {@link Ids#parse(String)} 兜底；其它资源类型仍按宿主资源表（找不到就是 0）。
+     */
+    static int inlineResourceIdFallback(int resolved, String type, String name) {
+        if (resolved != 0 || name == null || name.isEmpty()) {
+            return resolved;
+        }
+        if (!"id".equals(type)) {
+            return resolved;
+        }
+        return Ids.parse(name);
+    }
+
+    /** 2.4：数字布局 id 反查布局名（宿主不支持时返回空名，JS 回退到只按 id 请求）。 */
+    private static Object layoutName(Context context, String projectDir, JSONObject request) throws Exception {
+        int id = request.optInt("id", 0);
+        if (id == 0) {
+            return new JSONObject().put("ok", true).put("name", "");
+        }
+        ProjectResourceBundle bundle = bundleOf(context, projectDir);
+        String name = bundle == null || bundle.getError() != null ? "" : bundle.layoutNameById(id);
+        return new JSONObject().put("ok", true).put("name", name == null ? "" : name);
     }
 
     /** 取（并缓存）工程资源包；加载失败也缓存错误，避免每次属性读取都重扫 res/。 */
@@ -1763,10 +1862,12 @@ public final class NodeUiHost {
         if (attempt > 3) {
             return;
         }
-        MAIN.postDelayed(new Runnable() {
+        // 2.2：宿主侧 postDelayed 必须落在真实主 Looper 上；本地 NodeUI Activity 会话同样要有内容视图，
+        // 不能只看 overlay 静态字段（否则本地会话的延迟重试永远不执行）。
+        main().postDelayed(new Runnable() {
             @Override
             public void run() {
-                if (sOverlayView == null || sShownBundle == null) {
+                if (sessionContentView() == null) {
                     return;
                 }
                 try {
@@ -1866,7 +1967,7 @@ public final class NodeUiHost {
                     }
                     imageCache().put(url, bitmap);
                     final Bitmap loaded = bitmap;
-                    MAIN.post(new Runnable() {
+                    main().post(new Runnable() {
                         @Override
                         public void run() {
                             // item 已回收/复用给别的 url 时不能覆盖（防错位）。
@@ -2166,11 +2267,17 @@ public final class NodeUiHost {
                         public boolean onNavigationItemSelected(android.view.MenuItem item) {
                             try {
                                 int index = menuIndex(navigation, item.getItemId());
+                                if (index < 0) {
+                                    // 2.7：itemId 不在真实菜单里时不猜第 0 页，也不消费选中事件。
+                                    return false;
+                                }
                                 if (pager.getAdapter() != null && pager.getAdapter().getCount() > 0) {
                                     index = Math.min(index, pager.getAdapter().getCount() - 1);
                                 }
                                 pager.setCurrentItem(index, true);
-                                return true;
+                                // 返回 false 让 BottomNavigationView 完成真实选中态更新，
+                                // 否则 getSelectedItemId() 与真实菜单会不一致（2.7）。
+                                return false;
                             } catch (Throwable error) {
                                 Log.w(TAG, "底部导航切换页失败", error);
                                 return false;
@@ -2181,7 +2288,11 @@ public final class NodeUiHost {
                         @Override
                         public void onPageSelected(int position) {
                             try {
-                                navigation.setSelectedItemId(navigation.getMenu().getItem(position).getItemId());
+                                android.view.Menu menu = navigation.getMenu();
+                                if (position < 0 || position >= menu.size()) {
+                                    return;
+                                }
+                                navigation.setSelectedItemId(menu.getItem(position).getItemId());
                             } catch (Throwable ignored) {
                                 // 同步底部选中态失败不影响翻页
                             }
@@ -2228,7 +2339,7 @@ public final class NodeUiHost {
                 return i;
             }
         }
-        return 0;
+        return -1;
     }
 
     /**
@@ -2361,10 +2472,30 @@ public final class NodeUiHost {
     }
 
     // ------------------------------------------------------------------
-    // overlay 回退模式的真实 View 句柄 / 基础命令 / click
+    // task-254：本地会话/overlay 的真实 View 句柄、视图树与通用事件
+    //
+    // 与 assets/node24/ui.js 的 uiRequestView(action, params) 对应：
+    //   findViewById/inflate 返回真实 View 的 handleId；addView/removeView/getParent/
+    //   getChildCount/getChildAt/removeAllViews 在真实 View 树上执行；
+    //   setOnClickListener/setOnCheckedChangeListener/setOnTextChangedListener/
+    //   setOnItemSelectedListener 安装真实监听器，事件写入现有 pollEvents 队列。
     // ------------------------------------------------------------------
 
-    private static Object overlayViewCommand(final JSONObject request) throws Exception {
+    /** 当前会话（本地 NodeUiLocalActivity 或 overlay）的真实内容视图；两者都可能为空。 */
+    private static View sessionContentView() {
+        View overlay = sContentView;
+        if (overlay != null) {
+            return overlay;
+        }
+        try {
+            return NodeUiLocalSession.isShowing() ? NodeUiLocalSession.getContentView() : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static Object overlayViewCommand(final Context context, final String projectDir,
+                                             final JSONObject request) throws Exception {
         final String op = request.optString("op", "");
         final AtomicReference<JSONObject> result = new AtomicReference<>();
         runOnMain(new Runnable() {
@@ -2376,10 +2507,11 @@ public final class NodeUiHost {
                     } else if ("bindClick".equals(op)) {
                         result.set(overlayBindClick(request));
                     } else {
-                        result.set(overlayViewAction(request));
+                        result.set(executeViewAction(context, projectDir,
+                                resolveViewAction(request), viewActionParams(request)));
                     }
                 } catch (Throwable error) {
-                    Log.w(TAG, "overlay View 命令失败: " + request, error);
+                    Log.w(TAG, "View 命令失败: " + request, error);
                     result.set(viewError("View 命令失败：" + describe(error)));
                 }
             }
@@ -2387,29 +2519,200 @@ public final class NodeUiHost {
         return result.get() == null ? viewError("View 命令没有返回结果") : result.get();
     }
 
-    private static JSONObject overlayFindViewById(JSONObject request) throws Exception {
-        if (sContentView == null) {
-            return viewError("Node UI overlay 尚未显示");
-        }
-        int id = resolveOverlayViewId(request);
-        View view = id == 0 ? null : sContentView.findViewById(id);
-        if (view == null) {
-            return viewError("findViewById 未命中：id=" + id + " name="
-                    + request.optString("name", ""));
-        }
-        String handle = "view-" + (sOverlayViewHandleSeq++);
-        OVERLAY_VIEW_HANDLES.put(handle, view);
-        return new JSONObject().put("ok", true).put("handleId", handle).put("viewId", id);
+    /** op:"uiRequestView" 或 action 作为 op 时的统一入口（在主线程执行）。 */
+    private static Object uiRequestView(final Context context, final String projectDir,
+                                        final JSONObject request) throws Exception {
+        final String action = resolveViewAction(request);
+        final JSONObject params = viewActionParams(request);
+        final AtomicReference<JSONObject> result = new AtomicReference<>();
+        runOnMain(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    result.set(executeViewAction(context, projectDir, action, params));
+                } catch (Throwable error) {
+                    Log.w(TAG, "uiRequestView 失败: action=" + action + " request=" + request, error);
+                    result.set(viewError("uiRequestView " + action + " 失败：" + describe(error)));
+                }
+            }
+        });
+        return result.get() == null ? viewError("uiRequestView 没有返回结果") : result.get();
     }
 
-    private static JSONObject overlayViewAction(JSONObject request) {
-        View view = OVERLAY_VIEW_HANDLES.get(request.optString("handleId", ""));
-        if (view == null) {
-            return viewError("无效的 View handle：" + request.optString("handleId", ""));
+    // ---- 协议参数解析（纯逻辑，JVM 单测覆盖） ----
+
+    /** uiRequestView(action, params) 的 action：优先 action 字段，其次 params.action，最后 op。 */
+    static String resolveViewAction(JSONObject request) {
+        if (request == null) {
+            return "";
         }
-        String action = request.optString("action", "");
-        Object value = request.opt("value");
+        String action = request.optString(NodeUiProtocol.K_ACTION, "");
+        if (!action.isEmpty()) {
+            return action;
+        }
+        JSONObject params = request.optJSONObject(NodeUiProtocol.K_PARAMS);
+        if (params != null) {
+            action = params.optString(NodeUiProtocol.K_ACTION, "");
+            if (!action.isEmpty()) {
+                return action;
+            }
+        }
+        String op = request.optString("op", "");
+        return NodeUiProtocol.OP_UI_REQUEST_VIEW.equals(op) ? "" : op;
+    }
+
+    /** 把 request 顶层字段与 params 合并成一层（params 优先）。 */
+    static JSONObject viewActionParams(JSONObject request) {
+        JSONObject merged = new JSONObject();
+        if (request == null) {
+            return merged;
+        }
+        Iterator<String> keys = request.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (NodeUiProtocol.K_PARAMS.equals(key)) {
+                continue;
+            }
+            try {
+                merged.put(key, request.get(key));
+            } catch (Throwable ignored) {
+                // 非法字段不参与合并
+            }
+        }
+        JSONObject params = request.optJSONObject(NodeUiProtocol.K_PARAMS);
+        if (params != null) {
+            keys = params.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                try {
+                    merged.put(key, params.get(key));
+                } catch (Throwable ignored) {
+                    // 非法字段不参与合并
+                }
+            }
+        }
+        return merged;
+    }
+
+    static boolean isViewAction(String action) {
+        if (action == null) {
+            return false;
+        }
+        switch (action) {
+            case NodeUiProtocol.ACTION_ADD_VIEW:
+            case NodeUiProtocol.ACTION_REMOVE_VIEW:
+            case NodeUiProtocol.ACTION_REMOVE_ALL_VIEWS:
+            case NodeUiProtocol.ACTION_GET_PARENT:
+            case NodeUiProtocol.ACTION_GET_CHILD_COUNT:
+            case NodeUiProtocol.ACTION_GET_CHILD_AT:
+            case NodeUiProtocol.ACTION_SET_ON_CLICK_LISTENER:
+            case NodeUiProtocol.ACTION_SET_ON_CHECKED_CHANGE_LISTENER:
+            case NodeUiProtocol.ACTION_SET_ON_TEXT_CHANGED_LISTENER:
+            case NodeUiProtocol.ACTION_SET_ON_ITEM_SELECTED_LISTENER:
+            case NodeUiProtocol.ACTION_GET_SELECTED_ITEM_ID:
+            case NodeUiProtocol.ACTION_SET_SELECTED_ITEM_ID:
+            case NodeUiProtocol.ACTION_GET_MENU_SIZE:
+            case NodeUiProtocol.ACTION_GET_MENU_ITEM_ID:
+            case NodeUiProtocol.ACTION_MENU_ITEMS:
+            case NodeUiProtocol.ACTION_POST_DELAYED:
+            case NodeUiProtocol.ACTION_REMOVE_CALLBACKS:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static JSONObject overlayFindViewById(JSONObject request) {
+        View content = sessionContentView();
+        if (content == null) {
+            return viewError("Node UI 尚未显示（没有内容视图）");
+        }
+        String name = request.optString("name", "");
+        int id = resolveSessionViewId(request);
+        View view = id == 0 ? null : findInlineViewById(content, id);
+        if (view == null && id != 0) {
+            view = content.findViewById(id);
+        }
+        if (view == null) {
+            return viewError("findViewById 未命中：id=" + id + " name=" + name);
+        }
+        return viewHandleResult(view, view.getId() == 0 ? id : view.getId(), name);
+    }
+
+    private static JSONObject overlayBindClick(JSONObject request) throws Exception {
+        View content = sessionContentView();
+        if (content == null) {
+            return viewError("Node UI 尚未显示（没有内容视图）");
+        }
+        int id = resolveSessionViewId(request);
+        View view = id == 0 ? null : findInlineViewById(content, id);
+        if (view == null && id != 0) {
+            view = content.findViewById(id);
+        }
+        if (view == null) {
+            return viewError("bindClick 未命中：id=" + id + " name=" + request.optString("name", ""));
+        }
+        installClickListener(view);
+        view.setClickable(true);
+        return new JSONObject().put("ok", true).put("viewId", eventViewId(view));
+    }
+
+    private static JSONObject viewHandleResult(View view, int viewId, String viewName) {
         try {
+            return new JSONObject()
+                    .put("ok", true)
+                    .put("handleId", VIEW_HANDLES.handleFor(view))
+                    .put("viewId", viewId)
+                    .put("viewName", viewName == null ? "" : viewName)
+                    .put("className", view.getClass().getName());
+        } catch (Throwable error) {
+            return viewError("生成 View 句柄失败：" + describe(error));
+        }
+    }
+
+    private static int resolveSessionViewId(JSONObject request) {
+        int id = request.optInt(NodeUiProtocol.K_VIEW_ID, request.optInt("id", 0));
+        String name = request.optString("name", "");
+        if (id == 0 && !name.isEmpty()) {
+            if (sShownViews != null) {
+                id = sShownViews.optInt(name, 0);
+            }
+            if (id == 0) {
+                try {
+                    id = NodeUiLocalSession.viewId(name);
+                } catch (Throwable ignored) {
+                    // 本地会话不在时继续走 bundle / Ids
+                }
+            }
+            if (id == 0 && sShownBundle != null) {
+                id = sShownBundle.idOf("id", name);
+            }
+            if (id == 0) {
+                // inline 布局与菜单项同源：@+id/name 走 Ids.parse 名字表（2.7）。
+                id = Ids.parse(name);
+            }
+        }
+        return id;
+    }
+
+    /** uiRequestView / viewCommand / 旧 View 命令的统一执行体（调用方保证在主线程）。 */
+    private static JSONObject executeViewAction(Context context, String projectDir,
+                                                String action, JSONObject request) {
+        if (action == null || action.isEmpty()) {
+            return viewError("uiRequestView 缺少 action");
+        }
+        try {
+            if (NodeUiProtocol.ACTION_POST_DELAYED.equals(action)) {
+                return scheduleTimer(request);
+            }
+            if (NodeUiProtocol.ACTION_REMOVE_CALLBACKS.equals(action)) {
+                return cancelTimer(request);
+            }
+            View view = (View) VIEW_HANDLES.get(handleIdOf(request));
+            if (view == null) {
+                return viewError("无效的 View handle：" + handleIdOf(request));
+            }
+            Object value = request.opt(NodeUiProtocol.K_VALUE);
             switch (action) {
                 case "setText":
                     if (!(view instanceof TextView)) {
@@ -2439,11 +2742,7 @@ public final class NodeUiHost {
                     ((CompoundButton) view).setChecked(Boolean.parseBoolean(String.valueOf(value)));
                     return new JSONObject().put("ok", true);
                 case "isChecked":
-                    if (!(view instanceof CompoundButton)) {
-                        return viewError("isChecked 只支持 CompoundButton，当前=" + view.getClass().getName());
-                    }
-                    return new JSONObject().put("ok", true)
-                            .put("value", ((CompoundButton) view).isChecked());
+                    return new JSONObject().put("ok", true).put("value", isChecked(view));
                 case "toggle":
                     if (!(view instanceof CompoundButton)) {
                         return viewError("toggle 只支持 CompoundButton，当前=" + view.getClass().getName());
@@ -2452,6 +2751,45 @@ public final class NodeUiHost {
                     return new JSONObject().put("ok", true);
                 case "click":
                     return new JSONObject().put("ok", true).put("value", view.performClick());
+                case NodeUiProtocol.ACTION_ADD_VIEW:
+                    return addView((ViewGroup) view, request);
+                case NodeUiProtocol.ACTION_REMOVE_VIEW:
+                    return removeView(view, request);
+                case NodeUiProtocol.ACTION_REMOVE_ALL_VIEWS:
+                    if (!(view instanceof ViewGroup)) {
+                        return viewError("removeAllViews 需要 ViewGroup，当前=" + view.getClass().getName());
+                    }
+                    ((ViewGroup) view).removeAllViews();
+                    return new JSONObject().put("ok", true);
+                case NodeUiProtocol.ACTION_GET_CHILD_COUNT:
+                    if (!(view instanceof ViewGroup)) {
+                        return viewError("getChildCount 需要 ViewGroup，当前=" + view.getClass().getName());
+                    }
+                    return new JSONObject().put("ok", true).put("value", ((ViewGroup) view).getChildCount());
+                case NodeUiProtocol.ACTION_GET_CHILD_AT:
+                    return getChildAt(view, request);
+                case NodeUiProtocol.ACTION_GET_PARENT:
+                    return getParent(view);
+                case NodeUiProtocol.ACTION_SET_ON_CLICK_LISTENER:
+                    installClickListener(view);
+                    view.setClickable(true);
+                    return new JSONObject().put("ok", true).put("viewId", eventViewId(view));
+                case NodeUiProtocol.ACTION_SET_ON_CHECKED_CHANGE_LISTENER:
+                    return installCheckedChangeListener(view);
+                case NodeUiProtocol.ACTION_SET_ON_TEXT_CHANGED_LISTENER:
+                    return installTextChangedListener(view);
+                case NodeUiProtocol.ACTION_SET_ON_ITEM_SELECTED_LISTENER:
+                    return installItemSelectedListener(view);
+                case NodeUiProtocol.ACTION_GET_SELECTED_ITEM_ID:
+                    return new JSONObject().put("ok", true).put("value", selectedItemId(view));
+                case NodeUiProtocol.ACTION_SET_SELECTED_ITEM_ID:
+                    return setSelectedItemId(view, request);
+                case NodeUiProtocol.ACTION_GET_MENU_SIZE:
+                    return new JSONObject().put("ok", true).put("value", menuSize(view));
+                case NodeUiProtocol.ACTION_GET_MENU_ITEM_ID:
+                    return new JSONObject().put("ok", true).put("value", menuItemId(view, request));
+                case NodeUiProtocol.ACTION_MENU_ITEMS:
+                    return menuItems(view);
                 default:
                     return viewError("viewCommand 不支持：" + action);
             }
@@ -2460,39 +2798,544 @@ public final class NodeUiHost {
         }
     }
 
-    private static JSONObject overlayBindClick(JSONObject request) throws Exception {
-        if (sContentView == null) {
-            return viewError("Node UI overlay 尚未显示");
+    private static String handleIdOf(JSONObject request) {
+        String handle = request.optString(NodeUiProtocol.K_HANDLE, "");
+        if (handle.isEmpty()) {
+            handle = request.optString("handle", "");
         }
-        final int id = resolveOverlayViewId(request);
-        View view = id == 0 ? null : sContentView.findViewById(id);
-        if (view == null) {
-            return viewError("bindClick 未命中：id=" + id + " name=" + request.optString("name", ""));
+        return handle;
+    }
+
+    private static JSONObject addView(ViewGroup group, JSONObject request) throws Exception {
+        String childHandle = request.optString(NodeUiProtocol.K_CHILD_HANDLE, "");
+        if (childHandle.isEmpty()) {
+            childHandle = request.optString("childHandleId", request.optString("child", ""));
         }
+        View child = (View) VIEW_HANDLES.get(childHandle);
+        if (child == null) {
+            return viewError("addView 缺少有效 childHandle：" + childHandle);
+        }
+        if (child == group) {
+            return viewError("addView 不能把 View 加到自身");
+        }
+        ViewParent previous = child.getParent();
+        if (previous instanceof ViewGroup) {
+            ((ViewGroup) previous).removeView(child);
+        }
+        int index = request.has(NodeUiProtocol.K_INDEX)
+                ? request.optInt(NodeUiProtocol.K_INDEX, -1)
+                : request.optInt(NodeUiProtocol.K_VALUE, -1);
+        if (index < 0 || index > group.getChildCount()) {
+            index = -1;
+        }
+        try {
+            if (index >= 0) {
+                ViewGroup.LayoutParams params = child.getLayoutParams();
+                if (params != null) {
+                    group.addView(child, index, params);
+                } else {
+                    group.addView(child, index);
+                }
+            } else {
+                ViewGroup.LayoutParams params = child.getLayoutParams();
+                if (params != null) {
+                    group.addView(child, params);
+                } else {
+                    group.addView(child);
+                }
+            }
+        } catch (RuntimeException mismatch) {
+            // 旧父容器的 LayoutParams 类型不匹配时，退回目标容器的默认 LP。
+            if (index >= 0) {
+                group.addView(child, index);
+            } else {
+                group.addView(child);
+            }
+        }
+        return new JSONObject().put("ok", true)
+                .put("viewId", eventViewId(child))
+                .put("handleId", VIEW_HANDLES.handleFor(child));
+    }
+
+    private static JSONObject removeView(View view, JSONObject request) throws Exception {
+        if (!(view instanceof ViewGroup)) {
+            return viewError("removeView 需要 ViewGroup，当前=" + view.getClass().getName());
+        }
+        ViewGroup group = (ViewGroup) view;
+        String childHandle = request.optString(NodeUiProtocol.K_CHILD_HANDLE, "");
+        if (childHandle.isEmpty()) {
+            childHandle = request.optString("childHandleId", request.optString("child", ""));
+        }
+        View child = (View) VIEW_HANDLES.get(childHandle);
+        boolean removed;
+        if (child != null) {
+            removed = child.getParent() == group;
+            group.removeView(child);
+        } else if (request.has(NodeUiProtocol.K_VALUE) || request.has(NodeUiProtocol.K_INDEX)) {
+            int index = request.optInt(NodeUiProtocol.K_VALUE, request.optInt(NodeUiProtocol.K_INDEX, -1));
+            if (index < 0 || index >= group.getChildCount()) {
+                return viewError("removeView 索引越界：" + index);
+            }
+            child = group.getChildAt(index);
+            removed = child != null;
+            group.removeViewAt(index);
+        } else {
+            return viewError("removeView 缺少有效 childHandle 或 index");
+        }
+        return new JSONObject().put("ok", true).put("value", removed);
+    }
+
+    private static JSONObject getChildAt(View view, JSONObject request) throws Exception {
+        if (!(view instanceof ViewGroup)) {
+            return viewError("getChildAt 需要 ViewGroup，当前=" + view.getClass().getName());
+        }
+        int index = request.optInt(NodeUiProtocol.K_VALUE, request.optInt(NodeUiProtocol.K_INDEX, 0));
+        ViewGroup group = (ViewGroup) view;
+        if (index < 0 || index >= group.getChildCount()) {
+            return new JSONObject().put("ok", true).put(NodeUiProtocol.K_HANDLE, JSONObject.NULL);
+        }
+        View child = group.getChildAt(index);
+        return new JSONObject().put("ok", true)
+                .put(NodeUiProtocol.K_HANDLE, VIEW_HANDLES.handleFor(child))
+                .put(NodeUiProtocol.K_VIEW_ID, eventViewId(child))
+                .put(NodeUiProtocol.K_VIEW_NAME, "");
+    }
+
+    private static JSONObject getParent(View view) throws Exception {
+        ViewParent parent = view.getParent();
+        if (!(parent instanceof View)) {
+            return new JSONObject().put("ok", true).put(NodeUiProtocol.K_HANDLE, JSONObject.NULL);
+        }
+        View parentView = (View) parent;
+        return new JSONObject().put("ok", true)
+                .put(NodeUiProtocol.K_HANDLE, VIEW_HANDLES.handleFor(parentView))
+                .put(NodeUiProtocol.K_VIEW_ID, eventViewId(parentView));
+    }
+
+    private static void installClickListener(final View view) {
         view.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
+                enqueueViewEvent(NodeUiProtocol.EVENT_CLICK, eventViewId(view), null);
+            }
+        });
+    }
+
+    /** MaterialSwitch/SwitchCompat/CheckBox 等 CompoundButton，以及 MaterialButton。 */
+    private static JSONObject installCheckedChangeListener(final View view) throws Exception {
+        final int viewId = eventViewId(view);
+        if (view instanceof CompoundButton) {
+            ((CompoundButton) view).setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+                @Override
+                public void onCheckedChanged(CompoundButton button, boolean checked) {
+                    enqueueViewEvent(NodeUiProtocol.EVENT_CHECK, viewId, payload("checked", checked));
+                }
+            });
+            return new JSONObject().put("ok", true).put("viewId", viewId);
+        }
+        if (installMaterialButtonCheckedListener(view, viewId)) {
+            return new JSONObject().put("ok", true).put("viewId", viewId);
+        }
+        return viewError("setOnCheckedChangeListener 只支持 CompoundButton/MaterialButton，当前="
+                + view.getClass().getName());
+    }
+
+    /**
+     * MaterialButton 的 checkable 变化走 addOnCheckedChangeListener(MaterialButton.OnCheckedChangeListener)，
+     * 与 CompoundButton 接口不同；用反射挂真实监听器（材质版本差异时安全失败）。
+     */
+    private static boolean installMaterialButtonCheckedListener(final View view, final int viewId) {
+        try {
+            for (final java.lang.reflect.Method method : view.getClass().getMethods()) {
+                if (!"addOnCheckedChangeListener".equals(method.getName())
+                        || method.getParameterTypes().length != 1
+                        || !method.getParameterTypes()[0].isInterface()) {
+                    continue;
+                }
+                Class<?> listenerType = method.getParameterTypes()[0];
+                Object listener = java.lang.reflect.Proxy.newProxyInstance(
+                        listenerType.getClassLoader(), new Class<?>[]{listenerType},
+                        (proxy, called, args) -> {
+                            if ("onCheckedChanged".equals(called.getName()) && args != null && args.length >= 1) {
+                                Object checked = args[args.length - 1];
+                                enqueueViewEvent(NodeUiProtocol.EVENT_CHECK, viewId,
+                                        payload("checked", checked instanceof Boolean
+                                                ? checked : Boolean.parseBoolean(String.valueOf(checked))));
+                            }
+                            return null;
+                        });
+                method.invoke(view, listener);
+                return true;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "安装 MaterialButton OnCheckedChangeListener 失败", error);
+        }
+        return false;
+    }
+
+    private static JSONObject installTextChangedListener(final View view) throws Exception {
+        if (!(view instanceof TextView)) {
+            return viewError("setOnTextChangedListener 只支持 TextView，当前=" + view.getClass().getName());
+        }
+        final TextView textView = (TextView) view;
+        final int viewId = eventViewId(view);
+        textView.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+                String text = s == null ? textView.getText().toString() : s.toString();
+                enqueueViewEvent(NodeUiProtocol.EVENT_TEXT_CHANGE, viewId, payload("text", text));
+            }
+        });
+        return new JSONObject().put("ok", true).put("viewId", viewId);
+    }
+
+    private static JSONObject installItemSelectedListener(final View view) throws Exception {
+        final int viewId = eventViewId(view);
+        if (view instanceof BottomNavigationView) {
+            ((BottomNavigationView) view).setOnItemSelectedListener(
+                    new BottomNavigationView.OnItemSelectedListener() {
+                        @Override
+                        public boolean onNavigationItemSelected(android.view.MenuItem item) {
+                            // 不消费事件：让 BottomNavigationView 完成真实选中态更新（2.7 getSelectedItemId 一致）。
+                            enqueueViewEvent(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, itemPayload(item));
+                            return false;
+                        }
+                    });
+            return new JSONObject().put("ok", true).put("viewId", viewId);
+        }
+        if (view instanceof AdapterView) {
+            ((AdapterView<?>) view).setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                @Override
+                public void onItemSelected(AdapterView<?> parent, View selected, int position, long id) {
+                    JSONObject payload = payload("itemId", id);
+                    try {
+                        payload.put("position", position);
+                    } catch (Throwable ignored) {
+                        // position 一定可序列化
+                    }
+                    enqueueViewEvent(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, payload);
+                }
+
+                @Override
+                public void onNothingSelected(AdapterView<?> parent) {
+                }
+            });
+            return new JSONObject().put("ok", true).put("viewId", viewId);
+        }
+        if (installReflectiveItemSelectedListener(view, viewId)) {
+            return new JSONObject().put("ok", true).put("viewId", viewId);
+        }
+        return viewError("setOnItemSelectedListener 只支持 BottomNavigationView/AdapterView，当前="
+                + view.getClass().getName());
+    }
+
+    /** Material NavigationBarView（material>=1.4）的 setOnItemSelectedListener(OnItemSelectedListener)。 */
+    private static boolean installReflectiveItemSelectedListener(final View view, final int viewId) {
+        try {
+            for (final java.lang.reflect.Method method : view.getClass().getMethods()) {
+                if (!"setOnItemSelectedListener".equals(method.getName())
+                        || method.getParameterTypes().length != 1
+                        || !method.getParameterTypes()[0].isInterface()) {
+                    continue;
+                }
+                Class<?> listenerType = method.getParameterTypes()[0];
+                Object listener = java.lang.reflect.Proxy.newProxyInstance(
+                        listenerType.getClassLoader(), new Class<?>[]{listenerType},
+                        (proxy, called, args) -> {
+                            if ("onItemSelected".equals(called.getName()) && args != null && args.length >= 1) {
+                                enqueueViewEvent(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId,
+                                        itemPayload(args[0]));
+                            }
+                            return null;
+                        });
+                method.invoke(view, listener);
+                return true;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "安装 setOnItemSelectedListener 失败", error);
+        }
+        return false;
+    }
+
+    private static int selectedItemId(View view) {
+        if (view instanceof BottomNavigationView) {
+            return ((BottomNavigationView) view).getSelectedItemId();
+        }
+        if (view instanceof AdapterView) {
+            return (int) ((AdapterView<?>) view).getSelectedItemId();
+        }
+        try {
+            java.lang.reflect.Method method = view.getClass().getMethod("getSelectedItemId");
+            Object value = method.invoke(view);
+            if (value instanceof Number) {
+                return ((Number) value).intValue();
+            }
+        } catch (Throwable ignored) {
+            // 非菜单型控件没有选中项
+        }
+        return 0;
+    }
+
+    private static JSONObject setSelectedItemId(View view, JSONObject request) throws Exception {
+        int id = intValue(request.opt(NodeUiProtocol.K_VALUE));
+        if (view instanceof BottomNavigationView) {
+            ((BottomNavigationView) view).setSelectedItemId(id);
+            return new JSONObject().put("ok", true).put("value", ((BottomNavigationView) view).getSelectedItemId());
+        }
+        try {
+            java.lang.reflect.Method method = view.getClass().getMethod("setSelectedItemId", int.class);
+            method.invoke(view, id);
+            return new JSONObject().put("ok", true).put("value", selectedItemId(view));
+        } catch (Throwable error) {
+            return viewError("setSelectedItemId 只支持 BottomNavigationView，当前=" + view.getClass().getName());
+        }
+    }
+
+    private static int menuSize(View view) {
+        if (view instanceof BottomNavigationView) {
+            return ((BottomNavigationView) view).getMenu().size();
+        }
+        return -1;
+    }
+
+    private static int menuItemId(View view, JSONObject request) {
+        if (!(view instanceof BottomNavigationView)) {
+            return -1;
+        }
+        android.view.Menu menu = ((BottomNavigationView) view).getMenu();
+        int index = intValue(request.opt(NodeUiProtocol.K_VALUE));
+        if (index < 0 || index >= menu.size()) {
+            return -1;
+        }
+        return menu.getItem(index).getItemId();
+    }
+
+    private static JSONObject menuItems(View view) throws Exception {
+        android.view.Menu menu = view instanceof BottomNavigationView
+                ? ((BottomNavigationView) view).getMenu() : null;
+        JSONArray ids = new JSONArray();
+        if (menu != null) {
+            for (int i = 0; i < menu.size(); i++) {
+                ids.put(menu.getItem(i).getItemId());
+            }
+        }
+        JSONObject value = new JSONObject();
+        try {
+            value.put("size", menu == null ? 0 : menu.size());
+            value.put("selectedItemId", selectedItemId(view));
+            value.put("itemIds", ids);
+        } catch (Throwable ignored) {
+            // 上面的 put 都是合法 key；失败也不影响 ok
+        }
+        return new JSONObject().put("ok", true).put("value", value);
+    }
+
+    private static boolean isChecked(View view) {
+        if (view instanceof CompoundButton) {
+            return ((CompoundButton) view).isChecked();
+        }
+        try {
+            java.lang.reflect.Method method = view.getClass().getMethod("isChecked");
+            Object value = method.invoke(view);
+            return value instanceof Boolean && (Boolean) value;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    /** 2.2：把 JS 定时回调排到宿主主线程 Looper 上，到期后用 pollEvents 的 timer 事件回调。 */
+    private static JSONObject scheduleTimer(JSONObject request) throws Exception {
+        final String key = timerKey(request);
+        long delay = request.optLong("delay", request.optLong(NodeUiProtocol.K_VALUE, 0L));
+        if (delay < 0) {
+            delay = 0;
+        }
+        final int viewId = request.optInt(NodeUiProtocol.K_VIEW_ID, 0);
+        final JSONObject payload = payload("channel", key);
+        Runnable previous;
+        synchronized (LOCK) {
+            previous = TIMER_CALLBACKS.remove(key);
+        }
+        if (previous != null) {
+            main().removeCallbacks(previous);
+        }
+        final Runnable task = new Runnable() {
+            @Override
+            public void run() {
+                synchronized (LOCK) {
+                    TIMER_CALLBACKS.remove(key);
+                }
+                enqueueViewEvent(NodeUiProtocol.EVENT_TIMER, viewId, payload);
+            }
+        };
+        synchronized (LOCK) {
+            TIMER_CALLBACKS.put(key, task);
+        }
+        main().postDelayed(task, delay);
+        return new JSONObject().put("ok", true).put("value", key);
+    }
+
+    private static JSONObject cancelTimer(JSONObject request) throws Exception {
+        String key = timerKey(request);
+        Runnable task;
+        synchronized (LOCK) {
+            task = TIMER_CALLBACKS.remove(key);
+        }
+        if (task != null) {
+            main().removeCallbacks(task);
+        }
+        return new JSONObject().put("ok", true).put("value", task != null);
+    }
+
+    private static String timerKey(JSONObject request) {
+        String key = request.optString(NodeUiProtocol.K_CHANNEL, "");
+        if (key.isEmpty()) {
+            key = request.optString("key", "");
+        }
+        if (key.isEmpty()) {
+            key = "timer-" + SystemClock.elapsedRealtimeNanos();
+        }
+        return key;
+    }
+
+    private static void enqueueViewEvent(String type, int viewId, JSONObject extra) {
+        try {
+            JSONObject event = new JSONObject().put("type", type).put("viewId", viewId);
+            if (extra != null) {
+                Iterator<String> keys = extra.keys();
+                while (keys.hasNext()) {
+                    String key = keys.next();
+                    event.put(key, extra.get(key));
+                }
+            }
+            enqueueEventObject(event);
+        } catch (Throwable error) {
+            Log.w(TAG, "入队 View 事件失败: " + type, error);
+        }
+    }
+
+    private static int eventViewId(View view) {
+        return view == null ? 0 : view.getId();
+    }
+
+    private static JSONObject itemPayload(Object item) {
+        JSONObject payload = new JSONObject();
+        int itemId = 0;
+        if (item instanceof android.view.MenuItem) {
+            itemId = ((android.view.MenuItem) item).getItemId();
+        }
+        try {
+            payload.put("itemId", itemId);
+        } catch (Throwable ignored) {
+            // itemId 一定合法
+        }
+        return payload;
+    }
+
+    private static JSONObject payload(String key, Object value) {
+        JSONObject object = new JSONObject();
+        try {
+            object.put(key, value);
+        } catch (Throwable ignored) {
+            // key 为字面量，不会失败
+        }
+        return object;
+    }
+
+    private static int intValue(Object value) {
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Throwable ignored) {
+            return 0;
+        }
+    }
+
+    /**
+     * 2.5：本地会话/overlay 的 ui.inflate。支持 XML 字符串与工程布局名/数字 id，
+     * parentHandle 用于生成 LayoutParams/可选 attach；返回真实 View 的 handle。
+     */
+    private static Object inflateForSession(final Context context, final String projectDir,
+                                            final JSONObject request) throws Exception {
+        final AtomicReference<JSONObject> result = new AtomicReference<>();
+        final AtomicReference<Throwable> failure = new AtomicReference<>();
+        runOnMain(new Runnable() {
+            @Override
+            public void run() {
                 try {
-                    enqueueEventObject(new JSONObject().put("type", "click").put("viewId", id));
+                    ViewGroup parent = null;
+                    String parentHandle = request.optString(NodeUiProtocol.K_PARENT_HANDLE,
+                            request.optString("parentHandleId", ""));
+                    if (!parentHandle.isEmpty()) {
+                        View parentView = (View) VIEW_HANDLES.get(parentHandle);
+                        if (parentView instanceof ViewGroup) {
+                            parent = (ViewGroup) parentView;
+                        }
+                    }
+                    boolean attach = request.optBoolean(NodeUiProtocol.K_ATTACH_TO_PARENT, parent != null);
+                    String xml = request.optString("layoutXml", "");
+                    String viewName = request.optString("name", "");
+                    if (xml == null || xml.trim().isEmpty()) {
+                        ProjectResourceBundle bundle = bundleOf(context, projectDir);
+                        int layoutId = request.optInt("layoutId", 0);
+                        String layoutName = null;
+                        String path = null;
+                        if (bundle != null && bundle.getError() == null) {
+                            if (layoutId != 0) {
+                                layoutName = bundle.layoutNameById(layoutId);
+                                path = bundle.layoutFileById(layoutId);
+                            }
+                            if ((path == null || path.isEmpty()) && !viewName.isEmpty()) {
+                                layoutName = viewName;
+                                path = bundle.layoutFile(viewName);
+                            }
+                        }
+                        if (path == null || path.isEmpty()) {
+                            throw new IllegalStateException("找不到布局：" + (viewName.isEmpty()
+                                    ? String.valueOf(layoutId) : viewName));
+                        }
+                        xml = readTextFile(new File(path));
+                        if (layoutName != null && !layoutName.isEmpty()) {
+                            viewName = layoutName;
+                        }
+                    }
+                    if (xml == null || xml.trim().isEmpty()) {
+                        throw new IllegalStateException("布局内容为空");
+                    }
+                    Context themed = NodeUiWidgetInflater.currentContext();
+                    if (themed == null) {
+                        themed = NodeUiLocalSession.getActivity();
+                    }
+                    if (themed == null && parent != null) {
+                        themed = parent.getContext();
+                    }
+                    if (themed == null) {
+                        themed = context;
+                    }
+                    View view = inflateInlineLayout(themed, xml, themed.getClassLoader(), parent, attach);
+                    if (view == null) {
+                        throw new IllegalStateException("inflate 结果为空");
+                    }
+                    result.set(viewHandleResult(view, view.getId(), viewName));
                 } catch (Throwable error) {
-                    Log.w(TAG, "overlay click 事件入队失败", error);
+                    failure.set(error);
                 }
             }
         });
-        view.setClickable(true);
-        return new JSONObject().put("ok", true).put("viewId", id);
-    }
-
-    private static int resolveOverlayViewId(JSONObject request) {
-        int id = request.optInt("id", 0);
-        String name = request.optString("name", "");
-        if (id == 0 && !name.isEmpty() && sShownViews != null) {
-            id = sShownViews.optInt(name, 0);
+        if (failure.get() != null) {
+            throw new IllegalStateException("inflate 失败：" + describe(failure.get()), failure.get());
         }
-        if (id == 0 && !name.isEmpty() && sShownBundle != null) {
-            id = sShownBundle.idOf("id", name);
-        }
-        return id;
+        return result.get() == null ? viewError("inflate 没有返回结果") : result.get();
     }
 
     private static JSONObject viewError(String message) {
@@ -2555,7 +3398,7 @@ public final class NodeUiHost {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             remove.run();
         } else {
-            boolean posted = MAIN.post(remove);
+            boolean posted = main().post(remove);
             if (!posted) {
                 remove.run();
             }
@@ -2605,8 +3448,13 @@ public final class NodeUiHost {
         sThemedContext = null;
         sShownBundle = null;
         sShownViews = null;
-        OVERLAY_VIEW_HANDLES.clear();
-        sOverlayViewHandleSeq = 1;
+        VIEW_HANDLES.clear();
+        synchronized (LOCK) {
+            for (Runnable timer : TIMER_CALLBACKS.values()) {
+                main().removeCallbacks(timer);
+            }
+            TIMER_CALLBACKS.clear();
+        }
     }
 
     // ------------------------------------------------------------------
@@ -2670,7 +3518,7 @@ public final class NodeUiHost {
         }
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicReference<Throwable> failure = new AtomicReference<>();
-        MAIN.post(new Runnable() {
+        main().post(new Runnable() {
             @Override
             public void run() {
                 try {
@@ -2720,6 +3568,61 @@ public final class NodeUiHost {
 
     private static int dp(Context context, int value) {
         return (int) (value * context.getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    /**
+     * 真实 View 的 handle 注册表（task-254 / 2.5）。
+     *
+     * <p>同一 View 永远返回同一 handleId，并用 IdentityHashMap 反查；这样
+     * {@code root.addView(child)} 之后 {@code child.getParent()} 拿回的父句柄就是 root 的句柄，
+     * JS 侧 facade 缓存命中，身份一致。纯 Java（只依赖 Object），JVM 单测可直接回归。
+     */
+    static final class ViewHandleRegistry {
+        private static final int MAX_HANDLES = 4096;
+        private final Map<String, Object> byId = new LinkedHashMap<>();
+        private final java.util.IdentityHashMap<Object, String> byView = new java.util.IdentityHashMap<>();
+        private int sequence = 1;
+
+        synchronized String handleFor(Object view) {
+            if (view == null) {
+                throw new IllegalArgumentException("View 不能为空");
+            }
+            String existing = byView.get(view);
+            if (existing != null) {
+                return existing;
+            }
+            while (byId.size() >= MAX_HANDLES) {
+                Iterator<Map.Entry<String, Object>> iterator = byId.entrySet().iterator();
+                if (!iterator.hasNext()) {
+                    break;
+                }
+                Map.Entry<String, Object> eldest = iterator.next();
+                iterator.remove();
+                byView.remove(eldest.getValue());
+            }
+            String handle = "view-" + (sequence++);
+            byId.put(handle, view);
+            byView.put(view, handle);
+            return handle;
+        }
+
+        synchronized Object get(String handle) {
+            return handle == null || handle.isEmpty() ? null : byId.get(handle);
+        }
+
+        synchronized String handleOf(Object view) {
+            return view == null ? null : byView.get(view);
+        }
+
+        synchronized int size() {
+            return byId.size();
+        }
+
+        synchronized void clear() {
+            byId.clear();
+            byView.clear();
+            sequence = 1;
+        }
     }
 
     private static String describe(Throwable error) {
