@@ -182,6 +182,667 @@
             });
         }
 
+        // ------------------------------------------------------------------
+        // task-254：bug 2.1/2.4/2.5/2.9 的 JS 侧
+        //  - 2.4 ui.inflate 接受数字资源 id / ui.R.layout.x / 布局名，并区分错误；
+        //  - 2.5 ui.inflate 返回值参与真实视图树（addView/getParent 走宿主真实 View）；
+        //  - 2.9 click/check/long_click/touch/key/scroll_change 真回调 + 轮询兜底；
+        //  - 2.1 on('text_change') 宿主 TextWatcher（旧宿主 getText() 轮询兜底）。
+        //
+        // 协议（与宿主侧 NodeUiProtocol/NodeUiHost.executeViewAction 一致；
+        // 视图操作统一走 uiRequestView(action, params)，参数扁平，宿主会合并顶层与 params）：
+        //   op:"inflate"    params: {name?, layoutId?, layoutXml?, parentHandle?, attachToParent?}
+        //   op:"uiRequestView" action:"addView"    {handleId, childHandle, index?, value?}
+        //   op:"uiRequestView" action:"removeView" {handleId, childHandle}
+        //   op:"uiRequestView" action:"getParent"  {handleId}  → {handleId, viewId}
+        //   op:"uiRequestView" action:"getChildCount"/"getChildAt"/"removeAllViews"
+        //   op:"uiRequestView" action:"setOnClickListener"/"setOnCheckedChangeListener"/
+        //                              "setOnTextChangedListener"/"setOnItemSelectedListener" {handleId}
+        //   旧宿主：同样的 action 以 op:"viewCommand" 再试一次（viewRequest 自动回退）。
+        // 事件回传统一走 pollEvents：
+        //   {type:"click", viewId}
+        //   {type:"check", viewId, checked}
+        //   {type:"text_change", viewId, text}
+        //   {type:"item_selected", viewId, itemId, position?}
+        // 宿主侧要求：视图事件必须在 pollEvents 里返回（NodeUiHost 已实现），
+        // 否则 click/check/text_change/item_selected 在无 Activity 的脚本阶段会被丢弃。
+        //   - 旧宿主没有上面这些动作时：2.5 的 addView/getParent 明确报错；
+        //     2.9 的 click 明确报错；check/text_change/item_selected 退化为每 120ms 轮询
+        //     isChecked()/getText()/getSelectedItemId()（开始轮询时会 warn 一次）。
+        // ------------------------------------------------------------------
+        /** 宿主侧 NodeUiProtocol.OP_UI_REQUEST_VIEW（task-254 已合入宿主）。 */
+        const NODE_UI_VIEW_OP = 'uiRequestView';
+        const VIEW_PROTOCOL = {
+            addView: 'addView',
+            removeView: 'removeView',
+            removeAllViews: 'removeAllViews',
+            getParent: 'getParent',
+            getChildCount: 'getChildCount',
+            getChildAt: 'getChildAt',
+            setOnClickListener: 'setOnClickListener',
+            setOnCheckedChangeListener: 'setOnCheckedChangeListener',
+            setOnTextChangedListener: 'setOnTextChangedListener',
+            setOnItemSelectedListener: 'setOnItemSelectedListener'
+        };
+        /** 事件名 → 宿主监听器动作；非宿主协议事件按轮询兜底处理。 */
+        const VIEW_PROTOCOL_LISTENER = {
+            click: 'setOnClickListener',
+            check: 'setOnCheckedChangeListener',
+            text_change: 'setOnTextChangedListener',
+            item_selected: 'setOnItemSelectedListener'
+        };
+        /** 实时输入类事件（long_click/touch/key/scroll_change）无法轮询，宿主不支持时必须明确报错。 */
+        const VIEW_INPUT_EVENTS = ['long_click', 'touch', 'touch_down', 'touch_up', 'touch_move', 'key', 'key_down', 'key_up', 'scroll_change'];
+        const VIEW_EVENT_POLL_MS = 120;
+        /** pollEvents 里按 viewId 分发的 View 事件类型（与宿主协议事件通道一致）。 */
+        const VIEW_EVENT_TYPES = {
+            click: true, check: true, text_change: true, item_selected: true,
+            long_click: true, touch: true, touch_down: true, touch_up: true, touch_move: true,
+            key: true, key_down: true, key_up: true, scroll_change: true
+        };
+        /** 宿主「没有这个能力」的错误特征；用于给出明确降级提示而不是静默 no-op。 */
+        const UNSUPPORTED_HOST_TOKENS = ['不支持', '未知的', '未知 op', '未知的 Node UI op'];
+        function isUnsupportedHostMessage(message) {
+            const text = String(message == null ? '' : message);
+            // 旧宿主把真实错误包在「View 命令失败（action）：xxx」里；按动作名判断缺能力。
+            if (text.indexOf('viewCommand 不支持') >= 0 || text.indexOf('handleView 不支持') >= 0
+                    || text.indexOf('未知的 Node UI op') >= 0) {
+                return true;
+            }
+            // prelude 在宿主缺方法时抛出「找不到方法/NoSuchMethod」；同样是宿主版本差异。
+            return text.indexOf('找不到方法') >= 0 || text.indexOf('NoSuchMethod') >= 0
+                || /is not a function/.test(text);
+        }
+        /**
+         * 只用于「缺能力」判定的探测：把不支持/宿主版本差异转成 true，
+         * 其它实现错误原样抛出（不要吞掉真实的布局/类型错误）。
+         */
+        function hostLacksCapability(fn) {
+            try {
+                fn();
+                return false;
+            } catch (error) {
+                const text = String(error && error.message ? error.message : error);
+                if (isUnsupportedHostMessage(text)) return true;
+                throw error;
+            }
+        }
+
+        // ---- 2.4：布局参数解析（数字资源 id / {type,name} / 名字） -----------------
+        const reverseLayoutIndex = Object.create(null);
+        function rememberLayoutId(name, id) {
+            if (name && id) reverseLayoutIndex[String(id)] = String(name);
+            return id;
+        }
+        /**
+         * 数字布局 id → 布局名。优先用 ui.R.layout.<name> 访问时建立的索引；
+         * 未命中时问宿主（新宿主可反查；旧宿主返回 0 时按「宿主不支持」处理）。
+         */
+        function layoutNameHintFor(layoutId, allowHostQuery) {
+            const id = Number(layoutId) || 0;
+            if (!id) return '';
+            if (reverseLayoutIndex[id]) return reverseLayoutIndex[id];
+            if (allowHostQuery === false) return '';
+            try {
+                const value = hostCall({op: 'layoutName', id: id});
+                if (value && value.ok === true && value.name) {
+                    const name = String(value.name);
+                    rememberLayoutId(name, id);
+                    return name;
+                }
+            } catch (ignored) {
+                // 旧宿主没有 layoutName 反查；由 inflate 的错误分类给出明确提示。
+            }
+            return '';
+        }
+        /** 布局名 → 数字 id（新宿主 inflate 可同时带 layoutId）。 */
+        function layoutIdHintFor(name) {
+            const key = String(name == null ? '' : name);
+            if (!key) return 0;
+            if (resourcesNameIndex[key]) return resourcesNameIndex[key];
+            try {
+                const value = hostCall({op: 'layoutId', name: key});
+                const id = value && Number(value.id);
+                if (id && id !== -1) {
+                    rememberLayoutId(key, id);
+                    resourcesNameIndex[key] = id;
+                    return id;
+                }
+            } catch (ignored) { /* 名字路径仍可继续 */ }
+            return 0;
+        }
+        /** ui.R.layout.<name> 访问时的记录表（供 layoutIdHintFor 复用同一张资源表）。 */
+        const resourcesNameIndex = Object.create(null);
+
+        function uiLayoutArg(input) {
+            if (typeof input === 'number') {
+                return Number.isInteger(input) && input !== 0 ? {layoutId: input} : null;
+            }
+            if (input && typeof input === 'object' && input.__ajsLayout) {
+                const parts = String(input.__ajsLayout).split('/');
+                return {name: parts[parts.length - 1]};
+            }
+            if (typeof input === 'string' && input.trim().length > 0) {
+                const text = input.trim();
+                // 字符串形式的数字（JSON/命令拼接误传）按资源 id 处理，不当布局名。
+                if (/^-?\d+$/.test(text)) return uiLayoutArg(Number(text));
+                return {name: text};
+            }
+            return null;
+        }
+        function layoutTypeError(input) {
+            return new TypeError('ui.inflate 只支持 XML 字符串（以 "<" 开头）或资源 id（ui.R.layout.xxx / 数字 id），收到：'
+                + Object.prototype.toString.call(input));
+        }
+        /** 无法解析布局：按输入类型区分「宿主只支持 XML/资源 id」与「布局不存在」。 */
+        function layoutResolveError(arg, value) {
+            if (arg && arg.layoutId != null && !arg.name) {
+                return new Error('ui.inflate 收到资源 id（' + arg.layoutId + '），但当前宿主的布局表里没有它：'
+                    + '宿主可能只支持 XML 字符串或已知布局名（旧宿主 inflate 只接受 name 解析）。'
+                    + '请改用 ui.inflate("<.../>") 动态布局，或升级宿主后按 id inflate。');
+            }
+            return new Error('布局不存在：' + String(value)
+                + '（ui.inflate 只支持 XML 字符串或资源 id：请检查布局名/资源 id，或改用 ui.inflate("<.../>")）');
+        }
+        function inflateRequestFor(arg) {
+            if (arg.name) {
+                const request = {name: arg.name};
+                const hint = layoutIdHintFor(arg.name);
+                if (hint) request.layoutId = hint;
+                return request;
+            }
+            return {layoutId: arg.layoutId};
+        }
+
+        // ---- 新协议调用 ---------------------------------------------------------
+        /** 与 uiRequestView 相同，但不把 !ok 转成异常（便于区分「宿主缺能力」）。 */
+        function uiRequestViewRaw(op, params) {
+            const request = {};
+            if (params) {
+                Object.keys(params).forEach(function (key) {
+                    if (params[key] !== undefined) request[key] = params[key];
+                });
+            }
+            request.op = op;
+            try {
+                return hostCall(request);
+            } catch (error) {
+                // 宿主返回 !ok（未知 op/不支持）时保留错误文本，交给调用方分类；
+                // 真正的桥接异常（非法 JSON 等）仍然抛出，避免掩盖宿主故障。
+                const text = String(error && error.message ? error.message : error);
+                if (/Node UI 宿主|非法 JSON|未启用/.test(text)) throw error;
+                return {ok: false, error: text};
+            }
+        }
+        /**
+         * task-254：宿主视图协议入口。
+         *
+         * 与宿主侧 NodeUiProtocol 对齐：op:"uiRequestView" + {action, ...params}（参数扁平，
+         * 宿主 viewActionParams 会把顶层字段与 params 子对象合并，params 优先）。
+         * 旧宿主（只认 viewCommand + action）由 viewRequestCompat 回退。
+         */
+        function viewRequest(action, params) {
+            const request = {action: action};
+            if (params) {
+                Object.keys(params).forEach(function (key) {
+                    if (params[key] !== undefined) request[key] = params[key];
+                });
+            }
+            const response = uiRequestViewRaw(NODE_UI_VIEW_OP, request);
+            if (response && (response.ok === true || !isUnsupportedHostMessage(String(response.error || '')))) {
+                return response;
+            }
+            // 旧宿主：把它当作 viewCommand action 再试一次。
+            return uiRequestViewRaw('viewCommand', request);
+        }
+
+        // ---- 2.5：View 参与真实视图树（宿主协议优先，真实 Java 兜底） --------------
+        function nativeViewOf(handle) {
+            if (handle == null) return null;
+            if (typeof handle === 'object') {
+                // 直接传入真实 Java View（inline/宽布局 inflate 的返回值）。
+                if (handle.__ajsJavaObject__ === true) return handle;
+                const raw = handle.__nativeView;
+                if (raw && raw.__ajsJavaObject__ === true) return raw;
+                return null;
+            }
+            // 宿主句柄字符串/数字：Java 侧 NodeUiLocalSession.nativeView 还原成真实 View；
+            // 旧宿主没有该方法时返回 null（调用方回退到宿主协议）。
+            if (typeof handle === 'string' || typeof handle === 'number') {
+                try {
+                    const session = javaSession();
+                    const method = session.nativeView;
+                    if (typeof method !== 'function') return null;
+                    // prelude 的 Java 代理要求显式 invoke(receiver, args)；兼容直接调用。
+                    let view;
+                    try {
+                        view = method(handle);
+                    } catch (invokeError) {
+                        if (typeof method.invoke !== 'function') throw invokeError;
+                        view = method.invoke(session, [handle]);
+                    }
+                    return view && view.__ajsJavaObject__ === true ? view : null;
+                } catch (ignored) {
+                    return null;
+                }
+            }
+            return null;
+        }
+        function callNativeView(view, method, args) {
+            if (!view || typeof view[method] !== 'function') return undefined;
+            return view[method].apply(view, args || []);
+        }
+        /**
+         * addView：优先新宿主协议（handleId/childHandle），宿主没有该动作时退回真实 Java View，
+         * 两者都不可用时抛出明确错误（绝不静默）。
+         */
+        function viewFacadeAddView(parentHandle, childHandle, index) {
+            const childNative = nativeViewOf(childHandle);
+            if (!childNative && (!childHandle || !childHandle.__handleId)) {
+                throw new Error('addView 需要 ui.inflate/ui.findViewById 返回的 View（当前参数不是视图句柄，'
+                    + '也不是真实 Java View）');
+            }
+            const raw = nativeViewOf(parentHandle);
+            if (raw) {
+                try {
+                    callNativeView(raw, 'addView', [childNative || childHandle, index]);
+                    return parentHandle;
+                } catch (error) {
+                    if (!isUnsupportedHostMessage(String(error && error.message || error))) throw error;
+                }
+            }
+            const response = viewRequest(VIEW_PROTOCOL.addView, {
+                handleId: parentHandle.__handleId,
+                childHandle: childHandle.__handleId,
+                index: index
+            });
+            if (response && response.ok === true) return parentHandle;
+            throw new Error('addView 宿主不支持：' + String(response && response.error || '')
+                + '（需要宿主实现 viewCommand addView/removeView/getParent，或使用真实 Java View）');
+        }
+        function viewFacadeRemoveView(parentHandle, childHandle) {
+            const parentNative = nativeViewOf(parentHandle);
+            if (parentNative) {
+                try {
+                    callNativeView(parentNative, 'removeView', [nativeViewOf(childHandle) || childHandle]);
+                    return parentHandle;
+                } catch (error) {
+                    if (!isUnsupportedHostMessage(String(error && error.message || error))) throw error;
+                }
+            }
+            const response = viewRequest(VIEW_PROTOCOL.removeView, {
+                handleId: parentHandle.__handleId,
+                childHandle: childHandle && childHandle.__handleId
+            });
+            if (response && response.ok === true) return parentHandle;
+            throw new Error('removeView 宿主不支持：' + String(response && response.error || '')
+                + '（需要宿主实现 viewCommand removeView）');
+        }
+        /** getParent：宿主协议优先；真实 Java View 直接调用 getParent()。 */
+        function viewFacadeGetParent(handle) {
+            const raw = nativeViewOf(handle);
+            if (raw) {
+                try {
+                    const parent = callNativeView(raw, 'getParent', []);
+                    if (parent != null) return parent;
+                    if (parent === null) return null;
+                } catch (error) {
+                    if (!isUnsupportedHostMessage(String(error && error.message || error))) throw error;
+                }
+            }
+            const response = viewRequest(VIEW_PROTOCOL.getParent, {handleId: handle.__handleId});
+            if (response && response.ok === true) {
+                return response.handleId ? uiWrapHandle(response) : null;
+            }
+            throw new Error('getParent 宿主不支持：' + String(response && response.error || '')
+                + '（需要宿主实现 viewCommand getParent，或使用真实 Java View）');
+        }
+        function viewFacadeTreeValue(handle, action, value) {
+            const response = viewRequest(action, {handleId: handle.__handleId, value: value});
+            if (response && response.ok === true) return response.value;
+            throw new Error(action + ' 宿主不支持：' + String(response && response.error || '')
+                + '（需要宿主实现 viewCommand ' + action + '）');
+        }
+
+        // ---- 2.9/2.1：View 事件（宿主协议 + 原生 Listener + 轮询兜底） -------------
+        let viewExtrasByHandle = new WeakMap();
+        /** 句柄/真实 View 共用的事件回调表（click/check/text_change/... 每个 View 一份）。 */
+        let viewEventHandlers = new WeakMap();
+        function eventHandlersOf(view) {
+            let handlers = viewEventHandlers.get(view);
+            if (!handlers) { handlers = Object.create(null); viewEventHandlers.set(view, handlers); }
+            return handlers;
+        }
+        /** id → 归属对象：Java View 与它的句柄门面共用同一份事件状态。 */
+        let viewIdentities = new WeakMap();
+        function viewIdentity(view) {
+            if (!view || typeof view !== 'object') return view;
+            const mapped = viewIdentities.get(view);
+            if (mapped) return mapped;
+            let identity = view;
+            if (view.__handleId) viewIdentities.set(view, identity);
+            else viewIdentities.set(view, identity);
+            return identity;
+        }
+        function viewHandleExtras(view) {
+            let extras = viewExtrasByHandle.get(view);
+            if (!extras) {
+                extras = {
+                    events: new (require('events').EventEmitter)(),
+                    handlers: Object.create(null),
+                    listeners: Object.create(null),
+                    state: {},
+                    poll: Object.create(null)
+                };
+                viewExtrasByHandle.set(view, extras);
+            }
+            return extras;
+        }
+        /**
+         * click/check/text_change 等事件统一走 realViewExtras（真实 View 身份），
+         * 宿主协议句柄则复用句柄 extras；两者都提供 {events, handlers}。
+         */
+        function eventExtras(view) {
+            const raw = receiverRawByHandle.has(view) ? receiverRawByHandle.get(view) : view;
+            if (raw && raw.__ajsJavaObject__ === true) {
+                const extras = viewExtras(raw);
+                extras.handlers = handlersFor(extras, raw);
+                return extras;
+            }
+            const extras = viewHandleExtras(view);
+            extras.handlers = handlersFor(extras, view);
+            return extras;
+        }
+        /** handlers 与 extras 同身份绑定：同一个 extras 永远拿到同一份 handler 表。 */
+        function handlersFor(extras, view) {
+            if (!extras.handlers) extras.handlers = eventHandlersOf(view);
+            return extras.handlers;
+        }
+        function viewProtocolGet(handle, action, value) {
+            const response = viewRequest(action, value === undefined
+                ? {handleId: handle.__handleId} : {handleId: handle.__handleId, value: value});
+            if (response && response.ok === true) return response.value;
+            throw new Error(action + ' 宿主不支持：' + String(response && response.error || ''));
+        }
+        /** 句柄的 click 注册状态（与 binding marker 共用 clickStates，按 viewId 查回）。 */
+        function viewHandleState(handle) {
+            let state = viewHandleStates.get(handle);
+            if (!state) {
+                const native = handle && handle.__ajsJavaObject__ === true;
+                state = {
+                    handle: handle,
+                    nativeJava: native,
+                    viewId: native ? 0 : (Number(handle.__viewId) || 0),
+                    viewName: native ? '' : (handle.__viewName || '')
+                };
+                viewHandleStates.set(handle, state);
+                if (state.viewId) clickStates[String(state.viewId)] = state;
+            }
+            return state;
+        }
+        let viewHandleStates = new WeakMap();
+        /** 需要轮询兜底的句柄状态（WeakSet 不可迭代，这里显式登记）。 */
+        let viewPollStates = new Set();
+        /** handleId → 视图门面：同一真实 View 必须复用同一 JS 身份（2.5 的真实视图树语义）。 */
+        const handleFacades = Object.create(null);
+        const VIEW_PROTOCOL_EVENT_NAME = {check: 'check', item_selected: 'item_selected', text_change: 'text_change'};
+        function dispatchRemoteEvent(handle, name, args) {
+            try { return viewHandleExtras(handle).events.emit.apply(viewHandleExtras(handle).events, [name].concat(args || [])); }
+            catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); return false; }
+        }
+        function onRemote(handle, event, handler) {
+            const extras = eventExtras(handle);
+            const name = String(event);
+            (extras.handlers[name] = extras.handlers[name] || []).push(handler);
+            const existing = viewHandleStates.get(handle);
+            if (existing && existing.polling && existing.polling[name]) return handle;
+            const action = VIEW_PROTOCOL_LISTENER[name];
+            // 真实 Java View：直接安装原生 Listener（inline/宽布局/ContentView），不走宿主 handle 协议。
+            const isNativeView = !!(handle && (handle.__ajsJavaObject__ === true || nativeViewOf(handle)));
+            if (isNativeView) {
+                const bound = bindNativeViewEvent(handle, eventExtras(handle), name);
+                if (bound) {
+                    eventExtras(handle).listeners[name] = 'native';
+                    return handle;
+                }
+                if (VIEW_INPUT_EVENTS.indexOf(name) >= 0) {
+                    throw new Error('真实 Java View 不支持 ' + name + '：宿主方法缺失');
+                }
+            } else if (action) {
+                const response = viewRequest(action, {handleId: handle.__handleId, channel: name});
+                if (response && response.ok === true) {
+                    extras.listeners[name] = 'host';
+                    return handle;
+                }
+                if (!isUnsupportedHostMessage(String(response && response.error || ''))) {
+                    throw new Error(response && response.error ? String(response.error)
+                        : (name + ' 事件绑定失败'));
+                }
+            }
+            if (VIEW_INPUT_EVENTS.indexOf(name) >= 0) {
+                throw new Error('当前宿主不支持 ' + name + ' 事件转发（需要宿主实现 viewCommand '
+                    + '事件通道；老宿主只支持 click/check/text_change/item_selected 与轮询兜底）');
+            }
+            // 轮询兜底：click 不可观测，明确报错；check/text_change/item_selected 用状态快照。
+            if (name === 'click') {
+                throw new Error('当前宿主不支持 click 事件转发（需要宿主实现 viewCommand setOnClickListener）');
+            }
+            if (name === 'check' || name === 'text_change' || name === 'item_selected') {
+                extras.listeners[name] = 'poll';
+                startViewPolling(viewHandleState(handle), name);
+                return handle;
+            }
+            const typed = name === 'itemSelected' ? 'item_selected' : name;
+            throw new Error('当前宿主不支持 ' + name + ' 事件（可用事件：click/check/long_click/touch/key/'
+                + 'scroll_change/text_change/item_selected；需要宿主实现 ' + typed + ' 转发）');
+        }
+        function onceRemote(handle, event, handler) {
+            const wrapped = function () {
+                offRemote(handle, event, wrapped);
+                return handler.apply(null, arguments);
+            };
+            return onRemote(handle, event, wrapped);
+        }
+        function offRemote(handle, event, handler) {
+            const extras = eventExtras(handle);
+            const list = extras.handlers[String(event)];
+            if (Array.isArray(list)) {
+                const index = list.indexOf(handler);
+                if (index >= 0) list.splice(index, 1);
+            }
+            return handle;
+        }
+        function removeAllRemoteListeners(handle, event) {
+            const extras = eventExtras(handle);
+            const names = event == null ? Object.keys(extras.handlers) : [String(event)];
+            names.forEach(function (name) {
+                const list = extras.handlers[name];
+                if (Array.isArray(list)) list.length = 0;
+                delete extras.listeners[name];
+                delete extras.poll[name];
+            });
+            return handle;
+        }
+        /**
+         * 轮询兜底：宿主没有事件通道时用 viewCommand 读状态快照。
+         * check → isChecked()；text_change → getText()；item_selected → getSelectedItemId()。
+         */
+        function startViewPolling(state, event) {
+            if (state.polling && state.polling[event]) return;
+            const handle = state.handle;
+            if (nativeViewOf(handle)) {
+                // 真实 Java View：Android 回调由 bindNativeViewEvent 安装，不能轮询（会双发）。
+                console.warn('[ui] ' + event + ' 已有原生监听器，不启用轮询兜底');
+                return;
+            }
+            let read;
+            if (event === 'check') read = h => !!viewProtocolGet(h, 'isChecked');
+            else if (event === 'text_change') read = h => String(viewProtocolGet(h, 'getText'));
+            else read = h => Number(viewProtocolGet(h, 'getSelectedItemId')) || 0;
+            let baseline;
+            try { baseline = read(handle); } catch (error) {
+                console.warn('[ui] ' + event + ' 轮询兜底不可用（宿主没有读取接口）：', error);
+                return;
+            }
+            state.polling = state.polling || Object.create(null);
+            state.polling[event] = {read: read, last: baseline};
+            viewPollStates.add(state);
+        }
+        /** pollEvents 的额外状态轮询（120ms 节拍）：状态变化才回调。 */
+        function pollViewProtocol() {
+            viewPollStates.forEach(function (state) {
+                if (!state.polling) return;
+                Object.keys(state.polling).forEach(function (event) {
+                    const poll = state.polling[event];
+                    let value;
+                    try { value = poll.read(state.handle, event); } catch (error) {
+                        console.warn('[ui] ' + event + ' 轮询读取失败：', error);
+                        return;
+                    }
+                    if (value === poll.last) return;
+                    poll.last = value;
+                    dispatchHandleEvent(state.handle, event, event === 'check' ? [value]
+                        : event === 'text_change' ? [value] : [value]);
+                });
+            });
+        }
+        /** 协议事件分发到句柄事件表 + 该 viewId 的注册状态（pollEvents 的 check 等也走这里）。 */
+        function dispatchHandleEvent(handle, name, args) {
+            const extras = eventExtras(handle);
+            const list = extras.handlers[name];
+            const count = extras.events.listenerCount(name);
+            if ((!Array.isArray(list) || !list.length) && count === 0) return;
+            try {
+                if (Array.isArray(list) && list.length) {
+                    list.slice().forEach(function (handler) {
+                        try { handler.apply(null, args || []); }
+                        catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
+                    });
+                    return;
+                }
+                extras.events.emit.apply(extras.events, [name].concat(args || []));
+            } catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
+        }
+
+        // ---- 2.9/2.1：真实 Java View 的原生监听器（Activity 编译布局路径） ---------
+        function bindNativeViewEvent(view, extras, event) {
+            const receiver = receiverRawByHandle.has(view) ? receiverRawByHandle.get(view) : view;
+            // 真实 Java 对象可能是 prelude 代理，也可能是桥返回的裸 Java 对象；统一解析。
+            const native = nativeViewOf(receiver) || (receiver && receiver.__ajsJavaObject__ === true
+                ? receiver : null);
+            if (!native) return false;
+            if (!extras) extras = eventExtras(receiver);
+            // handlers 表由 eventExtras/handlersFor 统一提供，这里绝不能再换一份。
+            extras.handlers = extras.handlers || eventHandlersOf(receiver);
+            // prelude 的 Java 回调对象是函数代理：调用时可能需要显式 invoke(receiver, args)。
+            function invokeCallback(listener, name, args) {
+                if (!listener) return undefined;
+                const member = listener[name];
+                if (typeof member === 'function') return member.apply(listener, args);
+                if (typeof listener === 'function') {
+                    if (typeof listener.invoke === 'function') return listener.invoke(null, args);
+                    return listener.apply(null, args);
+                }
+                if (typeof member === 'function') return member.apply(listener, args);
+                return undefined;
+            }
+            const emit = function (name) {
+                const list = extras.handlers[name];
+                if (!Array.isArray(list) || !list.length) return;
+                const args = Array.prototype.slice.call(arguments, 1);
+                list.slice().forEach(function (handler) {
+                    try { handler.apply(null, args); }
+                    catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
+                });
+            };
+            extras.nativeEmit = emit;
+            let method = null, callbacks = null;
+            if (event === 'click' || event === 'check' || event === 'long_click'
+                    || event === 'touch' || event === 'key' || event === 'scroll_change') {
+                if (event === 'click') {
+                    method = 'setOnClickListener';
+                    callbacks = {onClick: function (source) { emit('click', source); }};
+                } else if (event === 'check') {
+                    method = 'setOnCheckedChangeListener';
+                    callbacks = {onCheckedChanged: function (source, checked) {
+                        emit('check', !!checked, source);
+                    }};
+                } else if (event === 'long_click') {
+                    method = 'setOnLongClickListener';
+                    callbacks = {onLongClick: function (source) {
+                        const e = inputEvent(null, {view: source});
+                        emit('long_click', e, source);
+                        return !!e.consumed;
+                    }};
+                } else if (event === 'touch') {
+                    method = 'setOnTouchListener';
+                    callbacks = {onTouch: function (source, nativeEvent) {
+                        const e = inputEvent(nativeEvent, {view: source});
+                        const action = Number(nativeEvent.getAction()) & 255;
+                        const phase = action === 0 ? 'touch_down' : action === 1 ? 'touch_up' : action === 2 ? 'touch_move' : null;
+                        if (phase) emit(phase, e, source);
+                        emit('touch', e, source);
+                        return !!e.consumed;
+                    }};
+                } else if (event === 'key') {
+                    method = 'setOnKeyListener';
+                    callbacks = {onKey: function (source, keyCode, nativeEvent) {
+                        const e = inputEvent(nativeEvent, {view: source});
+                        const action = Number(nativeEvent.getAction());
+                        if (action === 0 || action === 1) {
+                            emit(action === 0 ? 'key_down' : 'key_up', keyCode, e, source);
+                        }
+                        emit('key', keyCode, e, source);
+                        return !!e.consumed;
+                    }};
+                } else {
+                    method = 'setOnScrollChangeListener';
+                    callbacks = {onScrollChange: function (source, scrollX, scrollY, oldScrollX, oldScrollY) {
+                        emit('scroll_change', inputEvent(null,
+                            {view: source, scrollX, scrollY, oldScrollX, oldScrollY}), source);
+                    }};
+                }
+            } else if (event === 'text_change') {
+                method = typeof native.setTextChangedListener === 'function' ? 'setTextChangedListener'
+                    : (typeof native.addTextChangedListener === 'function' ? 'addTextChangedListener' : null);
+                callbacks = {
+                    onTextChanged: function (source, start, before, count) {
+                        let value = '';
+                        try {
+                            value = source && typeof source.getText === 'function' ? String(source.getText())
+                                : (source != null ? String(source) : '');
+                        } catch (ignored) { value = ''; }
+                        emit('text_change', value, Number(count) || 0);
+                    }
+                };
+            } else if (event === 'item_selected') {
+                method = typeof native.setOnItemSelectedListener === 'function' ? 'setOnItemSelectedListener'
+                    : (typeof native.setItemSelectedListener === 'function' ? 'setItemSelectedListener' : null);
+                callbacks = {
+                    onItemSelected: function (source, item) {
+                        let id = 0;
+                        try { id = item && typeof item.getItemId === 'function' ? Number(item.getItemId()) : 0; }
+                        catch (ignored) { id = 0; }
+                        emit('item_selected', id, source);
+                    },
+                    onNothingSelected: function () { }
+                };
+            } else {
+                return false;
+            }
+            if (!method) return false;
+            const Listener = globalThis.$autojs.java.findClass(event === 'text_change'
+                ? 'android.text.TextWatcher' : 'com.google.android.material.navigation.NavigationBarView$OnItemSelectedListener');
+            // prelude 回调对象是函数代理：按接口方法名包一层，保证 Java 侧能回调到（保留逐事件语义）。
+            const installed = {};
+            Object.keys(callbacks).forEach(function (name) {
+                const callback = callbacks[name];
+                installed[name] = function () { return callback.apply(null, arguments); };
+            });
+            native[method](new Listener(installed));
+            return true;
+        }
+
         function bindViewEvent(view, extras, event) {
             const group = /^touch(?:_down|_up|_move)?$/.test(event) ? 'touch'
                 : /^key(?:_down|_up)?$/.test(event) ? 'key' : event;
@@ -195,6 +856,10 @@
                         + String(view && view.__class || 'unknown') + '）');
                 }
                 ensureDrawListener(view, extras);
+            } else if (bindNativeViewEvent(view, extras, event)) {
+                // 真实 Java View（inline/宽布局）：直接安装原生 Listener。
+                extras.bound[event] = true;
+                return;
             } else {
                 let listenerClass, method, callbacks;
                 function dispatch(name, args) {
@@ -244,7 +909,14 @@
                             dispatch('scroll_change', [inputEvent(null, {view: source, scrollX, scrollY, oldScrollX, oldScrollY}), source]);
                         }};
                         break;
-                    default: throw new Error('Node View 事件暂不支持：' + event);
+                    default:
+                        // 2.1/2.9：Activity 编译布局路径上的 text_change / item_selected 真实回调。
+                        if (bindNativeViewEvent(view, extras, group)) {
+                            extras.bound[group] = true;
+                            return;
+                        }
+                        throw new Error('Node View 事件暂不支持：' + event
+                            + '（可用：click/check/long_click/touch/key/scroll_change/text_change/item_selected）');
                 }
                 const Listener = globalThis.$autojs.java.findClass(listenerClass);
                 view[method](new Listener(callbacks));
@@ -732,21 +1404,53 @@
             if (typeof handler !== 'function') {
                 throw new TypeError('click 监听需要一个函数');
             }
+            if (!state.viewId && state.handle) {
+                state.viewId = Number(state.handle.__viewId) || 0;
+                if (!state.viewId && state.handle.__handle != null) {
+                    state.viewId = Number(state.handle.__handle) || 0;
+                    state.clickBound = true;
+                }
+            }
             if (!state.viewId) {
-                // task-194：Adapter item 探测/动态视图可能没有 id，click 绑定降级为 no-op，
-                // 不再抛错（否则示例会打出「无法绑定 click」warning）。
+                // task-194：Adapter item 探测/动态视图可能没有 id。
+                // task-254：显式报错而不是静默 no-op（2.5）；marker 兼容路径仍按旧语义降级。
+                if (state.handle) {
+                    throw new Error('click 事件需要 View 的 viewId（宿主 inflate/findViewById 没有返回 viewId）：'
+                        + '无法把宿主 click 事件映射回 JS 回调，请升级宿主或改用真实 Java View 的 setOnClickListener');
+                }
                 return false;
             }
             state.clickHandlers = state.clickHandlers || [];
             state.clickHandlers.push(handler);
             clickStates[String(state.viewId)] = state;
-            if (!state.clickBound) {
-                uiRequestView('bindClick', {
-                    id: state.viewId,
-                    name: state.viewName || ''
-                });
-                state.clickBound = true;
+            if (state.clickBound) return true;
+            const handle = state.handle;
+            // 1) 协议句柄（ui.inflate/viewCommand 门面）：走 viewCommand setOnClickListener + 事件队列。
+            if (handle && handle.__handleId) {
+                const response = viewRequest(VIEW_PROTOCOL.setOnClickListener,
+                    {handleId: handle.__handleId, channel: 'click'});
+                if (response && response.ok === true) {
+                    state.clickBound = true;
+                    return true;
+                }
+                throw new Error('click 事件绑定失败：' + String(response && response.error || ''));
             }
+            // 2) 真实 Java View：宿主 bindClick 事件按 viewId 回到 dispatchViewClick；
+            //    没有 id 时上面的 viewFacadeOn 已经走了原生 setOnClickListener。
+            if (handle && handle.__ajsJavaObject__ === true) {
+                state.clickBound = true;
+                return true;
+            }
+            // 3) 老宿主 marker 路径：bindClick。
+            const response = uiRequestViewRaw('bindClick', {
+                id: state.viewId,
+                name: state.viewName || ''
+            });
+            if (response && response.ok === true) {
+                state.clickBound = true;
+                return true;
+            }
+            throw new Error('click 事件绑定失败：' + String(response && response.error || ''));
         }
 
         function markerObject(name, extra) {
@@ -763,15 +1467,31 @@
                     if (key === 'toString') return function () { return '[NodeUI ' + state.name + ']'; };
                     if (key === 'valueOf') return function () { return 0; };
                     if (key === 'toJSON') return function () { return {}; };
-                    if (key === 'on') return function (eventName, handler) {
-                        if (String(eventName) === 'click') {
-                            registerViewClick(state, handler);
-                        }
-                        return proxy;
+                    if (key === 'on' || key === 'once' || key === 'addListener') return function (eventName, handler) {
+                        return viewFacadeOn(proxy, eventName, handler, key === 'once');
+                    };
+                    if (key === 'off' || key === 'removeListener') return function (eventName, handler) {
+                        return viewFacadeOff(proxy, eventName, handler);
+                    };
+                    if (key === 'removeAllListeners') return function (eventName) {
+                        return viewFacadeRemoveAllListeners(proxy, eventName);
                     };
                     if (key === 'setOnClickListener') return function (handler) {
+                        if (state.handle && typeof state.handle.setOnClickListener === 'function') {
+                            state.handle.setOnClickListener(handler);
+                            return proxy;
+                        }
                         registerViewClick(state, handler);
                         return proxy;
+                    };
+                    if (key === 'setOnCheckedChangeListener') return function (handler) {
+                        return viewFacadeOn(proxy, 'check', handler);
+                    };
+                    if (key === 'setOnTextChangedListener') return function (handler) {
+                        return viewFacadeOn(proxy, 'text_change', handler);
+                    };
+                    if (key === 'setOnItemSelectedListener') return function (handler) {
+                        return viewFacadeOn(proxy, 'item_selected', handler);
                     };
                     if (state.viewId > 0) {
                         // task-24：binding.<id> 对 text/input/button 等基础控件做真实 View 命令，
@@ -1084,7 +1804,11 @@
                                     // 回退到对应 res/layout XML（主进程 overlay 按 XML inflate）。
                                     globalThis.__ajsLastLayoutName = resName;
                                     const value = hostCall({op: 'layoutId', name: resName});
-                                    return typeof value.id === 'number' && value.id !== -1 ? value.id : 0;
+                                    const layoutId = typeof value.id === 'number' && value.id !== -1 ? value.id : 0;
+                                    // task-254（2.4）：记住 name→id，让 ui.inflate(数字 id) 能反查布局名。
+                                    if (layoutId) rememberLayoutId(resName, layoutId);
+                                    resourcesNameIndex[resName] = layoutId;
+                                    return layoutId;
                                 }
                                 const value = hostCall({op: 'resourceId', type: typeName, name: resName});
                                 return typeof value.id === 'number' && value.id !== -1 ? value.id : 0;
@@ -1658,9 +2382,64 @@
             Object.keys(viewBindings).forEach(function (key) { delete viewBindings[key]; });
             Object.keys(webFacadeByHandle).forEach(function (key) { delete webFacadeByHandle[key]; });
             Object.keys(webStateById).forEach(function (key) { delete webStateById[key]; });
+            // task-254：句柄/轮询状态不能串到下一轮脚本。
+            clearViewProtocolState();
             restoreJavaGlobals();
             if (!suppressLifecycle && !suppressAllDestroyed) emitActivityLifecycle('all_activities_destroyed');
             return true;
+        }
+
+        /**
+         * task-254：宿主协议事件（check/item_selected 等）按 viewId 找到同一个 View 门面，
+         * 回调注册在门面的事件表上（与 realViewExtras 的 View 身份无关，旧宿主也能收）。
+         */
+        function dispatchViewProtocolEvent(event, name, args) {
+            const document = eventNameArgs(name, event, args);
+            const viewId = Number(event && event.viewId) || 0;
+            const state = viewId ? clickStates[String(viewId)] : null;
+            if (state && state.handle) dispatchHandleEvent(state.handle, name, document);
+            // 真实 Java View：事件表存在 realViewExtras 上（可能与 clickStates 不是同一份）。
+            if (realUiMode) {
+                try {
+                    const root = javaSession().getContentView();
+                    const view = viewId && root ? root.findViewById(viewId) : null;
+                    if (view) dispatchRealViewEvent(view, name, document);
+                } catch (ignored) { /* 没有真实内容视图时忽略 */ }
+            }
+        }
+        /** 真实 Java View 的事件表（与 {@link realViewMember} 共用同一 extras）。 */
+        function dispatchRealViewEvent(view, name, args) {
+            try {
+                const extras = viewExtras(view);
+                if (extras) extras.events.emit.apply(extras.events, [name].concat(args || []));
+            } catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
+        }
+        /** 离散事件（check/item_selected/text_change）的回调参数。 */
+        function eventNameArgs(name, event, fallback) {
+            if (name === 'check') {
+                const checked = event && event.checked;
+                return [checked == null ? fallback[0] : !!checked];
+            }
+            if (name === 'text_change') {
+                return [String(event && (event.text != null ? event.text : event.value) || '')];
+            }
+            if (name === 'item_selected') {
+                const itemId = event && (event.itemId != null ? event.itemId : event.item_id);
+                return [itemId == null ? fallback[0] : itemId, event];
+            }
+            return fallback;
+        }
+
+        /** task-254：停止/重建时清掉句柄轮询与布局 id 反查缓存。 */
+        function clearViewProtocolState() {
+            Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
+            viewExtrasByHandle = new WeakMap();
+            viewHandleStates = new WeakMap();
+            viewEventHandlers = new WeakMap();
+            viewPollStates = new Set();
+            Object.keys(handleFacades).forEach(function (key) { delete handleFacades[key]; });
+            Object.keys(reverseLayoutIndex).forEach(function (key) { delete reverseLayoutIndex[key]; });
+            Object.keys(resourcesNameIndex).forEach(function (key) { delete resourcesNameIndex[key]; });
         }
 
         function dispatchViewClick(event) {
@@ -1874,7 +2653,12 @@
         }
 
         function pollEvents() {
+            // pollEvents 只在 UI 运行期间轮询；契约测试的 __viewProtocolPoll 直接跑一轮。
             if (pollTimer == null) return;
+            pollEventsOnce();
+        }
+
+        function pollEventsOnce() {
             let value;
             try {
                 value = hostCall({op: 'pollEvents'});
@@ -1884,7 +2668,17 @@
                 return;
             }
             const events = Array.isArray(value.events) ? value.events : [];
+            // 2.1/2.9：宿主没有事件通道时的状态轮询兜底（120ms 同一节拍）。
+            try { pollViewProtocol(); } catch (error) {
+                console.warn('[ui] 视图状态轮询失败：', error);
+            }
             events.forEach(function (event) {
+                // 2.9/2.1：View 事件独立于 Activity 生命周期分发（脚本可以先挂监听再 setMainActivity）。
+                if (event && VIEW_EVENT_TYPES[String(event.type || '')]) {
+                    if (String(event.type) === 'click') dispatchViewClick(event);
+                    else dispatchViewProtocolEvent(event, String(event.type), []);
+                    return;
+                }
                 if (event && String(event.type || '').indexOf('webview_') === 0) {
                     dispatchWebEvent(event);
                 } else if (realUiMode && event) {
@@ -2147,32 +2941,153 @@
             });
         }
         function uiRequestView(op, extra) {
-            var request = {};
-            if (extra) { for (var key in extra) { if (Object.prototype.hasOwnProperty.call(extra, key)) { request[key] = extra[key]; } } }
-            request.op = op;
-            var result = hostCall(request);
+            var result = uiRequestViewRaw(op, extra);
             if (!result || result.ok !== true) {
                 throw new Error((result && result.error) || ('ui 命令失败：' + op));
             }
             return result;
         }
-        function uiWrapHandle(result) {
-            var handleId = result.handleId;
-            function command(action, value) {
-                var response = uiRequestView('viewCommand', {handleId: handleId, action: action, value: value});
-                return response ? response.value : undefined;
+        function viewFacadeOn(handle, eventName, handler, once) {
+            if (typeof handler !== 'function') throw new TypeError('View.on/once 需要函数');
+            // 桥返回的 Java View 描述符（客户端对象）在 JS 侧直接可用，但事件仍要挂到 JS 表上。
+            if (handle && handle._rawView && handle.__ajsJavaObject__ === true) handle = handle._rawView;
+            const name = String(eventName);
+            if (handle && handle.__ajsJavaObject__ !== true && !handle.__handleId) {
+                throw new Error('View 事件需要一个真实的 View（句柄或 Java View），当前参数无效');
             }
-            return {
+            if (name === 'click') {
+                const nativeClick = bindNativeViewEvent(handle, eventExtras(handle), 'click');
+                registerViewClick(viewHandleState(handle), handler);
+                if (nativeClick) eventExtras(handle).listeners.click = 'native';
+                return handle;
+            }
+            return once ? onceRemote(handle, name, handler) : onRemote(handle, name, handler);
+        }
+        function viewFacadeOff(handle, eventName, handler) {
+            const name = String(eventName);
+            if (name === 'click') {
+                const state = viewHandleState(handle);
+                if (Array.isArray(state.clickHandlers)) {
+                    const index = state.clickHandlers.indexOf(handler);
+                    if (index >= 0) state.clickHandlers.splice(index, 1);
+                }
+                return handle;
+            }
+            return offRemote(handle, name, handler);
+        }
+        function viewFacadeRemoveAllListeners(handle, eventName) {
+            const state = viewHandleState(handle);
+            if (eventName == null || String(eventName) === 'click') state.clickHandlers = [];
+            return removeAllRemoteListeners(handle, eventName);
+        }
+        function viewCommandProxy(result) {
+            const handleId = result.handleId;
+            const viewId = Number(result.viewId) || 0;
+            const viewName = result.viewName == null ? '' : String(result.viewName);
+            // 普通 View 方法（setXxx 等）在宿主协议里按成员转发；事件方法在下面显式拦截。
+            function isEventMember(name) {
+                return name === 'on' || name === 'once' || name === 'addListener' || name === 'off'
+                    || name === 'removeListener' || name === 'removeAllListeners'
+                    || name === 'setOnClickListener' || name === 'setOnCheckedChangeListener'
+                    || name === 'setOnTextChangedListener' || name === 'setOnItemSelectedListener'
+                    || name === 'addTextChangedListener';
+            }
+            function isTreeMember(name) {
+                return name === 'addView' || name === 'removeView' || name === 'removeAllViews'
+                    || name === 'getParent' || name === 'getChildCount' || name === 'getChildAt'
+                    || name === 'findViewById' || name === 'findView' || name === 'click'
+                    || name === 'getText' || name === 'setText' || name === 'setVisibility'
+                    || name === 'getVisibility' || name === 'setEnabled' || name === 'setChecked'
+                    || name === 'isChecked';
+            }
+            function memberMethod(name) {
+                return function () {
+                    const args = Array.prototype.slice.call(arguments);
+                    const value = args.length ? args[0] : undefined;
+                    return command(name, value);
+                };
+            }
+            const proxy = {
                 __handleId: handleId,
-                __viewId: result.viewId,
-                setText: function (text) { command('setText', String(text)); return this; },
+                __viewId: viewId,
+                __viewName: viewName,
+                __class: result.className ? String(result.className) : 'android.view.View',
+                setText: function (text) { command('setText', String(text)); return proxy; },
                 getText: function () { return command('getText'); },
-                setVisibility: function (value) { command('setVisibility', Number(value)); return this; },
-                setEnabled: function (value) { command('setEnabled', !!value); return this; },
-                setChecked: function (value) { command('setChecked', !!value); return this; },
+                setVisibility: function (value) { command('setVisibility', Number(value)); return proxy; },
+                getVisibility: function () { return command('getVisibility'); },
+                setEnabled: function (value) { command('setEnabled', !!value); return proxy; },
+                setChecked: function (value) { command('setChecked', !!value); return proxy; },
                 isChecked: function () { return command('isChecked'); },
-                click: function () { return command('click'); }
+                click: function () { return command('click'); },
+                // 2.5：参与真实视图树（宿主协议；真实 Java View 时走原生）
+                addView: function (child, index) { return viewFacadeAddView(proxy, child, index); },
+                removeView: function (child) { return viewFacadeRemoveView(proxy, child); },
+                removeAllViews: function () { return viewFacadeTreeValue(proxy, VIEW_PROTOCOL.removeAllViews); },
+                getChildCount: function () { return viewFacadeTreeValue(proxy, VIEW_PROTOCOL.getChildCount); },
+                getChildAt: function (index) { 
+                    const response = viewRequest(VIEW_PROTOCOL.getChildAt, {handleId: handleId, value: Number(index) || 0});
+                    if (response && response.ok === true) return response.handleId ? uiWrapHandle(response) : null;
+                    throw new Error('getChildAt 宿主不支持：' + String(response && response.error || ''));
+                },
+                getParent: function () { return viewFacadeGetParent(proxy); },
+                findViewById: function (idOrName) {
+                    if (!viewId) return null;
+                    const id = typeof idOrName === 'number' ? idOrName : resolveViewId(String(idOrName));
+                    if (!id) return null;
+                    const found = uiRequestViewRaw('findViewById', {id: id, name: String(idOrName)});
+                    return found && found.ok === true ? uiWrapHandle(found) : null;
+                },
+                findView: function (idOrName) { return proxy.findViewById(idOrName); },
+                // 2.9 / 2.1：事件
+                on: function (eventName, handler) { return viewFacadeOn(proxy, eventName, handler, false); },
+                once: function (eventName, handler) { return viewFacadeOn(proxy, eventName, handler, true); },
+                addListener: function (eventName, handler) { return viewFacadeOn(proxy, eventName, handler, false); },
+                off: function (eventName, handler) { return viewFacadeOff(proxy, eventName, handler); },
+                removeListener: function (eventName, handler) { return viewFacadeOff(proxy, eventName, handler); },
+                removeAllListeners: function (eventName) { return viewFacadeRemoveAllListeners(proxy, eventName); },
+                setOnClickListener: function (handler) { return viewFacadeOn(proxy, 'click', handler, false); },
+                setOnCheckedChangeListener: function (handler) { return viewFacadeOn(proxy, 'check', handler, false); },
+                setOnTextChangedListener: function (handler) { return viewFacadeOn(proxy, 'text_change', handler, false); },
+                setOnItemSelectedListener: function (handler) { return viewFacadeOn(proxy, 'item_selected', handler, false); }
             };
+            function command(action, value) {
+                const response = viewRequest(action, {handleId: handleId, value: value});
+                if (response && response.ok === true) return response.value;
+                throw new Error(String(response && response.error)
+                    || ('viewCommand 失败：' + action));
+            }
+            if (viewId) clickStates[String(viewId)] = viewHandleState(proxy);
+            viewExtrasByHandle.set(proxy, viewHandleExtras(proxy));
+            handleFacades[handleId] = proxy;
+            // 未显式列出的成员按宿主 viewCommand 转发（getText/setText/performClick…），
+            // 这样 ui.inflate 返回的句柄仍是「真实 View」的完整门面。
+            return new Proxy(proxy, {
+                get: function (target, name) {
+                    if (typeof name === 'symbol' || name in target) return target[name];
+                    const key = String(name);
+                    if (key === 'then' || key === 'toJSON' || key === '__ajsMarker') return undefined;
+                    if (isEventMember(key) || isTreeMember(key)) return undefined;
+                    return memberMethod(key);
+                },
+                has: function (target, name) { return name in target || typeof name === 'string'; }
+            });
+        }
+        function uiWrapHandle(result) {
+            const handleId = result && result.handleId;
+            // 同一 handle 复用同一个门面：root.addView(child) 后 child.getParent() === root（真实身份）。
+            if (handleId && handleFacades[handleId]) {
+                const cached = handleFacades[handleId];
+                if (!cached.__viewId && Number(result.viewId)) cached.__viewId = Number(result.viewId);
+                if (!cached.__nativeView && result.nativeView && result.nativeView.__ajsJavaObject__ === true) {
+                    cached.__nativeView = result.nativeView;
+                }
+                return cached;
+            }
+            const facade = viewCommandProxy(result);
+            const raw = result && result.nativeView;
+            if (raw && raw.__ajsJavaObject__ === true) facade.__nativeView = raw;
+            return facade;
         }
         function uiFindViewById(idOrName) {
             if (realUiMode) {
@@ -2185,7 +3100,9 @@
             }
             var id = typeof idOrName === 'number' ? idOrName : 0;
             var name = typeof idOrName === 'string' ? idOrName : '';
-            return uiWrapHandle(uiRequestView('findViewById', {id: id, name: name}));
+            if (!id && !name) return null;
+            var response = uiRequestViewRaw('findViewById', {id: id, name: name});
+            return response && response.ok === true ? uiWrapHandle(response) : null;
         }
         function uiSetContentView(layoutOrView) {
             if (!realUiMode && typeof layoutOrView === 'string' && layoutOrView.trim().charAt(0) === '<'
@@ -2218,14 +3135,54 @@
                 attachCustomWidgets(expanded.records, mainViews, view);
                 return view;
             }
+            // 2.4：数字资源 id / {type,name} / 布局名 统一归一化；数字解析成布局（含名字提示）。
+            const arg = uiLayoutArg(layoutName);
+            if (!arg) throw layoutTypeError(layoutName);
+            if (!arg.name && arg.layoutId) {
+                const hint = layoutNameHintFor(arg.layoutId, true);
+                // 宿主反查回来的名字必须是真名字（不是数字回声），否则只按 id 请求。
+                if (hint && !/^-?\d+$/.test(hint)) arg.name = hint;
+            }
             if (realUiMode) {
                 const activity = requireRealActivity();
-                const layout = layoutOf(layoutName);
-                const id = layout.layoutId || (layout.name && R.layout[layout.name]);
-                if (!id) throw new Error('未找到布局资源：' + String(layoutName));
+                const id = arg.layoutId || (arg.name ? R.layout[arg.name] : 0);
+                if (!id) throw layoutResolveError(arg, layoutName);
                 return activity.getLayoutInflater().inflate(id, parent || null, !!attachToParent);
             }
-            return uiWrapHandle(uiRequestView('inflate', {name: String(layoutName || '')}));
+            const request = inflateRequestFor(arg);
+            if (parent && parent.__handleId) {
+                request.parentHandle = parent.__handleId;
+                request.attachToParent = !!attachToParent;
+            }
+            const response = uiRequestViewRaw('inflate', request);
+            if (response && response.ok === true) return uiWrapHandle(response);
+            const message = String(response && response.error || '');
+            // 老宿主只按 name 解析布局：没有可用名字时用宿主 layoutName 反查（不支持则放弃）。
+            if (!arg.name && arg.layoutId) {
+                const NameHint = layoutNameHintFor(arg.layoutId, true);
+                if (NameHint) {
+                    const byName = uiRequestViewRaw('inflate', {name: NameHint});
+                    if (byName && byName.ok === true) return uiWrapHandle(byName);
+                }
+            }
+            if (arg.name && request.layoutId) {
+                const byName = uiRequestViewRaw('inflate', {name: arg.name});
+                if (byName && byName.ok === true) return uiWrapHandle(byName);
+            }
+            // 宿主明确说不认识 layoutId（版本差异）时，错误归到「只支持 XML/资源 id」。
+            if (arg.layoutId != null && !arg.name && isUnsupportedHostMessage(message)) {
+                throw layoutResolveError(arg, layoutName);
+            }
+            if (/布局/.test(message) || /layout/i.test(message)) {
+                throw layoutResolveError(arg, layoutName);
+            }
+            throw new Error('ui.inflate 失败（' + describeLayoutArg(arg) + '）：'
+                + (message || '宿主没有返回结果'));
+        }
+        function describeLayoutArg(arg) {
+            if (arg && arg.layoutId != null && arg.name) return 'id=' + arg.layoutId + ' name=' + arg.name;
+            if (arg && arg.layoutId != null) return 'id=' + arg.layoutId;
+            return 'name=' + String(arg && arg.name || '');
         }
         /**
          * 批量 inflate 子 View：把 count 次 inflate 合并成一次宿主调用（减少 JNI/回调与逐条 render）。
@@ -2395,7 +3352,18 @@
             loadAndroidResources: loadAndroidResources,
             setMainActivity: setMainActivity,
             close: close,
-            __pollTimer: function () { return pollTimer; }
+            __pollTimer: function () { return pollTimer; },
+            // 契约测试hook：直接跑一轮 pollEvents（pollTimer 是 interval id，不是函数）。
+            __viewProtocolPoll: function () { pollEventsOnce(); },
+            // task-254：内部探针（测试/诊断用；不承诺稳定 API）。
+            __viewProtocolTick: pollViewProtocol,
+            __viewProtocolProbe: function (event, viewId) {
+                const state = viewId == null ? null : clickStates[String(viewId)];
+                const handle = state && state.handle;
+                const extras = handle && viewExtrasByHandle.get(handle);
+                return !!(extras && (extras.listeners[String(event)] || extras.poll[String(event)]));
+            },
+            __viewProtocolNames: function () { return Object.keys(VIEW_PROTOCOL); }
         };
         return ui;
     });
