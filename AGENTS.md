@@ -2,7 +2,9 @@
 
 > **2026-10-31 当前发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](docs/reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。真机验证：Activity/绑定路径 click/check/text_change 全部回调（含真实点击）、`ui.inflate(R.layout.x)`、`addView/getParent`、`JsViewPager childCount=3/adapterCount=3`、BottomNav 菜单与监听；keepRunning 引用计数保活；文档索引 781 条。已知剩余：`setSelectedItemId` NPE、`ui.layout` 内联 binding 无 viewId、vector 仅诊断。
 
-> **2026-10-31 前次发布 dev-1294（LAN，MI8 已装）**：[节点对齐 R01–R08 集成与发布](docs/reports/2026-10-31_节点对齐R01-R08集成发布.md)。R01 Java 反射 varargs、R02/R03 Widget 共享根接收者与构造期 style/theme、R04 QuickJS ui.inflate、R05–R07 快照完整性/真 BFS/token 代次、R08 Node 等级2 自解包载荷与模板对账；562 引擎 JVM + 47 打包测试 + 契约 57 项；MI8 实测 R01/R04/R05/R07。135.98 MiB，SHA `f767e404…`；LAN 已发布，MI8 已装。
+> **发布渠道约定（2026-10-31 用户要求，先读这条）**：默认**只发 LAN**（`192.168.10.7:8080`），**不要逐版本建 GitHub Release/tag**；GitHub 只作代码托管，只有用户明确要求时才建 Release。按此约定已删除 dev-1292 / dev-1294 的 Release+tag，GitHub 只保留最新 dev-1297。
+
+> **2026-10-31 前次发布 dev-1294（LAN，MI8 已装，GitHub Release 已按约定删除）**：[节点对齐 R01–R08 集成与发布](docs/reports/2026-10-31_节点对齐R01-R08集成发布.md)。R01 Java 反射 varargs、R02/R03 Widget 共享根接收者与构造期 style/theme、R04 QuickJS ui.inflate、R05–R07 快照完整性/真 BFS/token 代次、R08 Node 等级2 自解包载荷与模板对账；562 引擎 JVM + 47 打包测试 + 契约 57 项；MI8 实测 R01/R04/R05/R07。135.98 MiB，SHA `f767e404…`；LAN 已发布，MI8 已装。
 
 > **2026-10-30 前次发布 dev-1292（LAN，MI8 已装）**：[Widget 标签/晚注册兼容与验收](docs/reports/2026-10-30_Node_Widget标签注册兼容.md)。注册优先于原生别名转换，保留原始名称/属性/空值/实体；列表模板到 bind 时判断。522 JVM、7 组 JS、宿主新 36+旧 41/30/32 项、独立 APK 36 项、真实点击/重建/停止通过；773 条文档同步。135.95 MiB，SHA befa99b6…，完整手机 LAN 下载一致，Downloads 有 APK/MD。保持 1291 日志修复，K40 未动。style/theme 全组合、复杂别名共享根、反射空 varargs、通用插件与全量高级 API 仍待继续。以下为历史记录。
 
