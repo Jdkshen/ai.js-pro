@@ -302,32 +302,32 @@ const loader = host.runtime.getAndroidClassLoader();
 
 ### 9.1 Node UI 已知问题状态（dev-1295 文档线，2026-10-31）
 
-来源：设备 `192.168.10.4` 上 `chess-auto/docs/已知问题.md` 第 2 章 / 第 2.15 节与 `chess-auto/node-port/ui/README.md` 第 6 章（Redmi 2602BRT18C / Android 16 / 宿主 **dev-1294** 实测）。**dev-1295 只做文档，未改 Java/JS 代码**；本次没有新增代码修复，下表“待修/待验”的项仍以设备实测为准。
+来源：设备 `192.168.10.4` 上 `chess-auto/docs/已知问题.md` 第 2 章 / 第 2.15 节与 `chess-auto/node-port/ui/README.md` 第 6 章（Redmi 2602BRT18C / Android 16 / 宿主 dev-1294 实测）。**dev-1295 候选已针对下列问题完成代码修复并通过 JVM/假宿主契约；真机回归待做**，因此“代码已修”不等于“设备验收”。
 
 | 编号 | 现象 | dev-1294 实测状态 | 依据 |
 | --- | --- | --- | --- |
 | 6.12 | `ViewGroup.LayoutParams.MATCH_PARENT` 被当类名解析 | ✅ 已修（设备实测） | `LP.MATCH_PARENT` 可直接取（-1）；`new LP(-1,-1)` 与 `new LP(LP.MATCH_PARENT, LP.MATCH_PARENT)` 均可用 |
-| 6.10 | `ui.inflate(layoutId)` 找不到布局 | ❌ 未修 | `ui.inflate.arity=3`，只吃 XML 字符串；传资源 ID 报“找不到布局” |
-| 6.11 | `ui.inflate()` 返回 NodeUI 包装对象，`getParent()` 恒 null | ❌ 未修（设备实测） | 设备实测返回 `[NodeUI View]`、`frameLayout.getChildCount()=0`，不能 `addView()` 挂页面 |
-| 6.13 | `setOnClickListener` / `setOnCheckedChangeListener` / `view.on('check')` / `addTextChangedListener` 不回调 | ❌ 未修（最关键） | 4 类控件“挂载成功”，实际点击/勾选后控件视觉状态变化但 JS 回调一次未触发 |
-| 2.1 | 输入框无文本变化事件，只能轮询 `getText()` | ❌ 未修 | 与 6.13 同类；17 个输入框 `afterTextChanged` 均不回调 |
-| 2.6 | `JsViewPager.initAdapterFromChildren()` 不识别 `<include>` | ❌ 未修 | `childCount=0`、`adapter.count=0`、`setCurrentItem(1)` 后 `currentItem` 仍为 0 |
-| 2.7 | `BottomNavigationView` itemId 与 `ui.R.id` 不一致、监听不回调 | — 未重测（设备已弃用该控件） | 只在已知问题文档保留 |
-| 2.2 | `Handler.postDelayed` 在 `onContentViewSet → _bind` 链里不执行 | ❌ 未修 | 同位置 `setTimeout` 正常；定时逻辑改用 `setTimeout` |
-| 2.3 / 6.6 | 工程自建 vector drawable 不进编译资源 | ❌ 未修 | 改用宿主内置 Material 图标（`ui.R.drawable`） |
-| 6.3 | `view.findViewById(id)` 返回包装对象，`setText` 会覆盖包装对象本身 | ❌ 未修 | 必须用 `view.binding.<id>` |
+| 6.10 | `ui.inflate(layoutId)` 找不到布局 | ✅ 代码已修（JVM 契约） | 接受数字 id / `ui.R.layout.x` / `{type,name}` / 名字；错误区分「只支持 XML/资源 id」与「布局不存在」 |
+| 6.11 | `ui.inflate()` 返回 NodeUI 包装对象，`getParent()` 恒 null | ✅ 代码已修（JVM 契约） | 真实 View 句柄 + `addView/getParent/getChildCount`；旧宿主缺协议时明确报错 |
+| 6.13 | `setOnClickListener` / `setOnCheckedChangeListener` / `view.on('check')` / `addTextChangedListener` 不回调 | ✅ 代码已修（JVM 契约） | 宿主真实 listener + JS 协议/原生/轮询三通道；真机待验 |
+| 2.1 | 输入框无文本变化事件，只能轮询 `getText()` | ✅ 代码已修（JVM 契约） | 新增 `on('text_change')`；旧宿主仍轮询 `getText()` 兜底 |
+| 2.6 | `JsViewPager.initAdapterFromChildren()` 不识别 `<include>` | ✅ 代码已修（JVM 契约） | `<include>` 展开进 child/adapter；真机需确认 `childCount=3`、切页不叠加 |
+| 2.7 | `BottomNavigationView` itemId 与 `ui.R.id` 不一致、监听不回调 | ✅ 代码已修（JVM 契约） | id 同源 + 菜单访问 + itemSelected 监听；真机待验 |
+| 2.2 | `Handler.postDelayed` 在 `onContentViewSet → _bind` 链里不执行 | ✅ 代码已修（JVM 契约） | 宿主提供主 Looper `postDelayed/removeCallbacks`；JS 侧 `setTimeout` 仍可用 |
+| 2.3 / 6.6 | 工程自建 vector drawable 不进编译资源 | ⚠️ 仅可执行诊断 | 未实现 vector 渲染；按提示跑 `tools/build-project-res.ps1` 或改用内置图标 |
+| 6.3 | `view.findViewById(id)` 返回包装对象，`setText` 会覆盖包装对象本身 | ⚠️ 待真机确认 | 继续用 `view.binding.<id>`；协议句柄已返回真实 viewId |
 | 6.4 | `binding[id]` 是函数但带 `setText/getText/setChecked` | — 行为说明（非缺陷） | 判空用 `if (!w || !w.setText) return;` |
 | 6.5 | `TextInputLayout` 文字渲染不出来 | ❌ 未修 | 换 `TextView` 标签 + 原生 `EditText` |
 
-**由此得到的脚本约束**（宿主修好前不要改回事件驱动）：
+**脚本约束（dev-1295 真机验收前仍按旧策略）**：
 
-- 开关读 `isChecked()`、输入框读 `getText()`，按 250ms 轮询、值稳定后写盘；`SWITCH_FIELDS` / `EDIT_FIELDS` 清单驱动。
-- 多页用单页滚动（`<include>` 串联进一个 `ScrollView`），不要用 `JsViewPager` / `BottomNavigationView`，也不要 `addView(ui.inflate(...))` 动态挂页。
+- 开关/输入框保留轮询兜底；真机确认 listener 稳定回调后再改事件驱动。
+- 多页保留单页滚动兜底；真机确认 `childCount=3` 且切页不叠加后再回到 `JsViewPager + BottomNavigationView`。
 - 被 `include` 的页面根不能再是 `ScrollView`，否则外层手势冲突。
 
 **MCP 侧独立待办**（与本表不是同一实现）：`ui_input` 曾把待写入文本混进节点查找条件，代码未改，仍按“待修/待验”记录；见 [听海 Node UI 兼容修复](../reports/2026-10-26_听海NodeUI兼容修复.md)。
 
-> 上述结论只在上述设备/宿主 dev-1294 上实测；换设备、换系统或宿主升级后需重跑测试脚本。文档不代表已修复，也不代表其它机型行为一致。
+> dev-1294 的设备实测结论见上表“依据”；dev-1295 候选的代码修复只过了 JVM/假宿主契约，**真机验收（MI8 与 chess-auto 设备）尚未完成**。
 
 **源码依据**
 - 引擎选择：`modules/engine/src/main/java/com/stardust/autojs/script/JavaScriptSource.java`（指令与优先级）；`Node24JavaScriptEngine.java`（60s/10min、feature 推断）。

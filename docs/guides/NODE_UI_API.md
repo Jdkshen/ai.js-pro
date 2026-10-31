@@ -233,3 +233,12 @@ Node 的 `ui.Activity` 与 Rhino/QuickJS 的传统 `ui.layout` 实现不同。No
 关闭某一个脚本只清理它拥有的窗口；“停止全部脚本”和音量上键走全局停止链路。任意第三方 native 库仍可能崩溃，进程隔离不等于能捕获所有 native 错误。
 
 本文依据本项目 `node24/ui.js`、`NodeUiLocalSession`、`NodeUiLocalActivity`、`ScriptResourceContext`、`Node24HostBridge` 的实际入口；资源加载、布局重建和停止路径已有小米 8 验证。未宣称全部高级版控件、所有厂商设备或独立打包 APK 都具有同等能力。
+
+## dev-1295 新增：文本变化、视图树与事件通道
+
+- `view.on('text_change', fn)`：输入框文本变化回调。真实 Java View 走 `TextWatcher`；协议句柄走宿主 `setOnTextChangedListener`；旧宿主退化为 120ms 轮询 `getText()`。
+- `ui.inflate` 现在接受：XML 字符串、数字资源 id、`ui.R.layout.x`、`{type:'layout', name:'page_x'}`、布局名。错误会区分「只支持 XML 字符串/资源 id」与「布局不存在」。
+- 视图树：`view.addView(child)`、`view.removeView(child)`、`view.removeAllViews()`、`view.getParent()`、`view.getChildCount()`、`view.getChildAt(i)`、`view.findViewById(id)`、`view.findView(name)`。同一 View 复用同一 JS 句柄，`addView(child)` 后 `child.getParent()` 身份稳定。
+- 事件：`click` / `check` / `text_change` / `item_selected` 走宿主协议通道；真实 Java View 同时支持原生 listener（`long_click/touch/key/scroll_change`）；宿主不支持时轮询兜底（`isChecked()/getText()/getSelectedItemId()`）。
+- 旧宿主：缺协议时抛明确中文错误，不再静默 no-op。
+- 2026-10-31 dev-1295 候选：以上只过了 JVM/假宿主契约，真机（MI8 / chess-auto 设备）验收待做；未验收前继续保留轮询与单页滚动兜底。
