@@ -1,6 +1,6 @@
 # AI 接手总纲（AI_HANDOFF）
 
-> **发布渠道约定（2026-10-31）**：默认只发 LAN，不逐版本建 GitHub Release/tag；GitHub 只作代码托管，用户明确要求时才建 Release。
+> **发布/推送约定（2026-10-31）**：默认只发 LAN，不逐版本建 GitHub Release/tag；代码提交默认只本地，不自动 push——只有用户明确说「推一次」才推。
 
 > **2026-10-31 当前发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。Node UI listener/text_change 真机回调、inflate layoutId、真实视图树、JsViewPager include、keepRunning 引用计数；已知剩余见报告 §3。
 
