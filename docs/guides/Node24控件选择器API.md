@@ -1,6 +1,6 @@
 # Node24 控件查询、点击与文字输入
 
-> 当前实现：dev-1279 节点 API 复核候选。主进程与 `:script` 分开验收；具体测试结果见 `docs/reports/2026-10-28_三引擎节点API复核与修复.md`。
+> 当前实现：dev-1294（R01–R08 节点对齐集成）。主进程与 `:script` 分开验收；节点分页/BFS/身份与 Java varargs 见 `docs/reports/2026-10-31_节点对齐R01-R08集成发布.md`，早期复核见 `docs/reports/2026-10-28_三引擎节点API复核与修复.md`。
 
 适用主 App 的 flutterPoc 构建。先开启本应用的无障碍服务，再在 Node 引擎中运行脚本。
 
@@ -253,3 +253,26 @@ if (slider && slider.setProgress(66)) {
 查询仍受宿主遍历预算约束（节点/深度/5 秒/约 200 KiB JSON；直接查询最多 500 项）。本轮不把极大树的部分快照称为完整结果；有序快照和分页仍待完善。三引擎实测与具体边界见后续复核报告。
 
 三套同名只读示例位于“示例 → 各引擎 → 三引擎统一示例 → 节点查询进阶_只读.js”。它们展示 DFS/BFS、自定义过滤和范围读取，空结果会如实显示，不把没有目标控件当作动作成功。
+
+## dev-1294 新增：分页/BFS/身份与 Java varargs
+
+### Node 快照与分页
+
+- `accessibility.snapshotInfo()` → `{nodes, complete, truncated, firstMissingPath, generation}`
+- `accessibility.treePage(limit[, cursor][, {signal}])` → `{nodes, complete, truncated, snapshotComplete, firstMissingPath, generation, seen, cursor}`
+- `select(spec).findPage(limit[, cursor][, {signal}])`：同一快照内稳定分页；游标绑定代次，过期/畸形明确报错；`signal.aborted` 时抛“已取消”
+- 完整性由宿主 DFS dump 的 path/childCount 重新校验；宿主单次预算（约 200KiB/500 节点/5s/5000 访问）未变，截断时只如实报告，不返回被截断的节点
+
+### 跨布局身份
+
+- `node.token` / `node.generation` / `node.isStale()`；插入/删除/列表复用后同一 path 换成别的节点 → `isStale()=true`，动作返回 `false`，不做坐标兜底
+- `index`/`findOnce(index)` 仍是 0..255；更大位置用 path + 身份条件定位
+
+### Java 反射可变参数
+
+- `Class.getMethod(name)`（省略空参数数组）现在可用；`getMethod(name, [])` 与省略写法一致
+- 支持零个/一个/多个 varargs；基本类型按组件类型收窄；固定参数重载优先于 varargs
+
+### QuickJS（R04）
+
+- QuickJS 公开 `ui.inflate(xml, parent?, attachToParent?)`，返回真实 View（Java 代理）；`$ui.inflate` 仍未暴露（C++ 白名单）
