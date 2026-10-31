@@ -255,8 +255,9 @@ viewFile('./screenshot.png');
 
 ### 3.2 执行时间、线程与并发
 
-- 默认 **headless** Node24 执行有 **60 秒**上限（`timeoutMillis=60000`）；普通脚本结束即返回。
-- 带 `keepRunning()` 或 UI 特征的脚本由宿主保活，现有上限为 **10 分钟**；超过后仍需重新运行。
+- 默认 headless Node24 执行上限为 **1 小时**（dev-1277 起；更早版本为 60 秒），普通脚本结束即返回。
+- 带 `keepRunning()` 或 UI 特征的脚本由宿主持续保活，没有固定到期时间；`keepRunning()` 可多次调用并按引用计数，`stopRunning()` 只释放最近一次，新增 `cancelKeepRunning(token)` 精确释放。
+- 入口文件或工程源码里出现 `keepRunning`（含被 `require` 的模块）都会按保活处理；只有运行时动态调用且不在工程源码里时，宿主仍按普通脚本的 1 小时上限执行。
 - Promise 只表示“结果稍后返回”，**不等于** native 并行：回调仍在 Node 线程执行，连续
   `await` 的宿主调用可能按顺序完成，不能据此假设多指/多任务已经并行。
 - `ui.run()` 立即在 Node 线程执行；`ui.post()` 用 Node `setTimeout` 调度，回调仍在 Node 线程。
