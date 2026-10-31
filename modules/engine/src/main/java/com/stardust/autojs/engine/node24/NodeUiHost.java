@@ -37,6 +37,7 @@ import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.inflater.ProjectResourceBundle;
+import com.stardust.autojs.core.ui.inflater.ProjectResources;
 import com.stardust.autojs.core.ui.inflater.ResourceParser;
 import com.stardust.autojs.core.ui.inflater.inflaters.BaseViewInflater;
 import com.stardust.autojs.core.ui.inflater.util.Drawables;
@@ -109,6 +110,19 @@ public final class NodeUiHost {
     private static final Map<String, ProjectResourceBundle> BUNDLE_CACHE = new LinkedHashMap<String, ProjectResourceBundle>(16, 0.75f, true) {
         @Override protected boolean removeEldestEntry(Map.Entry<String, ProjectResourceBundle> entry) { return size() > 8; }
     };
+    /**
+     * B→C 联动：当前 Node UI 会话的工程资源表。inline inflater 过去只有 {@code new Drawables()}，
+     * {@code <include layout="@layout/...">} 无法展开；会话建立/销毁时注入/清除后即可解析。
+     */
+    private static volatile ProjectResources sSessionResources;
+
+    public static void setSessionResources(ProjectResources resources) {
+        sSessionResources = resources;
+    }
+
+    public static ProjectResources sessionResources() {
+        return sSessionResources;
+    }
     private static final ArrayDeque<JSONObject> EVENTS = new ArrayDeque<>();
     /**
      * 主线程 Handler 延迟创建：类加载不触碰 Android Looper，JVM 单测可以加载本类做纯逻辑回归。
@@ -1207,6 +1221,10 @@ public final class NodeUiHost {
 
     private static DynamicLayoutInflater newInlineLayoutInflater(Context context) {
         ResourceParser parser = new ResourceParser(new Drawables());
+        ProjectResources sessionResources = sSessionResources;
+        if (sessionResources != null) {
+            parser.setProjectResources(sessionResources);
+        }
         NodeUiWidgetInflater.Registration widgets = NodeUiLocalSession.widgetRegistration(context);
         DynamicLayoutInflater inflater = widgets == null ? new DynamicLayoutInflater(parser)
                 : new NodeUiWidgetInflater(parser, widgets);

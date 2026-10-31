@@ -42,6 +42,8 @@ public class NodeUiLocalActivity extends AppCompatActivity {
                 com.stardust.autojs.core.ui.inflater.ScriptResourceContext.find(getIntent().getStringExtra("javaClassOwner"));
         ProjectResourceBundle bundle = ProjectResourceBundle.load(scriptContext == null ? getApplicationContext() : scriptContext,
                 new java.io.File(directory));
+        // B→C 联动：inline inflater 也要能展开 <include>，把本会话工程资源表注入 NodeUiHost。
+        NodeUiHost.setSessionResources(bundle.getResources());
         if (bundle.isCompiled()) projectResources = bundle.getCompiled().getResources();
         runtimeClasses = Node24GeneratedClasses.loader(getIntent().getStringExtra("javaClassOwner"), super.getClassLoader());
         int projectTheme = bundle.isCompiled() ? bundle.idOf("style", "MainTheme") : 0;
@@ -134,6 +136,7 @@ public class NodeUiLocalActivity extends AppCompatActivity {
         return NodeUiLocalSession.optionsItemSelected(item) || super.onOptionsItemSelected(item);
     }
     @Override protected void onDestroy() {
+        NodeUiHost.setSessionResources(null);
         NodeUiLocalSession.destroyed(this);
         super.onDestroy();
     }
