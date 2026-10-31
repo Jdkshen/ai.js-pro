@@ -3241,7 +3241,18 @@ public final class NodeUiHost {
     }
 
     private static int eventViewId(View view) {
-        return view == null ? 0 : view.getId();
+        if (view == null) {
+            return 0;
+        }
+        int id = view.getId();
+        // A's JS side keys click/check/text_change by viewId. XML roots without @+id
+        // (common for ui.inflate) would all report -1 and share one event bucket, so
+        // assign a stable generated id once and reuse it for listeners and responses.
+        if (id == android.view.View.NO_ID) {
+            id = android.view.View.generateViewId();
+            view.setId(id);
+        }
+        return id;
     }
 
     private static JSONObject itemPayload(Object item) {
@@ -3344,7 +3355,7 @@ public final class NodeUiHost {
                     if (view == null) {
                         throw new IllegalStateException("inflate 结果为空");
                     }
-                    result.set(viewHandleResult(view, view.getId(), viewName));
+                    result.set(viewHandleResult(view, eventViewId(view), viewName));
                 } catch (Throwable error) {
                     failure.set(error);
                 }
