@@ -118,8 +118,9 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
     protected GlobalConsole createGlobalConsole() {
         return new GlobalConsole(getUiHandler()) {
             @Override
-            public String println(int level, CharSequence charSequence) {
-                String log = super.println(level, charSequence);
+            public String printlnAt(int level, CharSequence charSequence, long time, String source) {
+                // Both direct println calls and the unified multi-process console use this entry.
+                String log = super.printlnAt(level, charSequence, time, source);
                 DevPluginService.getInstance().log(log);
                 return log;
             }
