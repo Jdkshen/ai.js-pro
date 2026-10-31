@@ -300,19 +300,19 @@ const loader = host.runtime.getAndroidClassLoader();
 - Node 自动化在主 App 已覆盖，但打包运行时（inrt）和独立打包 APK 的能力面可能不同；Node UI/截图/无障碍需按实际包单独验证。
 - Android 11+ 的无障碍截图有频率/页面保护限制；MediaProjection 每次授权只对应一个 job 会话；设备厂商可能额外限制后台启动/悬浮窗。本文未逐项执行 Android 真机回归，类型声明、示例和源码只能证明入口存在。
 
-### 9.1 Node UI 已知问题状态（dev-1295 文档线，2026-10-31）
+### 9.1 Node UI 已知问题状态（dev-1297 真机复测，2026-10-31）
 
-来源：设备 `192.168.10.4` 上 `chess-auto/docs/已知问题.md` 第 2 章 / 第 2.15 节与 `chess-auto/node-port/ui/README.md` 第 6 章（Redmi 2602BRT18C / Android 16 / 宿主 dev-1294 实测）。**dev-1295 候选已针对下列问题完成代码修复并通过 JVM/假宿主契约；真机回归待做**，因此“代码已修”不等于“设备验收”。
+来源：设备 `192.168.10.4` 上 `chess-auto/docs/已知问题.md` 第 2 章 / 第 2.15 节与 `chess-auto/node-port/ui/README.md` 第 6 章（Redmi 2602BRT18C / Android 16 / 宿主 dev-1294 实测）。**dev-1297 已完成代码修复并在 MI8 真机复测**；详见 [Node UI 事件与视图树修复](2026-10-31_NodeUI事件与视图树修复dev-1297.md)。
 
 | 编号 | 现象 | dev-1294 实测状态 | 依据 |
 | --- | --- | --- | --- |
 | 6.12 | `ViewGroup.LayoutParams.MATCH_PARENT` 被当类名解析 | ✅ 已修（设备实测） | `LP.MATCH_PARENT` 可直接取（-1）；`new LP(-1,-1)` 与 `new LP(LP.MATCH_PARENT, LP.MATCH_PARENT)` 均可用 |
-| 6.10 | `ui.inflate(layoutId)` 找不到布局 | ✅ 代码已修（JVM 契约） | 接受数字 id / `ui.R.layout.x` / `{type,name}` / 名字；错误区分「只支持 XML/资源 id」与「布局不存在」 |
-| 6.11 | `ui.inflate()` 返回 NodeUI 包装对象，`getParent()` 恒 null | ✅ 代码已修（JVM 契约） | 真实 View 句柄 + `addView/getParent/getChildCount`；旧宿主缺协议时明确报错 |
-| 6.13 | `setOnClickListener` / `setOnCheckedChangeListener` / `view.on('check')` / `addTextChangedListener` 不回调 | ✅ 代码已修（JVM 契约） | 宿主真实 listener + JS 协议/原生/轮询三通道；真机待验 |
-| 2.1 | 输入框无文本变化事件，只能轮询 `getText()` | ✅ 代码已修（JVM 契约） | 新增 `on('text_change')`；旧宿主仍轮询 `getText()` 兜底 |
-| 2.6 | `JsViewPager.initAdapterFromChildren()` 不识别 `<include>` | ✅ 代码已修（JVM 契约） | `<include>` 展开进 child/adapter；真机需确认 `childCount=3`、切页不叠加 |
-| 2.7 | `BottomNavigationView` itemId 与 `ui.R.id` 不一致、监听不回调 | ✅ 代码已修（JVM 契约） | id 同源 + 菜单访问 + itemSelected 监听；真机待验 |
+| 6.10 | `ui.inflate(layoutId)` 找不到布局 | ✅ 真机已验证（MI8 dev-1297） | 数字 id / `ui.R.layout.x` / `{type,name}` / 名字都可用；最小工程 `ui.inflate(R.layout.page_a)` 通过 |
+| 6.11 | `ui.inflate()` 返回 NodeUI 包装对象，`getParent()` 恒 null | ✅ 真机已验证（MI8） | 真实 View 句柄；`addView` 后 `getParent()` 身份一致、`childCount` 递增 |
+| 6.13 | `setOnClickListener` / `setOnCheckedChangeListener` / `view.on('check')` / `addTextChangedListener` 不回调 | ✅ 真机已验证（MI8 dev-1297） | Activity/绑定路径 click/check/text_change 全部回调；真实 ADB 点击也触发 |
+| 2.1 | 输入框无文本变化事件，只能轮询 `getText()` | ✅ 真机已验证（MI8 dev-1297） | `input.setText("abc")` 触发 `on('text_change')`；旧宿主仍轮询兜底 |
+| 2.6 | `JsViewPager.initAdapterFromChildren()` 不识别 `<include>` | ✅ 真机已验证（MI8 dev-1297） | 最小工程：`childCount=3`、`adapterCount=3`、`setCurrentItem(1)` 生效 |
+| 2.7 | `BottomNavigationView` itemId 与 `ui.R.id` 不一致、监听不回调 | ⚠️ 部分真机已验证（MI8 dev-1297） | `menuSize=3`、id 与 `ui.R.id` 同源、itemSelected 回调触发；`setSelectedItemId` 仍抛 NPE，反向同步待修 |
 | 2.2 | `Handler.postDelayed` 在 `onContentViewSet → _bind` 链里不执行 | ✅ 代码已修（JVM 契约） | 宿主提供主 Looper `postDelayed/removeCallbacks`；JS 侧 `setTimeout` 仍可用 |
 | 2.3 / 6.6 | 工程自建 vector drawable 不进编译资源 | ⚠️ 仅可执行诊断 | 未实现 vector 渲染；按提示跑 `tools/build-project-res.ps1` 或改用内置图标 |
 | 6.3 | `view.findViewById(id)` 返回包装对象，`setText` 会覆盖包装对象本身 | ⚠️ 待真机确认 | 继续用 `view.binding.<id>`；协议句柄已返回真实 viewId |
@@ -327,7 +327,7 @@ const loader = host.runtime.getAndroidClassLoader();
 
 **MCP 侧独立待办**（与本表不是同一实现）：`ui_input` 曾把待写入文本混进节点查找条件，代码未改，仍按“待修/待验”记录；见 [听海 Node UI 兼容修复](../reports/2026-10-26_听海NodeUI兼容修复.md)。
 
-> dev-1294 的设备实测结论见上表“依据”；dev-1295 候选的代码修复只过了 JVM/假宿主契约，**真机验收（MI8 与 chess-auto 设备）尚未完成**。
+> dev-1297 的 MI8 复测结论见 [修复报告](2026-10-31_NodeUI事件与视图树修复dev-1297.md)；chess-auto 设备（192.168.10.4）尚未安装 dev-1297，需要用户侧复测。
 
 **源码依据**
 - 引擎选择：`modules/engine/src/main/java/com/stardust/autojs/script/JavaScriptSource.java`（指令与优先级）；`Node24JavaScriptEngine.java`（60s/10min、feature 推断）。

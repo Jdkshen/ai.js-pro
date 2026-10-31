@@ -1,5 +1,7 @@
 # AI.js Pro 文档索引
 
+> **2026-10-31 当前发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。click/check/text_change 真机回调、`ui.inflate(layoutId)`、`addView/getParent`、`JsViewPager childCount=3`、BottomNav 监听；SHA 见发布记录。
+
 > **2026-10-31 当前发布 dev-1294（LAN，MI8 已装）**：[节点对齐 R01–R08 集成与发布](reports/2026-10-31_节点对齐R01-R08集成发布.md)。R01 varargs、R02/R03 Widget、R04 QuickJS ui.inflate、R05–R07 节点分页/BFS/身份、R08 Node 等级2 载荷与模板；SHA `f767e404…`。
 
 > **2026-10-26 最新工作：APK 卡顿优化，本地候选未发布**：[定位与验证报告](reports/2026-10-26_APK卡顿定位与优化.md)。覆盖启动、切页、编辑器/日志/文档及脚本运行后响应；目录/历史日志后台读取、重复加载/绘制削减、隐藏日志懒加载、文档正文缓存。409 JVM、32 Flutter、10 生成/59 高亮检查与 MI8 真机验证通过；候选 `dev-1259-perf-candidate`，公开更新仍 dev-1259，K40 未动。

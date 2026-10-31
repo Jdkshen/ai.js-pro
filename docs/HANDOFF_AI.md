@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-10-31 当前发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。Node UI listener/text_change 真机回调、inflate layoutId、真实视图树、JsViewPager include、keepRunning 引用计数；已知剩余见报告 §3。
+
 > **2026-10-31 当前发布 dev-1294（LAN，MI8 已装）**：[节点对齐 R01–R08 集成与发布](reports/2026-10-31_节点对齐R01-R08集成发布.md)。R01 varargs、R02/R03 Widget、R04 QuickJS ui.inflate、R05–R07 节点分页/BFS/身份、R08 Node 等级2 载荷与模板对账；SHA `f767e404…`。
 
 > **当前发布 dev-1286（LAN，2026-10-29）**：[架构交付及验收](reports/2026-10-29_dev1286发布与架构对齐验收.md)。执行、UI/浮窗、无障碍后端、节点采集与统一日志进程边界已接通；MCP 脚本及 11 个自动化工具转发；Node 软退出/资源退役与 QuickJS JNI/UI 交接修复，新内置独立模板已打包。1,032 JVM、三引擎并发和单停、17 轮列表/音量终态停止、独立 Node 实际节点点击、日志流和进程恢复通过。142,528,242 字节/SHA 439b5aaa…，手机完整下载摘要通过；MI8 已装，K40 未换包/未停止任务。更新源 192.168.10.7:8080，Downloads 有包。本轮未推 GitHub；Android36 原机、全高级 API 与旧手动/插件模板边界见报告。
