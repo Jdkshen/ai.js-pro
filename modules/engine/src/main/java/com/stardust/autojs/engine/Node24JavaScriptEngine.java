@@ -215,7 +215,7 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
             // 同时供脚本内 globalThis.__ajsFeatures 与宿主保活策略使用。
             JSONObject features = parseFeatures(script, filename);
             boolean uiScript = (scriptSource.getExecutionMode() & JavaScriptSource.EXECUTION_MODE_UI) != 0
-                    || features.optBoolean("ui", false) || shouldHoldAlive(script);
+                    || features.optBoolean("ui", false) || shouldHoldAlive(script, filename);
             features.put("ui", uiScript);
             long holdMillis = uiScript ? UI_HOLD_MILLIS : 0L;
             if (script != null) {
@@ -365,7 +365,25 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
         return features;
     }
 
-    private static boolean shouldHoldAlive(String script) {
+    /**
+     * bugs 6.1：是否需要宿主保活。
+     *
+     * <p>入口源码扫描只是启动期的预判；require 的模块里调用 keepRunning 时入口源码看不到，
+     * 旧实现只扫入口文件，模块里的保活就被当成普通脚本（Dev-1277 的 1 小时上限）。
+     * 这里补上「工程源码扫描」：入口所在工程目录里的 .js/.node.js/.mjs/.cjs（跳过
+     * node_modules/build/dist 等第三方与产物目录、有界读取）出现过 keepRunning 即保活。
+     * 运行时仍以 prelude 上报的 {@code kind:"keepalive"} 标记为准（Node24HostBridge
+     * 一旦收到 running=true 就保持 sticky），两者互补。</p>
+     */
+    static boolean shouldHoldAlive(String script, String filename) {
+        if (containsKeepAliveRequest(script)) {
+            return true;
+        }
+        return projectSourcesRequestKeepAlive(filename);
+    }
+
+    /** 源码文本里是否有人申请保活（入口脚本 / 模块源码共用）。 */
+    static boolean containsKeepAliveRequest(String script) {
         if (script == null || script.isEmpty()) {
             return false;
         }
@@ -374,6 +392,84 @@ public class Node24JavaScriptEngine extends JavaScriptEngine {
                 || script.contains("require(\"ui\")")
                 || script.contains("ui nodejs")
                 || script.contains("nodejs ui");
+    }
+
+    /** 工程源码扫描的上限：避免大工程每次启动都做全量 I/O。 */
+    private static final int PROJECT_SCAN_MAX_FILES = 200;
+    private static final int PROJECT_SCAN_MAX_BYTES = 4 * 1024 * 1024;
+    private static final long PROJECT_SCAN_MAX_FILE_BYTES = 512 * 1024;
+    private static final java.util.Set<String> PROJECT_SCAN_SKIP_DIRS = new java.util.HashSet<>(
+            java.util.Arrays.asList("node_modules", ".git", "build", "dist", "out", "target",
+                    ".idea", ".gradle", ".artifacts", "assets"));
+
+    /** 入口工程目录（含子目录）里是否有模块申请保活；只读有界、失败不影响脚本启动。 */
+    static boolean projectSourcesRequestKeepAlive(String filename) {
+        try {
+            if (filename == null || filename.isEmpty()) {
+                return false;
+            }
+            // 生产是 Android 绝对路径（'/'）；JVM 单测在 Windows 上跑时统一正斜杠，
+            // 避免 Node24Prelude.projectDir 只认 '/' 而把工程目录判成空。
+            String directory = org.autojs.source.engine.android.Node24Prelude
+                    .projectDir(filename.replace('\\', '/'));
+            if (directory == null || directory.isEmpty()) {
+                return false;
+            }
+            File root = new File(directory);
+            if (!root.isDirectory()) {
+                return false;
+            }
+            java.util.ArrayDeque<File> queue = new java.util.ArrayDeque<>();
+            queue.add(root);
+            int scannedFiles = 0;
+            int scannedBytes = 0;
+            while (!queue.isEmpty()
+                    && scannedFiles < PROJECT_SCAN_MAX_FILES
+                    && scannedBytes < PROJECT_SCAN_MAX_BYTES) {
+                File current = queue.poll();
+                File[] children = current.listFiles();
+                if (children == null) {
+                    continue;
+                }
+                for (File child : children) {
+                    if (child.isDirectory()) {
+                        if (!PROJECT_SCAN_SKIP_DIRS.contains(child.getName())) {
+                            queue.add(child);
+                        }
+                        continue;
+                    }
+                    if (scannedFiles >= PROJECT_SCAN_MAX_FILES || scannedBytes >= PROJECT_SCAN_MAX_BYTES) {
+                        break;
+                    }
+                    if (!isProjectSourceFile(child)) {
+                        continue;
+                    }
+                    scannedFiles++;
+                    long length = child.length();
+                    if (length <= 0L || length > PROJECT_SCAN_MAX_FILE_BYTES) {
+                        continue;
+                    }
+                    try {
+                        byte[] content = java.nio.file.Files.readAllBytes(child.toPath());
+                        scannedBytes += content.length;
+                        if (containsKeepAliveRequest(
+                                new String(content, java.nio.charset.StandardCharsets.UTF_8))) {
+                            return true;
+                        }
+                    } catch (Throwable unreadable) {
+                        // 单个不可读文件（权限/竞态）不能影响保活判定。
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "keepRunning project scan failed", error);
+        }
+        return false;
+    }
+
+    private static boolean isProjectSourceFile(File file) {
+        String name = file.getName();
+        return name.endsWith(".js") || name.endsWith(".mjs") || name.endsWith(".cjs");
     }
 
     /**

@@ -556,8 +556,27 @@
   var listeners = Object.create(null);
   var pollTimer = null;
   var polling = false;
-  var keepAliveTimer = null;
   var POLL_INTERVAL = 25;
+
+  // ------------------------------------------------------------------
+  // 保活引用计数（bugs 6.1/6.2）
+  //
+  // Pro 的语义是 $autojs.keepRunning(): number + $autojs.cancelKeepRunning(id)：
+  // 每次 keepRunning() 增加一个引用，只有最后一个引用释放后脚本才允许自然结束。
+  // 旧实现只有一个 keepAliveTimer 布尔位，ui.js 的 cleanupUiLifecycle() 在界面关闭时
+  // 调用 $autojs.stopRunning() 会把用户脚本在入口/require 模块里申请的保活一起清掉，
+  // 现象就是「光 keepRunning 只撑几秒（界面销毁的时刻）就自退」。
+  // ------------------------------------------------------------------
+  var keepAliveTimer = null;
+  var keepAliveHolds = Object.create(null);
+  var keepAliveHoldCount = 0;
+  var keepAliveNextToken = 1;
+  var keepAliveExitGuardInstalled = false;
+  /**
+   * 保活定时器周期：必须足够长且不能被 unref。社区脚本用 {@code 1 << 30}
+   * （约 12.4 天，仍小于 Node 的 2^31-1 上限）兜底，这里直接作为默认值。
+   */
+  var KEEP_ALIVE_PERIOD_MS = 1 << 30;
 
   function dispatchEvent(event) {
     if (!event || !event.type) { return; }
@@ -655,26 +674,97 @@
   globalThis.__ajsOn = on;
   globalThis.__ajsOff = off;
 
-  function setKeepAliveFlag(running) {
+  function setKeepAliveFlag(running, holds) {
     try {
       // task-63：告诉 Java 宿主（:node24 的 Node24Service）保活，native execute 返回后它阻塞等待 STOP/关闭。
-      hostRaw({ kind: 'keepalive', running: !!running });
+      // bugs 6.1：带 holds 的运行时标记 —— 宿主以「是否调用过 keepRunning」为准，
+      // 不再依赖入口源码扫描（require 模块里调用同样生效）。
+      hostRaw({ kind: 'keepalive', running: !!running, holds: holds || 0 });
     } catch (error) {
       console.warn('[Auto.js] keepalive 通知宿主失败：', error);
     }
   }
 
-  function keepRunning() {
-    setKeepAliveFlag(true);
+  function armKeepAliveTimer() {
     if (keepAliveTimer) { return; }
     // 保持 Node 事件循环存活（UI 项目让 Activity/事件轮询继续跑）；stopRunning 可退出。
-    keepAliveTimer = setInterval(function () { }, 3600 * 1000);
+    // 长周期 + 不 unref：社区脚本用 setInterval(function () {}, 1 << 30) 兜底的同一手段。
+    keepAliveTimer = setInterval(function () { }, KEEP_ALIVE_PERIOD_MS);
+    installKeepAliveExitGuard();
     ensurePolling();
   }
-  function stopRunning() {
-    setKeepAliveFlag(false);
+
+  /**
+   * bugs 6.2：单个 setInterval 在某些宿主/引擎组合下仍会被判空并自退。
+   * beforeExit 是「事件循环已无工作」的信号；只要还有保活引用就重新装表，
+   * 让脚本真正持续保活，直到最后一个引用释放或宿主取消/停止。
+   */
+  function installKeepAliveExitGuard() {
+    if (keepAliveExitGuardInstalled) { return; }
+    keepAliveExitGuardInstalled = true;
+    try {
+      if (typeof process === 'undefined' || !process || typeof process.on !== 'function') { return; }
+      process.on('beforeExit', function () {
+        if (keepAliveHoldCount <= 0) { return; }
+        if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+        keepAliveTimer = setInterval(function () { }, KEEP_ALIVE_PERIOD_MS);
+        ensurePolling();
+      });
+    } catch (ignored) { }
+  }
+
+  /** Pro 语义：$autojs.keepRunning(): number，可多次调用形成独立引用。 */
+  function keepRunning() {
+    var token = keepAliveNextToken++;
+    keepAliveHolds[token] = true;
+    keepAliveHoldCount++;
+    armKeepAliveTimer();
+    setKeepAliveFlag(true, keepAliveHoldCount);
+    return token;
+  }
+
+  /**
+   * 释放一次保活。带 token 只释放该 token；不带 token 释放最近一次（LIFO）。
+   *
+   * 这里的 LIFO 不是随手选的：node24/ui.js 的 cleanupUiLifecycle() 会调用
+   * $autojs.stopRunning() 释放它自己那次（界面打开时调的 keepRunning）。
+   * 旧实现会把唯一的 keepAliveTimer 一起清掉，于是用户脚本在入口或 require
+   * 模块里显式申请的保活被连带取消 —— 表现就是「光 keepRunning 只撑几秒
+   * （界面销毁时刻）就自退」。
+   */
+  function releaseKeepAliveHold(token) {
+    if (token === undefined || token === null) {
+      var keys = Object.keys(keepAliveHolds);
+      if (keys.length === 0) { return false; }
+      token = Number(keys[keys.length - 1]);
+    }
+    if (!keepAliveHolds[token]) { return false; }
+    delete keepAliveHolds[token];
+    keepAliveHoldCount--;
+    if (keepAliveHoldCount > 0) {
+      setKeepAliveFlag(true, keepAliveHoldCount);
+      return true;
+    }
+    keepAliveHoldCount = 0;
+    if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+    setKeepAliveFlag(false, 0);
+    return true;
+  }
+
+  /** Pro 的显式取消：$autojs.cancelKeepRunning(id)。 */
+  function cancelKeepRunning(token) { return releaseKeepAliveHold(token); }
+
+  /** 任务结束（process.exit/宿主终止）：一次性释放全部保活，不做引用保留。 */
+  function releaseAllKeepAlive() {
+    keepAliveHolds = Object.create(null);
+    keepAliveHoldCount = 0;
     if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
   }
+
+  /** 诊断：当前保活引用数（宿主/MCP 只读查询用）。 */
+  function keepAliveCount() { return keepAliveHoldCount; }
+
+  function stopRunning(token) { return releaseKeepAliveHold(token); }
 
   /**
    * 真正结束当前 Node 任务运行时。
@@ -690,7 +780,7 @@
     var value = (code === undefined || code === null) ? 0 : Number(code);
     if (!isFinite(value)) { value = 0; }
     value = value | 0;
-    try { stopRunning(); } catch (ignored) { }
+    try { releaseAllKeepAlive(); } catch (ignored) { }
     try {
       if (typeof process !== 'undefined' && process && typeof process.exit === 'function') {
         process.exit(value);
@@ -736,6 +826,10 @@
       off: off,
       keepRunning: keepRunning,
       stopRunning: stopRunning,
+      cancelKeepRunning: cancelKeepRunning,
+      keepRunningCount: keepAliveCount,
+      setTimeout: javaCallbackSetTimeout,
+      clearTimeout: javaCallbackClearTimeout,
       registerModule: registerModule,
       $autojs: autojs
     };
@@ -862,7 +956,137 @@
     }
   };
 
-  globalThis.__ajsDispatchJavaCallback = function (text) {
+  // ------------------------------------------------------------------
+  // bugs 6.3：宿主定时器兜底（纯 Java 回调上下文）
+  //
+  // 原生桥把 Java→Node 回调派发在 Node 线程，正常情况下原生 setTimeout 可用；
+  // 但历史上出现过「纯 Java 回调里直接 setTimeout 不触发」。这里的做法是：
+  //   1) 该上下文里把 globalThis.setTimeout/clearTimeout 换成「原生 + 宿主」双保险
+  //      （宿主定时器经 poll 事件回灌，只要轮询在跑就一定会执行）；
+  //   2) 上下文结束时恢复原生实现，不影响脚本其它位置；
+  //   3) $autojs.setTimeout/clearTimeout 也暴露成同一实现，可显式使用。
+  // ------------------------------------------------------------------
+  var nativeSetTimeout = typeof setTimeout === 'function' ? setTimeout : null;
+  var nativeClearTimeout = typeof clearTimeout === 'function' ? clearTimeout : null;
+  var hostTimerCallbacks = Object.create(null);
+  var hostTimerNextId = 1;
+  var hostTimerListenerInstalled = false;
+  var hostTimersUsable = true;
+  var javaCallbackDepth = 0;
+  var robustTimers = Object.create(null);
+  var robustTimerNextId = 1;
+
+  function hostTimersAvailable() { return hostTimersUsable; }
+
+  function ensureHostTimerListener() {
+    if (hostTimerListenerInstalled) { return; }
+    hostTimerListenerInstalled = true;
+    on('__ajs_host_timer', function (payload) {
+      var id = payload && payload.id;
+      var callback = hostTimerCallbacks[id];
+      if (typeof callback !== 'function') { return; }
+      delete hostTimerCallbacks[id];
+      try { callback(); } catch (error) {
+        console.error('[Auto.js] 宿主定时器回调异常：', error);
+      }
+    });
+  }
+
+  /** 宿主定时器：经 ScheduledExecutor 到点后由 poll 事件投递回 Node。 */
+  function hostSetTimeout(callback, delayMs) {
+    if (typeof callback !== 'function') { throw hostError('宿主定时器回调必须是函数'); }
+    if (!hostTimersUsable) { return null; }
+    var id = hostTimerNextId++;
+    ensureHostTimerListener();
+    hostTimerCallbacks[id] = callback;
+    try {
+      hostValue({ kind: 'timers', op: 'set', id: id, delay: Math.max(0, Number(delayMs) || 0) });
+      ensurePolling();
+    } catch (error) {
+      delete hostTimerCallbacks[id];
+      hostTimersUsable = false;
+      return null;
+    }
+    return id;
+  }
+
+  function hostClearTimeout(id) {
+    if (id === null || id === undefined) { return; }
+    delete hostTimerCallbacks[id];
+    try { hostValue({ kind: 'timers', op: 'cancel', id: Number(id) }); } catch (ignored) { }
+  }
+
+  /**
+   * 双保险 setTimeout：原生定时器为主，宿主定时器兜底（先到先执行，另一个自动取消）。
+   * 返回的是本实现的数字句柄，必须用 javaCallbackClearTimeout/clearTimeout 取消。
+   */
+  function javaCallbackSetTimeout(callback, delayMs) {
+    var delay = Math.max(0, Number(delayMs) || 0);
+    if (typeof callback !== 'function') {
+      return nativeSetTimeout ? nativeSetTimeout(callback, delay) : null;
+    }
+    var id = robustTimerNextId++;
+    var fired = false;
+    var hostId = null;
+    var nativeHandle = null;
+    function clearBoth() {
+      if (hostId !== null) { hostClearTimeout(hostId); hostId = null; }
+      if (nativeHandle !== null && nativeClearTimeout) {
+        try { nativeClearTimeout(nativeHandle); } catch (ignored) { }
+      }
+      nativeHandle = null;
+      delete robustTimers[id];
+    }
+    function fire() {
+      if (fired) { return; }
+      fired = true;
+      clearBoth();
+      try { callback(); } catch (error) {
+        console.error('[Auto.js] Java 回调定时器异常：', error);
+      }
+    }
+    robustTimers[id] = { clear: clearBoth };
+    if (hostTimersUsable) { hostId = hostSetTimeout(fire, delay); }
+    if (nativeSetTimeout) { nativeHandle = nativeSetTimeout(fire, delay); }
+    return id;
+  }
+
+  function javaCallbackClearTimeout(handle) {
+    if (handle === null || handle === undefined) { return; }
+    var entry = robustTimers[handle];
+    if (entry) { entry.clear(); return; }
+    if (nativeClearTimeout) { try { nativeClearTimeout(handle); } catch (ignored) { } }
+  }
+
+  /**
+   * 进入纯 Java 回调上下文：标记深度并把 setTimeout/clearTimeout 换成双保险实现，
+   * 保证这段 JS 里创建的定时器一定会执行（宿主定时器经 poll 回灌）。
+   */
+  function enterJavaCallbackContext() {
+    javaCallbackDepth++;
+    var swapped = false;
+    var previousTimeout = globalThis.setTimeout;
+    var previousClear = globalThis.clearTimeout;
+    if (javaCallbackDepth === 1 && hostTimersUsable && typeof globalThis.setTimeout === 'function') {
+      try {
+        globalThis.setTimeout = javaCallbackSetTimeout;
+        globalThis.clearTimeout = javaCallbackClearTimeout;
+        swapped = true;
+      } catch (ignored) { swapped = false; }
+    }
+    ensurePolling();
+    return function restoreJavaCallbackContext() {
+      javaCallbackDepth--;
+      if (swapped) {
+        try {
+          globalThis.setTimeout = previousTimeout;
+          globalThis.clearTimeout = previousClear;
+        } catch (ignored) { }
+      }
+    };
+  }
+
+  function dispatchJavaCallbackText(text) {
     try {
       var request = JSON.parse(text);
       if (request.control === 'requestExit') {
@@ -904,6 +1128,19 @@
     } catch (error) {
       return JSON.stringify({ ok: false, error: String(error && error.stack || error) });
     }
+  }
+
+  /**
+   * 冻结入口（native 用）：所有 Java→Node 回调都经这里。外层负责切到
+   * 「Java 回调上下文」（双保险定时器），内层保持原有协议不变。
+   */
+  globalThis.__ajsDispatchJavaCallback = function (text) {
+    var restore = enterJavaCallbackContext();
+    try {
+      return dispatchJavaCallbackText(text);
+    } finally {
+      restore();
+    }
   };
 
   var autojs = globalThis.$autojs || {};
@@ -919,6 +1156,13 @@
   autojs.scriptFile = scriptFile;
   autojs.keepRunning = keepRunning;
   autojs.stopRunning = stopRunning;
+  autojs.cancelKeepRunning = cancelKeepRunning;
+  autojs.keepRunningCount = keepAliveCount;
+  // bugs 6.3：宿主定时器兜底（Java 回调上下文里 JS 定时器不可靠时的备用实现）。
+  autojs.setTimeout = javaCallbackSetTimeout;
+  autojs.clearTimeout = javaCallbackClearTimeout;
+  // 宿主/引擎终止路径用：一次性释放全部保活。
+  globalThis.__ajsReleaseAllKeepAlive = releaseAllKeepAlive;
   autojs.on = on;
   autojs.off = off;
   autojs.pollEvents = pollOnce;
@@ -6776,7 +7020,7 @@
         try {
           hostValue({ kind: 'lifecycle', action: 'exitRequested', args: { code: value } });
         } catch (ignored) { }
-        try { $autojs.stopRunning(); } catch (ignored) { }
+        try { releaseAllKeepAlive(); } catch (ignored) { }
         try {
           if (typeof globalThis.__ajsStopOverlayPolling === 'function') {
             globalThis.__ajsStopOverlayPolling();

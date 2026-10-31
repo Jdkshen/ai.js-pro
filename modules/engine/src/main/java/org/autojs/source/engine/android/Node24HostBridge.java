@@ -164,9 +164,18 @@ public final class Node24HostBridge implements Node24Engine.Host {
 
     /** task-63：prelude 的 $autojs.keepRunning()/stopRunning() 通过 host op kind=keepalive 置位。 */
     private volatile boolean mKeepRunning;
+    /**
+     * bugs 6.1：运行时保活引用数（prelude keepRunning 的 token 计数）。
+     * 宿主以「是否调用过 keepRunning」为准，入口源码扫描只是启动期的预判；
+     * 只要运行时置过位就保持保活（sticky），直到 prelude 释放掉最后一个引用。
+     */
+    private volatile int mKeepAliveHoldCount;
     /** task-64 兜底：最近一次 kind=ui / kind=keepalive 请求时间（elapsedRealtime），用于时序兜底。 */
     private volatile long mLastUiRequestAt;
     private volatile long mLastKeepAliveAt;
+    /** bugs 6.3：宿主定时器兜底（Java 回调上下文里 JS 定时器不可靠时经 poll 事件回灌）。 */
+    private final Map<Integer, java.util.concurrent.ScheduledFuture<?>> mHostTimers = new ConcurrentHashMap<>();
+    private java.util.concurrent.ScheduledExecutorService mHostTimerExecutor;
     /** task-65：记录 NodeUiHost 缺失/反射失败的 helper 名，最多记一次，便于 logcat 定位。 */
     private final java.util.Set<String> mMissingUiHelpers =
             java.util.Collections.synchronizedSet(new java.util.HashSet<String>());
@@ -380,9 +389,24 @@ public final class Node24HostBridge implements Node24Engine.Host {
                     return ok(pollEvents());
                 case "sensors":
                     return handleSensors(request);
-                case "keepalive":
-                    mKeepRunning = request.optBoolean("running", true);
+                case "keepalive": {
+                    // bugs 6.1：运行时标记 —— prelude 每次 keepRunning 都会上报当前引用数。
+                    // 一旦置位就保持（sticky），只有 prelude 明确释放到 0 才取消保活，
+                    // 因此 require 的模块里调用 keepRunning 同样生效。
+                    int holds = keepAliveRequestHolds(request);
+                    boolean running = keepAliveRequestRunning(request);
+                    if (running || holds > 0) {
+                        mKeepRunning = true;
+                        mKeepAliveHoldCount = Math.max(1, holds);
+                    } else {
+                        mKeepRunning = false;
+                        mKeepAliveHoldCount = 0;
+                    }
                     return ok(mKeepRunning);
+                }
+                case "timers":
+                    // bugs 6.3：Java 回调上下文里的定时器兜底。
+                    return ok(handleHostTimers(request));
                 case "lifecycle": {
                     // task-195：prelude 的 process.exit 记录正常退出请求。
                     String lifecycleAction = request.optString("action", "");
@@ -1965,6 +1989,103 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
     }
 
+    /** bugs 6.1：当前运行时保活引用数（0 = 未保活）；绝不抛。 */
+    public int keepAliveHoldCount() {
+        try {
+            return mKeepRunning ? mKeepAliveHoldCount : 0;
+        } catch (Throwable error) {
+            noteHelperFailure("keepAliveHoldCount", error);
+            return 0;
+        }
+    }
+
+    /**
+     * kind=keepalive 请求里的 running 字段。缺省 true（旧 prelude 只发 running）。
+     * 纯静态函数便于 JVM 单测覆盖兼容分支。
+     */
+    static boolean keepAliveRequestRunning(JSONObject request) {
+        if (request == null) return false;
+        return request.optBoolean("running", true);
+    }
+
+    /**
+     * kind=keepalive 请求里的引用数：新 prelude 上报 holds，旧 prelude 缺省时按
+     * running ? 1 : 0 归一，避免把「调用过 keepRunning」降级成未保活。
+     */
+    static int keepAliveRequestHolds(JSONObject request) {
+        if (request == null) return 0;
+        int holds = request.optInt("holds", -1);
+        if (holds >= 0) return holds;
+        return request.optBoolean("running", true) ? 1 : 0;
+    }
+
+    // ------------------------------------------------------------------
+    // bugs 6.3：宿主定时器兜底
+    //
+    // 纯 Java 回调上下文里 JS 定时器历史上有不触发的情况；prelude 在进入该上下文时
+    // 会创建宿主定时器（原生实现为主、宿主实现兜底），这里用单线程 ScheduledExecutor
+    // 到点后把事件投进 poll 队列，Node 侧 __ajs_host_timer 监听负责执行回调。
+    // ------------------------------------------------------------------
+
+    private synchronized java.util.concurrent.ScheduledExecutorService hostTimerExecutor() {
+        if (mHostTimerExecutor == null) {
+            mHostTimerExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread thread = new Thread(r, "node24-host-timer");
+                thread.setDaemon(true);
+                return thread;
+            });
+        }
+        return mHostTimerExecutor;
+    }
+
+    JSONObject handleHostTimers(JSONObject request) throws Exception {
+        String op = request == null ? "" : request.optString("op", "");
+        int id = request == null ? -1 : request.optInt("id", -1);
+        switch (op) {
+            case "set": {
+                if (id <= 0) throw new IllegalArgumentException("宿主定时器 id 非法：" + id);
+                long delay = Math.max(0L, request.optLong("delay", 0L));
+                cancelHostTimer(id);
+                java.util.concurrent.ScheduledFuture<?> future = hostTimerExecutor().schedule(() -> {
+                    mHostTimers.remove(id);
+                    if (mClosed.get()) return;
+                    try {
+                        enqueueEventValue("__ajs_host_timer", new JSONObject().put("id", id));
+                    } catch (Throwable error) {
+                        Log.w(TAG, "host timer delivery failed id=" + id, error);
+                    }
+                }, delay, java.util.concurrent.TimeUnit.MILLISECONDS);
+                mHostTimers.put(id, future);
+                return ok(true);
+            }
+            case "cancel": {
+                cancelHostTimer(id);
+                return ok(true);
+            }
+            case "cancelAll": {
+                cancelAllHostTimers();
+                return ok(true);
+            }
+            default:
+                throw new IllegalArgumentException("timers 不支持：" + op);
+        }
+    }
+
+    private void cancelHostTimer(int id) {
+        java.util.concurrent.ScheduledFuture<?> future = mHostTimers.remove(id);
+        if (future != null) future.cancel(false);
+    }
+
+    private void cancelAllHostTimers() {
+        for (java.util.concurrent.ScheduledFuture<?> future : mHostTimers.values()) {
+            if (future != null) future.cancel(false);
+        }
+        mHostTimers.clear();
+        java.util.concurrent.ScheduledExecutorService executor = mHostTimerExecutor;
+        mHostTimerExecutor = null;
+        if (executor != null) executor.shutdownNow();
+    }
+
     /** 最近一次 kind=ui 请求距今毫秒（从未出现返回 Long.MAX_VALUE；task-65：绝不抛）。 */
     public long lastUiRequestAgeMs() {
         try {
@@ -2152,6 +2273,10 @@ public final class Node24HostBridge implements Node24Engine.Host {
         try { builder.append(lastUiRequestAgeMs()); } catch (Throwable error) { builder.append("ERR"); }
         builder.append(" keepAliveAgeMs=");
         try { builder.append(lastKeepAliveAgeMs()); } catch (Throwable error) { builder.append("ERR"); }
+        builder.append(" keepAliveHolds=");
+        try { builder.append(keepAliveHoldCount()); } catch (Throwable error) { builder.append("ERR"); }
+        builder.append(" hostTimers=");
+        try { builder.append(mHostTimers.size()); } catch (Throwable error) { builder.append("ERR"); }
         builder.append(" helpers=").append(mMissingUiHelpers);
         return builder.toString();
     }
@@ -2201,6 +2326,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
      */
     public void close() {
         beginCallbackShutdown();
+        // bugs 6.3：宿主定时器必须先取消，否则回调可能在任务退役后触发。
+        try { cancelAllHostTimers(); } catch (Throwable error) { cleanupFailure("host timers", error); }
         if (!mCallbacksClosing) return; // Keep callbacks intact until the unsafe process is retired.
         if (!mClosed.compareAndSet(false, true)) {
             return;
