@@ -58,6 +58,10 @@ public final class Node24DirectDexGenerator {
      */
     public static final int DEFAULT_DEX_API = 21;
 
+    /** Smali 标签唯一化：基本类型返回值补默认值的 null 分支。 */
+    private static final java.util.concurrent.atomic.AtomicInteger RETURN_DEFAULT_LABEL =
+            new java.util.concurrent.atomic.AtomicInteger();
+
     private Node24DirectDexGenerator() {
     }
 
@@ -379,11 +383,20 @@ public final class Node24DirectDexGenerator {
             return;
         }
         String wrapper = Node24ClassGenerator.wrapperInternalName(returnType);
+        // JS 回调可能返回 undefined → dispatcher 给回 null。基本类型返回值的接口方法
+        // 直接拆箱会 NPE（"Expected to unbox a 'boolean' primitive type but was returned null"），
+        // 这里补 null 分支返回 Java 默认值（0 / false / '\0'）。
+        String nullLabel = "n24def" + RETURN_DEFAULT_LABEL.incrementAndGet();
+        out.append("    if-nez v0, :").append(nullLabel).append('\n');
         out.append("    check-cast v0, L").append(wrapper).append(";\n");
         out.append("    invoke-virtual {v0}, L").append(wrapper).append(";->")
                 .append(Node24ClassGenerator.unboxMethodName(returnType)).append("()")
                 .append(Node24ClassGenerator.typeDescriptor(returnType)).append('\n');
         emitMoveResult(out, returnType, 0);
+        out.append("    return").append(returnSuffix(returnType)).append(" v0\n");
+        out.append("    :").append(nullLabel).append('\n');
+        out.append(Node24ClassGenerator.words(returnType) == 2
+                ? "    const-wide/16 v0, 0x0\n" : "    const/4 v0, 0x0\n");
         out.append("    return").append(returnSuffix(returnType)).append(" v0\n");
     }
 

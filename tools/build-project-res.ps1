@@ -109,6 +109,68 @@ Write-Step "包名       : $PackageName"
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 Copy-Item -Recurse -Force $resRoot $workRes
 
+# --- 工程 res 预处理：aapt2 比 JS 引擎严格，下面两类写法在 JS 兼容路径能跑，但 aapt2 直接失败 ---
+# 1) 裸数字尺寸（android:layout_marginTop="12"）—— Auto.js 语义是 dp，补上单位；
+# 2) ?attr/xxx 引用了宿主资源表里没有的 attr（R8 资源收缩会删掉未用 attr）——
+#    能映射到同族 attr 就替换，否则删掉该属性，并逐条打印。
+Write-Step '预处理工程 res（裸数字尺寸 / 缺失 attr）'
+$dimensionAttrs = @(
+    'layout_margin','layout_marginTop','layout_marginBottom','layout_marginLeft','layout_marginRight',
+    'layout_marginStart','layout_marginEnd','layout_width','layout_height',
+    'padding','paddingTop','paddingBottom','paddingLeft','paddingRight','paddingStart','paddingEnd',
+    'textSize','minWidth','minHeight','maxWidth','maxHeight','elevation',
+    'cardCornerRadius','cardElevation','itemIconSize','iconSize','lineSpacingExtra','letterSpacing'
+)
+$attrAliases = @{
+    'materialButtonTonalStyle' = 'materialButtonOutlinedStyle'
+}
+$hostAttrs = New-Object 'System.Collections.Generic.HashSet[string]'
+try {
+    $dump = & $aapt2 dump resources $AppApk 2>$null
+    foreach ($line in $dump) {
+        foreach ($m in [regex]::Matches($line, 'attr/([A-Za-z0-9_]+)')) { [void]$hostAttrs.Add($m.Groups[1].Value) }
+    }
+} catch { }
+$script:bareFixed = 0
+$script:attrFixed = 0
+$script:attrDropped = 0
+foreach ($f in (Get-ChildItem -Path $workRes -Recurse -Include *.xml -File)) {
+    $text = [IO.File]::ReadAllText($f.FullName)
+    $original = $text
+    $dimPattern = '(android:[A-Za-z_]+)="(-?\d+(?:\.\d+)?)"'
+    $text = [regex]::Replace($text, $dimPattern, {
+        param($m)
+        $name = $m.Groups[1].Value.Substring('android:'.Length)
+        if ($dimensionAttrs -contains $name) {
+            $script:bareFixed++
+            return $m.Groups[1].Value + '="' + $m.Groups[2].Value + 'dp"'
+        }
+        return $m.Value
+    })
+    if ($hostAttrs.Count -gt 0 -and $text -match '\?attr/') {
+        $text = [regex]::Replace($text, '\?attr/([A-Za-z0-9_]+)', {
+            param($m)
+            $name = $m.Groups[1].Value
+            if ($hostAttrs.Contains($name)) { return $m.Value }
+            if ($attrAliases.ContainsKey($name) -and $hostAttrs.Contains($attrAliases[$name])) {
+                $script:attrFixed++
+                Write-Host ("  替换 ?attr/" + $name + " -> ?attr/" + $attrAliases[$name] + "  (" + $f.Name + ")")
+                return '?attr/' + $attrAliases[$name]
+            }
+            $script:attrDropped++
+            Write-Host ("  删除宿主不支持的 ?attr/" + $name + "  (" + $f.Name + ")")
+            return '__AJSPRO_DROP_ATTR__'
+        })
+        $text = [regex]::Replace($text, '\s+[A-Za-z0-9_:]+="__AJSPRO_DROP_ATTR__"', '')
+    }
+    if ($text -ne $original) {
+        [IO.File]::WriteAllText($f.FullName, $text, (New-Object Text.UTF8Encoding($false)))
+    }
+}
+if ($bareFixed -gt 0) { Write-Host ("  裸数字尺寸补 dp：" + $bareFixed + " 处") }
+if ($attrFixed -gt 0) { Write-Host ("  attr 映射替换：" + $attrFixed + " 处") }
+if ($attrDropped -gt 0) { Write-Host ("  attr 删除：" + $attrDropped + " 处（如外观不符请改用宿主存在的 style/属性）") }
+
 # 清单里的 package 决定资源编到哪个包里。Pro 的示例写死了 org.autojs.autojspro，对我们没意义：
 # 统一改成宿主 app 的包名，这样引擎侧所有 getIdentifier(name, type, getPackageName()) 直接命中，
 # 且与其同包 id(0x7f) 时行为等价于「叠加」—— 只有同名资源才会被覆盖。

@@ -2728,12 +2728,28 @@
             });
         }
 
+        let legacyPathWarned = false;
+        /**
+         * 声明了 androidResources 却拿不到编译资源包时，脚本会落在兼容路径（合成 id）：
+         * listener/ViewPager/BottomNavigationView 行为受限。这里显式告警一次，避免被误判成"宿主没修"。
+         */
+        function warnLegacyPath(result) {
+            if (legacyPathWarned) return;
+            legacyPathWarned = true;
+            const text = (result && result.warning) || ('工程声明了 androidResources，但没有可用的 build/project-res.apk：'
+                + '当前走兼容路径（合成 id），listener/ViewPager/BottomNavigationView 等行为受限。'
+                + '请在 PC 上运行 tools/build-project-res.ps1 -ProjectDir <工程目录> 生成资源包后重试。');
+            try { console.warn('[ui] ' + text); } catch (ignored) { }
+        }
+
         function loadAndroidResources() {
             return Promise.resolve().then(function () {
                 const result = hostCall({op: 'loadAndroidResources'});
                 resourceCompiled = result.compiled === true;
                 if (resourceCompiled && typeof globalThis.__ajsEnableJavaCallbacks === 'function') {
                     realUiMode = true;
+                } else if (!resourceCompiled) {
+                    warnLegacyPath(result);
                 }
                 return result;
             });
@@ -2761,6 +2777,7 @@
                 catch (_) { /* Older hosts still support ui.loadAndroidResources(). */ }
                 if (resourceCompiled && typeof globalThis.__ajsEnableJavaCallbacks === 'function') realUiMode = true;
             }
+            if (!resourceCompiled) warnLegacyPath(null);
             // 进入 UI 前按需切换包代理；inline 布局会走真实 Activity，发现后立即恢复真实 Java 包。
             if (!realUiMode) patchJavaGlobals();
             let instance;

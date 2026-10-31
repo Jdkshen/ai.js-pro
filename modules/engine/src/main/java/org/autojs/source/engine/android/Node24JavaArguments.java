@@ -242,7 +242,14 @@ final class Node24JavaArguments {
                         if ("equals".equals(method.getName())) return proxy == (args == null ? null : args[0]);
                         if ("toString".equals(method.getName())) return "[NodeInterface " + type.getName() + "]";
                     }
-                    return dispatcher.invoke(method, args);
+                    Object result = dispatcher.invoke(method, args);
+                    // JS 回调返回 undefined 时 result == null；接口方法声明为基本类型时，
+                    // 动态代理拆箱会抛 "Expected to unbox a 'boolean' primitive type but was
+                    // returned null"（chess-auto 的 setSelectedItemId 就这么炸的）。按 Java 默认值补齐。
+                    if (result == null && method.getReturnType().isPrimitive()) {
+                        return defaultValue(method.getReturnType());
+                    }
+                    return result;
                 });
     }
 

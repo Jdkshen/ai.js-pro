@@ -1382,7 +1382,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
                                     .put("method", method.getName()).put("args", values);
                             JSONObject result = new JSONObject(Node24Engine.invokeCallback(session, request.toString()));
                             if (!result.optBoolean("ok")) throw new IllegalStateException(result.optString("error"));
-                            return coerce(method.getReturnType(), fromWire(result.opt("value")));
+                            Object value = coerce(method.getReturnType(), fromWire(result.opt("value")));
+                            // JS 回调没写 return 时 value 为 null；接口方法声明成基本类型时，
+                            // 动态代理返回 null 会导致拆箱 NPE（"Expected to unbox a 'boolean'
+                            // primitive type but was returned null"，chess-auto 的
+                            // setSelectedItemId / performLongClick 都撞在这里）。补 Java 默认值。
+                            return value == null ? defaultJavaValue(method.getReturnType()) : value;
                         } catch (Node24Engine.CallbackClosedException closed) {
                             if (iface == com.stardust.autojs.engine.node24.NodeUiWidgetInflater.Callbacks.class) throw closed;
                             return defaultJavaValue(method.getReturnType());

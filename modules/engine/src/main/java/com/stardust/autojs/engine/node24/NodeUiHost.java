@@ -800,6 +800,16 @@ public final class NodeUiHost {
             return new JSONObject().put("ok", false)
                     .put("error", result.optString("error", "工程 Android 资源加载失败"));
         }
+        // 声明了 androidResources 却没有编译资源包时，引擎会退回兼容路径（合成 id、
+        // listener/ViewPager/BottomNavigationView 行为受限）。必须显式告警，否则用户
+        // 会以为宿主功能没修（chess-auto 2026-10-31 就是这样被误导的）。
+        if (!bundle.isCompiled()) {
+            String warning = "工程声明了 androidResources，但没有可用的 build/project-res.apk："
+                    + "当前走兼容路径（合成 id），listener/ViewPager/BottomNavigationView 等行为受限。"
+                    + "请在 PC 上运行 tools/build-project-res.ps1 -ProjectDir <工程目录> 生成资源包后重试。";
+            Log.w(TAG, "C-RES-WARN: " + warning);
+            result.put("warning", warning);
+        }
         return result;
     }
 
