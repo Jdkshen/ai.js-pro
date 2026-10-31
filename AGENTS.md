@@ -1,8 +1,10 @@
 # AGENTS.md
 
-> **2026-10-30 当前发布 dev-1292（LAN，MI8 已装）**：[Widget 标签/晚注册兼容与验收](docs/reports/2026-10-30_Node_Widget标签注册兼容.md)。注册优先于原生别名转换，保留原始名称/属性/空值/实体；列表模板到 bind 时判断。522 JVM、7 组 JS、宿主新 36+旧 41/30/32 项、独立 APK 36 项、真实点击/重建/停止通过；773 条文档同步。135.95 MiB，SHA befa99b6…，完整手机 LAN 下载一致，Downloads 有 APK/MD。保持 1291 日志修复，K40 未动。style/theme 全组合、复杂别名共享根、反射空 varargs、通用插件与全量高级 API 仍待继续。以下为历史记录。
+> **2026-10-31 当前发布 dev-1294（LAN，MI8 已装）**：[节点对齐 R01–R08 集成与发布](docs/reports/2026-10-31_节点对齐R01-R08集成发布.md)。R01 Java 反射 varargs、R02/R03 Widget 共享根接收者与构造期 style/theme、R04 QuickJS ui.inflate、R05–R07 快照完整性/真 BFS/token 代次、R08 Node 等级2 自解包载荷与模板对账；562 引擎 JVM + 47 打包测试 + 契约 57 项；MI8 实测 R01/R04/R05/R07。135.98 MiB，SHA `f767e404…`；LAN 已发布，MI8 已装。
 
-> **2026-10-31 节点对齐候选 dev-1293（MI8 已装、未发布）**：[R01 反射空可变参数修复](docs/reports/2026-10-31_R01反射空可变参数修复.md)。Class.getMethod(name) 省略空数组、单个/多个 varargs、显式数组一致性与固定重载优先均通过；1007 JVM、真机 6 项；候选 SHA `170292d2…`。
+> **2026-10-30 前次发布 dev-1292（LAN，MI8 已装）**：[Widget 标签/晚注册兼容与验收](docs/reports/2026-10-30_Node_Widget标签注册兼容.md)。注册优先于原生别名转换，保留原始名称/属性/空值/实体；列表模板到 bind 时判断。522 JVM、7 组 JS、宿主新 36+旧 41/30/32 项、独立 APK 36 项、真实点击/重建/停止通过；773 条文档同步。135.95 MiB，SHA befa99b6…，完整手机 LAN 下载一致，Downloads 有 APK/MD。保持 1291 日志修复，K40 未动。style/theme 全组合、复杂别名共享根、反射空 varargs、通用插件与全量高级 API 仍待继续。以下为历史记录。
+
+> **2026-10-31 候选 dev-1293（已被 dev-1294 取代）**：[R01 反射空可变参数修复](docs/reports/2026-10-31_R01反射空可变参数修复.md)。Class.getMethod(name) 省略空数组、单个/多个 varargs、显式数组一致性与固定重载优先均通过；1007 JVM、真机 6 项；候选 SHA `170292d2…`。
 
 > **2026-10-30 当前发布 dev-1291（LAN，MI8 已装）**：[Node Widget 原生生命周期与完整验收](docs/reports/2026-10-30_Node_Widget原生生命周期.md)。真实 rootViewCreated/inflated、render(Context,parent) 返回 XML/原生 View、原始自定义属性、旧构造器默认值和 detached weight 已补；516 引擎 JVM、7 组 Node UI 契约、最终宿主 41+30+32 项、独立 APK 41 项、重建/停止、三引擎电脑日志 15 条通过。保留旁线 1290 日志修复，主工作区旁线文件未改。135.94 MiB，SHA 7900689f…，手机完整 LAN 下载摘要一致；Downloads 有包/MD。高级版全量、复杂别名和 style/theme 等仍有边界，以下为历史记录。
 
