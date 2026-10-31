@@ -17,7 +17,9 @@ import androidx.recyclerview.widget.RecyclerView;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -85,6 +87,14 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
     private JSONArray data = new JSONArray();
     private ItemCreatedListener itemCreatedListener;
     private NodeAdapter adapter;
+    /**
+     * bug 2.6：{@code initAdapterFromChildren()} 采到的子 View。
+     *
+     * <p>{@code <include>} 由 inflater 展开成真实子 View 后挂在 list/grid/viewPager 上，
+     * 所以这里的 child 数量天然包含 include 展开的页面；adapter 的 item 数随之正确。
+     */
+    private final List<View> childItems = new ArrayList<>();
+    private boolean childrenMode;
 
     protected NodeUiRecyclerView(Context context) {
         super(context);
@@ -122,6 +132,7 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
         final String normalized = xml == null ? "" : xml;
         runOnMain(() -> {
             itemTemplate = normalized;
+            exitChildrenMode();
             if (adapter != null) adapter.notifyDataSetChanged();
         });
     }
@@ -140,6 +151,7 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
         final JSONArray next = toDataArray(source);
         runOnMain(() -> {
             data = next;
+            exitChildrenMode();
             if (adapter != null) adapter.notifyDataSetChanged();
         });
     }
@@ -158,6 +170,7 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
         final JSONArray next = toDataArray(source);
         runOnMain(() -> {
             data = next;
+            exitChildrenMode();
             if (adapter == null) return;
             try {
                 if (index < 0 || index >= next.length()) {
@@ -176,6 +189,7 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
         final JSONArray next = toDataArray(source);
         runOnMain(() -> {
             data = next;
+            exitChildrenMode();
             if (adapter == null) return;
             try {
                 // 删除最后一项后 index 已等于新长度，这时粒度通知越界，直接整表刷新。
@@ -195,6 +209,7 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
         final JSONArray next = toDataArray(source);
         runOnMain(() -> {
             data = next;
+            exitChildrenMode();
             if (adapter == null) return;
             try {
                 if (index < 0 || index >= next.length()) {
@@ -213,12 +228,69 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
         final JSONArray next = toDataArray(source);
         runOnMain(() -> {
             data = next;
+            exitChildrenMode();
             if (adapter != null) adapter.notifyDataSetChanged();
         });
     }
 
     public int getNodeItemCount() {
-        return data == null ? 0 : data.length();
+        return childrenMode ? childItems.size() : (data == null ? 0 : data.length());
+    }
+
+    /**
+     * Auto.js Pro {@code initAdapterFromChildren()} 的 list/grid 版本：把当前已经 inflate 出来的
+     * 子 View 当作 adapter 的 item。
+     *
+     * <p>{@code <include>} 已经在 inflater 阶段展开成真实子 View 并挂到本控件上，所以每个 include
+     * 页面都会计入 child/adapter 数量（bug 2.6 的「展开的页面要计入」）。幂等：已有显式
+     * dataSource / itemTemplate 时不覆盖；重复调用不会重复采集。
+     */
+    public void initAdapterFromChildren() {
+        runOnMain(this::adoptChildren);
+    }
+
+    /** 由子 View 生成的 item 数（诊断/断言用）。 */
+    public int getChildItemCount() {
+        return childItems.size();
+    }
+
+    /** 当前是否处于「子 View 当 item」模式。 */
+    public boolean isChildrenMode() {
+        return childrenMode;
+    }
+
+    private void adoptChildren() {
+        if (childrenMode || hasExplicitItems() || getChildCount() == 0) {
+            return;
+        }
+        List<View> collected = new ArrayList<>(getChildCount());
+        for (int i = 0; i < getChildCount(); i++) {
+            collected.add(getChildAt(i));
+        }
+        // RecyclerView 自己管理子 View，直接挂着会被布局管理器当成脏子节点；先摘下来，再由
+        // adapter 的 ViewHolder 容器按 position 挂回，item 数 = 采集到的子 View 数。
+        removeAllViews();
+        childItems.clear();
+        childItems.addAll(collected);
+        childrenMode = true;
+        if (adapter != null) {
+            adapter.notifyDataSetChanged();
+        }
+        Log.i(TAG, "initAdapterFromChildren: " + childItems.size() + " 个子 View 转为 item");
+    }
+
+    private boolean hasExplicitItems() {
+        return (itemTemplate != null && !itemTemplate.trim().isEmpty())
+                || (data != null && data.length() > 0);
+    }
+
+    /** 显式 dataSource / itemTemplate 优先：一旦设置就退出 children 模式。 */
+    private void exitChildrenMode() {
+        if (!childrenMode) {
+            return;
+        }
+        childrenMode = false;
+        childItems.clear();
     }
 
     @Override
@@ -233,6 +305,9 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
         destroyed.set(false);
         if (itemCallbacks.isShutdown()) itemCallbacks = newItemExecutor();
         super.onAttachedToWindow();
+        // RecyclerView 本不该有裸子 View。脚本用子标签/&lt;include&gt; 给了 item、又没显式
+        // dataSource/itemTemplate 时，直接接管为 children 模式，避免 adapter item 数是 0。
+        adoptChildren();
     }
 
     private void runOnMain(Runnable runnable) {
@@ -254,6 +329,10 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
     }
 
     private void bindItem(NodeViewHolder holder, int position) {
+        if (childrenMode) {
+            bindChildItem(holder, position);
+            return;
+        }
         JSONObject item = data.optJSONObject(position);
         if (item == null) {
             Object raw = data.opt(position);
@@ -278,6 +357,30 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
                         ViewGroup.LayoutParams.MATCH_PARENT, 1));
             }
         }
+        notifyItemCreated(holder);
+    }
+
+    /** children 模式：第 position 个 item 就是第 position 个原始子 View（含 include 展开的页面）。 */
+    private void bindChildItem(NodeViewHolder holder, int position) {
+        holder.container.removeAllViews();
+        View item = position >= 0 && position < childItems.size() ? childItems.get(position) : null;
+        if (item == null) {
+            return;
+        }
+        if (item.getParent() instanceof ViewGroup) {
+            ((ViewGroup) item.getParent()).removeView(item);
+        }
+        ViewGroup.LayoutParams params = item.getLayoutParams();
+        if (params == null) {
+            params = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        holder.container.addView(item, params);
+        notifyItemCreated(holder);
+    }
+
+    /** item 绑定完成后的 item_created 回调（bindVersion 丢弃已回收的旧项）。 */
+    private void notifyItemCreated(NodeViewHolder holder) {
         int version = ++holder.bindVersion;
         ItemCreatedListener listener = itemCreatedListener;
         if (listener != null && !destroyed.get()) {
@@ -429,7 +532,7 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
 
         @Override
         public int getItemCount() {
-            return data == null ? 0 : data.length();
+            return childrenMode ? childItems.size() : (data == null ? 0 : data.length());
         }
     }
 }
