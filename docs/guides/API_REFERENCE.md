@@ -146,6 +146,30 @@ await accessibility.swipe(100, 800, 100, 200, 300);
 - 触控：Rhino/QuickJS 用 `touch.create({backend:'root'|'adb'|'shizuku'})`，再 `down/move/up/exit`（root 最多 10 指，Shizuku/ADB 单指）。Node **没有** `touch`；用 `accessibility.gesture`，或仅 root 的 `root_automator`（`adb/Shizuku` 未接入，`touchDown/Move/Up` 近似 swipe）。
 - 权限：无障碍服务需在系统设置开启，Node 的 `enableService` 只负责引导/轮询，不能绕过用户授权；坐标手势、节点点击和截图都要求无障碍可用，`takeScreenshot` 受系统频率/`FLAG_SECURE` 限制。
 
+### 4.1 dev-1294：Node 快照完整性、分页与跨布局身份
+
+`require('accessibility')` 新增（Node 专有；Rhino/QuickJS 无同形接口）：
+
+- `accessibility.snapshotInfo()` → `{nodes, complete, truncated, firstMissingPath, generation}`；`complete=false` 时用 `firstMissingPath` 定位首个缺失节点。
+- `accessibility.treePage(limit[, cursor][, {signal}])` → `{nodes, complete, truncated, snapshotComplete, firstMissingPath, generation, seen, cursor}`；`complete=true` 时 `cursor=null`。
+- `select(spec).findPage(limit[, cursor][, {signal}])` → 同字段查询分页（另带 `offset`）；把上一页 `cursor` 原样传回续页，树/查询变化时报“游标已过期”，`signal.aborted` 时抛“已取消”。
+- 节点身份：`node.token`、`node.generation`、`node.isStale()`；插入/删除/列表复用后同一 path 换成别的节点时 `isStale()=true`，动作返回 `false`，不做坐标兜底。`algorithm("BFS")` 只在完整快照上按真实层序执行。
+- 宿主单次预算仍未变（约 200KiB JSON / 500 节点 / 5s / 5000 访问），截断时只如实报告且不返回被截断节点；服务端 cursor 分页未实现。
+
+示例：
+
+```js
+const { accessibility, select } = require('accessibility');
+(async () => {
+  const info = accessibility.snapshotInfo();
+  console.log(info.complete, info.nodes, info.firstMissingPath, info.generation);
+  let page = accessibility.treePage(50);
+  while (page.cursor) page = accessibility.treePage(50, page.cursor);   // 续页
+  const node = await select({ text: '确定' }).firstOrNull();
+  if (node && !node.isStale()) node.click();                            // click 同步返回 boolean
+})().catch(console.error);
+```
+
 ## 5. 截图、images、OCR 与 YOLO
 ```js
 // Rhino / QuickJS：同步
@@ -188,7 +212,7 @@ w.setPosition(100, 300); w.setSize(400, 200); w.close();
 ```
 - Rhino 可直接用 E4X XML 字面量；QuickJS 必须传 XML 字符串。`ui.registerWidget` 可注册自定义控件；`floaty.rawWindow` 返回原始 View 浮窗。`ui.run` 在 Rhino/QuickJS 会阻塞等待 UI 线程。Rhino 的 `ui.post` 投递到 UI 线程；QuickJS 的 `ui.post` 延后在脚本线程执行，需切 UI 时在回调内用 ui.run。浮窗需要悬浮窗权限（`floaty.checkPermission/requestPermission`），普通 `ui` Activity 不需要。
 
-文字控件支持 `view.attr('textColor', value)` / `view.attr('color', value)` 及 `textColorHint`，读取为当前 `#AARRGGBB`。颜色支持十六进制、整数、`@color/name` 和 `@android:color/name`；Node 的原生 View 使用同一颜色处理。QuickJS 在 `ui.run` 内先设置再读取会立即看到新值；获取普通界面控件用 `ui.layout` / `ui.findView`；dev-1294 起 QuickJS 也提供 `ui.inflate(xml, parent?, attachToParent?)`，返回真实 View（Java 代理），非法 XML/父容器会给出可读错误。
+文字控件支持 `view.attr('textColor', value)` / `view.attr('color', value)` 及 `textColorHint`，读取为当前 `#AARRGGBB`。颜色支持十六进制、整数、`@color/name` 和 `@android:color/name`；Node 的原生 View 使用同一颜色处理。QuickJS 在 `ui.run` 内先设置再读取会立即看到新值；获取普通界面控件用 `ui.layout` / `ui.findView`；dev-1294 起 QuickJS 公开 `ui.inflate(xml, parent?, attachToParent?)`（宿主实现见 `QuickJsHostBridge` 的 `uiInflate`），返回真实 View 的 Java 代理，非法 XML/父容器会给出可读错误；`$ui.inflate` 仍是未暴露的 C++ 白名单入口。Node 的 `ui.inflate` 是另一入口，仍只接受 XML 字符串。
 
 ### 6.2 Node `ui.Activity`
 ```js
@@ -275,6 +299,35 @@ const loader = host.runtime.getAndroidClassLoader();
 - Node 的 `shell` root/adb/Tap、`threads.exec/atomic`、`floaty`、`$java.loadDex`、完整 Pro UI 组件等未实现或仅部分实现；不要把示例中的目标态当现状。
 - Node 自动化在主 App 已覆盖，但打包运行时（inrt）和独立打包 APK 的能力面可能不同；Node UI/截图/无障碍需按实际包单独验证。
 - Android 11+ 的无障碍截图有频率/页面保护限制；MediaProjection 每次授权只对应一个 job 会话；设备厂商可能额外限制后台启动/悬浮窗。本文未逐项执行 Android 真机回归，类型声明、示例和源码只能证明入口存在。
+
+### 9.1 Node UI 已知问题状态（dev-1295 文档线，2026-10-31）
+
+来源：设备 `192.168.10.4` 上 `chess-auto/docs/已知问题.md` 第 2 章 / 第 2.15 节与 `chess-auto/node-port/ui/README.md` 第 6 章（Redmi 2602BRT18C / Android 16 / 宿主 **dev-1294** 实测）。**dev-1295 只做文档，未改 Java/JS 代码**；本次没有新增代码修复，下表“待修/待验”的项仍以设备实测为准。
+
+| 编号 | 现象 | dev-1294 实测状态 | 依据 |
+| --- | --- | --- | --- |
+| 6.12 | `ViewGroup.LayoutParams.MATCH_PARENT` 被当类名解析 | ✅ 已修（设备实测） | `LP.MATCH_PARENT` 可直接取（-1）；`new LP(-1,-1)` 与 `new LP(LP.MATCH_PARENT, LP.MATCH_PARENT)` 均可用 |
+| 6.10 | `ui.inflate(layoutId)` 找不到布局 | ❌ 未修 | `ui.inflate.arity=3`，只吃 XML 字符串；传资源 ID 报“找不到布局” |
+| 6.11 | `ui.inflate()` 返回 NodeUI 包装对象，`getParent()` 恒 null | ❌ 未修（设备实测） | 设备实测返回 `[NodeUI View]`、`frameLayout.getChildCount()=0`，不能 `addView()` 挂页面 |
+| 6.13 | `setOnClickListener` / `setOnCheckedChangeListener` / `view.on('check')` / `addTextChangedListener` 不回调 | ❌ 未修（最关键） | 4 类控件“挂载成功”，实际点击/勾选后控件视觉状态变化但 JS 回调一次未触发 |
+| 2.1 | 输入框无文本变化事件，只能轮询 `getText()` | ❌ 未修 | 与 6.13 同类；17 个输入框 `afterTextChanged` 均不回调 |
+| 2.6 | `JsViewPager.initAdapterFromChildren()` 不识别 `<include>` | ❌ 未修 | `childCount=0`、`adapter.count=0`、`setCurrentItem(1)` 后 `currentItem` 仍为 0 |
+| 2.7 | `BottomNavigationView` itemId 与 `ui.R.id` 不一致、监听不回调 | — 未重测（设备已弃用该控件） | 只在已知问题文档保留 |
+| 2.2 | `Handler.postDelayed` 在 `onContentViewSet → _bind` 链里不执行 | ❌ 未修 | 同位置 `setTimeout` 正常；定时逻辑改用 `setTimeout` |
+| 2.3 / 6.6 | 工程自建 vector drawable 不进编译资源 | ❌ 未修 | 改用宿主内置 Material 图标（`ui.R.drawable`） |
+| 6.3 | `view.findViewById(id)` 返回包装对象，`setText` 会覆盖包装对象本身 | ❌ 未修 | 必须用 `view.binding.<id>` |
+| 6.4 | `binding[id]` 是函数但带 `setText/getText/setChecked` | — 行为说明（非缺陷） | 判空用 `if (!w || !w.setText) return;` |
+| 6.5 | `TextInputLayout` 文字渲染不出来 | ❌ 未修 | 换 `TextView` 标签 + 原生 `EditText` |
+
+**由此得到的脚本约束**（宿主修好前不要改回事件驱动）：
+
+- 开关读 `isChecked()`、输入框读 `getText()`，按 250ms 轮询、值稳定后写盘；`SWITCH_FIELDS` / `EDIT_FIELDS` 清单驱动。
+- 多页用单页滚动（`<include>` 串联进一个 `ScrollView`），不要用 `JsViewPager` / `BottomNavigationView`，也不要 `addView(ui.inflate(...))` 动态挂页。
+- 被 `include` 的页面根不能再是 `ScrollView`，否则外层手势冲突。
+
+**MCP 侧独立待办**（与本表不是同一实现）：`ui_input` 曾把待写入文本混进节点查找条件，代码未改，仍按“待修/待验”记录；见 [听海 Node UI 兼容修复](../reports/2026-10-26_听海NodeUI兼容修复.md)。
+
+> 上述结论只在上述设备/宿主 dev-1294 上实测；换设备、换系统或宿主升级后需重跑测试脚本。文档不代表已修复，也不代表其它机型行为一致。
 
 **源码依据**
 - 引擎选择：`modules/engine/src/main/java/com/stardust/autojs/script/JavaScriptSource.java`（指令与优先级）；`Node24JavaScriptEngine.java`（60s/10min、feature 推断）。

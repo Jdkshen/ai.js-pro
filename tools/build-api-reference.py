@@ -26,6 +26,8 @@ LEGACY = ['app', 'console', 'coordinates-based-automation', 'device', 'dialogs',
           'modules', 'widgets-based-automation', 'sensors', 'shell', 'storages',
           'threads', 'timers', 'ui', 'io', 'plugins', 'canvas']
 GUIDE_ENGINE_OVERRIDES = {
+    '4.1 dev-1294：Node 快照完整性、分页与跨布局身份': ['nodejs'],
+    '9.1 Node UI 已知问题状态（dev-1295 文档线，2026-10-31）': ['nodejs'],
     '6.1 Rhino / QuickJS 传统 UI': ['rhino', 'quickjs'],
     '6.2 Node `ui.Activity`': ['nodejs'],
     '6.3 Node `ctx.loadResources` 与 `recreate`': ['nodejs'],

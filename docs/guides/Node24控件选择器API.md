@@ -256,12 +256,15 @@ if (slider && slider.setProgress(66)) {
 
 ## dev-1294 新增：分页/BFS/身份与 Java varargs
 
+本节的快照分页与身份接口是 Node24 专有；Java 反射 varargs 与 QuickJS `ui.inflate` 是同期变化。以上均为脚本侧 API，不新增 MCP 工具。
+
 ### Node 快照与分页
 
-- `accessibility.snapshotInfo()` → `{nodes, complete, truncated, firstMissingPath, generation}`
-- `accessibility.treePage(limit[, cursor][, {signal}])` → `{nodes, complete, truncated, snapshotComplete, firstMissingPath, generation, seen, cursor}`
-- `select(spec).findPage(limit[, cursor][, {signal}])`：同一快照内稳定分页；游标绑定代次，过期/畸形明确报错；`signal.aborted` 时抛“已取消”
-- 完整性由宿主 DFS dump 的 path/childCount 重新校验；宿主单次预算（约 200KiB/500 节点/5s/5000 访问）未变，截断时只如实报告，不返回被截断的节点
+- `accessibility.snapshotInfo()` → `{nodes, complete, truncated, firstMissingPath, generation}`；`complete=false` 时 `firstMissingPath` 指出首个缺失节点路径。
+- `accessibility.treePage(limit[, cursor][, {signal}])` → `{nodes, complete, truncated, snapshotComplete, firstMissingPath, generation, seen, cursor}`；`complete=true` 时 `cursor=null`。
+- `select(spec).findPage(limit[, cursor][, {signal}])`：同一快照内稳定分页；字段与 `treePage` 一致（另带 `offset`）；游标绑定代次，过期/畸形明确报错；`signal.aborted` 时抛“已取消”。
+- 完整性由宿主 DFS dump 的 path/childCount 重新校验；宿主单次预算（约 200KiB/500 节点/5s/5000 访问）未变，截断时只如实报告，**不返回被截断的节点**。服务端 cursor 分页未做。
+- `algorithm("BFS")` 只在完整快照上按真实层序执行；截断时明确拒绝，不把截断 DFS 排序冒充 BFS。
 
 ### 跨布局身份
 
@@ -276,3 +279,4 @@ if (slider && slider.setProgress(66)) {
 ### QuickJS（R04）
 
 - QuickJS 公开 `ui.inflate(xml, parent?, attachToParent?)`，返回真实 View（Java 代理）；`$ui.inflate` 仍未暴露（C++ 白名单）
+- 这只覆盖 QuickJS。Node 的 `ui.inflate` 仍是另一入口，只接受 XML 字符串；设备实测的 Node UI 遗留问题（listener 不回调、`ui.inflate` 返回包装对象等）见 [API 参考](API_REFERENCE.md) §9.1。

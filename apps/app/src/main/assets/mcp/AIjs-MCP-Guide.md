@@ -94,6 +94,39 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 
 节点匹配是精确匹配（text/contentDesc/className；className 也接受简单名）；坐标以屏幕像素计。动作失败会返回 success=false 和原因，不要把它当成功。仅遍历当前活动窗口，不覆盖其它窗口/输入法。无障碍截图仍用 capture_screen；先截图+ui_find，再点击，坐标按 sourceWidth/scale 换算。
 
+## dev-1294 后的节点 API 变化（MCP 相关）
+
+以下变化属于脚本侧 Node API（`require('accessibility')`）。MCP 现有 `ui_find` / `ui_click` / `ui_node_action` / `ui_input` 只覆盖固定定位子集，**没有**直接暴露分页/快照/身份字段；要用这些能力，请用 `run_script`（engine=nodejs）在脚本里调用，或先 `search_api_docs` / `read_api_doc` 查参数再运行。
+
+### 快照完整性与分页（R05/R06）
+
+| 调用 | 返回 / 行为 |
+| --- | --- |
+| `accessibility.snapshotInfo()` | `{nodes, complete, truncated, firstMissingPath, generation}`；`complete=false` 时 `firstMissingPath` 指出首个缺失节点路径 |
+| `accessibility.treePage(limit[, cursor][, {signal}])` | 整棵树稳定分页；返回 `{nodes, complete, truncated, snapshotComplete, firstMissingPath, generation, seen, cursor}`，`complete=true` 时 `cursor=null` |
+| `select(spec).findPage(limit[, cursor][, {signal}])` | 同一快照内的查询结果分页；字段与 `treePage` 一致 |
+
+- **游标绑定代次**：把上一页返回的 `cursor` 原样传回续页。树内容或查询条件发生变化（代次不同）时明确报“分页游标已过期”，不会把两页拼成看似完整的树；此时从第一页重新开始。
+- **取消**：`signal.aborted` 为真时抛“已取消”，不是静默返回空页。
+- **截断如实报告**：宿主单次遍历预算未变（约 200 KiB JSON / 500 节点 / 5 秒 / 5000 次访问），被截断时只设置 `truncated/snapshotComplete/firstMissingPath`，**不返回被截断的节点**。`complete=true` 才代表本次快照完整；服务端 cursor 分页仍未实现，客户端只能如实报告截断。
+- **BFS 只对完整快照生效**：`algorithm("BFS")` 在完整快照上按真实层序执行；快照被截断时明确拒绝，不拿截断的 DFS 结果排序冒充 BFS。
+
+### 跨布局身份与过期（R07）
+
+- 节点新增 `token`（宿主身份串）、`generation`（快照代次）、`isStale()`（是否已过期）。
+- 插入/删除/列表复用后，同一 `path` 换成别的节点时 `isStale()=true`，动作返回 `false`，**不做坐标兜底**。
+- `index` / `findOnce(index)` 仍是 `0..255`；更大位置用 `path` + 身份条件重新定位。
+
+### Java 反射可变参数（R01）
+
+- `Class.getMethod(name)`（省略空参数数组）现在可用，与 `getMethod(name, [])` 行为一致；零个/一个/多个 varargs 均支持，基本类型按组件类型收窄，固定参数重载优先于 varargs。
+
+### QuickJS 的 ui.inflate（R04）与边界
+
+- QuickJS 公开 `ui.inflate(xml, parent?, attachToParent?)`，返回真实 Android View 代理；`$ui.inflate` 仍未暴露（C++ 白名单 Proxy，需改 `quickjs_jni.cpp` 并重编 native）。
+- Node 的 `ui.inflate` 仍**只接受 XML 字符串**，传布局资源 ID 会报“找不到布局”；返回的 View 未挂到父容器时 `getParent()` 为 null，是否属于真实视图树依产物路径而异（设备实测见 `docs/guides/API_REFERENCE.md` 的 Node UI 已知问题表）。
+- 完整参数、引擎差异与设备实测见 `docs/guides/Node24控件选择器API.md`「dev-1294 新增」与 `docs/guides/API_REFERENCE.md`。
+
 ## 应用管理（无 root）
 
 `app_list`、`app_info`、`app_launch`、`app_open_settings`、`app_open_url` 使用 PackageManager/Intent，无需 root。
