@@ -75,4 +75,93 @@ public class Node24JavaArgumentsTest {
                 Outer.Middle.Inner.class.getName().replace('$', '.'), loader));
         assertSame(int[].class, cache.findClass("[I", loader));
     }
+
+    // ---- R01: Java 反射空可变参数 ----
+
+    /** 与 Node24HostBridge.findMethod 相同的候选选择循环，用来验证 varargs 规则。 */
+    private static Method select(Class<?> type, String name, Object[] args) {
+        Method best = null;
+        for (Method method : type.getMethods()) {
+            if (!method.getName().equals(name)) continue;
+            if (!Node24JavaArguments.compatible(method.getParameterTypes(), method.isVarArgs(), args)) continue;
+            if (best == null || Node24JavaArguments.score(method.getParameterTypes(), method.isVarArgs(), args)
+                    < Node24JavaArguments.score(best.getParameterTypes(), best.isVarArgs(), args)) {
+                best = method;
+            }
+        }
+        return best;
+    }
+
+    @Test public void getMethodWithoutClassArgumentsPacksAnEmptyVarargsArray() throws Exception {
+        Object[] args = {"toString"};
+        Method selected = select(Class.class, "getMethod", args);
+        assertNotNull("clazz.getMethod(\"toString\") 必须匹配 getMethod(String, Class...)", selected);
+        assertTrue(selected.isVarArgs());
+        Object[] coerced = Node24JavaArguments.coerce(
+                selected.getParameterTypes(), selected.isVarArgs(), args);
+        assertEquals(2, coerced.length);
+        assertEquals("toString", coerced[0]);
+        assertTrue(coerced[1] instanceof Class[]);
+        assertEquals(0, ((Class<?>[]) coerced[1]).length);
+        Method found = (Method) selected.invoke(Class.class, coerced);
+        assertEquals("toString", found.getName());
+    }
+
+    @Test public void explicitEmptyClassArrayStillMatchesDirectly() throws Exception {
+        Object[] args = {"toString", new Object[0]};
+        Method selected = select(Class.class, "getMethod", args);
+        assertNotNull(selected);
+        Object[] coerced = Node24JavaArguments.coerce(
+                selected.getParameterTypes(), selected.isVarArgs(), args);
+        assertArrayEquals(new Class<?>[0], (Class<?>[]) coerced[1]);
+        Method found = (Method) selected.invoke(Class.class, coerced);
+        assertEquals("toString", found.getName());
+    }
+
+    @Test public void varargsPackOneOrMoreTrailingValues() throws Exception {
+        Object[] one = {"valueOf", int.class};
+        assertTrue(Node24JavaArguments.compatible(
+                new Class<?>[]{String.class, Class[].class}, true, one));
+        Object[] coercedOne = Node24JavaArguments.coerce(
+                new Class<?>[]{String.class, Class[].class}, true, one);
+        assertArrayEquals(new Class<?>[]{int.class}, (Class<?>[]) coercedOne[1]);
+        Method valueOf = String.class.getMethod("valueOf", (Class<?>[]) coercedOne[1]);
+        assertEquals("12", valueOf.invoke(null, 12));
+
+        Object[] two = {"getMethod", String.class, Class[].class};
+        Object[] coercedTwo = Node24JavaArguments.coerce(
+                new Class<?>[]{String.class, Class[].class}, true, two);
+        assertArrayEquals(new Class<?>[]{String.class, Class[].class}, (Class<?>[]) coercedTwo[1]);
+    }
+
+    @Test public void primitiveVarargsPackAndRejectIncompatibleElements() {
+        Object[] values = {1, 2.0, 3L};
+        assertTrue(Node24JavaArguments.compatible(new Class<?>[]{int[].class}, true, values));
+        Object[] coerced = Node24JavaArguments.coerce(new Class<?>[]{int[].class}, true, values);
+        assertArrayEquals(new int[]{1, 2, 3}, (int[]) coerced[0]);
+        assertFalse(Node24JavaArguments.compatible(new Class<?>[]{int[].class}, true,
+                new Object[]{"bad"}));
+    }
+
+    @Test public void fixedArityIsPreferredOverVarargs() throws Exception {
+        final class Target {
+            public String pick(String value) { return "fixed:" + value; }
+            public String pick(String... values) { return "varargs:" + values.length; }
+        }
+        Target target = new Target();
+        Object[] args = {"a"};
+        Method fixed = null;
+        Method varargs = null;
+        for (Method method : Target.class.getMethods()) {
+            if (!method.getName().equals("pick")) continue;
+            if (method.isVarArgs()) varargs = method; else fixed = method;
+        }
+        assertNotNull(fixed);
+        assertNotNull(varargs);
+        assertTrue(Node24JavaArguments.compatible(fixed.getParameterTypes(), false, args));
+        assertTrue(Node24JavaArguments.compatible(varargs.getParameterTypes(), true, args));
+        assertTrue(Node24JavaArguments.score(fixed.getParameterTypes(), false, args)
+                < Node24JavaArguments.score(varargs.getParameterTypes(), true, args));
+        assertEquals("fixed:a", fixed.invoke(target, args));
+    }
 }

@@ -1423,7 +1423,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
             constructor.setAccessible(true);
             Boolean previous = mConstructingFromJs.get();
             if (request.optBoolean("fromJs")) mConstructingFromJs.set(true);
-            try { return constructor.newInstance(coerce(constructor.getParameterTypes(), args)); }
+            try { return constructor.newInstance(Node24JavaArguments.coerce(
+                    constructor.getParameterTypes(), constructor.isVarArgs(), args)); }
             finally {
                 if (previous == null) mConstructingFromJs.remove(); else mConstructingFromJs.set(previous);
             }
@@ -1592,7 +1593,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
         }
         try {
             method.setAccessible(true);
-            Object result = method.invoke(target, coerce(method.getParameterTypes(), args));
+            Object result = method.invoke(target, Node24JavaArguments.coerce(
+                    method.getParameterTypes(), method.isVarArgs(), args));
             observeOwnedResourceCall(target, method.getName(), args);
             return result;
         } catch (InvocationTargetException error) {
@@ -1756,15 +1758,17 @@ public final class Node24HostBridge implements Node24Engine.Host {
     private Constructor<?> findConstructor(Class<?> type, Object[] args) {
         Constructor<?> best = null;
         for (Constructor<?> constructor : type.getConstructors()) {
-            if (compatible(constructor.getParameterTypes(), args)) {
-                if (best == null || better(constructor.getParameterTypes(), best.getParameterTypes(), args)) {
+            if (Node24JavaArguments.compatible(constructor.getParameterTypes(), constructor.isVarArgs(), args)) {
+                if (best == null || Node24JavaArguments.score(constructor.getParameterTypes(),
+                        constructor.isVarArgs(), args) < Node24JavaArguments.score(best.getParameterTypes(),
+                        best.isVarArgs(), args)) {
                     best = constructor;
                 }
             }
         }
         if (best == null) {
             for (Constructor<?> constructor : type.getDeclaredConstructors()) {
-                if (compatible(constructor.getParameterTypes(), args)) {
+                if (Node24JavaArguments.compatible(constructor.getParameterTypes(), constructor.isVarArgs(), args)) {
                     best = constructor;
                     break;
                 }
@@ -1782,8 +1786,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
             if (args == null) {
                 return method;
             }
-            if (compatible(method.getParameterTypes(), args)) {
-                if (best == null || better(method.getParameterTypes(), best.getParameterTypes(), args)) {
+            if (Node24JavaArguments.compatible(method.getParameterTypes(), method.isVarArgs(), args)) {
+                if (best == null || Node24JavaArguments.score(method.getParameterTypes(), method.isVarArgs(), args)
+                        < Node24JavaArguments.score(best.getParameterTypes(), best.isVarArgs(), args)) {
                     best = method;
                 }
             }
@@ -1815,54 +1820,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
         return null;
     }
 
-    private static boolean compatible(Class<?>[] types, Object[] args) {
-        if (types.length != args.length) {
-            return false;
-        }
-        for (int i = 0; i < types.length; i++) {
-            if (!compatible(types[i], args[i])) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean compatible(Class<?> type, Object value) {
-        return Node24JavaArguments.compatible(type, value);
-    }
-
-    private static boolean better(Class<?>[] candidate, Class<?>[] current, Object[] args) {
-        int candidateScore = score(candidate, args);
-        int currentScore = score(current, args);
-        return candidateScore < currentScore;
-    }
-
-    private static int score(Class<?>[] types, Object[] args) {
-        int score = 0;
-        for (int i = 0; i < types.length; i++) {
-            if (args[i] != null && args[i].getClass() == box(types[i])) {
-                score += 0;
-            } else {
-                score += 1;
-            }
-        }
-        return score;
-    }
-
-    private static Class<?> box(Class<?> type) {
-        if (!type.isPrimitive()) {
-            return type;
-        }
-        if (type == boolean.class) return Boolean.class;
-        if (type == byte.class) return Byte.class;
-        if (type == short.class) return Short.class;
-        if (type == int.class) return Integer.class;
-        if (type == long.class) return Long.class;
-        if (type == float.class) return Float.class;
-        if (type == double.class) return Double.class;
-        if (type == char.class) return Character.class;
-        return type;
-    }
+    // Overload matching/conversion, including varargs packing, lives in
+    // Node24JavaArguments so methods and constructors share one rule set.
 
     // ------------------------------------------------------------------
     // wire <-> Java

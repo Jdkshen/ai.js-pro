@@ -75,6 +75,117 @@ final class Node24JavaArguments {
     }
 
     /**
+     * Varargs-aware parameter matching. Java reflection does not perform the
+     * compiler's variable-arity expansion: a {@code foo(String...)} method needs
+     * one array argument, while JS callers naturally pass zero or more values.
+     * Sharing the rules between method and constructor selection keeps
+     * {@code clazz.getMethod("x")} able to find {@code getMethod(String, Class...)}
+     * with an empty varargs array.
+     */
+    static boolean compatible(Class<?>[] types, boolean varArgs, Object[] args) {
+        if (types == null || args == null) return false;
+        if (!varArgs) {
+            if (types.length != args.length) return false;
+            for (int i = 0; i < types.length; i++) {
+                if (!compatible(types[i], args[i])) return false;
+            }
+            return true;
+        }
+        if (types.length == 0) return false;
+        int fixed = types.length - 1;
+        if (args.length < fixed) return false;
+        for (int i = 0; i < fixed; i++) {
+            if (!compatible(types[i], args[i])) return false;
+        }
+        Class<?> arrayType = types[fixed];
+        if (!arrayType.isArray()) return false;
+        if (args.length == fixed) return true;
+        if (args.length == fixed + 1 && isDirectVarArgsArray(arrayType, args[fixed])) return true;
+        Class<?> component = arrayType.getComponentType();
+        for (int i = fixed; i < args.length; i++) {
+            if (!compatible(component, args[i])) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Converts JS arguments for a chosen method/constructor, packing trailing
+     * values into the varargs array. An explicit JS array is passed through as
+     * the array itself (matching Rhino/QuickJS interop), so nested arrays stay
+     * nested and {@code getMethod("x", [])} keeps working.
+     */
+    static Object[] coerce(Class<?>[] types, boolean varArgs, Object[] args) {
+        if (args == null) return new Object[0];
+        if (!varArgs) {
+            Object[] values = new Object[args.length];
+            for (int i = 0; i < args.length; i++) values[i] = coerce(types[i], args[i]);
+            return values;
+        }
+        int fixed = types.length - 1;
+        Object[] values = new Object[types.length];
+        for (int i = 0; i < fixed; i++) values[i] = coerce(types[i], args[i]);
+        Class<?> arrayType = types[fixed];
+        Class<?> component = arrayType.getComponentType();
+        if (args.length == fixed + 1 && isDirectVarArgsArray(arrayType, args[fixed])) {
+            values[fixed] = coerce(arrayType, args[fixed]);
+        } else {
+            Object array = Array.newInstance(component, args.length - fixed);
+            for (int i = fixed; i < args.length; i++) {
+                Array.set(array, i - fixed, coerce(component, args[i]));
+            }
+            values[fixed] = array;
+        }
+        return values;
+    }
+
+    /**
+     * Overload preference: fixed arity wins over varargs; otherwise prefer exact
+     * (already-boxed) matches over widening conversions, matching the previous
+     * single-arity score.
+     */
+    static int score(Class<?>[] types, boolean varArgs, Object[] args) {
+        if (types == null || args == null) return Integer.MAX_VALUE;
+        int score = varArgs ? 1000 : 0;
+        int fixed = varArgs ? types.length - 1 : types.length;
+        if (fixed < 0) return Integer.MAX_VALUE;
+        for (int i = 0; i < fixed && i < args.length; i++) {
+            score += exactScore(types[i], args[i]);
+        }
+        if (varArgs && args.length > fixed) {
+            Class<?> component = types[fixed].getComponentType();
+            if (!(args.length == fixed + 1 && isDirectVarArgsArray(types[fixed], args[fixed]))) {
+                for (int i = fixed; i < args.length; i++) score += exactScore(component, args[i]);
+            }
+        }
+        return score;
+    }
+
+    /** True when a single trailing value already is the varargs array. */
+    static boolean isDirectVarArgsArray(Class<?> arrayType, Object value) {
+        if (arrayType == null || !arrayType.isArray() || value == null) return false;
+        if (arrayType.isInstance(value)) return true;
+        // Wire arrays from the JSON/typed-JNI bridge arrive as Object[].
+        return value instanceof Object[];
+    }
+
+    private static int exactScore(Class<?> type, Object value) {
+        return value != null && value.getClass() == box(type) ? 0 : 1;
+    }
+
+    private static Class<?> box(Class<?> type) {
+        if (!type.isPrimitive()) return type;
+        if (type == boolean.class) return Boolean.class;
+        if (type == byte.class) return Byte.class;
+        if (type == short.class) return Short.class;
+        if (type == int.class) return Integer.class;
+        if (type == long.class) return Long.class;
+        if (type == float.class) return Float.class;
+        if (type == double.class) return Double.class;
+        if (type == char.class) return Character.class;
+        return type;
+    }
+
+    /**
      * JS object literal → interface conversion (wire {@code $map} whose values are
      * {@code $callback} handles). The strict abstract-method check is deliberate:
      * it lets overload resolution pick a listener only when the object really
