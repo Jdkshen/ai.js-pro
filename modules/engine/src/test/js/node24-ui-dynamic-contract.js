@@ -3,7 +3,7 @@ const assert = require('assert'), fs = require('fs'), path = require('path'), vm
 const source = fs.readFileSync(path.resolve(__dirname, '../../main/assets/node24/ui.js'), 'utf8');
 let ui, shown, replacement, recreated, keepAlive = 0;
 let uiScopeDepth = 0, callbackWorkerEnabled = false;
-const ids = {}, requests = [];
+const ids = {}, requests = [], queuedEvents = [], warnings = [], errors = [];
 let sequence = 1;
 function readIds(xml) {
     for (const m of xml.matchAll(/\bid="(?:@\+?id\/)?([\w]+)"/g)) {
@@ -29,7 +29,8 @@ const session = {
     setContentView: root => { replacement = root; },
     recreate: xml => { recreated = xml; }
 };
-const context = vm.createContext({require, console, setTimeout, clearTimeout,
+const context = vm.createContext({require, console: {...console,
+    warn: (...args) => warnings.push(args), error: (...args) => errors.push(args)}, setTimeout, clearTimeout,
     setInterval: () => 1, clearInterval() {}, __ajsEnableJavaCallbacks: () => {
         callbackWorkerEnabled = true; return 1;
     },
@@ -53,7 +54,7 @@ const context = vm.createContext({require, console, setTimeout, clearTimeout,
             shown = req.layoutXml; currentView = view(shown);
             return {ok: true, views: ids};
         }
-        if (req.op === 'pollEvents') return {ok: true, events: []};
+        if (req.op === 'pollEvents') return {ok: true, events: queuedEvents.splice(0)};
         return {ok: true};
     }}); }
 });
@@ -71,6 +72,20 @@ class Page extends ui.Activity {
     get layoutXml(){return '<frame id="root"><m3-card id="card"><m3-card id="nested"><text id="child" text="x > y"/></m3-card><m3-leaf/></m3-card><!-- keep <m3-card/> --></frame>';}
 }
 const p = ui.setMainActivity(Page).instance;
+assert.equal(warnings.length, 0, 'inline XML without project resources must not warn about missing project-res.apk');
+const pollTarget = views.get(ids.child);
+pollTarget.setOnCheckedChangeListener = function () {};
+const pollMember = name => context.__ajsJavaViewMember(pollTarget, name);
+let afterPollFailure = 0;
+pollMember('once')('check', () => { throw new Error('expected forwarded event failure'); });
+pollMember('on')('check', () => { afterPollFailure++; });
+queuedEvents.push({type: 'check', viewId: ids.child, checked: true});
+ui.__viewProtocolPoll();
+queuedEvents.push({type: 'check', viewId: ids.child, checked: false});
+ui.__viewProtocolPoll();
+assert.equal(afterPollFailure, 2, 'forwarded native events isolate each callback exception');
+assert.equal(errors.length, 1, 'a throwing once callback is removed before forwarded delivery');
+pollMember('removeAllListeners')();
 const card = cards.find(entry => entry.nativeView === views.get(ids.card));
 assert(card, 'custom widget receives its native view');
 card.nativeView.attr = context.__ajsJavaViewMember(card.nativeView, 'attr');

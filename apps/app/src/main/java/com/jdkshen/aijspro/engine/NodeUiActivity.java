@@ -395,8 +395,7 @@ public class NodeUiActivity extends AppCompatActivity {
     }
 
     /** task-135 Phase2：宿主 View 句柄命令（主进程执行；返回 JSON 字符串）。 */
-    private final java.util.Map<String, View> mViewHandles = new java.util.HashMap<>();
-    private int mViewHandleSeq = 1;
+    private final NodeUiHost.ViewHandleRegistry mViewHandles = new NodeUiHost.ViewHandleRegistry();
 
     public String handleView(String requestJson) {
         try {
@@ -425,8 +424,7 @@ public class NodeUiActivity extends AppCompatActivity {
                         setContentView(view);
                         mContentView = view;
                     }
-                    String handle = "view-" + (mViewHandleSeq++);
-                    mViewHandles.put(handle, view);
+                    String handle = mViewHandles.handleFor(view);
                     return new JSONObject().put("ok", true).put("handleId", handle)
                             .put("name", name).put("handleCount", mViewHandles.size()).toString();
                 }
@@ -438,8 +436,7 @@ public class NodeUiActivity extends AppCompatActivity {
                             .put("error", "findViewById 未命中：" + request.optString("name", "")
                                     + " id=" + id).toString();
                     }
-                    String handle = "view-" + (mViewHandleSeq++);
-                    mViewHandles.put(handle, view);
+                    String handle = mViewHandles.handleFor(view);
                     return new JSONObject().put("ok", true).put("handleId", handle)
                             .put("viewId", id).toString();
                 }
@@ -463,12 +460,20 @@ public class NodeUiActivity extends AppCompatActivity {
                     view.setClickable(true);
                     return new JSONObject().put("ok", true).put("viewId", id).toString();
                 }
+                case "uiRequestView":
                 case "viewCommand": {
-                    View view = mViewHandles.get(request.optString("handleId", ""));
+                    request = NodeUiHost.viewActionParams(request);
+                    View view = (View) mViewHandles.get(request.optString("handleId", ""));
                     if (view == null) return new JSONObject().put("ok", false).put("error", "无效的 View handle").toString();
                     String action = request.optString("action", "");
                     Object value = request.opt("value");
                     switch (action) {
+                        case NodeUiProtocol.ACTION_SET_ON_CLICK_LISTENER:
+                        case NodeUiProtocol.ACTION_SET_ON_CHECKED_CHANGE_LISTENER:
+                        case NodeUiProtocol.ACTION_SET_ON_TEXT_CHANGED_LISTENER:
+                        case NodeUiProtocol.ACTION_SET_ON_ITEM_SELECTED_LISTENER:
+                            return NodeUiHost.installProtocolViewListener(view, action,
+                                    this::enqueueProtocolViewEvent).toString();
                         case "setText":
                             if (!(view instanceof TextView)) return viewTypeError("setText", view);
                             ((TextView) view).setText(String.valueOf(value));
@@ -547,6 +552,15 @@ public class NodeUiActivity extends AppCompatActivity {
             while (mViewEvents.size() > 64) {
                 mViewEvents.removeFirst();
             }
+        }
+    }
+
+    private void enqueueProtocolViewEvent(String type, int viewId, JSONObject payload) {
+        try {
+            JSONObject event = payload == null ? new JSONObject() : new JSONObject(payload.toString());
+            enqueueViewEvent(event.put("type", type).put("viewId", viewId));
+        } catch (Throwable error) {
+            Log.w(TAG, "View 事件入队失败", error);
         }
     }
 

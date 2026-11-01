@@ -506,30 +506,11 @@
 
         // ---- 2.9/2.1：View 事件（宿主协议 + 原生 Listener + 轮询兜底） -------------
         let viewExtrasByHandle = new WeakMap();
-        /** 句柄/真实 View 共用的事件回调表（click/check/text_change/... 每个 View 一份）。 */
-        let viewEventHandlers = new WeakMap();
-        function eventHandlersOf(view) {
-            let handlers = viewEventHandlers.get(view);
-            if (!handlers) { handlers = Object.create(null); viewEventHandlers.set(view, handlers); }
-            return handlers;
-        }
-        /** id → 归属对象：Java View 与它的句柄门面共用同一份事件状态。 */
-        let viewIdentities = new WeakMap();
-        function viewIdentity(view) {
-            if (!view || typeof view !== 'object') return view;
-            const mapped = viewIdentities.get(view);
-            if (mapped) return mapped;
-            let identity = view;
-            if (view.__handleId) viewIdentities.set(view, identity);
-            else viewIdentities.set(view, identity);
-            return identity;
-        }
         function viewHandleExtras(view) {
             let extras = viewExtrasByHandle.get(view);
             if (!extras) {
                 extras = {
                     events: new (require('events').EventEmitter)(),
-                    handlers: Object.create(null),
                     listeners: Object.create(null),
                     state: {},
                     poll: Object.create(null)
@@ -540,23 +521,16 @@
         }
         /**
          * click/check/text_change 等事件统一走 realViewExtras（真实 View 身份），
-         * 宿主协议句柄则复用句柄 extras；两者都提供 {events, handlers}。
+         * 宿主协议句柄则复用句柄 extras；每个 View 只有一份 EventEmitter。
          */
         function eventExtras(view) {
-            const raw = receiverRawByHandle.has(view) ? receiverRawByHandle.get(view) : view;
-            if (raw && raw.__ajsJavaObject__ === true) {
-                const extras = viewExtras(raw);
-                extras.handlers = handlersFor(extras, raw);
-                return extras;
-            }
-            const extras = viewHandleExtras(view);
-            extras.handlers = handlersFor(extras, view);
+            let raw = receiverRawByHandle.has(view) ? receiverRawByHandle.get(view) : view;
+            const marker = markerStateOf(raw);
+            if (marker && marker.eventFacade) raw = marker.eventFacade;
+            const native = nativeViewOf(raw);
+            const extras = native ? viewExtras(native) : viewHandleExtras(raw);
+            if (!extras.listeners) extras.listeners = Object.create(null);
             return extras;
-        }
-        /** handlers 与 extras 同身份绑定：同一个 extras 永远拿到同一份 handler 表。 */
-        function handlersFor(extras, view) {
-            if (!extras.handlers) extras.handlers = eventHandlersOf(view);
-            return extras.handlers;
         }
         function viewProtocolGet(handle, action, value) {
             const response = viewRequest(action, value === undefined
@@ -569,11 +543,12 @@
             let state = viewHandleStates.get(handle);
             if (!state) {
                 const native = handle && handle.__ajsJavaObject__ === true;
+                const marker = markerStateOf(handle);
                 state = {
                     handle: handle,
                     nativeJava: native,
-                    viewId: native ? 0 : (Number(handle.__viewId) || 0),
-                    viewName: native ? '' : (handle.__viewName || '')
+                    viewId: native ? 0 : (Number(marker ? marker.viewId : handle.__viewId) || 0),
+                    viewName: native ? '' : (marker ? marker.viewName : handle.__viewName) || ''
                 };
                 viewHandleStates.set(handle, state);
                 if (state.viewId) clickStates[String(state.viewId)] = state;
@@ -586,33 +561,26 @@
         /** handleId → 视图门面：同一真实 View 必须复用同一 JS 身份（2.5 的真实视图树语义）。 */
         const handleFacades = Object.create(null);
         const VIEW_PROTOCOL_EVENT_NAME = {check: 'check', item_selected: 'item_selected', text_change: 'text_change'};
-        function dispatchRemoteEvent(handle, name, args) {
-            try { return viewHandleExtras(handle).events.emit.apply(viewHandleExtras(handle).events, [name].concat(args || [])); }
-            catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); return false; }
-        }
-        function onRemote(handle, event, handler) {
+        function bindRemoteViewEvent(handle, name) {
             const extras = eventExtras(handle);
-            const name = String(event);
-            (extras.handlers[name] = extras.handlers[name] || []).push(handler);
+            if (extras.listeners[name] === 'host' || extras.listeners[name] === 'native') return;
             const existing = viewHandleStates.get(handle);
-            if (existing && existing.polling && existing.polling[name]) return handle;
+            if (existing && existing.polling && existing.polling[name]) return;
             const action = VIEW_PROTOCOL_LISTENER[name];
             // 真实 Java View：直接安装原生 Listener（inline/宽布局/ContentView），不走宿主 handle 协议。
             const isNativeView = !!(handle && (handle.__ajsJavaObject__ === true || nativeViewOf(handle)));
             if (isNativeView) {
-                const bound = bindNativeViewEvent(handle, eventExtras(handle), name);
-                if (bound) {
-                    eventExtras(handle).listeners[name] = 'native';
-                    return handle;
-                }
-                if (VIEW_INPUT_EVENTS.indexOf(name) >= 0) {
-                    throw new Error('真实 Java View 不支持 ' + name + '：宿主方法缺失');
-                }
+                bindViewEvent(nativeViewOf(handle) || handle, extras, name);
+                extras.listeners[name] = 'native';
+                return;
             } else if (action) {
-                const response = viewRequest(action, {handleId: handle.__handleId, channel: name});
+                const marker = markerStateOf(handle);
+                const response = marker && name === 'click'
+                    ? uiRequestViewRaw('bindClick', {id: marker.viewId || 0, name: marker.viewName || ''})
+                    : viewRequest(action, {handleId: marker ? bindingHandle(marker) : handle.__handleId, channel: name});
                 if (response && response.ok === true) {
                     extras.listeners[name] = 'host';
-                    return handle;
+                    return;
                 }
                 if (!isUnsupportedHostMessage(String(response && response.error || ''))) {
                     throw new Error(response && response.error ? String(response.error)
@@ -628,40 +596,43 @@
                 throw new Error('当前宿主不支持 click 事件转发（需要宿主实现 viewCommand setOnClickListener）');
             }
             if (name === 'check' || name === 'text_change' || name === 'item_selected') {
-                extras.listeners[name] = 'poll';
                 startViewPolling(viewHandleState(handle), name);
-                return handle;
+                extras.listeners[name] = 'poll';
+                return;
             }
             const typed = name === 'itemSelected' ? 'item_selected' : name;
             throw new Error('当前宿主不支持 ' + name + ' 事件（可用事件：click/check/long_click/touch/key/'
                 + 'scroll_change/text_change/item_selected；需要宿主实现 ' + typed + ' 转发）');
         }
-        function onceRemote(handle, event, handler) {
-            const wrapped = function () {
-                offRemote(handle, event, wrapped);
-                return handler.apply(null, arguments);
-            };
-            return onRemote(handle, event, wrapped);
+        function onRemote(handle, event, handler, method) {
+            if (typeof handler !== 'function') throw new TypeError('View.on/once 需要函数');
+            const name = String(event);
+            // Bind first: a failed host call must not leave a ghost JS subscription.
+            bindRemoteViewEvent(handle, name);
+            viewHandleState(handle);
+            eventExtras(handle).events[method || 'on'](name, handler);
+            return handle;
         }
         function offRemote(handle, event, handler) {
             const extras = eventExtras(handle);
-            const list = extras.handlers[String(event)];
-            if (Array.isArray(list)) {
-                const index = list.indexOf(handler);
-                if (index >= 0) list.splice(index, 1);
-            }
+            extras.events.removeListener(String(event), handler);
+            pruneViewPolling(handle, String(event));
             return handle;
         }
         function removeAllRemoteListeners(handle, event) {
             const extras = eventExtras(handle);
-            const names = event == null ? Object.keys(extras.handlers) : [String(event)];
-            names.forEach(function (name) {
-                const list = extras.handlers[name];
-                if (Array.isArray(list)) list.length = 0;
-                delete extras.listeners[name];
-                delete extras.poll[name];
-            });
+            const names = event == null ? extras.events.eventNames() : [String(event)];
+            if (event == null) extras.events.removeAllListeners();
+            else extras.events.removeAllListeners(String(event));
+            names.forEach(function (name) { pruneViewPolling(handle, name); });
             return handle;
+        }
+        function pruneViewPolling(handle, name) {
+            const state = viewHandleStates.get(handle);
+            if (!state || !state.polling || eventExtras(handle).events.listenerCount(name)) return;
+            delete state.polling[name];
+            if (eventExtras(handle).listeners[name] === 'poll') delete eventExtras(handle).listeners[name];
+            if (!Object.keys(state.polling).length) viewPollStates.delete(state);
         }
         /**
          * 轮询兜底：宿主没有事件通道时用 viewCommand 读状态快照。
@@ -681,8 +652,7 @@
             else read = h => Number(viewProtocolGet(h, 'getSelectedItemId')) || 0;
             let baseline;
             try { baseline = read(handle); } catch (error) {
-                console.warn('[ui] ' + event + ' 轮询兜底不可用（宿主没有读取接口）：', error);
-                return;
+                throw new Error(event + ' 轮询兜底不可用（宿主没有读取接口）：' + String(error));
             }
             state.polling = state.polling || Object.create(null);
             state.polling[event] = {read: read, last: baseline};
@@ -693,7 +663,9 @@
             viewPollStates.forEach(function (state) {
                 if (!state.polling) return;
                 Object.keys(state.polling).forEach(function (event) {
+                    pruneViewPolling(state.handle, event);
                     const poll = state.polling[event];
+                    if (!poll) return;
                     let value;
                     try { value = poll.read(state.handle, event); } catch (error) {
                         console.warn('[ui] ' + event + ' 轮询读取失败：', error);
@@ -703,25 +675,20 @@
                     poll.last = value;
                     dispatchHandleEvent(state.handle, event, event === 'check' ? [value]
                         : event === 'text_change' ? [value] : [value]);
+                    pruneViewPolling(state.handle, event);
                 });
             });
         }
         /** 协议事件分发到句柄事件表 + 该 viewId 的注册状态（pollEvents 的 check 等也走这里）。 */
         function emitViewHandlers(extras, name, args) {
-            // Native View subscriptions use EventEmitter only. Its raw listeners
+            // All View subscriptions use EventEmitter only. Its raw listeners
             // preserve once wrappers, duplicates, prepend order and off identity.
             const listeners = extras.events.rawListeners(name);
-            const remote = extras.handlers && extras.handlers[name];
-            const handlers = Array.isArray(remote) ? remote.slice() : [];
             listeners.forEach(function (listener) {
                 try { listener.apply(extras.events, args || []); }
                 catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
             });
-            handlers.forEach(function (handler) {
-                try { handler.apply(null, args || []); }
-                catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
-            });
-            return listeners.length > 0 || handlers.length > 0;
+            return listeners.length > 0;
         }
         function dispatchHandleEvent(handle, name, args) {
             return emitViewHandlers(eventExtras(handle), name, args);
@@ -735,8 +702,6 @@
                 ? receiver : null);
             if (!native) return false;
             if (!extras) extras = eventExtras(receiver);
-            // handlers 表由 eventExtras/handlersFor 统一提供，这里绝不能再换一份。
-            extras.handlers = extras.handlers || eventHandlersOf(receiver);
             // prelude 的 Java 回调对象是函数代理：调用时可能需要显式 invoke(receiver, args)。
             function invokeCallback(listener, name, args) {
                 if (!listener) return undefined;
@@ -1412,60 +1377,6 @@
             return uiRequestView('viewCommand', request);
         }
 
-        /** button.on("click", fn) / setOnClickListener(fn)：宿主侧真实监听，事件经 pollEvents 回来。 */
-        function registerViewClick(state, handler) {
-            if (typeof handler !== 'function') {
-                throw new TypeError('click 监听需要一个函数');
-            }
-            if (!state.viewId && state.handle) {
-                state.viewId = Number(state.handle.__viewId) || 0;
-                if (!state.viewId && state.handle.__handle != null) {
-                    state.viewId = Number(state.handle.__handle) || 0;
-                    state.clickBound = true;
-                }
-            }
-            if (!state.viewId) {
-                // task-194：Adapter item 探测/动态视图可能没有 id。
-                // task-254：显式报错而不是静默 no-op（2.5）；marker 兼容路径仍按旧语义降级。
-                if (state.handle) {
-                    throw new Error('click 事件需要 View 的 viewId（宿主 inflate/findViewById 没有返回 viewId）：'
-                        + '无法把宿主 click 事件映射回 JS 回调，请升级宿主或改用真实 Java View 的 setOnClickListener');
-                }
-                return false;
-            }
-            state.clickHandlers = state.clickHandlers || [];
-            state.clickHandlers.push(handler);
-            clickStates[String(state.viewId)] = state;
-            if (state.clickBound) return true;
-            const handle = state.handle;
-            // 1) 协议句柄（ui.inflate/viewCommand 门面）：走 viewCommand setOnClickListener + 事件队列。
-            if (handle && handle.__handleId) {
-                const response = viewRequest(VIEW_PROTOCOL.setOnClickListener,
-                    {handleId: handle.__handleId, channel: 'click'});
-                if (response && response.ok === true) {
-                    state.clickBound = true;
-                    return true;
-                }
-                throw new Error('click 事件绑定失败：' + String(response && response.error || ''));
-            }
-            // 2) 真实 Java View：宿主 bindClick 事件按 viewId 回到 dispatchViewClick；
-            //    没有 id 时上面的 viewFacadeOn 已经走了原生 setOnClickListener。
-            if (handle && handle.__ajsJavaObject__ === true) {
-                state.clickBound = true;
-                return true;
-            }
-            // 3) 老宿主 marker 路径：bindClick。
-            const response = uiRequestViewRaw('bindClick', {
-                id: state.viewId,
-                name: state.viewName || ''
-            });
-            if (response && response.ok === true) {
-                state.clickBound = true;
-                return true;
-            }
-            throw new Error('click 事件绑定失败：' + String(response && response.error || ''));
-        }
-
         function markerObject(name, extra) {
             const state = Object.assign({name: name}, extra || {});
             const target = function () {};
@@ -1480,8 +1391,9 @@
                     if (key === 'toString') return function () { return '[NodeUI ' + state.name + ']'; };
                     if (key === 'valueOf') return function () { return 0; };
                     if (key === 'toJSON') return function () { return {}; };
-                    if (key === 'on' || key === 'once' || key === 'addListener') return function (eventName, handler) {
-                        return viewFacadeOn(proxy, eventName, handler, key === 'once');
+                    if (key === 'on' || key === 'once' || key === 'addListener'
+                            || key === 'prependListener' || key === 'prependOnceListener') return function (eventName, handler) {
+                        return viewFacadeOn(proxy, eventName, handler, key === 'addListener' ? 'on' : key);
                     };
                     if (key === 'off' || key === 'removeListener') return function (eventName, handler) {
                         return viewFacadeOff(proxy, eventName, handler);
@@ -1489,13 +1401,14 @@
                     if (key === 'removeAllListeners') return function (eventName) {
                         return viewFacadeRemoveAllListeners(proxy, eventName);
                     };
+                    const eventMember = viewFacadeEmitterMember(proxy, key);
+                    if (eventMember !== undefined) return eventMember;
                     if (key === 'setOnClickListener') return function (handler) {
                         if (state.handle && typeof state.handle.setOnClickListener === 'function') {
                             state.handle.setOnClickListener(handler);
                             return proxy;
                         }
-                        registerViewClick(state, handler);
-                        return proxy;
+                        return viewFacadeOn(proxy, 'click', handler);
                     };
                     if (key === 'setOnCheckedChangeListener') return function (handler) {
                         return viewFacadeOn(proxy, 'check', handler);
@@ -2410,13 +2323,14 @@
             const document = eventNameArgs(name, event, args);
             const viewId = Number(event && event.viewId) || 0;
             const state = viewId ? clickStates[String(viewId)] : null;
+            const dispatchedExtras = state && state.handle ? eventExtras(state.handle) : null;
             if (state && state.handle) dispatchHandleEvent(state.handle, name, document);
             // 真实 Java View：事件表存在 realViewExtras 上（可能与 clickStates 不是同一份）。
             if (realUiMode) {
                 try {
                     const root = javaSession().getContentView();
                     const view = viewId && root ? root.findViewById(viewId) : null;
-                    if (view) dispatchRealViewEvent(view, name, document);
+                    if (view && eventExtras(view) !== dispatchedExtras) dispatchRealViewEvent(view, name, document);
                 } catch (ignored) { /* 没有真实内容视图时忽略 */ }
             }
         }
@@ -2424,7 +2338,7 @@
         function dispatchRealViewEvent(view, name, args) {
             try {
                 const extras = viewExtras(view);
-                if (extras) extras.events.emit.apply(extras.events, [name].concat(args || []));
+                if (extras) emitViewHandlers(extras, name, args);
             } catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
         }
         /** 离散事件（check/item_selected/text_change）的回调参数。 */
@@ -2448,7 +2362,6 @@
             Object.keys(clickStates).forEach(function (id) { delete clickStates[id]; });
             viewExtrasByHandle = new WeakMap();
             viewHandleStates = new WeakMap();
-            viewEventHandlers = new WeakMap();
             viewPollStates = new Set();
             Object.keys(handleFacades).forEach(function (key) { delete handleFacades[key]; });
             Object.keys(reverseLayoutIndex).forEach(function (key) { delete reverseLayoutIndex[key]; });
@@ -2456,17 +2369,7 @@
         }
 
         function dispatchViewClick(event) {
-            const viewId = Number(event && event.viewId) || 0;
-            if (!viewId) return;
-            const state = clickStates[String(viewId)];
-            if (!state || !Array.isArray(state.clickHandlers)) return;
-            state.clickHandlers.slice().forEach(function (handler) {
-                try {
-                    handler(event);
-                } catch (error) {
-                    console.error('[ui] click 回调异常：', error);
-                }
-            });
+            dispatchViewProtocolEvent(event, 'click', [event]);
         }
 
         // ------------------------------------------------------------------
@@ -2714,8 +2617,8 @@
         function warnLegacyPath(result) {
             if (legacyPathWarned) return;
             legacyPathWarned = true;
-            const text = (result && result.warning) || ('工程声明了 androidResources，但没有可用的 build/project-res.apk：'
-                + '当前走兼容路径（合成 id），listener/ViewPager/BottomNavigationView 等行为受限。'
+            const text = (result && result.warning) || ('没有可用的 build/project-res.apk：'
+                + '工程资源布局当前走兼容路径（合成 id），listener/ViewPager/BottomNavigationView 等行为受限。'
                 + '请在 PC 上运行 tools/build-project-res.ps1 -ProjectDir <工程目录> 生成资源包后重试。');
             try { console.warn('[ui] ' + text); } catch (ignored) { }
         }
@@ -2755,7 +2658,6 @@
                 catch (_) { /* Older hosts still support ui.loadAndroidResources(). */ }
                 if (resourceCompiled && typeof globalThis.__ajsEnableJavaCallbacks === 'function') realUiMode = true;
             }
-            if (!resourceCompiled) warnLegacyPath(null);
             // 进入 UI 前按需切换包代理；inline 布局会走真实 Activity，发现后立即恢复真实 Java 包。
             if (!realUiMode) patchJavaGlobals();
             let instance;
@@ -2797,6 +2699,7 @@
                 throw new Error('Activity 没有设置 layoutId 或 layoutXml'
                     + '（get layoutId() 返回 ui.R.layout.xxx，或 get layoutXml() 返回 XML 字符串）');
             }
+            if (!resourceCompiled && !layoutXml) warnLegacyPath(null);
             const request = {op: 'show', className: Ctor.name || 'MainActivity'};
             if (options && options.flags != null) {
                 request.flags = Number(options.flags) || 0;
@@ -2977,38 +2880,56 @@
             }
             return result;
         }
-        function viewFacadeOn(handle, eventName, handler, once) {
+        function viewFacadeOn(handle, eventName, handler, mode) {
             if (typeof handler !== 'function') throw new TypeError('View.on/once 需要函数');
+            const marker = markerStateOf(handle);
+            if (marker && !marker.eventFacade) {
+                const found = uiRequestViewRaw('findViewById', {id: marker.viewId || 0, name: marker.viewName || ''});
+                if (found && found.ok === true && found.handleId) marker.eventFacade = uiWrapHandle(found);
+                else if (!isUnsupportedHostMessage(String(found && found.error || ''))) {
+                    throw new Error(String(found && found.error || '无法解析绑定控件的 View handle'));
+                }
+            }
+            if (marker && marker.eventFacade) {
+                viewFacadeOn(marker.eventFacade, eventName, handler, mode);
+                return handle;
+            }
             // 桥返回的 Java View 描述符（客户端对象）在 JS 侧直接可用，但事件仍要挂到 JS 表上。
             if (handle && handle._rawView && handle.__ajsJavaObject__ === true) handle = handle._rawView;
             const name = String(eventName);
-            if (handle && handle.__ajsJavaObject__ !== true && !handle.__handleId) {
+            if (!handle || (!nativeViewOf(handle) && !markerStateOf(handle)
+                    && typeof handle.__handleId !== 'string' && typeof handle.__handleId !== 'number')) {
                 throw new Error('View 事件需要一个真实的 View（句柄或 Java View），当前参数无效');
             }
-            if (name === 'click') {
-                const nativeClick = bindNativeViewEvent(handle, eventExtras(handle), 'click');
-                registerViewClick(viewHandleState(handle), handler);
-                if (nativeClick) eventExtras(handle).listeners.click = 'native';
-                return handle;
-            }
-            return once ? onceRemote(handle, name, handler) : onRemote(handle, name, handler);
+            const method = mode === true ? 'once' : (typeof mode === 'string' ? mode : 'on');
+            return onRemote(handle, name, handler, method);
         }
         function viewFacadeOff(handle, eventName, handler) {
-            const name = String(eventName);
-            if (name === 'click') {
-                const state = viewHandleState(handle);
-                if (Array.isArray(state.clickHandlers)) {
-                    const index = state.clickHandlers.indexOf(handler);
-                    if (index >= 0) state.clickHandlers.splice(index, 1);
-                }
+            const marker = markerStateOf(handle);
+            if (marker && marker.eventFacade) {
+                viewFacadeOff(marker.eventFacade, eventName, handler);
                 return handle;
             }
+            const name = String(eventName);
             return offRemote(handle, name, handler);
         }
         function viewFacadeRemoveAllListeners(handle, eventName) {
-            const state = viewHandleState(handle);
-            if (eventName == null || String(eventName) === 'click') state.clickHandlers = [];
+            const marker = markerStateOf(handle);
+            if (marker && marker.eventFacade) {
+                viewFacadeRemoveAllListeners(marker.eventFacade, eventName);
+                return handle;
+            }
             return removeAllRemoteListeners(handle, eventName);
+        }
+        function viewFacadeEmitterMember(handle, name) {
+            if (['eventNames', 'listenerCount', 'listeners', 'getMaxListeners', 'emit'].includes(name)) {
+                return eventExtras(handle).events[name].bind(eventExtras(handle).events);
+            }
+            if (name === 'setMaxListeners') return function (count) {
+                eventExtras(handle).events.setMaxListeners(count);
+                return handle;
+            };
+            return undefined;
         }
         function viewCommandProxy(result) {
             const handleId = result.handleId;
@@ -3017,6 +2938,9 @@
             // 普通 View 方法（setXxx 等）在宿主协议里按成员转发；事件方法在下面显式拦截。
             function isEventMember(name) {
                 return name === 'on' || name === 'once' || name === 'addListener' || name === 'off'
+                    || name === 'prependListener' || name === 'prependOnceListener'
+                    || name === 'eventNames' || name === 'listenerCount' || name === 'listeners'
+                    || name === 'getMaxListeners' || name === 'setMaxListeners' || name === 'emit'
                     || name === 'removeListener' || name === 'removeAllListeners'
                     || name === 'setOnClickListener' || name === 'setOnCheckedChangeListener'
                     || name === 'setOnTextChangedListener' || name === 'setOnItemSelectedListener'
@@ -3037,22 +2961,23 @@
                     return command(name, value);
                 };
             }
+            let facade;
             const proxy = {
                 __handleId: handleId,
                 __viewId: viewId,
                 __viewName: viewName,
                 __class: result.className ? String(result.className) : 'android.view.View',
-                setText: function (text) { command('setText', String(text)); return proxy; },
+                setText: function (text) { command('setText', String(text)); return facade; },
                 getText: function () { return command('getText'); },
-                setVisibility: function (value) { command('setVisibility', Number(value)); return proxy; },
+                setVisibility: function (value) { command('setVisibility', Number(value)); return facade; },
                 getVisibility: function () { return command('getVisibility'); },
-                setEnabled: function (value) { command('setEnabled', !!value); return proxy; },
-                setChecked: function (value) { command('setChecked', !!value); return proxy; },
+                setEnabled: function (value) { command('setEnabled', !!value); return facade; },
+                setChecked: function (value) { command('setChecked', !!value); return facade; },
                 isChecked: function () { return command('isChecked'); },
                 click: function () { return command('click'); },
                 // 2.5：参与真实视图树（宿主协议；真实 Java View 时走原生）
-                addView: function (child, index) { return viewFacadeAddView(proxy, child, index); },
-                removeView: function (child) { return viewFacadeRemoveView(proxy, child); },
+                addView: function (child, index) { return viewFacadeAddView(facade, child, index); },
+                removeView: function (child) { return viewFacadeRemoveView(facade, child); },
                 removeAllViews: function () { return viewFacadeTreeValue(proxy, VIEW_PROTOCOL.removeAllViews); },
                 getChildCount: function () { return viewFacadeTreeValue(proxy, VIEW_PROTOCOL.getChildCount); },
                 getChildAt: function (index) { 
@@ -3070,16 +2995,18 @@
                 },
                 findView: function (idOrName) { return proxy.findViewById(idOrName); },
                 // 2.9 / 2.1：事件
-                on: function (eventName, handler) { return viewFacadeOn(proxy, eventName, handler, false); },
-                once: function (eventName, handler) { return viewFacadeOn(proxy, eventName, handler, true); },
-                addListener: function (eventName, handler) { return viewFacadeOn(proxy, eventName, handler, false); },
-                off: function (eventName, handler) { return viewFacadeOff(proxy, eventName, handler); },
-                removeListener: function (eventName, handler) { return viewFacadeOff(proxy, eventName, handler); },
-                removeAllListeners: function (eventName) { return viewFacadeRemoveAllListeners(proxy, eventName); },
-                setOnClickListener: function (handler) { return viewFacadeOn(proxy, 'click', handler, false); },
-                setOnCheckedChangeListener: function (handler) { return viewFacadeOn(proxy, 'check', handler, false); },
-                setOnTextChangedListener: function (handler) { return viewFacadeOn(proxy, 'text_change', handler, false); },
-                setOnItemSelectedListener: function (handler) { return viewFacadeOn(proxy, 'item_selected', handler, false); }
+                on: function (eventName, handler) { return viewFacadeOn(facade, eventName, handler); },
+                once: function (eventName, handler) { return viewFacadeOn(facade, eventName, handler, 'once'); },
+                addListener: function (eventName, handler) { return viewFacadeOn(facade, eventName, handler); },
+                prependListener: function (eventName, handler) { return viewFacadeOn(facade, eventName, handler, 'prependListener'); },
+                prependOnceListener: function (eventName, handler) { return viewFacadeOn(facade, eventName, handler, 'prependOnceListener'); },
+                off: function (eventName, handler) { return viewFacadeOff(facade, eventName, handler); },
+                removeListener: function (eventName, handler) { return viewFacadeOff(facade, eventName, handler); },
+                removeAllListeners: function (eventName) { return viewFacadeRemoveAllListeners(facade, eventName); },
+                setOnClickListener: function (handler) { return viewFacadeOn(facade, 'click', handler); },
+                setOnCheckedChangeListener: function (handler) { return viewFacadeOn(facade, 'check', handler); },
+                setOnTextChangedListener: function (handler) { return viewFacadeOn(facade, 'text_change', handler); },
+                setOnItemSelectedListener: function (handler) { return viewFacadeOn(facade, 'item_selected', handler); }
             };
             function command(action, value) {
                 const response = viewRequest(action, {handleId: handleId, value: value});
@@ -3087,21 +3014,23 @@
                 throw new Error(String(response && response.error)
                     || ('viewCommand 失败：' + action));
             }
-            if (viewId) clickStates[String(viewId)] = viewHandleState(proxy);
-            viewExtrasByHandle.set(proxy, viewHandleExtras(proxy));
-            handleFacades[handleId] = proxy;
             // 未显式列出的成员按宿主 viewCommand 转发（getText/setText/performClick…），
             // 这样 ui.inflate 返回的句柄仍是「真实 View」的完整门面。
-            return new Proxy(proxy, {
+            facade = new Proxy(proxy, {
                 get: function (target, name) {
                     if (typeof name === 'symbol' || name in target) return target[name];
                     const key = String(name);
+                    const eventMember = viewFacadeEmitterMember(facade, key);
+                    if (eventMember !== undefined) return eventMember;
                     if (key === 'then' || key === 'toJSON' || key === '__ajsMarker') return undefined;
                     if (isEventMember(key) || isTreeMember(key)) return undefined;
                     return memberMethod(key);
                 },
                 has: function (target, name) { return name in target || typeof name === 'string'; }
             });
+            if (viewId) clickStates[String(viewId)] = viewHandleState(facade);
+            handleFacades[handleId] = facade;
+            return facade;
         }
         function uiWrapHandle(result) {
             const handleId = result && result.handleId;

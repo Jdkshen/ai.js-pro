@@ -2550,6 +2550,10 @@ public final class NodeUiHost {
     /** op:"uiRequestView" 或 action 作为 op 时的统一入口（在主线程执行）。 */
     private static Object uiRequestView(final Context context, final String projectDir,
                                         final JSONObject request) throws Exception {
+        // Handles returned by the legacy Activity belong to :nodeui, never this registry.
+        if (sActivityMode && !NodeUiLocalSession.isShowing()) {
+            return NodeUiActivityClient.get().view(activityViewRequest(request));
+        }
         final String action = resolveViewAction(request);
         final JSONObject params = viewActionParams(request);
         final AtomicReference<JSONObject> result = new AtomicReference<>();
@@ -2570,7 +2574,7 @@ public final class NodeUiHost {
     // ---- 协议参数解析（纯逻辑，JVM 单测覆盖） ----
 
     /** uiRequestView(action, params) 的 action：优先 action 字段，其次 params.action，最后 op。 */
-    static String resolveViewAction(JSONObject request) {
+    public static String resolveViewAction(JSONObject request) {
         if (request == null) {
             return "";
         }
@@ -2590,7 +2594,7 @@ public final class NodeUiHost {
     }
 
     /** 把 request 顶层字段与 params 合并成一层（params 优先）。 */
-    static JSONObject viewActionParams(JSONObject request) {
+    public static JSONObject viewActionParams(JSONObject request) {
         JSONObject merged = new JSONObject();
         if (request == null) {
             return merged;
@@ -2620,6 +2624,13 @@ public final class NodeUiHost {
             }
         }
         return merged;
+    }
+
+    static JSONObject activityViewRequest(JSONObject request) throws Exception {
+        JSONObject forwarded = viewActionParams(request);
+        forwarded.put("action", resolveViewAction(request));
+        forwarded.put("op", "viewCommand");
+        return forwarded;
     }
 
     static boolean isViewAction(String action) {
@@ -2799,15 +2810,10 @@ public final class NodeUiHost {
                 case NodeUiProtocol.ACTION_GET_PARENT:
                     return getParent(view);
                 case NodeUiProtocol.ACTION_SET_ON_CLICK_LISTENER:
-                    installClickListener(view);
-                    view.setClickable(true);
-                    return new JSONObject().put("ok", true).put("viewId", eventViewId(view));
                 case NodeUiProtocol.ACTION_SET_ON_CHECKED_CHANGE_LISTENER:
-                    return installCheckedChangeListener(view);
                 case NodeUiProtocol.ACTION_SET_ON_TEXT_CHANGED_LISTENER:
-                    return installTextChangedListener(view);
                 case NodeUiProtocol.ACTION_SET_ON_ITEM_SELECTED_LISTENER:
-                    return installItemSelectedListener(view);
+                    return installProtocolViewListener(view, action, NodeUiHost::enqueueViewEvent);
                 case NodeUiProtocol.ACTION_GET_SELECTED_ITEM_ID:
                     return new JSONObject().put("ok", true).put("value", selectedItemId(view));
                 case NodeUiProtocol.ACTION_SET_SELECTED_ITEM_ID:
@@ -2940,28 +2946,54 @@ public final class NodeUiHost {
                 .put(NodeUiProtocol.K_VIEW_ID, eventViewId(parentView));
     }
 
+    /** Internal bridge shared by the local renderer and the legacy :nodeui Activity. */
+    public interface ViewEventSink {
+        void emit(String type, int viewId, JSONObject payload);
+    }
+
+    public static JSONObject installProtocolViewListener(View view, String action, ViewEventSink sink) throws Exception {
+        switch (action) {
+            case NodeUiProtocol.ACTION_SET_ON_CLICK_LISTENER:
+                installClickListener(view, sink);
+                view.setClickable(true);
+                return new JSONObject().put("ok", true).put("viewId", eventViewId(view));
+            case NodeUiProtocol.ACTION_SET_ON_CHECKED_CHANGE_LISTENER:
+                return installCheckedChangeListener(view, sink);
+            case NodeUiProtocol.ACTION_SET_ON_TEXT_CHANGED_LISTENER:
+                return installTextChangedListener(view, sink);
+            case NodeUiProtocol.ACTION_SET_ON_ITEM_SELECTED_LISTENER:
+                return installItemSelectedListener(view, sink);
+            default:
+                return viewError("不支持的 View 监听器：" + action);
+        }
+    }
+
     private static void installClickListener(final View view) {
+        installClickListener(view, NodeUiHost::enqueueViewEvent);
+    }
+
+    private static void installClickListener(final View view, final ViewEventSink sink) {
         view.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                enqueueViewEvent(NodeUiProtocol.EVENT_CLICK, eventViewId(view), null);
+                sink.emit(NodeUiProtocol.EVENT_CLICK, eventViewId(view), null);
             }
         });
     }
 
     /** MaterialSwitch/SwitchCompat/CheckBox 等 CompoundButton，以及 MaterialButton。 */
-    private static JSONObject installCheckedChangeListener(final View view) throws Exception {
+    private static JSONObject installCheckedChangeListener(final View view, final ViewEventSink sink) throws Exception {
         final int viewId = eventViewId(view);
         if (view instanceof CompoundButton) {
             ((CompoundButton) view).setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
                 @Override
                 public void onCheckedChanged(CompoundButton button, boolean checked) {
-                    enqueueViewEvent(NodeUiProtocol.EVENT_CHECK, viewId, payload("checked", checked));
+                    sink.emit(NodeUiProtocol.EVENT_CHECK, viewId, payload("checked", checked));
                 }
             });
             return new JSONObject().put("ok", true).put("viewId", viewId);
         }
-        if (installMaterialButtonCheckedListener(view, viewId)) {
+        if (installMaterialButtonCheckedListener(view, viewId, sink)) {
             return new JSONObject().put("ok", true).put("viewId", viewId);
         }
         return viewError("setOnCheckedChangeListener 只支持 CompoundButton/MaterialButton，当前="
@@ -2972,7 +3004,7 @@ public final class NodeUiHost {
      * MaterialButton 的 checkable 变化走 addOnCheckedChangeListener(MaterialButton.OnCheckedChangeListener)，
      * 与 CompoundButton 接口不同；用反射挂真实监听器（材质版本差异时安全失败）。
      */
-    private static boolean installMaterialButtonCheckedListener(final View view, final int viewId) {
+    private static boolean installMaterialButtonCheckedListener(final View view, final int viewId, final ViewEventSink sink) {
         try {
             for (final java.lang.reflect.Method method : view.getClass().getMethods()) {
                 if (!"addOnCheckedChangeListener".equals(method.getName())
@@ -2986,7 +3018,7 @@ public final class NodeUiHost {
                         (proxy, called, args) -> {
                             if ("onCheckedChanged".equals(called.getName()) && args != null && args.length >= 1) {
                                 Object checked = args[args.length - 1];
-                                enqueueViewEvent(NodeUiProtocol.EVENT_CHECK, viewId,
+                                sink.emit(NodeUiProtocol.EVENT_CHECK, viewId,
                                         payload("checked", checked instanceof Boolean
                                                 ? checked : Boolean.parseBoolean(String.valueOf(checked))));
                             }
@@ -3001,7 +3033,7 @@ public final class NodeUiHost {
         return false;
     }
 
-    private static JSONObject installTextChangedListener(final View view) throws Exception {
+    private static JSONObject installTextChangedListener(final View view, final ViewEventSink sink) throws Exception {
         if (!(view instanceof TextView)) {
             return viewError("setOnTextChangedListener 只支持 TextView，当前=" + view.getClass().getName());
         }
@@ -3019,13 +3051,13 @@ public final class NodeUiHost {
             @Override
             public void afterTextChanged(Editable s) {
                 String text = s == null ? textView.getText().toString() : s.toString();
-                enqueueViewEvent(NodeUiProtocol.EVENT_TEXT_CHANGE, viewId, payload("text", text));
+                sink.emit(NodeUiProtocol.EVENT_TEXT_CHANGE, viewId, payload("text", text));
             }
         });
         return new JSONObject().put("ok", true).put("viewId", viewId);
     }
 
-    private static JSONObject installItemSelectedListener(final View view) throws Exception {
+    private static JSONObject installItemSelectedListener(final View view, final ViewEventSink sink) throws Exception {
         final int viewId = eventViewId(view);
         if (view instanceof BottomNavigationView) {
             ((BottomNavigationView) view).setOnItemSelectedListener(
@@ -3033,7 +3065,7 @@ public final class NodeUiHost {
                         @Override
                         public boolean onNavigationItemSelected(android.view.MenuItem item) {
                             // 不消费事件：让 BottomNavigationView 完成真实选中态更新（2.7 getSelectedItemId 一致）。
-                            enqueueViewEvent(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, itemPayload(item));
+                            sink.emit(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, itemPayload(item));
                             return false;
                         }
                     });
@@ -3049,7 +3081,7 @@ public final class NodeUiHost {
                     } catch (Throwable ignored) {
                         // position 一定可序列化
                     }
-                    enqueueViewEvent(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, payload);
+                    sink.emit(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, payload);
                 }
 
                 @Override
@@ -3058,7 +3090,7 @@ public final class NodeUiHost {
             });
             return new JSONObject().put("ok", true).put("viewId", viewId);
         }
-        if (installReflectiveItemSelectedListener(view, viewId)) {
+        if (installReflectiveItemSelectedListener(view, viewId, sink)) {
             return new JSONObject().put("ok", true).put("viewId", viewId);
         }
         return viewError("setOnItemSelectedListener 只支持 BottomNavigationView/AdapterView，当前="
@@ -3066,7 +3098,7 @@ public final class NodeUiHost {
     }
 
     /** Material NavigationBarView（material>=1.4）的 setOnItemSelectedListener(OnItemSelectedListener)。 */
-    private static boolean installReflectiveItemSelectedListener(final View view, final int viewId) {
+    private static boolean installReflectiveItemSelectedListener(final View view, final int viewId, final ViewEventSink sink) {
         try {
             for (final java.lang.reflect.Method method : view.getClass().getMethods()) {
                 if (!"setOnItemSelectedListener".equals(method.getName())
@@ -3079,7 +3111,7 @@ public final class NodeUiHost {
                         listenerType.getClassLoader(), new Class<?>[]{listenerType},
                         (proxy, called, args) -> {
                             if ("onItemSelected".equals(called.getName()) && args != null && args.length >= 1) {
-                                enqueueViewEvent(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId,
+                                sink.emit(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId,
                                         itemPayload(args[0]));
                             }
                             return null;
@@ -3616,13 +3648,13 @@ public final class NodeUiHost {
      * {@code root.addView(child)} 之后 {@code child.getParent()} 拿回的父句柄就是 root 的句柄，
      * JS 侧 facade 缓存命中，身份一致。纯 Java（只依赖 Object），JVM 单测可直接回归。
      */
-    static final class ViewHandleRegistry {
+    public static final class ViewHandleRegistry {
         private static final int MAX_HANDLES = 4096;
         private final Map<String, Object> byId = new LinkedHashMap<>();
         private final java.util.IdentityHashMap<Object, String> byView = new java.util.IdentityHashMap<>();
         private int sequence = 1;
 
-        synchronized String handleFor(Object view) {
+        public synchronized String handleFor(Object view) {
             if (view == null) {
                 throw new IllegalArgumentException("View 不能为空");
             }
@@ -3645,7 +3677,7 @@ public final class NodeUiHost {
             return handle;
         }
 
-        synchronized Object get(String handle) {
+        public synchronized Object get(String handle) {
             return handle == null || handle.isEmpty() ? null : byId.get(handle);
         }
 
@@ -3653,11 +3685,11 @@ public final class NodeUiHost {
             return view == null ? null : byView.get(view);
         }
 
-        synchronized int size() {
+        public synchronized int size() {
             return byId.size();
         }
 
-        synchronized void clear() {
+        public synchronized void clear() {
             byId.clear();
             byView.clear();
             sequence = 1;

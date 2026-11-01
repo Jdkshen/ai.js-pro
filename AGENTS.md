@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-01 最新候选 dev-1301（MI8 已装，未发布）**：[协议句柄与界面进程事件转发](docs/reports/2026-11-01_Node协议句柄与事件转发兼容.md)。协议/marker/原生监听共用 EventEmitter，修 once/off/prepend/幽灵监听/轮询清理；修 :nodeui 句柄被本地误查及重复查找身份，复用监听安装与 Activity 自有队列；纯内联不误报缺资源。1,060 JVM、13 协议组、MI8 IPC 19 项两轮＋原生 23/32、独立 APK 23 项通过。LAN 仍 1299，未 push；完整旧树/菜单/第三方事件与参数形状边界见报告。
+
 > **2026-11-01 候选 dev-1300（MI8 已装，未发布）**：[Node 内联 UI 监听语义](docs/reports/2026-11-01_Node内联UI监听语义修复.md)。原生回调与 EventEmitter 单表统一，修 once/排序/重复/移除/重入；最终宿主新 23＋旧 32、内置新模板独立 APK 23 项通过，DP 只读评审完成。LAN 仍 dev-1299，未 push；旧协议句柄、轮询隔离与过宽资源告警另列未完成，不重报“内联 binding 无 viewId”。
 
 > **2026-10-31 当前发布 dev-1299（LAN，MI8 已装）**：[Node UI 回调默认值与工程资源路径](docs/reports/2026-10-31_NodeUI回调默认值与资源路径dev-1299.md)。修 JS 回调返回 undefined 导致的基本类型拆箱 NPE（`setSelectedItemId`/`performLongClick`）；缺少 `build/project-res.apk` 时显式告警（兼容路径受限）；`build-project-res.ps1` 自动补裸数字尺寸 `dp`、对账缺失 `?attr`。chess-auto 的 40 处裸尺寸 + `materialButtonTonalStyle` 已修并编译资源推回设备。

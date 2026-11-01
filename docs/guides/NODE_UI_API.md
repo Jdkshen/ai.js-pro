@@ -165,6 +165,10 @@ console.log(file.exists(), String(file.getAbsolutePath()));
 
 事件注册采用 EventEmitter 语义：同一函数注册两次会执行两次，`off(event, handler)` 每次移除最后注册的一份；`once` 在调用处理器前即移除，所以回调里再次触发原生事件也不会重复执行。`off` 可以直接传给 `once` 的原函数。`emit` 和 Android 回调共享同一组监听与一次性状态，查询数量、顺序和移除操作也一致。原生事件派发会记录单个处理器的异常并继续调用其他处理器；直接调用 `view.emit` 的异常仍按 EventEmitter 语义抛给调用者。
 
+旧 JSON 协议句柄也支持 `prependListener`、`prependOnceListener`、事件查询和同样的注册/移除语义。宿主监听安装失败会抛异常并取消本次注册；不要忽略错误后假定监听已成功。界面使用兼容渲染进程时，句柄命令与事件由对应界面会话处理，同一控件再次查找返回同一门面，`binding.name` 与协议查找共享监听。
+
+宿主没有 check/text_change/item_selected 事件通道时，仍可按状态变化轮询；移除最后一个监听或一次性监听消费后会停止该项状态读取。已有事件通道不同时启用轮询。旧协议 click 的回调参数保留事件对象 `{type, viewId}`，原生 Java View 的 click 仍为 `(view)`；注册方式一致不代表两个传输路径的全部参数形状相同。
+
 ```js
 "ui"; "nodejs";
 const ui = require('ui');

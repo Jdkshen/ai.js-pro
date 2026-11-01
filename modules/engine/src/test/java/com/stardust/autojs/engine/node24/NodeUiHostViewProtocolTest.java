@@ -23,6 +23,25 @@ import static org.junit.Assert.fail;
 public class NodeUiHostViewProtocolTest {
 
     @Test
+    public void activityForwardingPreservesNestedArgumentsWithoutChangingOperationOrInput() throws Exception {
+        JSONObject original = new JSONObject().put("op", "uiRequestView").put("handleId", "outer")
+                .put("params", new JSONObject().put("action", "setOnCheckedChangeListener")
+                        .put("handleId", "view-7").put("op", "close").put("channel", "check"));
+        String before = original.toString();
+        JSONObject forwarded = NodeUiHost.activityViewRequest(original);
+        assertEquals("viewCommand", forwarded.getString("op"));
+        assertEquals("setOnCheckedChangeListener", forwarded.getString("action"));
+        assertEquals("view-7", forwarded.getString("handleId"));
+        assertEquals("check", forwarded.getString("channel"));
+        assertFalse(forwarded.has("params"));
+        assertEquals(before, original.toString());
+        JSONObject direct = NodeUiHost.activityViewRequest(new JSONObject().put("op", "getChildCount")
+                .put("handleId", "view-2"));
+        assertEquals("viewCommand", direct.getString("op"));
+        assertEquals("getChildCount", direct.getString("action"));
+    }
+
+    @Test
     public void handleRegistryReturnsStableIdentityHandle() {
         NodeUiHost.ViewHandleRegistry registry = new NodeUiHost.ViewHandleRegistry();
         Object parent = new Object();
