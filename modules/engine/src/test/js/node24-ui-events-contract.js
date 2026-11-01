@@ -12,7 +12,9 @@ const sandbox = vm.createContext({require, console: {log() {}, warn() {}, error:
 });
 vm.runInContext(source, sandbox);
 const installed = {}, installs = {};
-const view = {__class: 'android.widget.TextView'};
+// Exercise the real Java View route, as returned by ui.layout()/Activity bindings.
+// Without the Java marker this fixture only tests the legacy EventEmitter fallback.
+const view = {__ajsJavaObject__: process.env.NODE_UI_LEGACY_EVENTS !== '1', __class: 'android.widget.TextView'};
 for (const method of ['setOnClickListener', 'setOnLongClickListener', 'setOnTouchListener', 'setOnKeyListener',
     'setOnScrollChangeListener', 'setOnCheckedChangeListener']) {
     view[method] = listener => { installed[method] = listener; installs[method] = (installs[method] || 0) + 1; };
@@ -113,6 +115,58 @@ assert.strictEqual(member('getMaxListeners')(), 27);
 member('removeAllListeners')();
 assert.strictEqual(member('listenerCount')('click'), 0);
 assert.strictEqual(member('emit')('click', view), false);
+
+// Native dispatch and manual emit must see the same registrations and once state.
+let onceClicks = 0;
+member('once')('click', () => { onceClicks++; });
+installed.setOnClickListener.onClick(view); installed.setOnClickListener.onClick(view);
+assert.strictEqual(onceClicks, 1);
+assert.strictEqual(member('listenerCount')('click'), 0);
+function removedOnce() { assert.fail('off(original) must remove a pending once wrapper'); }
+member('once')('click', removedOnce);
+off('click', removedOnce);
+installed.setOnClickListener.onClick(view);
+let duplicateCalls = 0;
+function duplicate() { duplicateCalls++; }
+on('click', duplicate); on('click', duplicate);
+installed.setOnClickListener.onClick(view);
+assert.strictEqual(duplicateCalls, 2, 'identical listener registrations are independent');
+off('click', duplicate);
+installed.setOnClickListener.onClick(view);
+assert.strictEqual(duplicateCalls, 3, 'off removes one registration, in EventEmitter order');
+clear('click'); installed.setOnClickListener.onClick(view);
+assert.strictEqual(duplicateCalls, 3, 'removeAllListeners clears native delivery as well');
+
+let reentrantOnce = 0, reentrantRegular = 0;
+member('once')('click', () => {
+    reentrantOnce++;
+    if (reentrantOnce < 3) installed.setOnClickListener.onClick(view);
+});
+on('click', () => { reentrantRegular++; });
+installed.setOnClickListener.onClick(view);
+assert.strictEqual(reentrantOnce, 1, 'once is removed before its callback can reenter Android');
+assert.strictEqual(reentrantRegular, 2);
+clear('click');
+member('once')('click', () => { onceClicks++; });
+assert.strictEqual(member('emit')('click', view), true);
+installed.setOnClickListener.onClick(view);
+assert.strictEqual(onceClicks, 2, 'manual emit consumes the same native once registration');
+
+const nativeOrder = [];
+on('click', () => nativeOrder.push('last'));
+member('prependListener')('click', () => nativeOrder.push('middle'));
+member('prependOnceListener')('click', () => nativeOrder.push('first'));
+installed.setOnClickListener.onClick(view); installed.setOnClickListener.onClick(view);
+assert.deepStrictEqual(nativeOrder, ['first', 'middle', 'last', 'middle', 'last']);
+clear('click');
+let afterFailure = 0;
+member('once')('click', () => { throw new Error('expected once failure'); });
+on('click', () => { afterFailure++; });
+installed.setOnClickListener.onClick(view); installed.setOnClickListener.onClick(view);
+assert.strictEqual(afterFailure, 2, 'one failed callback cannot suppress the others');
+assert.strictEqual(errors.length, 1, 'a throwing once listener is still removed');
+errors.length = 0;
+clear();
 
 // A handler which failed after consuming still cannot accidentally re-enable default input.
 on('long_click', e => { e.consumed = true; throw new Error('expected handler failure'); });

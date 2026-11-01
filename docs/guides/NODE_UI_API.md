@@ -117,6 +117,16 @@ Node 的 JS 始终在 Node 线程执行。`runOnUiThread` 不再用一个阻塞�
 
 `ui.setContentView(viewOrLayout)` / `ui.layout(viewOrLayout)` 安装内容视图。复用旧 View 前需要满足 Android 的 parent 规则；已属于另一个父布局的 View 不能直接重复添加。
 
+在支持原生 Java 回调的当前宿主中，`ui.layout('<vertical>...</vertical>')` 可以直接启动内联界面，返回真实 Android 根 View。用 `root.binding.name` 取得 XML 中声明了 `id="name"` 的真实控件；不存在的名称返回 `undefined`。真实控件的 Android ID 使用 `view.getId()` 读取，不需要读取旧兼容 marker 的 `__markerState.viewId`。
+
+```js
+const ui = require('ui');
+const root = ui.layout('<vertical><button id="save" text="保存"/></vertical>');
+root.binding.save.once('click', () => console.log('只处理第一次点击'));
+```
+
+再次调用 `ui.layout` 替换内容后，应从新返回的根 View 获取新控件。保留的旧 View 引用仍指向旧实例，其监听不会自动转移到新实例。
+
 ## 7. Java 互操作入口
 
 ```js
@@ -152,6 +162,8 @@ console.log(file.exists(), String(file.getAbsolutePath()));
 | `view.extras` | 当前 View 的 JS 附加状态字典；同一个原生 View 多次查找共享字典 |
 | `view.clearViewBindingCache()` | 修改子树后清除绑定缓存；已保存的 `binding` 引用也会重新查找控件 |
 | `ui.Widget.of(view)` | 获取自定义 Widget；也可读取 `view.extras['autojs.widget']`；普通控件返回 undefined（dev-1287 曾返回 null） |
+
+事件注册采用 EventEmitter 语义：同一函数注册两次会执行两次，`off(event, handler)` 每次移除最后注册的一份；`once` 在调用处理器前即移除，所以回调里再次触发原生事件也不会重复执行。`off` 可以直接传给 `once` 的原函数。`emit` 和 Android 回调共享同一组监听与一次性状态，查询数量、顺序和移除操作也一致。原生事件派发会记录单个处理器的异常并继续调用其他处理器；直接调用 `view.emit` 的异常仍按 EventEmitter 语义抛给调用者。
 
 ```js
 "ui"; "nodejs";

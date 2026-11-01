@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-01 候选 dev-1300（MI8 已装，未发布）**：[Node 内联 UI 监听语义](docs/reports/2026-11-01_Node内联UI监听语义修复.md)。原生回调与 EventEmitter 单表统一，修 once/排序/重复/移除/重入；最终宿主新 23＋旧 32、内置新模板独立 APK 23 项通过，DP 只读评审完成。LAN 仍 dev-1299，未 push；旧协议句柄、轮询隔离与过宽资源告警另列未完成，不重报“内联 binding 无 viewId”。
+
 > **2026-10-31 当前发布 dev-1299（LAN，MI8 已装）**：[Node UI 回调默认值与工程资源路径](docs/reports/2026-10-31_NodeUI回调默认值与资源路径dev-1299.md)。修 JS 回调返回 undefined 导致的基本类型拆箱 NPE（`setSelectedItemId`/`performLongClick`）；缺少 `build/project-res.apk` 时显式告警（兼容路径受限）；`build-project-res.ps1` 自动补裸数字尺寸 `dp`、对账缺失 `?attr`。chess-auto 的 40 处裸尺寸 + `materialButtonTonalStyle` 已修并编译资源推回设备。
 
 > **2026-10-31 前次发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](docs/reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。真机验证：Activity/绑定路径 click/check/text_change 全部回调（含真实点击）、`ui.inflate(R.layout.x)`、`addView/getParent`、`JsViewPager childCount=3/adapterCount=3`、BottomNav 菜单与监听；keepRunning 引用计数保活；文档索引 781 条。已知剩余：`setSelectedItemId` NPE、`ui.layout` 内联 binding 无 viewId、vector 仅诊断。

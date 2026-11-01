@@ -707,21 +707,24 @@
             });
         }
         /** 协议事件分发到句柄事件表 + 该 viewId 的注册状态（pollEvents 的 check 等也走这里）。 */
+        function emitViewHandlers(extras, name, args) {
+            // Native View subscriptions use EventEmitter only. Its raw listeners
+            // preserve once wrappers, duplicates, prepend order and off identity.
+            const listeners = extras.events.rawListeners(name);
+            const remote = extras.handlers && extras.handlers[name];
+            const handlers = Array.isArray(remote) ? remote.slice() : [];
+            listeners.forEach(function (listener) {
+                try { listener.apply(extras.events, args || []); }
+                catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
+            });
+            handlers.forEach(function (handler) {
+                try { handler.apply(null, args || []); }
+                catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
+            });
+            return listeners.length > 0 || handlers.length > 0;
+        }
         function dispatchHandleEvent(handle, name, args) {
-            const extras = eventExtras(handle);
-            const list = extras.handlers[name];
-            const count = extras.events.listenerCount(name);
-            if ((!Array.isArray(list) || !list.length) && count === 0) return;
-            try {
-                if (Array.isArray(list) && list.length) {
-                    list.slice().forEach(function (handler) {
-                        try { handler.apply(null, args || []); }
-                        catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
-                    });
-                    return;
-                }
-                extras.events.emit.apply(extras.events, [name].concat(args || []));
-            } catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
+            return emitViewHandlers(eventExtras(handle), name, args);
         }
 
         // ---- 2.9/2.1：真实 Java View 的原生监听器（Activity 编译布局路径） ---------
@@ -747,13 +750,8 @@
                 return undefined;
             }
             const emit = function (name) {
-                const list = extras.handlers[name];
-                if (!Array.isArray(list) || !list.length) return;
                 const args = Array.prototype.slice.call(arguments, 1);
-                list.slice().forEach(function (handler) {
-                    try { handler.apply(null, args); }
-                    catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); }
-                });
+                return emitViewHandlers(extras, name, args);
             };
             extras.nativeEmit = emit;
             let method = null, callbacks = null;
@@ -878,8 +876,7 @@
             } else {
                 let listenerClass, method, callbacks;
                 function dispatch(name, args) {
-                    try { return extras.events.emit.apply(extras.events, [name].concat(args)); }
-                    catch (error) { console.error('[ui] ' + name + ' 回调异常：', error); return false; }
+                    return emitViewHandlers(extras, name, args);
                 }
                 switch (group) {
                     case 'click':
@@ -1105,35 +1102,16 @@
                 event = String(event);
                 if (name === 'off' || name === 'removeListener') {
                     extras.events.removeListener(event, handler);
-                    removeViewEventHandler(view, event, handler);
                     return view;
                 }
                 if (typeof handler !== 'function') throw new TypeError('View.on/once 需要函数');
                 bindViewEvent(view, extras, event);
                 const emitterMethod = name === 'addListener' ? 'on' : name;
                 extras.events[emitterMethod](event, handler);
-                // Activity/绑定路径拿到的是真实 Java View：bindNativeViewEvent 的原生
-                // 回调从 eventHandlersOf(view) 取回调（不是 extras.events），只进
-                // EventEmitter 会导致“注册成功但永不回调”（chess-auto 6.13 真机复现）。
-                addViewEventHandler(view, event, handler);
                 return view;
             };
         }
 
-        function addViewEventHandler(view, event, handler) {
-            if (event === 'newListener' || event === 'removeListener') return;
-            const handlers = eventHandlersOf(view);
-            const list = handlers[event] || (handlers[event] = []);
-            if (list.indexOf(handler) < 0) list.push(handler);
-        }
-
-        function removeViewEventHandler(view, event, handler) {
-            const handlers = eventHandlersOf(view);
-            const list = handlers[event];
-            if (!Array.isArray(list)) return;
-            const index = list.indexOf(handler);
-            if (index >= 0) list.splice(index, 1);
-        }
         // WebView 的 JS 门面与宿主 webId 一一对应；cleanup 时必须整体清掉，
         // 否则上一脚本的 page handler/console 监听会串到下一次运行。
         const webFacadeByHandle = Object.create(null);
