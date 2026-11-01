@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.inrt
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 import android.net.Uri
@@ -12,6 +13,7 @@ import com.bumptech.glide.Glide
 import com.bumptech.glide.request.target.SimpleTarget
 import com.bumptech.glide.request.transition.Transition
 import com.stardust.app.GlobalAppContext
+import com.stardust.autojs.runtime.api.ShizukuClient
 import com.jdkshen.aijspro.inrt.autojs.AutoJs
 import com.jdkshen.aijspro.inrt.autojs.GlobalKeyObserver
 import com.jdkshen.aijspro.inrt.autojs.InrtStopRelay
@@ -26,6 +28,13 @@ import com.stardust.autojs.core.ui.inflater.util.Drawables
  */
 
 class App : Application() {
+
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(base)
+        // Enable the SDK's per-process Shizuku binder bridge before providers/onCreate.
+        // The actual binder lookup stays lazy/background; this call only selects the role.
+        ShizukuClient.attach(base)
+    }
 
     override fun onCreate() {
         super.onCreate()

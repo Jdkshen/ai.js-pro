@@ -81,6 +81,13 @@ module.exports = function(__runtime__, scope){
     scope.Input = scope.Text;
 
     return function(cmd, root){
+       if (root && typeof root === 'object') {
+           if (root.shizuku === true) {
+               if (root.root === true) throw new Error('root和shizuku不能同时启用');
+               return scope.shizuku.shell(cmd, root);
+           }
+           root = root.root === true;
+       }
        root = root ? 1 : 0;
        return __runtime__.shell(cmd, root);
    };

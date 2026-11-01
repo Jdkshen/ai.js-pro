@@ -17,7 +17,7 @@ internal class McpTerminalJobs(
 ) : Closeable {
     class RunningCommand(val process: Process, val terminate: () -> Unit)
 
-    private class Job(val id: String, val command: String, val directory: File) {
+    private class Job(val id: String, val command: String, val directory: File, val backend: String) {
         val lock = Object()
         val createdAt = System.currentTimeMillis()
         var status = "STARTING"
@@ -45,15 +45,20 @@ internal class McpTerminalJobs(
     }
     private var closed = false
 
+    @JvmOverloads
     @Synchronized
     fun execute(command: String, workingDirectory: String = "", environment: Map<String, String> = emptyMap(),
-                timeoutSeconds: Int = 300): JsonObject {
+                timeoutSeconds: Int = 300, backend: String = BACKEND_APP): JsonObject {
         check(!closed) { "终端服务已停止" }
+        require(backend == BACKEND_APP || backend == BACKEND_SHIZUKU) { "backend 必须是 app 或 shizuku" }
         require(command.isNotBlank() && command.length <= 65536 && '\u0000' !in command) { "command 必须为 1..65536 字符且不能包含 NUL" }
         require(timeoutSeconds in 1..3600) { "timeoutSeconds 必须为 1..3600（任务超时会终止进程组）" }
         require(environment.size <= 64 && environment.all { (key, value) ->
             key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && value.length <= 8192 && '\u0000' !in value
         }) { "env 无效：最多 64 个合法变量，值最多 8192 字符且不能包含 NUL" }
+        require(INTERNAL_BACKEND_ENV !in environment) {
+            "env 不能包含内部保留变量 $INTERNAL_BACKEND_ENV"
+        }
         val directory = McpPathRules.resolve(root, workingDirectory)
         require(directory.isDirectory) { "workingDirectory 目录不存在" }
         check(jobs.values.count { synchronized(it.lock) { it.finishedAt == 0L } } < maxRunning) { "终端任务已满（最多 $maxRunning 个），请先读取或停止任务" }
@@ -62,13 +67,17 @@ internal class McpTerminalJobs(
                 ?: error("终端任务已满")
             jobs.remove(old.id)
         }
-        val job = Job("terminal-${UUID.randomUUID()}", command, directory)
+        val job = Job("terminal-${UUID.randomUUID()}", command, directory, backend)
         jobs[job.id] = job
+        // The launcher receives the internal backend marker in its env. User-supplied env is
+        // rejected above, so a caller cannot forge shizuku/app state; the real child environment
+        // is rebuilt by McpAndroidTerminal after it strips this key.
+        val launchEnvironment = LinkedHashMap(environment).apply { put(INTERNAL_BACKEND_ENV, backend) }
         val timeout = timer.schedule({ stopJob(job, "TIMED_OUT") }, timeoutSeconds.toLong(), TimeUnit.SECONDS)
         workers.execute {
             var running: RunningCommand? = null
             try {
-                running = launcher(command, directory, environment)
+                running = launcher(command, directory, launchEnvironment)
                 synchronized(job.lock) {
                     job.running = running
                     if (job.status in ACTIVE) job.status = "RUNNING"
@@ -185,6 +194,7 @@ internal class McpTerminalJobs(
         JsonObject().apply {
             addProperty("jobId", job.id); addProperty("command", job.command)
             addProperty("workingDirectory", job.directory.relativeTo(root).invariantSeparatorsPath)
+            addProperty("backend", job.backend)
             addProperty("status", job.status); addProperty("running", job.status in ACTIVE)
             addProperty("processActive", job.running != null || job.finishedAt == 0L)
             addProperty("createdAt", job.createdAt); addProperty("finishedAt", job.finishedAt)
@@ -225,5 +235,13 @@ internal class McpTerminalJobs(
         timer.shutdownNow()
     }
 
-    companion object { private val ACTIVE = setOf("STARTING", "RUNNING") }
+    companion object {
+        const val BACKEND_APP = "app"
+        const val BACKEND_SHIZUKU = "shizuku"
+
+        /** Reserved launcher-only env key; never accepted from a tool caller. */
+        const val INTERNAL_BACKEND_ENV = "AIJS_MCP_TERMINAL_BACKEND"
+
+        private val ACTIVE = setOf("STARTING", "RUNNING")
+    }
 }

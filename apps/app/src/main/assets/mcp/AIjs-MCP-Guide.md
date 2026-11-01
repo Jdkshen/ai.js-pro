@@ -13,7 +13,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 工作区 | workspace_open/list/read/write/delete/diff/request_apply/mkdir/cancel/cleanup |
 | 引擎与 API | list_engines、list_engine_api、probe_engine_api、engine_api_diff、call_engine_api |
 | 设备与无障碍 | get_ui_layout、capture_screen、ui_find/click/long_click/node_action/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
-| 终端与构建 | terminal_exec/read/write/stop/list、get_build_tools |
+| 终端与构建 | terminal_exec/read/write/stop/list、shell_rish、get_build_tools |
 | 悬浮窗 | list_overlays、close_overlays |
 | 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
 
@@ -217,13 +217,14 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 ## 手机终端与编译
 
-MCP 和应用内已有终端复用同一执行底层，使用手机应用 UID，无需占用 Rhino/QuickJS/Node 运行槽。它是管道终端（`pty=false`），支持编译日志和 stdin；全屏编辑器、终端控制序列、Ctrl-C 作业控制不属于本接口。不要把 cwd 校验当成 shell 沙箱：workingDirectory 必须在 MCP 操作目录内，命令仍可访问应用权限允许的其他路径。
+MCP 和应用内终端复用同一底层，默认使用手机应用 UID，无需占用三引擎运行槽。`terminal_exec` 可显式选择 `backend="shizuku"`；Shizuku/Sui须已运行并授权，失败不会回退 app。后端实际身份可能为shell或root，诊断以真实状态为准。仍是管道终端（`pty=false`）；全屏编辑器、终端控制序列、交互PTY和完整作业控制不属于本接口。workingDirectory须在MCP操作目录内，命令可访问所选身份实际有权限的文件。
 
 1. `get_build_tools` 检测 PATH 中 clang/clang++、javac/java、Gradle、aapt2、zipalign、apksigner 等；`found=true` 仅表示定位到命令，`verified=false` 表示尚未试编译。
-2. `terminal_exec(command, workingDirectory?, env?, timeoutSeconds?)` 异步创建任务，立即返回 jobId。env 是字符串对象。最多 3 个并发，保留最近 16 条。timeoutSeconds 默认 300、范围 1..3600；这是命令执行期限，到期终止进程组。
+2. `terminal_exec(command, workingDirectory?, env?, timeoutSeconds?, backend?)` 异步创建任务，立即返回jobId；backend只接受app（默认）/shizuku。env是字符串对象，不能伪造内部后端变量或替换RISH_APPLICATION_ID。最多3个并发、保留最近16条；超时默认300秒，范围1..3600。
 3. `terminal_read(jobId, offset?, maxChars?, waitMillis?)` 按上次 nextOffset 继续读合并后的 stdout/stderr。offset/nextOffset 是 UTF-16 字符偏移，默认 0；maxChars 默认 16384、最大 65536；waitMillis 为 0..10000，仅控制等待输出，不会停止任务。每任务保留最近 256Ki 字符；truncated=true 时有旧输出被淘汰，可将完整编译日志重定向到项目文件。
 4. `terminal_write(jobId,input?,eof?)` 排队写 stdin，不自动补换行；eof=true 关闭输入。accepted 只表示入队，读取结果中的 inputError/pendingInput 确认是否写入。
 5. `terminal_stop(jobId)` 只停止该命令及同进程组子进程，`terminal_list` 查询本 MCP 所有终端任务。MCP 服务停止会清理自己的终端，应用界面的终端由界面生命周期独立管理。
+6. `shell_rish(command, workingDirectory?, env?, timeoutSeconds?)` 是同一Shizuku任务后端的兼容工具，**异步返回jobId**，不是同步code/result/error；用terminal_read/write/stop继续管理。停止Shizuku任务由远端执行服务回收所属进程组。
 
 状态：STARTING / RUNNING / SUCCEEDED / FAILED / STOPPED / TIMED_OUT。停止后 processActive 可能短暂仍为 true，应继续读取直到清理完成。判断编译成功需状态 SUCCEEDED、exitCode=0，并检查实际产物；服务/应用进程重启后任务记录不保留。后台守护进程自行 setsid 脱离进程组不受本接口管理，不要用于启动守护服务。
 
@@ -234,6 +235,14 @@ MCP 和应用内已有终端复用同一执行底层，使用手机应用 UID，
 ```json
 {"name":"terminal_read","arguments":{"jobId":"terminal-返回的ID","offset":0,"waitMillis":1000}}
 ```
+
+```json
+{"name":"terminal_exec","arguments":{"command":"id","backend":"shizuku","timeoutSeconds":30}}
+```
+
+app后端及内置终端可直接使用`rish -c 'id'`、`rish "id"`、`i "/路径/有 空格.apk"`。这是APK内置的命令模式兼容入口，不是官方交互PTY rish；无外置DEX或~/r脚本依赖。`i`通过安装会话流式写入单个或多个split APK，支持私有文件；默认覆盖安装、使用调用应用所在用户，不默认授予全部权限。支持显式-r/-d/-t/-g/--user；文件名前以`--`结束选项。Node子进程和脚本普通shell不自动注入终端函数，脚本使用`shizuku.shell`。
+
+三引擎全局`shizuku`提供isAvailable/hasPermission/getState/requestPermission/shell；Node也可`require('shizuku')`。Node授权/命令返回Promise，Rhino/QuickJS在脚本线程同步返回；shell参数为`command,{timeout,maxOutput}`，结果`{code,result,error}`保留非零退出时stdout。先用search_api_docs查询“Shizuku”。
 
 内置已有 D8 和 Smali，通过独立 app_process 执行，编译器 CLI 的退出不会退出宿主。环境变量 AIJS_APK 是当前 APK 路径，AIJS_BUILD_MAIN 是编译入口：
 

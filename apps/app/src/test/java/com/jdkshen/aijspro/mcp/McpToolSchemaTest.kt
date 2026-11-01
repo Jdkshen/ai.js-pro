@@ -28,6 +28,28 @@ class McpToolSchemaTest {
         assertEquals("boolean", poll.getAsJsonObject("eof").get("type").asString)
     }
 
+    @Test fun terminalBackendIsStrictAndShellRishKeepsTheSameAsyncJobSchema() {
+        val terminal = McpToolSchema.terminalSchema()
+        val terminalFields = terminal.getAsJsonObject("properties")
+        val backend = terminalFields.getAsJsonObject("backend")
+        assertEquals("string", backend.get("type").asString)
+        assertEquals("app", backend.get("default").asString)
+        assertEquals(listOf("app", "shizuku"), backend.getAsJsonArray("enum").map { it.asString })
+        assertEquals(300, terminalFields.getAsJsonObject("timeoutSeconds").get("default").asInt)
+        assertEquals(3600, terminalFields.getAsJsonObject("timeoutSeconds").get("maximum").asInt)
+        assertEquals(listOf("command"), terminal.getAsJsonArray("required").map { it.asString })
+        assertFalse(terminal.get("additionalProperties").asBoolean)
+
+        val rish = McpToolSchema.shellRishSchema()
+        val rishFields = rish.getAsJsonObject("properties")
+        assertFalse(rishFields.has("backend"))
+        assertEquals("object", rishFields.getAsJsonObject("env").get("type").asString)
+        assertEquals(300, rishFields.getAsJsonObject("timeoutSeconds").get("default").asInt)
+        assertEquals(3600, rishFields.getAsJsonObject("timeoutSeconds").get("maximum").asInt)
+        assertEquals(listOf("command"), rish.getAsJsonArray("required").map { it.asString })
+        assertFalse(rish.get("additionalProperties").asBoolean)
+    }
+
     @Test
     fun recursiveListingAndCleanupPublishTheTypesTheirHandlersAccept() {
         val properties = McpToolSchema.objectSchema(

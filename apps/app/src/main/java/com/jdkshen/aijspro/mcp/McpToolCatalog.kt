@@ -44,6 +44,7 @@ internal object McpToolCatalog {
         "terminal_write",
         "terminal_stop",
         "terminal_list",
+        "shell_rish",
         "get_build_tools",
         "app_list",
         "app_info",

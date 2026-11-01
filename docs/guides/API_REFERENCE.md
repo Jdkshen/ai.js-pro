@@ -97,7 +97,7 @@ const shell = require('shell');
 const n = await shell.exec('echo ok', {timeout: 5000});
 console.log(n.code, n.result, n.error);
 ```
-- Node 当前 `shell.checkAccess()`/`isRootAvailable()` 直接返回 `false`，`shell.Tap`/`KeyEvent` 兼容入口没有真正 root 通道（`Tap.tap`/`KeyEvent.keyCode` 会抛“需要 root”），root/adb 分支尚未接通；内置示例里这些分支不能当作已验证。Rhino/QuickJS 的 root/Shizuku 能力按各自宿主实现，QuickJS 支持 `shizuku`。shell 以应用 UID 运行，超时只保证终止同组进程，不是完整沙箱。
+- Node 的 `shell.checkAccess()`/`isRootAvailable()` 仍返回false，Tap/KeyEvent及root_automator的root/adb边界未因本次改变；新增的是三引擎统一Shizuku命令通道。普通shell默认应用UID，显式`shizuku.shell()`或`{shizuku:true}`走已授权后端；root与shizuku不能同时开启。
 
 ### 3.4 threads / timers
 ```js
@@ -343,3 +343,47 @@ const loader = host.runtime.getAndroidClassLoader();
 - QuickJS 的 HTTP/continuation 细节、部分高级模块的 Promise/回调差异未逐项实测；本文只写能从当前源码确认的形状。
 - Node 的 `$java.loadDex` 只存在于类型声明，运行时请用 `host.runtime.loadDex`，等待后续版本是否补齐。
 - Rhino/QuickJS 的 `threads`/`shell` 在 inrt/独立打包 APK 中的行为未逐项验证；Node `ui.Activity` 的完整 Pro 控件/自定义 View/多窗口/系统栏等价性也未全部验收。
+
+## Shizuku 三引擎与内置命令
+
+需要运行中的Shizuku/Sui，并为当前实际包名授权。独立APK是单独应用，不能继承主App授权。主进程、脚本进程和Node池各自通过官方多进程接口取得Binder；`isAvailable()`表示连接，不能替代权限检查。
+
+| 接口 | 参数 / 返回 |
+| --- | --- |
+| `shizuku.isAvailable()` | boolean；是否已连接。在工作线程首次调用可短暂等待连接，主线程不等待 |
+| `shizuku.hasPermission()` | boolean；当前进程是否可使用授权后端 |
+| `shizuku.getState()` | `{sdkSupported,binderAlive,permissionGranted,backendUid,serverVersion,processName,lastError}`；未知为null，backendUid通常2000或0，serverVersion是协议版本 |
+| `shizuku.requestPermission(timeout?)` | 超时毫秒，默认60000，范围1000..120000；Node返回Promise<boolean>，Rhino/QuickJS脚本线程返回boolean；主线程不阻塞等待授权 |
+| `shizuku.shell(command, options?)` | command字符串；timeout毫秒默认10000、范围1..3600000；maxOutput每条stdout/stderr上限字节默认1048576、范围0..16777216 |
+| 命令结果 | `{code,result,error}`；非零命令仍保留stdout；超时code=-1且error包含timeout。Node返回Promise，Rhino/QuickJS同步 |
+
+```js
+// Rhino / QuickJS：在普通脚本线程运行
+if (shizuku.isAvailable() && shizuku.hasPermission()) {
+  const result = shizuku.shell('id', {timeout:5000,maxOutput:4096});
+  console.log(result.code, result.result, result.error);
+}
+```
+
+```js
+// Node：全局对象与require模块是同一对象
+const shizuku = require('shizuku');
+shizuku.shell('printf ok; exit 7').then(function(result) {
+  console.log(result.code, result.result); // 7 / ok
+});
+```
+
+`shell(command,{shizuku:true,...})`在Rhino/QuickJS可用；Node为`require('shell').exec(command,{shizuku:true,...})`。Node使用后台Java桥，脚本结束时中断并回收所属命令。普通命令和Shizuku任务分别保留原权限含义，不自动提权。
+
+App终端与MCP共用任务底层，支持app/shizuku后端选择。MCP：`terminal_exec({command:'id',backend:'shizuku'})`或`shell_rish`均返回jobId，使用terminal_read/write/stop管理，非同步code/result/error。app后端另有内置函数：
+
+```sh
+rish -c 'id'
+rish "id"
+i "/storage/emulated/0/Download/有 空格.apk"
+i base.apk split_config.apk
+```
+
+`rish`为命令模式兼容入口，读取已安装APK代码，通过同UID本地通道管理远端命令；不含官方PTY、不解压外置DEX、不内置ADB、不自动启动Shizuku。`i`支持私有APK和split，通过会话流式写入；默认-r及应用所在用户，-g/--user须显式传入。仅在App终端/MCP app后端自动提供这两个函数，不能假设Node原生child_process或普通脚本shell已有这些终端函数。
+
+停止/超时只处理该命令的远端进程组；命令自行setsid脱离组的守护进程不在保证内。普通4KB手机的验证不能替代真实16KB或Android17系统验收。

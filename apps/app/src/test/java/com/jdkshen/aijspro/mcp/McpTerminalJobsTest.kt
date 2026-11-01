@@ -104,11 +104,57 @@ class McpTerminalJobsTest {
             McpTerminalJobs.RunningCommand(child, child::destroy)
         }).use { jobs ->
             val first = id(jobs.execute("one")); running(jobs, first)
-            val second = id(jobs.execute("two")); running(jobs, second)
+            val second = id(jobs.execute("two", backend = McpTerminalJobs.BACKEND_SHIZUKU)); running(jobs, second)
+            assertEquals("app", jobs.read(first).get("backend").asString)
+            assertEquals("shizuku", jobs.read(second).get("backend").asString)
             jobs.stop(first)
             assertEquals("STOPPED", done(jobs, first).get("status").asString)
+            assertEquals("app", jobs.read(first).get("backend").asString)
             assertTrue(jobs.read(second).get("running").asBoolean)
+            assertEquals("shizuku", jobs.read(second).get("backend").asString)
             jobs.stop(second); done(jobs, second)
+        }
+    }
+
+    @Test fun defaultsToAppAndRoutesBackendOnlyThroughTheReservedLaunchEnv() {
+        val seen = mutableListOf<Map<String, String>>()
+        McpTerminalJobs(temp.root, { _, _, env ->
+            synchronized(seen) { seen += env }
+            val child = Child()
+            McpTerminalJobs.RunningCommand(child, child::destroy)
+        }).use { jobs ->
+            val app = id(jobs.execute("app-command", environment = mapOf("MCP_TEST_ENV" to "yes"))); running(jobs, app)
+            val shizuku = id(jobs.execute("shizuku-command", backend = McpTerminalJobs.BACKEND_SHIZUKU))
+            running(jobs, shizuku)
+            assertEquals("app", jobs.read(app).get("backend").asString)
+            assertEquals("shizuku", jobs.read(shizuku).get("backend").asString)
+            val byBackend = synchronized(seen) {
+                seen.associateBy { it[McpTerminalJobs.INTERNAL_BACKEND_ENV] }
+            }
+            assertEquals(setOf("app", "shizuku"), byBackend.keys)
+            assertEquals("yes", byBackend.getValue("app")["MCP_TEST_ENV"])
+            assertTrue(byBackend.getValue("app").containsKey(McpTerminalJobs.INTERNAL_BACKEND_ENV))
+            jobs.stop(app); jobs.stop(shizuku)
+            assertEquals("STOPPED", done(jobs, app).get("status").asString)
+            assertEquals("STOPPED", done(jobs, shizuku).get("status").asString)
+        }
+    }
+
+    @Test fun rejectsUnknownBackendAndUserSuppliedInternalBackendEnvBeforeLaunching() {
+        val launches = AtomicInteger()
+        McpTerminalJobs(temp.root, { _, _, _ -> launches.incrementAndGet(); error("unexpected") }).use { jobs ->
+            listOf("", "APP", "root", "shizuku ").forEach { backend ->
+                try {
+                    jobs.execute("x", backend = backend)
+                    fail("invalid backend accepted: $backend")
+                } catch (_: IllegalArgumentException) {}
+            }
+            try {
+                jobs.execute("x", environment = mapOf(
+                    McpTerminalJobs.INTERNAL_BACKEND_ENV to McpTerminalJobs.BACKEND_SHIZUKU))
+                fail("user env forged the internal backend marker")
+            } catch (_: IllegalArgumentException) {}
+            assertEquals(0, launches.get())
         }
     }
 

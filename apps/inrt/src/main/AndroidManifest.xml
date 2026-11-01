@@ -21,6 +21,9 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE"/>
+    <!-- Declared by the Shizuku provider AAR for the main app; keep the packaged
+         template explicit because inrt's provider declaration below is new. -->
+    <uses-permission android:name="moe.shizuku.manager.permission.API_V23"/>
 
 
     <!-- 非AI.js Pro运行必需，不会主动申请，某些脚本可以自行申请-->
@@ -39,6 +42,10 @@
         tools:ignore="GoogleAppIndexingWarning"
         tools:replace="android:label, android:allowBackup"
         tools:targetApi="m">
+        <!-- Shizuku v11 provider AAR marker; the client uses API_V23 multi-process support. -->
+        <meta-data
+            android:name="moe.shizuku.client.V3_SUPPORT"
+            android:value="true"/>
         <!-- task-112：脚本执行/日志/UI 全部放 :script 独立进程（Pro 模型），
              避免 ImGui 等原生桥在主进程初始化后崩溃。 -->
         <activity
@@ -135,6 +142,15 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/provider_paths"/>
         </provider>
+        <!-- Receives the Shizuku binder in the packaged app's main process. The
+             authority must follow the runtime applicationId, not the host app's id. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:multiprocess="false"
+            android:enabled="true"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL"/>
     </application>
 
 </manifest>

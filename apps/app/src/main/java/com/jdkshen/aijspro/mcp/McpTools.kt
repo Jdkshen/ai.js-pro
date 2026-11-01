@@ -30,6 +30,21 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
+/** Help supplement kept in code because the bundled guide asset is owned by the integration pass. */
+internal object McpTerminalHelp {
+    private const val MARKER = "shell_rish"
+    private val SUPPLEMENT = """
+        ## 终端后端补充（Shizuku）
+        - terminal_exec 支持 backend=app（默认，普通应用 UID）或 backend=shizuku（需 Shizuku 已运行并授权；不会回退 app）。
+        - shell_rish 是 shizuku 后端的异步兼容入口，立即返回 jobId；与 terminal_exec 共用任务表，用 terminal_read/terminal_write/terminal_stop 管理，不进行同步 600 秒等待。
+        - app 后端仍为每条命令独立 setsid 进程组，并注入 rish/i 函数入口；RISH_APPLICATION_ID 固定为当前应用包名。shizuku 后端的 raw 命令不二次包装，停止时由 Shizuku UserService 销毁远端进程组。
+        - terminal_read/terminal_list 返回的 backend 字段标明 app 或 shizuku；普通应用权限的任务默认仍为 app。
+    """.trimIndent()
+
+    fun merge(base: String): String =
+        if (MARKER in base) base else base.trimEnd() + "\n\n" + SUPPLEMENT
+}
+
 internal class McpTools(private val context: Context, private val event: (String) -> Unit) {
     private val scriptsRoot = File(Pref.getScriptDirPath()).canonicalFile
     private val root = File(scriptsRoot, McpSettings.operationPath(context)).canonicalFile.also {
@@ -150,7 +165,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "- wait 超时返回 timedOut=true，任务仍可能在跑：用 wait_execution/get_execution 继续，不要当成成功。",
             "- 修改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply；workspace_write 不会直接落盘。",
             "- 读取控件/截图需无障碍服务；capture_screen 缩小后坐标按 sourceWidth/scale 换算。",
-            "- 手机终端：terminal_exec → terminal_read(offset=nextOffset) → terminal_write/terminal_stop；先 get_build_tools 确认工具链。普通应用 UID、非 PTY；cwd 校验不限制 shell 命令访问其他已授权文件。",
+            "- 手机终端：terminal_exec（backend 默认 app，可选 shizuku）→ terminal_read(offset=nextOffset) → terminal_write/terminal_stop；shell_rish 是 Shizuku 后端的异步兼容入口，同样返回 jobId，不阻塞等待。app 为普通应用 UID，shizuku 需服务已运行并授权且不回退；两者共用同一任务表。先 get_build_tools 确认工具链，非 PTY。",
             "",
             "常用示例：",
             "run_script 内存脚本：{\"name\":\"run_script\",\"arguments\":{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}}",
@@ -200,11 +215,12 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("call_engine_api", "在指定真实引擎调用全局或模块函数，支持 JSON args 和 Promise；回调、UI、Java 对象组合使用 run_script", McpToolSchema.callApiSchema()))
             add(tool("list_overlays", "列出各进程登记中的浮窗（pid/ownerEngineId/engine/kind/touchable/ageMs），用于诊断 stop 后是否有 View 残留"))
             add(tool("close_overlays", "关闭浮窗：指定 executionId 等同 stop_script；省略则等同 stop_all_scripts；返回剩余 overlayCount", objSchema("executionId")))
-            add(tool("terminal_exec", "在手机现有终端底层异步运行 shell 命令，立即返回 jobId；普通应用权限，非 PTY，stdout/stderr 合并。workingDirectory 在操作目录内；命令本身可访问应用有权限的文件。env 为字符串对象。timeoutSeconds 默认 300、最大 3600，到期终止进程组；先 get_build_tools 查编译器", McpToolSchema.terminalSchema()))
-            add(tool("terminal_read", "读取终端状态/输出；offset=上次 nextOffset（UTF-16 字符偏移），maxChars 默认 16384/最大 65536；waitMillis=0..10000 长轮询。仅保留最近 256Ki 字符，truncated=true 表示旧输出已淘汰；processActive=false 才表示清理完成", objSchema("jobId", "offset", "maxChars", "waitMillis", required = arrayOf("jobId"))))
+            add(tool("terminal_exec", "在手机终端底层异步运行 shell 命令，立即返回 jobId；backend=app（默认，普通应用 UID，注入 rish/i 函数入口）或 shizuku（需 Shizuku 已运行并授权，以授权身份执行且不回退 app）。非 PTY，stdout/stderr 合并。workingDirectory 在操作目录内；命令本身可访问应用有权限的文件。env 为字符串对象，不能包含内部后端变量。timeoutSeconds 默认 300、最大 3600，到期终止进程组（shizuku 由远端 UserService 清理）；先 get_build_tools 查编译器", McpToolSchema.terminalSchema()))
+            add(tool("terminal_read", "读取终端状态/输出；offset=上次 nextOffset（UTF-16 字符偏移），maxChars 默认 16384/最大 65536；waitMillis=0..10000 长轮询。仅保留最近 256Ki 字符，truncated=true 表示旧输出已淘汰；processActive=false 才表示清理完成（shizuku 任务需远端进程组销毁）", objSchema("jobId", "offset", "maxChars", "waitMillis", required = arrayOf("jobId"))))
             add(tool("terminal_write", "向运行中的终端排队写入 stdin；input 不自动添加换行，eof=true 关闭输入。返回 accepted 仅表示入队，写入失败见 terminal_read.inputError", objSchema("jobId", "input", "eof", required = arrayOf("jobId"))))
-            add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程；不会停止三个脚本引擎。processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
-            add(tool("terminal_list", "列出本 MCP 服务创建的终端任务（最多 3 个并发、保留 16 条，服务停止会终止任务）"))
+            add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程；不会停止三个脚本引擎。shizuku 任务调用 ShizukuShell 的 process.destroy() 由 UserService 终止远端进程组；processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
+            add(tool("terminal_list", "列出本 MCP 服务创建的终端任务（最多 3 个并发、保留 16 条，服务停止会终止任务）；每项 backend 为 app 或 shizuku"))
+            add(tool("shell_rish", "兼容工具：以 Shizuku 后端异步运行 shell 命令并立即返回 jobId（等价 terminal_exec backend=shizuku）；需 Shizuku 已运行并授权，不回退应用 UID。与 terminal_exec 共用任务表，用 terminal_read/terminal_write/terminal_stop 管理，timeoutSeconds 默认 300、最大 3600，不做同步 600 秒等待", McpToolSchema.shellRishSchema()))
             add(tool("get_build_tools", "检测手机终端当前 PATH 的 C/C++、Java、Android 编译工具，并说明内置 D8/Smali 入口；不下载安装工具链"))
             add(tool("app_list", "列出已安装应用（PackageManager，无 root）；query 过滤 label/包名，includeSystem 默认 true，limit 最大 200", McpToolSchema.appListSchema()))
             add(tool("app_info", "读取单个应用版本、SDK、安装路径与启动入口", McpToolSchema.appInfoSchema()))
@@ -298,21 +314,13 @@ internal class McpTools(private val context: Context, private val event: (String
                 toolJson(if (engine == "nodejs") McpNodeSyntax.check(context, code, name)
                     else McpSyntaxChecker.check(code, engine, name))
             }
-            "learn_autojs_skill" -> toolResult(context.assets.open("mcp/AIjs-MCP-Guide.md").bufferedReader(Charsets.UTF_8).use { it.readText() })
+            "learn_autojs_skill" -> toolResult(helpText())
             "stop_all_scripts" -> stopAllScripts()
             "get_mcp_log" -> toolJson(getMcpLog(args))
             "terminal_exec" -> {
                 requireExecution()
-                val env = linkedMapOf<String, String>()
-                args.get("env")?.let { element ->
-                    require(element.isJsonObject) { "env 必须是字符串对象" }
-                    element.asJsonObject.entrySet().forEach { (key, value) ->
-                        require(value.isJsonPrimitive && value.asJsonPrimitive.isString) { "env.$key 必须是字符串" }
-                        env[key] = value.asString
-                    }
-                }
-                toolJson(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""), env,
-                    terminalInt(args, "timeoutSeconds", 300)))
+                toolJson(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
+                    terminalEnvironment(args), terminalInt(args, "timeoutSeconds", 300), parseTerminalBackend(args)))
             }
             "terminal_read" -> toolJson(terminals.read(args.string("jobId"), terminalLong(args, "offset", 0),
                 terminalInt(args, "maxChars", 16384), terminalInt(args, "waitMillis", 0)))
@@ -325,6 +333,15 @@ internal class McpTools(private val context: Context, private val event: (String
             }
             "terminal_stop" -> toolJson(terminals.stop(args.string("jobId")))
             "terminal_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { terminals.list().forEach { add(it) } }) })
+            "shell_rish" -> {
+                requireExecution()
+                require(!args.has("backend")) { "shell_rish 固定使用 shizuku 后端；如需 app 后端请用 terminal_exec" }
+                // shell_rish is only a compatibility name for the same asynchronous Shizuku job
+                // system. It must never block the MCP request or pretend to be a sync result.
+                toolJson(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
+                    terminalEnvironment(args), terminalInt(args, "timeoutSeconds", 300),
+                    McpTerminalJobs.BACKEND_SHIZUKU))
+            }
             "get_build_tools" -> toolJson(McpBuildTools.inspect(terminalBackend, root))
             "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
             "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
@@ -889,6 +906,31 @@ internal class McpTools(private val context: Context, private val event: (String
     }
     /** task-118：MCP 服务开启即授权读写/运行。 */
     private fun requireWrite() { /* no-op：不再要求额外写入授权 */ }
+    private fun helpText(): String {
+        val base = context.assets.open("mcp/AIjs-MCP-Guide.md")
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+        return McpTerminalHelp.merge(base)
+    }
+    private fun terminalEnvironment(args: JsonObject): LinkedHashMap<String, String> {
+        val env = linkedMapOf<String, String>()
+        args.get("env")?.let { element ->
+            require(element.isJsonObject) { "env 必须是字符串对象" }
+            element.asJsonObject.entrySet().forEach { (key, value) ->
+                require(value.isJsonPrimitive && value.asJsonPrimitive.isString) { "env.$key 必须是字符串" }
+                env[key] = value.asString
+            }
+        }
+        return env
+    }
+    private fun parseTerminalBackend(args: JsonObject): String {
+        val value = args.get("backend") ?: return McpTerminalJobs.BACKEND_APP
+        require(value.isJsonPrimitive && value.asJsonPrimitive.isString) { "backend 必须是 app 或 shizuku" }
+        val backend = value.asString
+        require(backend == McpTerminalJobs.BACKEND_APP || backend == McpTerminalJobs.BACKEND_SHIZUKU) {
+            "backend 必须是 app 或 shizuku"
+        }
+        return backend
+    }
     private fun terminalLong(args: JsonObject, key: String, fallback: Long): Long {
         val value = args.get(key) ?: return fallback
         require(value.isJsonPrimitive && value.asJsonPrimitive.isNumber) { "$key 必须是整数" }

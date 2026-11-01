@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-01 当前LAN dev-1305（MI8已装）**：[Shizuku三引擎、终端与发布](docs/reports/2026-11-01_Shizuku三引擎终端接入与局域网发布.md)。补多进程Binder/inrt Provider，受控UserService与所有者清理；三引擎统一shizuku API，终端app/Shizuku、MCP shell_rish、内置rish/i及私有/split流式安装；新模板、示例、782条文档同步。1103 JVM、三引擎43项、终端/停止/大文件/split/独立APK/界面/空闲重连通过，PC/MI8完整HTTP下载摘要一致；136.12MiB，Downloads有包。仅LAN、本地提交，K40未动。Android17/root-Sui/完整权限矩阵仍待；外置插件模板未改。以下1303“仅审阅”是历史时点，已由本轮覆盖。
+
 > **2026-11-01 Shizuku指南审阅（未改产品代码）**：[修订与四任务方案](docs/reports/2026-11-01_Shizuku改造指南审阅与实施方案.md)。MCP读取`.4`两份20363字节/486行文档且摘要一致。确认多进程初始化缺口、inrt缺Provider、QuickJS已有shizuku而Rhino/Node未统一；终端实际共用底层，原文返回契约/超时/参数处理需修订。仅评审和文档，LAN仍1303；DP只读审阅超时，未计通过。
 
 > **2026-11-01 已发布 dev-1303（仅LAN）**：[发布记录](docs/reports/2026-11-01_dev1303局域网发布.md)。包含1300–1302已验修复；沿用既有开发通道签名以支持覆盖更新。PC/MI8完整HTTP下载摘要一致，136.06 MiB；Downloads有包。未安装1303、K40未动、未push/建Release；以下候选和LAN1299描述保留历史时点，当前更新源为1303。

@@ -26,6 +26,7 @@ class McpToolCategoriesTest {
         }
         assertEquals("状态与诊断", McpToolCategories.categoryFor("get_status").title)
         assertEquals("终端与构建", McpToolCategories.categoryFor("terminal_exec").title)
+        assertEquals("终端与构建", McpToolCategories.categoryFor("shell_rish").title)
         assertEquals("设备与无障碍", McpToolCategories.categoryFor("ui_click").title)
     }
 }

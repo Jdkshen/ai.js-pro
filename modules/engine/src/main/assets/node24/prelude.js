@@ -6256,8 +6256,33 @@
     }
     if ((process.env.PATH || '').split(':').indexOf(bin) < 0) process.env.PATH = bin + ':' + process.env.PATH;
   }
+  var shizukuClass = 'com.stardust.autojs.runtime.api.shizuku.ShizukuFacade';
+  var shizukuModule = {
+    isAvailable: function () { return !!javaCall({op:'static', cls:shizukuClass, method:'isAvailable', args:[]}); },
+    hasPermission: function () { return !!javaCall({op:'static', cls:shizukuClass, method:'hasPermission', args:[]}); },
+    getState: function () { return JSON.parse(String(javaCall({op:'static', cls:shizukuClass, method:'stateJson', args:[]}))); },
+    requestPermission: function (timeout) {
+      if (timeout === undefined) timeout = 60000;
+      if (!Number.isInteger(timeout) || timeout < 1000 || timeout > 120000) return Promise.reject(new TypeError('授权timeout必须为1000..120000毫秒整数'));
+      return javaAsyncCall({op:'static',cls:shizukuClass,method:'requestPermission'},[timeout],'worker');
+    },
+    shell: function (command, options) {
+      if (typeof command !== 'string') return Promise.reject(new TypeError('command必须为字符串'));
+      if (options !== undefined && (options === null || typeof options !== 'object' || Array.isArray(options))) return Promise.reject(new TypeError('options必须为对象'));
+      return javaAsyncCall({op:'static',cls:shizukuClass,method:'executeJson'},[command,JSON.stringify(options || {})],'worker')
+        .then(function(value){return JSON.parse(String(value));});
+    }
+  };
+  globalThis.shizuku = shizukuModule;
   function runShell(command, options, emitter) {
     options = Object.assign({}, shellOptions, options || {});
+    if (options.shizuku === true || options.backend === 'shizuku') {
+      if (options.root === true) return Promise.reject(apiError('root和shizuku不能同时启用'));
+      return shizukuModule.shell(command, options).then(function(result) {
+        if (emitter) String(result.result || '').split(/\r?\n/).forEach(function(line){if(line)emitter.emit('line',line);});
+        return result;
+      });
+    }
     prepareShellTools(options.cwd);
     return new Promise(function(resolve,reject) {
       var child, timer, result = '', error = '';
@@ -6716,6 +6741,7 @@
     notification: notificationModule,
     work_manager: workManagerReal,
     shell: shellModule,
+    shizuku: shizukuModule,
     sensors: sensorsModule,
     yolo: yoloModule
   };
@@ -6743,6 +6769,7 @@
   autojs.notification = notificationModule;
   autojs.work_manager = workManagerReal;
   autojs.shell = shellModule;
+  autojs.shizuku = shizukuModule;
   autojs.sensors = sensorsModule;
   autojs.yolo = yoloModule;
   // 第三方象棋工程的适配层直接用全局 yolo.load(...)，这里补全局别名（等价 Pro 的 yolo）。

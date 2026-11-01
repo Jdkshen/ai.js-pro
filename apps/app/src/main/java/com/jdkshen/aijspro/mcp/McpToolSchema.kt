@@ -12,12 +12,32 @@ internal object McpToolSchema {
     )
     private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited", "eof", "includeSystem", "exact")
 
-    fun terminalSchema(): JsonObject = objectSchema("command", "workingDirectory", "timeoutSeconds",
-        required = arrayOf("command")).apply {
-        getAsJsonObject("properties").add("env", JsonObject().apply {
-            addProperty("type", "object")
-            add("additionalProperties", JsonObject().apply { addProperty("type", "string") })
-        })
+    fun terminalSchema(): JsonObject = terminalCommandSchema(includeBackend = true)
+    fun shellRishSchema(): JsonObject = terminalCommandSchema(includeBackend = false)
+
+    private fun terminalCommandSchema(includeBackend: Boolean): JsonObject {
+        val names = if (includeBackend) {
+            arrayOf("command", "workingDirectory", "timeoutSeconds", "backend")
+        } else {
+            arrayOf("command", "workingDirectory", "timeoutSeconds")
+        }
+        return objectSchema(*names, required = arrayOf("command")).apply {
+            val fields = getAsJsonObject("properties")
+            fields.add("env", JsonObject().apply {
+                addProperty("type", "object")
+                add("additionalProperties", JsonObject().apply { addProperty("type", "string") })
+            })
+            fields.getAsJsonObject("timeoutSeconds").apply {
+                addProperty("minimum", 1)
+                addProperty("maximum", 3600)
+                addProperty("default", 300)
+            }
+            if (includeBackend) fields.getAsJsonObject("backend").apply {
+                addProperty("description", "app = 应用 UID（默认）；shizuku = Shizuku 授权身份，不回退 app")
+                add("enum", JsonArray().apply { add("app"); add("shizuku") })
+                addProperty("default", "app")
+            }
+        }
     }
     fun callApiSchema(): JsonObject = objectSchema("engine", "module", "name", "timeoutSeconds",
         required = arrayOf("engine", "name")).apply {

@@ -7,13 +7,16 @@ import org.junit.Test
 class McpToolCatalogTest {
     @Test
     fun publicToolContractContainsCanonicalToolsAndAllProAliases() {
-        assertEquals(60, McpToolCatalog.canonicalNames.size)
-        assertEquals(69, McpToolCatalog.names.size)
+        assertEquals(61, McpToolCatalog.canonicalNames.size)
+        assertEquals(70, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
         assertTrue(McpToolCatalog.names.all { it.matches(Regex("[a-zA-Z][a-zA-Z0-9_]*")) })
         assertEquals("get_status", McpToolCatalog.names.first())
         assertEquals("workspace_cleanup", McpToolCatalog.canonicalNames[25])
         assertEquals("closeOverlays", McpToolCatalog.names.last())
+        assertTrue("shell_rish" in McpToolCatalog.canonicalNames)
+        assertEquals("shellRish", McpToolCatalog.dispatchAliases.getValue("shell_rish"))
+        assertTrue("shellRish" !in McpToolCatalog.names)
         assertEquals(setOf("getUiLayout", "captureScreen", "checkSyntax", "runScript", "learnAutoJsSkill", "stopAllScripts", "getMcpLog", "listOverlays", "closeOverlays"), McpToolCatalog.aliases.keys)
         McpToolCatalog.aliases.forEach { (alias, canonical) ->
             assertTrue(canonical in McpToolCatalog.canonicalNames)
@@ -27,13 +30,13 @@ class McpToolCatalogTest {
         assertEquals("learn_autojs_skill", McpToolCatalog.canonicalName("learnAutojsSkill"))
         assertTrue("learnAutoJsSkill" in McpToolCatalog.names)
         assertTrue("learnAutojsSkill" !in McpToolCatalog.names)
-        assertEquals(69, McpToolCatalog.names.size)
+        assertEquals(70, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
     }
 
     @Test
     fun everyCanonicalToolHasADeterministicCamelCaseDispatchAliasWithoutGrowingTheList() {
-        assertEquals(60, McpToolCatalog.dispatchAliases.size)
+        assertEquals(61, McpToolCatalog.dispatchAliases.size)
         McpToolCatalog.canonicalNames.forEach { canonical ->
             val alias = McpToolCatalog.dispatchAliases.getValue(canonical)
             assertEquals(camelCase(canonical), alias)

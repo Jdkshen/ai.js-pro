@@ -48,6 +48,10 @@ class App : MultiDexApplication() {
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
+        // Shizuku delivers its binder only to the provider's process. Enable the SDK's
+        // multi-process bridge before any provider/onCreate work; each process then
+        // lazily fetches the binder on demand (never synchronously here).
+        com.stardust.autojs.runtime.api.ShizukuClient.attach(base)
         // Android 9+ forbids sharing a WebView data directory across processes.
         // Configure before providers/onCreate can initialize WebView, including
         // QuickJS :script and Node :node24. Keep the main process's existing data.
