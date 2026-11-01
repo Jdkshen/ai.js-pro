@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-01 最新候选 dev-1302（MI8 已装，未发布）**：[选中事件与旧协议菜单](docs/reports/2026-11-01_Node选中事件与旧协议菜单.md)，[当前剩余清单](docs/reports/2026-11-01_剩余对齐清单_dev1302.md)。修原生导航/Spinner 监听接口与选中接受、旧 :nodeui 五项菜单命令、反射监听返回；1,062 JVM、9 套 JS、MI8 107 项、独立 APK 12 项通过。App/MCP 781 条文档同步。QuickJS `$ui.inflate` 实测可用，别再列为缺失；defineClass/内置模板旧结论已纠正。LAN 仍1299，候选是测试签名，不可直接发布，未 push。
+
 > **2026-11-01 最新候选 dev-1301（MI8 已装，未发布）**：[协议句柄与界面进程事件转发](docs/reports/2026-11-01_Node协议句柄与事件转发兼容.md)。协议/marker/原生监听共用 EventEmitter，修 once/off/prepend/幽灵监听/轮询清理；修 :nodeui 句柄被本地误查及重复查找身份，复用监听安装与 Activity 自有队列；纯内联不误报缺资源。1,060 JVM、13 协议组、MI8 IPC 19 项两轮＋原生 23/32、独立 APK 23 项通过。LAN 仍 1299，未 push；完整旧树/菜单/第三方事件与参数形状边界见报告。
 
 > **2026-11-01 候选 dev-1300（MI8 已装，未发布）**：[Node 内联 UI 监听语义](docs/reports/2026-11-01_Node内联UI监听语义修复.md)。原生回调与 EventEmitter 单表统一，修 once/排序/重复/移除/重入；最终宿主新 23＋旧 32、内置新模板独立 APK 23 项通过，DP 只读评审完成。LAN 仍 dev-1299，未 push；旧协议句柄、轮询隔离与过宽资源告警另列未完成，不重报“内联 binding 无 viewId”。

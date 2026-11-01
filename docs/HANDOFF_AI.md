@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-11-01 最新候选 dev-1302（MI8 已装，未发布）**：[修复与验收](reports/2026-11-01_Node选中事件与旧协议菜单.md)，[剩余对齐清单](reports/2026-11-01_剩余对齐清单_dev1302.md)。导航/Spinner 选中、旧界面菜单命令共用实现；1,062 JVM、9 套 JS、宿主107项/独立包12项通过，文档/MCP同步。QuickJS `$ui.inflate` 已实际创建控件，旧“缺失”结论作废。仍缺宿主大树分页、完整旧 UI/外置模板与全量行为验收；LAN1299，测试签名候选，未 push。
+
 > **2026-11-01 最新候选 dev-1301（MI8 已装，未发布）**：[协议句柄与进程转发](reports/2026-11-01_Node协议句柄与事件转发兼容.md)。修协议监听/排序/移除/轮询与 :nodeui 句柄转发、稳定身份、无资源误告警。1,060 JVM；最终 IPC 19 项两轮、原生 23/32、独立 APK 23 项通过。LAN 仍 1299，未 push；旧协议树/菜单、参数形状和更多事件仍有边界。
 
 > **2026-11-01 候选 dev-1300（MI8 已装，未发布）**：[Node 内联 UI 监听语义](reports/2026-11-01_Node内联UI监听语义修复.md)。修复真实 View 的 once/顺序/重复/移除/重入，宿主新 23＋旧 32、内置模板独立包 23 项通过，DP 完成只读评审；LAN 仍 1299，未 push。旧协议句柄和轮询异常隔离等仍待后续。
@@ -261,7 +263,7 @@ git log --oneline -10                             # 最近改动
 
 - `dialogs.customView` 已支持（XML 协议）；Node 端 View 跨进程不可直接挂载，统一走 XML/句柄。
 - Node 单进程单 runtime：不要试图在 `:script` 内起两个 Node runtime（原生桥直接拒绝）。
-- 继承 Java 类/`defineClass` 仅中文提示，未实现（需要 Java→Node 反向回调）。
+- Java 子类/`defineClass`、Smali→Dex 与 super helper 已实现并有测试；复杂重载、生成类再次继承等深层矩阵仍待验，不再沿用“未实现”的旧结论。
 - 无障碍事件在 `:script` 是代理子集；Rhino `:script` 无完整事件对象。
 - inrt 仅 disposable/daily/weekly 任务；`addActivityIntentTask` 未实现。
 - 插件自带旧模板（70MB）未同步；宿主打包优先内置瘦身模板。

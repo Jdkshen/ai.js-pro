@@ -22,6 +22,44 @@ import static org.junit.Assert.fail;
  */
 public class NodeUiHostViewProtocolTest {
 
+    public interface MaterialSelection { boolean onNavigationItemSelected(android.view.MenuItem item); }
+    public interface LegacySelection { void onItemSelected(android.view.MenuItem item); }
+
+    private static android.view.MenuItem testMenuItem(int id) {
+        return (android.view.MenuItem) java.lang.reflect.Proxy.newProxyInstance(
+                NodeUiHostViewProtocolTest.class.getClassLoader(), new Class<?>[]{android.view.MenuItem.class},
+                (proxy, method, args) -> "getItemId".equals(method.getName()) ? id : null);
+    }
+
+    @Test
+    public void reflectiveMaterialSelectionAcceptsItemAndReportsItsRealId() {
+        java.util.List<JSONObject> events = new java.util.ArrayList<>();
+        MaterialSelection listener = (MaterialSelection) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{MaterialSelection.class},
+                NodeUiHost.selectionListenerHandler(17, (type, viewId, payload) -> {
+                    assertEquals("item_selected", type); assertEquals(17, viewId); events.add(payload);
+                }));
+        assertTrue(listener.onNavigationItemSelected(testMenuItem(701)));
+        assertEquals(1, events.size());
+        assertEquals(701, events.get(0).optInt("itemId"));
+    }
+
+    @Test
+    public void reflectiveLegacySelectionAndObjectMethodsDoNotMisdispatch() {
+        java.util.List<JSONObject> events = new java.util.ArrayList<>();
+        java.lang.reflect.InvocationHandler handler = NodeUiHost.selectionListenerHandler(18,
+                (type, id, payload) -> events.add(payload));
+        LegacySelection first = (LegacySelection) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{LegacySelection.class}, handler);
+        LegacySelection second = (LegacySelection) java.lang.reflect.Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{LegacySelection.class}, handler);
+        assertEquals(System.identityHashCode(first), first.hashCode());
+        assertTrue(first.equals(first)); assertFalse(first.equals(second)); assertFalse(first.equals(null));
+        assertTrue(first.toString().contains("18")); assertTrue(events.isEmpty());
+        first.onItemSelected(testMenuItem(702));
+        assertEquals(1, events.size()); assertEquals(702, events.get(0).optInt("itemId"));
+    }
+
     @Test
     public void activityForwardingPreservesNestedArgumentsWithoutChangingOperationOrInput() throws Exception {
         JSONObject original = new JSONObject().put("op", "uiRequestView").put("handleId", "outer")

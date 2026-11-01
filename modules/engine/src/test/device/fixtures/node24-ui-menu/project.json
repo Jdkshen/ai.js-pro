@@ -1,0 +1,9 @@
+{
+  "name": "Codex Menu 1302",
+  "packageName": "com.jdkshen.aijspro",
+  "versionName": "1.0",
+  "versionCode": 1,
+  "main": "main.js",
+  "type": "node",
+  "androidResources": {"resDir": "res", "manifest": "AndroidManifest.xml"}
+}

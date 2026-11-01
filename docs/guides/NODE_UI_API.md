@@ -154,6 +154,8 @@ console.log(file.exists(), String(file.getAbsolutePath()));
 | `setMaxListeners(n)` / `getMaxListeners()` | 设置 / 查询 EventEmitter 警告阈值；不限制事件次数 |
 | `click` | `(view)`；点击回调 |
 | `check` | `(checked, view)`；CheckBox、Switch 等 CompoundButton 状态变化 |
+| `item_selected`（原生导航） | BottomNavigationView / NavigationRailView：`(itemId, view)`；通知监听接受选中，处理器的返回值不否决切换 |
+| `item_selected`（原生 AdapterView） | Spinner 等：`(itemId, parent, position, child)`；position 为从 0 开始的行号，child 为本次选中行 |
 | `long_click` | `(event, view)`；`event.view` 为当前 View，`event.consumed` 默认 false |
 | `touch` / `touch_down` / `touch_up` / `touch_move` | `(event, view)`；事件可调用 `getX()`、`getY()`、`getAction()` 等 MotionEvent 方法；先触发对应阶段，再触发 touch |
 | `key` / `key_down` / `key_up` | `(keyCode, event, view)`；可调用 `event.getKeyCode()` 等 KeyEvent 方法；先阶段，再 key |
@@ -168,6 +170,10 @@ console.log(file.exists(), String(file.getAbsolutePath()));
 旧 JSON 协议句柄也支持 `prependListener`、`prependOnceListener`、事件查询和同样的注册/移除语义。宿主监听安装失败会抛异常并取消本次注册；不要忽略错误后假定监听已成功。界面使用兼容渲染进程时，句柄命令与事件由对应界面会话处理，同一控件再次查找返回同一门面，`binding.name` 与协议查找共享监听。
 
 宿主没有 check/text_change/item_selected 事件通道时，仍可按状态变化轮询；移除最后一个监听或一次性监听消费后会停止该项状态读取。已有事件通道不同时启用轮询。旧协议 click 的回调参数保留事件对象 `{type, viewId}`，原生 Java View 的 click 仍为 `(view)`；注册方式一致不代表两个传输路径的全部参数形状相同。
+
+旧 JSON 协议的 `item_selected` 回调只提供 itemId；原生 AdapterView 的 parent、position、child 参数不经该通道传递。`view.on('item_selected', fn)` 是选中通知；需要主动否决原生导航切换时，使用 Android 的 `setOnItemSelectedListener` 并按其 boolean 返回契约处理。
+
+dev-1302 补齐兼容界面进程的五项菜单命令：`getSelectedItemId()`、`setSelectedItemId(id)`、`getMenuSize()`、`getMenuItemId(index)`、`menuItems()`。导航支持底部栏和侧边栏；Toolbar 支持菜单读取，不能当作导航栏设置选中项。索引越界返回 -1；`menuItems()` 返回 `{size, itemIds, selectedItemId}`。该范围不包括任意菜单增删、标题/图标编辑和完整旧协议视图树操作。
 
 ```js
 "ui"; "nodejs";

@@ -1,5 +1,7 @@
 # AI.js Pro 剩余细节审计与收尾清单
 
+> **2026-11-01 最新候选 dev-1302**：[当前剩余五个方向与验收标准](reports/2026-11-01_剩余对齐清单_dev1302.md)，[本轮修复与证据](reports/2026-11-01_Node选中事件与旧协议菜单.md)。选中与旧协议菜单已修；1,062 JVM、MI8 107项、独立包12项通过。QuickJS `$ui.inflate`、defineClass、当前内置模板不再记缺失；完整旧UI/大树服务端分页/外置模板/全高级API与原场景验收继续保留。MI8候选1302，LAN1299，未发布。
+
 > **2026-11-01 最新候选 dev-1301（未发布）**：[协议监听与 :nodeui 句柄转发](reports/2026-11-01_Node协议句柄与事件转发兼容.md)。1300 列出的旧协议 once/off/prepend、轮询清理、转发异常隔离和纯内联资源误告警已续修；另修真实 IPC 无效句柄与身份不稳定。13 协议组、1,060 JVM，MI8 IPC 19 项两轮、原生 23/32、独立 APK 23 项通过。A03 的完整旧树/菜单、第三方事件与全部参数形状尚未收口；LAN 仍 1299。
 
 > **2026-11-01 候选 dev-1300（MI8 已装，未发布）**：[Node 内联 UI / 原生监听语义](reports/2026-11-01_Node内联UI监听语义修复.md)。dev-1299 内联 binding 已是真实 View，旧“无 viewId”结论已更正；修复 once、prepend、重复注册、移除与重入。最终候选新 23 项＋旧原生事件 32 项、重建模板独立 APK 23 项通过；DP 只读评审通过。旧协议句柄、轮询转发异常隔离、资源告警等剩余边界见报告。LAN 仍 1299；下文 1292 的 16 包是历史基线，不重复计已完成项。
@@ -77,7 +79,7 @@
 - [ ] **targetSdk 提升专项**：当前仍为 28；提升前必须回归存储、前台服务、通知、悬浮窗、包可见性和 APK 安装；
 - [ ] **三引擎行为契约**：QuickJS/Rhino/Node 的“同名 API”需按参数、异常、线程、资源释放逐项验收；不能只以回归用例数量或 API 数量宣称等价；
 - [ ] **`:script` 自动化代理边界**：Rhino/QuickJS 仅覆盖常用面（选择器链、坐标手势、截图、`auto.service` 代理）；无完整 `AccessibilityEvent`/`event.source`，服务状态变更非实时，事件未节流；
-- [ ] **Node24 缺口**：真实 Java 子类/`defineClass`、部分 Pro 模块面（高级浮窗、无障碍更多 API、@autojs/opencv 等）仍不完整；`work_manager.add` 返回 `id:0` 需复核（旧记录，后续版本请实测确认）；
+- [ ] **Node24 深层兼容**：真实 Java 子类/`defineClass` 和 super helper 已实现；高级浮窗、无障碍事件、完整 OpenCV 等按当前行为证据继续盘点；`work_manager.add` 返回 `id:0` 为旧记录，需现版本实测，不能直接记为已确认缺陷；
 - [ ] **inrt 限制**：`addActivityIntentTask` 未实现；广播 Intent 动态 receiver 仅在主进程存活期有效；任务 path 仅支持打包工程内相对路径或绝对路径；
 - [ ] **插件模板同步**：`plugins/apkbuilder-plugin/assets/template.apk` 仍是 70MB 旧全量模板，待下一次插件发版时用新 inrt release 整体重建（宿主打包优先使用内置瘦身模板）。
 

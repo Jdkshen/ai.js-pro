@@ -1,0 +1,5 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/menu_a" android:title="第一项" android:icon="@android:drawable/ic_menu_view"/>
+    <item android:id="@+id/menu_b" android:title="第二项" android:icon="@android:drawable/ic_menu_view"/>
+    <item android:id="@+id/menu_c" android:title="第三项" android:icon="@android:drawable/ic_menu_view"/>
+</menu>

@@ -719,7 +719,7 @@
                 return emitViewHandlers(extras, name, args);
             };
             extras.nativeEmit = emit;
-            let method = null, callbacks = null;
+            let method = null, callbacks = null, selectionListenerClass = null;
             if (event === 'click' || event === 'check' || event === 'long_click'
                     || event === 'touch' || event === 'key' || event === 'scroll_change') {
                 if (event === 'click') {
@@ -786,15 +786,23 @@
             } else if (event === 'item_selected') {
                 method = typeof native.setOnItemSelectedListener === 'function' ? 'setOnItemSelectedListener'
                     : (typeof native.setItemSelectedListener === 'function' ? 'setItemSelectedListener' : null);
-                callbacks = {
-                    onItemSelected: function (source, item) {
-                        let id = 0;
-                        try { id = item && typeof item.getItemId === 'function' ? Number(item.getItemId()) : 0; }
-                        catch (ignored) { id = 0; }
-                        emit('item_selected', id, source);
-                    },
-                    onNothingSelected: function () { }
-                };
+                const adapterView = globalThis.$autojs.java.findClass('android.widget.AdapterView');
+                if (adapterView.isInstance(native)) {
+                    selectionListenerClass = 'android.widget.AdapterView$OnItemSelectedListener';
+                    callbacks = {
+                        onItemSelected: function (parent, selected, position, id) {
+                            emit('item_selected', Number(id), parent, Number(position), selected);
+                        },
+                        onNothingSelected: function () { }
+                    };
+                } else {
+                    selectionListenerClass = 'com.google.android.material.navigation.NavigationBarView$OnItemSelectedListener';
+                    callbacks = {onNavigationItemSelected: function (item) {
+                        emit('item_selected', Number(item.getItemId()), native);
+                        // .on() observes selection. Android's true accepts the new item.
+                        return true;
+                    }};
+                }
             } else {
                 return false;
             }
@@ -809,7 +817,7 @@
                 : event === 'key' ? 'android.view.View$OnKeyListener'
                 : event === 'scroll_change' ? 'android.view.View$OnScrollChangeListener'
                 : event === 'text_change' ? 'android.text.TextWatcher'
-                : 'com.google.android.material.navigation.NavigationBarView$OnItemSelectedListener';
+                : selectionListenerClass;
             const Listener = globalThis.$autojs.java.findClass(listenerClassName);
             // prelude 回调对象是函数代理：按接口方法名包一层，保证 Java 侧能回调到（保留逐事件语义）。
             const installed = {};

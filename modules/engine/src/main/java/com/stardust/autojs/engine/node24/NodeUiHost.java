@@ -35,6 +35,7 @@ import androidx.viewpager.widget.ViewPager;
 
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.navigation.NavigationBarView;
 import com.stardust.autojs.core.ui.inflater.DynamicLayoutInflater;
 import com.stardust.autojs.core.ui.inflater.ProjectResourceBundle;
 import com.stardust.autojs.core.ui.inflater.ProjectResources;
@@ -2303,9 +2304,8 @@ public final class NodeUiHost {
                                     index = Math.min(index, pager.getAdapter().getCount() - 1);
                                 }
                                 pager.setCurrentItem(index, true);
-                                // 返回 false 让 BottomNavigationView 完成真实选中态更新，
-                                // 否则 getSelectedItemId() 与真实菜单会不一致（2.7）。
-                                return false;
+                                // NavigationBarView's true accepts the selected menu item.
+                                return true;
                             } catch (Throwable error) {
                                 Log.w(TAG, "底部导航切换页失败", error);
                                 return false;
@@ -2815,15 +2815,11 @@ public final class NodeUiHost {
                 case NodeUiProtocol.ACTION_SET_ON_ITEM_SELECTED_LISTENER:
                     return installProtocolViewListener(view, action, NodeUiHost::enqueueViewEvent);
                 case NodeUiProtocol.ACTION_GET_SELECTED_ITEM_ID:
-                    return new JSONObject().put("ok", true).put("value", selectedItemId(view));
                 case NodeUiProtocol.ACTION_SET_SELECTED_ITEM_ID:
-                    return setSelectedItemId(view, request);
                 case NodeUiProtocol.ACTION_GET_MENU_SIZE:
-                    return new JSONObject().put("ok", true).put("value", menuSize(view));
                 case NodeUiProtocol.ACTION_GET_MENU_ITEM_ID:
-                    return new JSONObject().put("ok", true).put("value", menuItemId(view, request));
                 case NodeUiProtocol.ACTION_MENU_ITEMS:
-                    return menuItems(view);
+                    return executeMenuAction(view, action, request);
                 default:
                     return viewError("viewCommand 不支持：" + action);
             }
@@ -3059,14 +3055,13 @@ public final class NodeUiHost {
 
     private static JSONObject installItemSelectedListener(final View view, final ViewEventSink sink) throws Exception {
         final int viewId = eventViewId(view);
-        if (view instanceof BottomNavigationView) {
-            ((BottomNavigationView) view).setOnItemSelectedListener(
-                    new BottomNavigationView.OnItemSelectedListener() {
+        if (view instanceof NavigationBarView) {
+            ((NavigationBarView) view).setOnItemSelectedListener(
+                    new NavigationBarView.OnItemSelectedListener() {
                         @Override
                         public boolean onNavigationItemSelected(android.view.MenuItem item) {
-                            // 不消费事件：让 BottomNavigationView 完成真实选中态更新（2.7 getSelectedItemId 一致）。
                             sink.emit(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, itemPayload(item));
-                            return false;
+                            return true;
                         }
                     });
             return new JSONObject().put("ok", true).put("viewId", viewId);
@@ -3109,13 +3104,7 @@ public final class NodeUiHost {
                 Class<?> listenerType = method.getParameterTypes()[0];
                 Object listener = java.lang.reflect.Proxy.newProxyInstance(
                         listenerType.getClassLoader(), new Class<?>[]{listenerType},
-                        (proxy, called, args) -> {
-                            if ("onItemSelected".equals(called.getName()) && args != null && args.length >= 1) {
-                                sink.emit(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId,
-                                        itemPayload(args[0]));
-                            }
-                            return null;
-                        });
+                        selectionListenerHandler(viewId, sink));
                 method.invoke(view, listener);
                 return true;
             }
@@ -3125,9 +3114,45 @@ public final class NodeUiHost {
         return false;
     }
 
+    static java.lang.reflect.InvocationHandler selectionListenerHandler(int viewId, ViewEventSink sink) {
+        return (proxy, method, args) -> {
+            if (method.getDeclaringClass() == Object.class) {
+                switch (method.getName()) {
+                    case "hashCode": return System.identityHashCode(proxy);
+                    case "equals": return args != null && args.length == 1 && proxy == args[0];
+                    case "toString": return "NodeUiItemSelectedListener(" + viewId + ")";
+                }
+            }
+            if (("onNavigationItemSelected".equals(method.getName()) || "onItemSelected".equals(method.getName()))
+                    && args != null && args.length > 0) {
+                sink.emit(NodeUiProtocol.EVENT_ITEM_SELECTED, viewId, itemPayload(args[0]));
+                return method.getReturnType() == boolean.class ? Boolean.TRUE : null;
+            }
+            return method.getReturnType() == boolean.class ? Boolean.FALSE : null;
+        };
+    }
+
+    /** Internal shared menu commands for both local Views and :nodeui handles. */
+    public static JSONObject executeMenuAction(View view, String action, JSONObject request) throws Exception {
+        switch (action) {
+            case NodeUiProtocol.ACTION_GET_SELECTED_ITEM_ID:
+                return new JSONObject().put("ok", true).put("value", selectedItemId(view));
+            case NodeUiProtocol.ACTION_SET_SELECTED_ITEM_ID:
+                return setSelectedItemId(view, request);
+            case NodeUiProtocol.ACTION_GET_MENU_SIZE:
+                return new JSONObject().put("ok", true).put("value", menuSize(view));
+            case NodeUiProtocol.ACTION_GET_MENU_ITEM_ID:
+                return new JSONObject().put("ok", true).put("value", menuItemId(view, request));
+            case NodeUiProtocol.ACTION_MENU_ITEMS:
+                return menuItems(view);
+            default:
+                return viewError("不支持的菜单命令：" + action);
+        }
+    }
+
     private static int selectedItemId(View view) {
-        if (view instanceof BottomNavigationView) {
-            return ((BottomNavigationView) view).getSelectedItemId();
+        if (view instanceof NavigationBarView) {
+            return ((NavigationBarView) view).getSelectedItemId();
         }
         if (view instanceof AdapterView) {
             return (int) ((AdapterView<?>) view).getSelectedItemId();
@@ -3146,9 +3171,9 @@ public final class NodeUiHost {
 
     private static JSONObject setSelectedItemId(View view, JSONObject request) throws Exception {
         int id = intValue(request.opt(NodeUiProtocol.K_VALUE));
-        if (view instanceof BottomNavigationView) {
-            ((BottomNavigationView) view).setSelectedItemId(id);
-            return new JSONObject().put("ok", true).put("value", ((BottomNavigationView) view).getSelectedItemId());
+        if (view instanceof NavigationBarView) {
+            ((NavigationBarView) view).setSelectedItemId(id);
+            return new JSONObject().put("ok", true).put("value", ((NavigationBarView) view).getSelectedItemId());
         }
         try {
             java.lang.reflect.Method method = view.getClass().getMethod("setSelectedItemId", int.class);
@@ -3160,17 +3185,15 @@ public final class NodeUiHost {
     }
 
     private static int menuSize(View view) {
-        if (view instanceof BottomNavigationView) {
-            return ((BottomNavigationView) view).getMenu().size();
-        }
-        return -1;
+        android.view.Menu menu = menuOf(view);
+        return menu == null ? -1 : menu.size();
     }
 
     private static int menuItemId(View view, JSONObject request) {
-        if (!(view instanceof BottomNavigationView)) {
+        android.view.Menu menu = menuOf(view);
+        if (menu == null) {
             return -1;
         }
-        android.view.Menu menu = ((BottomNavigationView) view).getMenu();
         int index = intValue(request.opt(NodeUiProtocol.K_VALUE));
         if (index < 0 || index >= menu.size()) {
             return -1;
@@ -3179,8 +3202,7 @@ public final class NodeUiHost {
     }
 
     private static JSONObject menuItems(View view) throws Exception {
-        android.view.Menu menu = view instanceof BottomNavigationView
-                ? ((BottomNavigationView) view).getMenu() : null;
+        android.view.Menu menu = menuOf(view);
         JSONArray ids = new JSONArray();
         if (menu != null) {
             for (int i = 0; i < menu.size(); i++) {
@@ -3196,6 +3218,16 @@ public final class NodeUiHost {
             // 上面的 put 都是合法 key；失败也不影响 ok
         }
         return new JSONObject().put("ok", true).put("value", value);
+    }
+
+    private static android.view.Menu menuOf(View view) {
+        if (view instanceof NavigationBarView) return ((NavigationBarView) view).getMenu();
+        try {
+            Object menu = view.getClass().getMethod("getMenu").invoke(view);
+            return menu instanceof android.view.Menu ? (android.view.Menu) menu : null;
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
     }
 
     private static boolean isChecked(View view) {

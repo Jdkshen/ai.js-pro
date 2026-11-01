@@ -468,6 +468,12 @@ public class NodeUiActivity extends AppCompatActivity {
                     String action = request.optString("action", "");
                     Object value = request.opt("value");
                     switch (action) {
+                        case NodeUiProtocol.ACTION_GET_SELECTED_ITEM_ID:
+                        case NodeUiProtocol.ACTION_SET_SELECTED_ITEM_ID:
+                        case NodeUiProtocol.ACTION_GET_MENU_SIZE:
+                        case NodeUiProtocol.ACTION_GET_MENU_ITEM_ID:
+                        case NodeUiProtocol.ACTION_MENU_ITEMS:
+                            return NodeUiHost.executeMenuAction(view, action, request).toString();
                         case NodeUiProtocol.ACTION_SET_ON_CLICK_LISTENER:
                         case NodeUiProtocol.ACTION_SET_ON_CHECKED_CHANGE_LISTENER:
                         case NodeUiProtocol.ACTION_SET_ON_TEXT_CHANGED_LISTENER:
