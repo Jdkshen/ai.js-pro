@@ -8,7 +8,7 @@
 
 **dev-1294 起**：Node 节点 API 增加快照完整性/分页与跨布局身份（`accessibility.snapshotInfo()`、`accessibility.treePage(limit[,cursor][,{signal}])`、`select(...).findPage(...)`、`node.token/generation/isStale()`），Java 反射 varargs 与 QuickJS `ui.inflate` 亦有变化。这些是脚本侧 API，**没有新增 MCP 工具**；`ui_find` / `ui_node_action` / `ui_input` 仍是固定定位子集，要分页/身份请用 `run_script`（engine=nodejs）。详见 [Node24 控件选择器 API](Node24控件选择器API.md)「dev-1294 新增」、[API 参考](API_REFERENCE.md) §9.1 与 App 内 `learn_autojs_skill` 返回的 MCP 使用说明「dev-1294 后的节点 API 变化」。
 
-> 2026-10-31 在设备 dev-1294 上实测 `tools/list`：共 **69 个名称**（60 个规范工具 + 9 个高级版别名），与 dev-1257 记录的 68（59+9）不同；**数量以客户端实际 `tools/list` 为准**，本文只作参考。附带说明：dev-1294 后 Node UI 仍有多项已知问题未修（如 `setOnClickListener` 不回调），见 [API 参考的 Node UI 已知问题表](API_REFERENCE.md)。
+> **2026-11-02 在设备 dev-1314 上实测 `tools/list`：共 128 个名称（119 个规范工具 + 9 个高级版别名）**，新增「文件与 APK 工具」60 个（`toolkit_status`、`file_*`、`zip_*`、`apk_*`），全部由 AI.js Pro 本地实现、不依赖 MT；早先 dev-1294 记录为 69（60+9）。**数量以客户端实际 `tools/list` 为准**。工具进程与主/脚本进程隔离，Elf 指令分析用本机 Capstone 5.0.6（AArch64/ARM/Thumb/x86/x86-64）。附带说明：Node UI 仍有多项已知边界，见 [API 参考的 Node UI 已知问题表](API_REFERENCE.md)。
 
 > 同一台手机上用 Rikkahub / Rikk 连接：直接用本机地址 `http://127.0.0.1:8765/mcp`，见下文 [Rikkahub 配置示例](#rik)。目标：让电脑上的 MCP 客户端连接到手机的 AI.js Pro，在电脑上列脚本、跑脚本、读日志、控制手机界面。
 
@@ -107,7 +107,7 @@ http://127.0.0.1:8765/mcp
 2. 名称填 `aijspro`，传输类型选 **Streamable HTTP**。
 3. 服务器地址填 `http://127.0.0.1:8765/mcp`（端口以 AI.js Pro 页面实际显示为准）。
 4. 打开 **启用**，点 **保存**。
-5. 回到 MCP 列表，看到 `aijspro`、**Connected** 且工具已加载即连接成功；dev-1257 记录为 **68 个名称**，2026-10-31 在 dev-1294 实测为 **69 个名称**（60 规范 + 9 别名），以 `tools/list` 为准。
+5. 回到 MCP 列表，看到 `aijspro`、**Connected** 且工具已加载即连接成功；2026-11-02 在 dev-1314 实测为 **128 个名称**（119 规范 + 9 别名，含新增的 60 个文件与 APK 工具），以 `tools/list` 为准。
 
 ![Rikkahub 新建 aijspro（红色备注）](images/rik-settings-red.jpg)
 
@@ -143,7 +143,7 @@ http://127.0.0.1:8765/mcp
 - `run_script`（`wait:true`）：运行脚本并拿真实输出；
 - `get_mcp_log` / `read_apk_logs`：查日志。
 
-连接正常时 `tools/list` 会返回当前公开工具（dev-1257 记录为 59 个规范工具 + 9 别名 = 68 个名称；2026-10-31 在 dev-1294 实测为 60 + 9 = 69 个名称，实际以客户端显示为准），分为：状态与诊断、脚本与执行、工作区、引擎与 API、设备与无障碍、终端与构建、悬浮窗、示例与帮助。
+连接正常时 `tools/list` 会返回当前公开工具（2026-11-02 在 dev-1314 实测为 119 个规范工具 + 9 别名 = 128 个名称，实际以客户端显示为准），分为：状态与诊断、脚本与执行、工作区、引擎与 API、设备与无障碍、终端与构建、悬浮窗、示例与帮助、文件与 APK 工具。文件/APK 工具在独立 `:tools` 进程执行，APK 采用不可变快照 + 编辑会话；ELF 指令分析用本机 Capstone 5.0.6，细节见 App 内 MCP 指南「文件与 APK 工具」一节。
 
 ## 七、常见问题
 

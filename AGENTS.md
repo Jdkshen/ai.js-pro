@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-02 当前LAN dev-1315（MI8已装）**：[MCP 文件/APK 工具箱与 Capstone 反汇编](docs/reports/2026-11-02_MCP文件APK工具与Capstone反汇编.md)。接续 Codex 未完成工作并发布：60 个本地 MCP 工具（file_*/zip_*/apk_*，独立 :tools 进程 + 文件 IPC、APK 不可变快照/编辑会话、DEX/Smali、ARSC 资源、ELF），工具总数 128 名称（119 规范 + 9 别名）；新增 Flutter「文件与 APK 工具」页；K40 上用可选 clang 编译 Capstone 5.0.6 JNI（AArch64/ARM/Thumb/x86/x86-64），lock 四哈希 + `verifyToolkitNativeFresh` 防旧库；修 4 个接手问题（`ignore` 前置声明、ARSCLib 中文数字字符引用、X86 ATT printer 缺符号导致 dlopen 失败、构建 daemon JVM 崩溃的缓解）。186 项 MCP JVM、flutter analyze、MI8 真机 128 工具/三架构反汇编/CFG 通过；144,042,959 B，SHA `a41adc8e…`，仅 LAN、本地提交，未 push/建 Release；K40 只用于编译。
+
 > **2026-11-02 Android17 Shizuku终端候选 dev-1312（新机已装已验，未切主源）**：[共用后端修复与验收](docs/reports/2026-11-02_Android17_Shizuku终端兼容修复.md)。SDK37通过只读APK的app_process直接创建执行服务，受权限保护的Provider核对一次性令牌/后端UID交接Binder，沿用命令所有者/进程组/FD安装；旧系统保留UserService。1117 JVM、终端/MCP/三引擎、单停/超时/意外死亡与Node恢复、私有/split安装、空闲重连通过，新手机C/C++运行及so编译通过，AX保持连接。最终SHA 3be39faf…，Downloads/LAN手动包与手机安装摘要一致，新模板/783文档同步；主源仍1305，未push、旧机/K40未动。可视终端逐按钮、root/Sui/多用户/真实16KB未验。覆盖下方1311“通用终端仍失败”的历史状态。
 
 > **2026-11-02 新手机 Shizuku 无障碍候选 dev-1311（新机已验，未切主源）**：[定位与修复](docs/reports/2026-11-02_新手机Shizuku启动无障碍修复.md)。`.4` 新机 Android17/SDK37、Shizuku已授权，但其UserService在系统LoadedApk.makeApplication空指针退出。无障碍改走Shizuku Binder直调settings，保留其他服务/用户并以真实连接判成功，错误透传。519 App JVM、最终R8/22ELF16KB/Retrofit、新机3轮启用78/62/63ms和专用按钮通过，已装1311且摘要一致；无障碍当前已连接。Downloads/LAN有手动包和MD，主源仍1305，旧机/K40未动、未push。通用Shizuku终端仍受UserService异常影响；附加修复按钮稳定复测未完成，不能算通过。
