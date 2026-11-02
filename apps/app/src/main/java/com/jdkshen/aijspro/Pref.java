@@ -13,6 +13,8 @@ import com.jdkshen.aijspro.autojs.key.GlobalKeyObserver;
 import com.jdkshen.aijspro.theme.ThemeColorManagerCompat;
 
 import java.io.File;
+import java.io.IOException;
+import com.jdkshen.aijspro.storage.file.ScriptDirectory;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -33,6 +35,7 @@ public class Pref {
     private static final String KEY_OVERLAY_REVOKED_PROMPTED = "poc_overlay_revoked_prompted";
     private static final String KEY_EDITOR_THEME = "editor.theme";
     private static final String KEY_EDITOR_TEXT_SIZE = "editor.textSize";
+    private static final String KEY_SCRIPT_DIR_ABSOLUTE = "scriptDirectory.absolutePath";
     /** `$settings.setEnabled('not_show_console', …)` 的落盘键（文档原名）。 */
     private static final String KEY_NOT_SHOW_CONSOLE = "not_show_console";
     /** APK 内置示例最后一次同步时的 versionCode，见 BundledSampleSync。 */
@@ -241,9 +244,31 @@ public class Pref {
     }
 
     public static String getScriptDirPath() {
-        String dir = def().getString(getString(R.string.key_script_dir_path),
+        SharedPreferences prefs = scriptDirectoryPreferences();
+        String dir = prefs.getString(getString(R.string.key_script_dir_path),
                 getString(R.string.default_value_script_dir_path));
-        return new File(Environment.getExternalStorageDirectory(), dir).getPath();
+        try {
+            return ScriptDirectory.resolvePreference(dir, Environment.getExternalStorageDirectory(),
+                    prefs.getBoolean(KEY_SCRIPT_DIR_ABSOLUTE, false)).getPath();
+        } catch (IOException error) {
+            return new File(Environment.getExternalStorageDirectory(),
+                    getString(R.string.default_value_script_dir_path)).getPath();
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static SharedPreferences scriptDirectoryPreferences() {
+        Context context = GlobalAppContext.get();
+        // Root writes are owned by the settings bridge. Recheck the preference file
+        // for script/editor processes that were already alive before the change.
+        return context.getSharedPreferences(context.getPackageName() + "_preferences",
+                Context.MODE_PRIVATE | Context.MODE_MULTI_PROCESS);
+    }
+
+    public static void setScriptDirPath(String canonicalPath) throws IOException {
+        if (!scriptDirectoryPreferences().edit().putString(getString(R.string.key_script_dir_path), canonicalPath)
+                .putBoolean(KEY_SCRIPT_DIR_ABSOLUTE, true).commit())
+            throw new IOException("脚本目录保存失败，请重试");
     }
 
     public static boolean isForegroundServiceEnabled() {

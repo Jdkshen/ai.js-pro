@@ -112,6 +112,12 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
       search = '';
       searching = createExpanded = restoreOffset = false;
       files = null;
+      request++;
+      loading = false;
+      selected.clear();
+      selecting = false;
+      clipboardPaths.clear();
+      clipboardMode = '';
       sampleUnits = const [];
       sampleLibraryLoaded = false;
       error = null;
@@ -317,6 +323,11 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
     }
     if (file['directory'] == true) {
       navigate(file['path']);
+      return;
+    }
+    // AJ sample rows run; the edit action opens source. AUTO is binary input.
+    if (runnable(file) && (widget.readOnly || !editable(file))) {
+      await run(file);
       return;
     }
     if (!editable(file)) {
@@ -1067,7 +1078,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                                 ? '运行示例'
                                 : '运行脚本'),
                         onTap: () => Navigator.pop(sheet, 'run')),
-                  if (runnable(file))
+                  if (floatable(file))
                     ListTile(
                         leading:
                             const Icon(Icons.picture_in_picture_alt_rounded),
@@ -1119,8 +1130,8 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                         title: Text(
                             file['directory'] == true ? '压缩并发送文件夹' : '发送文件'),
                         onTap: () => Navigator.pop(sheet, 'share')),
-                  if (file['directory'] != true && !widget.readOnly) ...[
-                    ListTile(
+                  if (file['directory'] != true) ...[
+                    if (packable(file) && !widget.readOnly) ListTile(
                         leading: const Icon(Icons.add_to_home_screen_rounded),
                         title: const Text('快捷方式'),
                         onTap: () => Navigator.pop(sheet, 'shortcut')),
@@ -1129,7 +1140,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                         title: const Text('其他应用打开'),
                         onTap: () => Navigator.pop(sheet, 'openWith')),
                   ],
-                  if (runnable(file) && !widget.readOnly) ...[
+                  if (packable(file) && !widget.readOnly) ...[
                     ListTile(
                         leading: const Icon(Icons.schedule_rounded),
                         title: const Text('设置任务'),
@@ -1140,7 +1151,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                         onTap: () => Navigator.pop(sheet, 'singleFileBuild')),
                   ],
                   if (widget.readOnly) ...[
-                    if (file['directory'] != true)
+                    if (packable(file))
                       ListTile(
                           leading: const Icon(Icons.android_rounded),
                           title: const Text('打包'),
@@ -1180,7 +1191,11 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                 ])))));
     if (!mounted || action == null) return;
     if (action == 'open') {
-      await open(file);
+      if (file['directory'] == true) {
+        navigate(file['path']);
+      } else {
+        await openNativeEditor(file);
+      }
       return;
     }
     if (action == 'run') {
@@ -1301,13 +1316,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
               onLongPress: () => copyBreadcrumb(widget.root),
               child: Padding(
                   padding: crumbPadding,
-                  child: Text(
-                      relative.isEmpty
-                          ? widget.title
-                          : widget.readOnly
-                              ? '示例'
-                              : '脚本',
-                      style: crumbStyle))),
+                  child: Text(widget.title, style: crumbStyle))),
           for (var i = 0; i < relative.length; i++) ...[
             const Padding(
                 padding: EdgeInsets.symmetric(vertical: 14),
@@ -1414,7 +1423,10 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
   String sampleDescription(Map<String, dynamic> file) {
     final name = (file['name'] ?? '').toString().toLowerCase();
     if (file['directory'] == true) return '文件夹';
+    if (name.endsWith('.node.js') || name.endsWith('.mjs')) return 'Node.js 示例';
     if (name.endsWith('.js')) return 'JavaScript 示例';
+    if (name.endsWith('.auto')) return '录制脚本 · 需要 Root';
+    if (name.endsWith('.xml')) return 'XML 布局 · 可预览';
     if (name.endsWith('.md')) return 'Markdown 文档';
     if (name.endsWith('.json')) return 'JSON 文件';
     if (name.endsWith('.apk')) return '安装包';
@@ -1441,19 +1453,19 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
     final rowPadding = sample
         ? const EdgeInsets.fromLTRB(18, 6, 8, 6)
         : const EdgeInsets.fromLTRB(16, 5, 6, 5);
-    // 图标体系对齐高级版文件管理（com.boyai.auma 截图）：
-    //   文件夹 = 实心蓝色圆底 + 白色实心文件夹；项目 = 同一个文件夹底 + 右下角星标角标；
-    //   .js/.mjs 脚本 = code 图标（<>），可运行=绿色圆底、普通文件=近黑圆底；
-    //   其余文件 = 黑色圆底 + 文档图标（白）。
+    // AJ Pro pz/sy: blue folder, starred project, extension initial; JS green,
+    // AUTO red/R, other extensions gray. Both tabs use the same rules.
     final pending = file['pendingSample'] == true;
-    final runnableFile = runnable(file);
+    final extension = fileExtension(file);
     final color = pending
         ? const Color(0xff607d8b)
         : directory
             ? const Color(0xff2196f3)
-            : runnableFile
-                ? const Color(0xff2e9e5b)
-                : const Color(0xff24272b);
+            : extension == 'js'
+                ? const Color(0xff99cc99)
+                : extension == 'auto'
+                    ? const Color(0xfffd999a)
+                    : const Color(0xff888888);
     final date = modifiedDate(file['modified']);
     final full = file['path']?.toString() ?? '';
     final parentPath = full.isEmpty ? '' : File(full).parent.path;
@@ -1487,16 +1499,15 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                                   height: circleSize,
                                   decoration: BoxDecoration(
                                       color: color, shape: BoxShape.circle),
-                                  child: Icon(
+                                  child: pending || directory ? Icon(
                                       pending
                                           ? Icons.cloud_download_outlined
-                                          : directory
-                                              ? Icons.folder_rounded
-                                              : runnableFile
-                                                  ? Icons.code_rounded
-                                                  : Icons.description_outlined,
+                                          : Icons.folder_rounded,
                                       color: Colors.white,
-                                      size: circleIconSize)),
+                                      size: circleIconSize) : Center(child: Text(
+                                          browserFileSymbol(file),
+                                          style: TextStyle(color: Colors.white,
+                                              fontSize: circleIconSize, fontWeight: FontWeight.w500)))),
                               if (project)
                                 Positioned(
                                     right: -1,
@@ -1517,7 +1528,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                             child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                              Text(file['name'],
+                              Text(browserFileName(file),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(fontSize: nameFontSize)),
@@ -1577,10 +1588,16 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                         else if (pending)
                           pendingSampleAction(file)
                         else ...[
+                          if (editable(file))
+                            ActionIcon(
+                                tooltip: '${widget.readOnly ? '查看源码' : '编辑'}：${file['name']}',
+                                height: 48,
+                                icon: const Icon(Icons.edit_outlined, size: 22),
+                                onPressed: () => openNativeEditor(file)),
                           if (runnable(file) || project)
                             ActionIcon(
                                 tooltip:
-                                    '${project ? '运行项目' : '运行'}：${file['name']}',
+                                    '${project ? '运行项目' : extension == 'xml' ? '预览布局' : '运行'}：${file['name']}',
                                 height: 48,
                                 icon: const Icon(Icons.play_arrow_rounded,
                                     size: 27),

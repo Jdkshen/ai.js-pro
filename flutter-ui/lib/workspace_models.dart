@@ -1,4 +1,11 @@
 /// Workspace ordering and editor search, independent of Android and widgets.
+String scriptDirectoryTitle(String root) {
+  final parts = root.split('/').where((part) => part.isNotEmpty).toList();
+  final name = parts.isEmpty ? '/' : parts.last;
+  if (root == '/storage/emulated/0') return '内部存储';
+  return root.startsWith('/storage/emulated/0/') ? '内部存储 · $name' : name;
+}
+
 class BrowserOptions {
   static const sorts = {
     'name': '名称',
@@ -87,19 +94,49 @@ String fileType(Map file) {
   final name = file['name'].toString().toLowerCase();
   if (name.endsWith('.node.js') || name.endsWith('.mjs')) return 'Node.js';
   if (name.endsWith('.js')) return 'JavaScript';
+  if (name.endsWith('.auto')) return '录制脚本（需要 Root）';
+  if (name.endsWith('.xml')) return 'XML 布局';
   final dot = name.lastIndexOf('.');
   return dot < 0 ? '文件' : name.substring(dot + 1).toUpperCase();
 }
 
+String fileExtension(Map file) {
+  final name = (file['name'] ?? '').toString().toLowerCase();
+  final dot = name.lastIndexOf('.');
+  return dot < 0 ? '' : name.substring(dot + 1);
+}
+
 bool runnable(Map file) =>
     file['directory'] != true &&
-    RegExp(r'\.(js|mjs)$', caseSensitive: false)
-        .hasMatch(file['name'].toString());
+    const {'js', 'mjs', 'auto', 'xml'}.contains(fileExtension(file));
+bool packable(Map file) =>
+    file['directory'] != true &&
+    const {'js', 'mjs'}.contains(fileExtension(file));
+bool floatable(Map file) => runnable(file) && fileExtension(file) != 'xml';
 bool editable(Map file) =>
     file['directory'] != true &&
-    RegExp(r'\.(c|cpp|cc|css|html|vue|java|js|mjs|json|kt|lua|md|py|sh|ts|xml|txt|ignore|gitignore|tsx|jsx|yaml|yml)$',
-            caseSensitive: false)
-        .hasMatch(file['name'].toString());
+    RegExp(
+      r'\.(c|h|cpp|hpp|cc|css|html|htm|vue|java|js|mjs|json|kt|lua|md|py|sh|ts|xml|txt|ignore|gitignore|tsx|jsx|yaml|yml|gradle|properties|toml|ini|cfg|log|csv)$',
+      caseSensitive: false,
+    ).hasMatch(file['name'].toString());
+
+// AJ Pro uses the extension initial, with R for recorded .auto files.
+String browserFileSymbol(Map file) {
+  final extension = fileExtension(file);
+  return extension.isEmpty
+      ? '?'
+      : extension == 'auto'
+          ? 'R'
+          : extension[0].toUpperCase();
+}
+
+String browserFileName(Map file) {
+  final name = file['name'].toString();
+  if (file['directory'] != true &&
+      const {'js', 'auto'}.contains(fileExtension(file)))
+    return name.substring(0, name.lastIndexOf('.'));
+  return name;
+}
 
 final _nameParts = RegExp(r'\d+|\D+');
 final _digitsOnly = RegExp(r'^\d+$');

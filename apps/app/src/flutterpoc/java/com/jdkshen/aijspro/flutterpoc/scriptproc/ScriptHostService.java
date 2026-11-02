@@ -438,7 +438,7 @@ public class ScriptHostService extends Service {
         try {
             if (state.stopRequested) throw new ScriptInterruptedException();
             ScriptEngineService engineService = requireEngineService();
-            com.stardust.autojs.script.JavaScriptSource source;
+            com.stardust.autojs.script.ScriptSource source;
             ExecutionConfig config;
             String requestFile=data.getString("requestFile");
             if (requestFile!=null) {
@@ -463,7 +463,9 @@ public class ScriptHostService extends Service {
                         ? detail : "脚本暂存到应用私有目录失败：" + detail, error);
             }
 
-            source = new JavaScriptFileSource(staged.scriptFile);
+            source = com.jdkshen.aijspro.model.script.WorkspaceScriptSource.runnable(staged.scriptFile)
+                    ? com.jdkshen.aijspro.model.script.WorkspaceScriptSource.create(staged.scriptFile)
+                    : new JavaScriptFileSource(staged.scriptFile); // Project-configured Node entries can use other suffixes.
             config = ExecutionConfig.getDefault();
             config.setWorkingDirectory(staged.workingDirectory.getAbsolutePath());
             }
@@ -993,8 +995,9 @@ public class ScriptHostService extends Service {
     }
 
     /** 脚本是否声明了 {@code "ui";}（UI 模式：走主线程 Looper 宿主）。 */
-    private static boolean isUiMode(JavaScriptSource source) {
-        return (source.getExecutionMode() & JavaScriptSource.EXECUTION_MODE_UI) != 0;
+    private static boolean isUiMode(com.stardust.autojs.script.ScriptSource source) {
+        return source instanceof JavaScriptSource &&
+                (((JavaScriptSource) source).getExecutionMode() & JavaScriptSource.EXECUTION_MODE_UI) != 0;
     }
 
     /** 取异常消息：staging 抛出的 IOException 已经是中文，直接透传给主进程。 */

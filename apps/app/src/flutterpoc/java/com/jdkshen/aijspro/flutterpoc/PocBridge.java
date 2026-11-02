@@ -117,10 +117,10 @@ final class PocBridge {
             // Asset traversal and PackageManager/icon decoding can take hundreds
             // of milliseconds. A Future in Dart does not move this handler off
             // Android's main thread; only the completed JSON reply belongs there.
-            if ("list".equals(method) || "logs".equals(method)
+            if ("list".equals(method) || "scriptsRoot".equals(method) || "logs".equals(method)
                     || "localCatalog".equals(method) || "pluginIcon".equals(method)) {
                 final JSONObject catalogArgs = args;
-                ExecutorService reader = "list".equals(method) ? DIRECTORY_READER
+                ExecutorService reader = ("list".equals(method) || "scriptsRoot".equals(method)) ? DIRECTORY_READER
                         : "logs".equals(method) ? LOG_READER : CATALOG_READER;
                 reader.execute(() -> {
                     String response;
@@ -201,7 +201,7 @@ final class PocBridge {
             case "appearance":
                 return new JSONObject().put("dark", AppThemeRepository.get(activity).isDark());
             case "scriptsRoot":
-                return new JSONObject().put("path", Pref.getScriptDirPath());
+                return scriptsRoot(activity, args);
             case "list":
                 return list(activity, args);
             case "theme":
@@ -561,6 +561,8 @@ final class PocBridge {
                 Pref.setStableModeEnabled(args.optBoolean("value", false));
             } else if (Arrays.asList(RUNTIME_FLAGS).contains(key)) {
                 prefs.edit().putBoolean(key, args.optBoolean("value", false)).apply();
+            } else if ("key_script_dir_path".equals(key)) {
+                scriptsRoot(activity, new JSONObject().put("path", args.getString("value")));
             } else if (Arrays.asList(RUNTIME_STRINGS).contains(key)) {
                 prefs.edit().putString(key, args.optString("value", "")).apply();
             } else {
@@ -648,8 +650,13 @@ final class PocBridge {
         if (path == null || path.trim().isEmpty()) {
             return null;
         }
-        File file = new File(path);
-        return file.isFile() && file.canRead() ? file : null;
+        try {
+            File file = new File(path).getCanonicalFile();
+            File root = new File(Pref.getScriptDirPath()).getCanonicalFile();
+            return within(file, root) && file.isFile() && file.canRead() ? file : null;
+        } catch (IOException error) {
+            return null;
+        }
     }
 
     private static File firstScript(File directory, int depth) {
@@ -667,7 +674,7 @@ final class PocBridge {
             if (name.startsWith(".")) {
                 continue;
             }
-            if (child.isFile() && name.toLowerCase(Locale.ROOT).endsWith(".js")) {
+            if (child.isFile() && name.toLowerCase(Locale.ROOT).matches(".+\\.(js|mjs)")) {
                 return child;
             }
             if (child.isDirectory() && firstDirectory == null) {
@@ -683,6 +690,16 @@ final class PocBridge {
             intent.addFlags(flags);
         }
         activity.startActivity(intent);
+    }
+
+    private static JSONObject scriptsRoot(Activity activity, JSONObject args) throws Exception {
+        if (args.has("path")) {
+            if (!(args.get("path") instanceof String)) throw new IOException("脚本目录必须是文字路径");
+            File directory = com.jdkshen.aijspro.storage.file.ScriptDirectory.prepare(args.getString("path"),
+                    android.os.Environment.getExternalStorageDirectory(), SampleFiles.sampleRoot(activity));
+            Pref.setScriptDirPath(directory.getPath());
+        }
+        return new JSONObject().put("path", Pref.getScriptDirPath()).put("saved", args.has("path"));
     }
 
     private static JSONArray list(Activity activity, JSONObject args) throws Exception {
@@ -709,27 +726,11 @@ final class PocBridge {
         if (query.length() > 256) {
             throw new IOException("搜索表达式不能超过 256 个字符");
         }
-        String needle = query.toLowerCase(Locale.ROOT);
         boolean showHidden = args.optBoolean("showHidden", false);
-        File[] children = directory.listFiles();
-        if (children == null) {
-            throw new IOException("无法读取目录：" + directory.getName());
-        }
         List<JSONObject> files = new ArrayList<>();
-        for (File child : children) {
+        for (File child : com.jdkshen.aijspro.storage.file.WorkspaceListing.read(directory, query,
+                args.optBoolean("regex", false), args.optBoolean("recursive", false), showHidden, MAX_ENTRIES)) {
             String name = child.getName();
-            if (name.startsWith(".autojs-glass-") || name.startsWith(".flutter-")) {
-                continue;
-            }
-            if (!showHidden && name.startsWith(".")) {
-                continue;
-            }
-            if (!needle.isEmpty() && !name.toLowerCase(Locale.ROOT).contains(needle)) {
-                continue;
-            }
-            if (files.size() >= MAX_ENTRIES) {
-                throw new IOException("目录条目超过 " + MAX_ENTRIES + "，请进入子目录后再搜索");
-            }
             // Snapshot metadata once, rather than stat() on every sort comparison.
             boolean isDirectory = child.isDirectory();
             files.add(new JSONObject()

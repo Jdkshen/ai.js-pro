@@ -808,7 +808,7 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
                                     child: FileBrowser(
                                         key: scriptBrowser,
                                         root: boot!['scripts'],
-                                        title: '内部存储 · 脚本',
+                                        title: scriptDirectoryTitle(boot!['scripts']),
                                         active: activeTab == 0 && !drawerOpen,
                                         revision: revision)),
                                 _WorkspacePage(

@@ -276,7 +276,7 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage>
                 controller: controller,
                 autofocus: true,
                 decoration: const InputDecoration(
-                    labelText: '目录路径', helperText: '填写目录路径，新目录会自动创建'),
+                    labelText: '目录路径', helperText: '新目录会自动创建，原目录中的文件不会移动'),
               ),
               actions: [
                 TextButton(
@@ -295,9 +295,12 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage>
     setState(() => updating = 'scriptsRoot');
     try {
       final result = await LocalBridge.call('scriptsRoot', {'path': value});
-      if (result is! Map || result['path'] is! String)
+      if (result is! Map || result['path'] is! String || result['saved'] != true)
         throw StateError('目录保存结果未确认');
-      if (mounted) setState(() => configuredRoot = result['path'] as String);
+      if (mounted) {
+        setState(() => configuredRoot = result['path'] as String);
+        message(context, '脚本目录已保存，返回脚本页即可使用');
+      }
     } catch (e) {
       if (mounted) message(context, '脚本目录未修改：$e');
     } finally {

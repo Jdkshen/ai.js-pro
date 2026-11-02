@@ -213,10 +213,16 @@ final class PocRuntime {
         if (!file.isFile()) {
             throw new IOException("脚本文件不存在：" + file.getName());
         }
-        if (!file.getName().toLowerCase(java.util.Locale.ROOT).matches(".+\\.(js|mjs)")) {
-            throw new IOException("请选择 JavaScript 脚本");
+        if (!com.jdkshen.aijspro.model.script.WorkspaceScriptSource.runnable(file)) {
+            throw new IOException("请选择 JavaScript、录制脚本或 XML 布局");
         }
         File parent = file.getParentFile();
+        String extension = com.jdkshen.aijspro.model.script.WorkspaceScriptSource.extension(file);
+        if ("auto".equals(extension) || "xml".equals(extension)) {
+            acquireForegroundLease(context);
+            PocScriptHost.run(context, file, parent);
+            return;
+        }
         // 单文件脚本只有「main.js + 同目录 project.json」才按项目路由；其它一律不做 native 递归检测。
         runFile(context, file, parent, isProjectEntry(file, parent));
     }
