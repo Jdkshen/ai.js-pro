@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-11-03 MCP/MT 实际功能核查（仍有缺口，未更新APK）**：[57工具矩阵、实测与修复顺序](reports/2026-11-03_MCP与MT功能实现对照及缺口.md)。MT57对应入口全部有，但并未行为对齐。MI8双端实测证实签名v2/v3、搜索、AXML、新建DEX、资源批读与XML预算、AES ZIP、zip_update参数、多架构补丁、padding和正则缺口；P0保留条目删除/构建检查需先补。已清理全部自建夹具与4个临时工作区。本轮只审查和MD，未改产品代码或发布，LAN1318、MI8候选1325保留；不要沿用历史60工具统计或“全齐”判断。Java反编译不是MT MCP必补功能。
+
 > **2026-11-03 Node 原生 UI 候选 dev-1325（MI8 已验，未切主源）**：[根因与验收](reports/2026-11-03_Node原生资源与动态回调修复验收.md)。修 ARSCLib 平台 API 副本污染 R8（净化 JAR+最终 DEX 守卫）与动态 DEX 基本类型 null 分支反向。528 App+617 Engine JVM、5 扫描器测试，MI8 原始编译 M3 图片卡片/三页实际可见/停止、Node/Rhino 内联、Java 反射实际返回 8/true/默认0 均通过；23 ELF16KB/R8/签名/Retrofit通过，SHA f5822d67…，Downloads有包、手机摘要一致、测试残留已清。LAN仍1318、未push、K40/新机未动；独立模板待刷新。原报告中的 ResourcesProvider/ApkAssets 换挂载不是最终修复方向。
 
 > **2026-11-02 Android17 Shizuku终端候选 dev-1312（新机已装已验，未切主源）**：[共用后端修复与验收](reports/2026-11-02_Android17_Shizuku终端兼容修复.md)。SDK37通过只读APK的app_process直接创建执行服务，受权限保护的Provider核对一次性令牌/后端UID交接Binder，沿用命令所有者/进程组/FD安装；旧系统保留UserService。1117 JVM、终端/MCP/三引擎、单停/超时/意外死亡与Node恢复、私有/split安装、空闲重连通过，新手机C/C++运行及so编译通过，AX保持连接。最终SHA 3be39faf…，Downloads/LAN手动包与手机安装摘要一致，新模板/783文档同步；主源仍1305，未push、旧机/K40未动。可视终端逐按钮、root/Sui/多用户/真实16KB未验。覆盖下方1311“通用终端仍失败”的历史状态。
