@@ -64,7 +64,7 @@ internal object McpToolCatalog {
         "ui_scroll",
         "search_api_docs",
         "read_api_doc"
-    )
+    ) + McpToolkitCatalog.names
 
     /**
      * Pro compatibility names advertised by tools/list, alongside the engine tools.
@@ -94,7 +94,7 @@ internal object McpToolCatalog {
     }
 
     private val canonicalByAlias: Map<String, String> =
-        dispatchAliases.entries.associate { entry -> entry.value to entry.key } + aliases
+        dispatchAliases.entries.associate { entry -> entry.value to entry.key } + aliases + McpToolkitCatalog.aliases
 
     val names = canonicalNames + aliases.keys
 

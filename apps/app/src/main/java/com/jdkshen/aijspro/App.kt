@@ -66,6 +66,8 @@ class App : MultiDexApplication() {
     override fun onCreate() {
         super.onCreate()
         GlobalAppContext.set(this)
+        // APK parsers run on demand in their own process, without engines, UI or schedulers.
+        if (com.stardust.autojs.execution.ScriptProcessIdentity.suffix(this) == ":tools") return
         com.stardust.autojs.core.floaty.RuntimeFloatyService.installRouting()
         if (com.stardust.autojs.execution.ScriptProcessIdentity.suffix(this) != ":script") {
             com.jdkshen.aijspro.ui.floating.layoutinspector.InspectorCaptureService.installRemote(this)

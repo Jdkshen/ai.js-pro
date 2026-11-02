@@ -757,6 +757,7 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                 () => page(const GuidePage())),
           ],
           link(Icons.terminal, '终端', terminal),
+          link(Icons.construction_outlined, '文件与 APK 工具', () => page(const ToolkitPage())),
           heading('其他'),
           SwitchListTile(
               dense: true,

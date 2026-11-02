@@ -40,6 +40,7 @@ class LocalBridge {
     final slow =
         method.startsWith('import') ||
         method == 'shizukuEnableAccessibility' ||
+        method == 'toolkitCall' ||
         // 示例包按需下载最大约 9MB，20s 默认超时不够。
         method == 'sampleDownload' ||
         method == 'share' ||

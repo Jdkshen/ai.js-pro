@@ -58,6 +58,10 @@ final class PocBridge {
     private static final String PREFS_GLASS = "flutter-glass";
     private static final int MAX_ENTRIES = 5000;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final ExecutorService TOOL_READER = new java.util.concurrent.ThreadPoolExecutor(1, 1, 0,
+            java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.ArrayBlockingQueue<>(8), task -> {
+                Thread thread = new Thread(task, "poc-toolkit-reader"); thread.setDaemon(true); return thread;
+            });
     // Directory polling must never block touch input, stop commands or catalogue
     // icon requests. Keep its FIFO separate from the catalogue reader.
     private static final ExecutorService DIRECTORY_READER = Executors.newSingleThreadExecutor(task -> {
@@ -118,9 +122,9 @@ final class PocBridge {
             // of milliseconds. A Future in Dart does not move this handler off
             // Android's main thread; only the completed JSON reply belongs there.
             if ("list".equals(method) || "scriptsRoot".equals(method) || "logs".equals(method)
-                    || "localCatalog".equals(method) || "pluginIcon".equals(method)) {
+                    || "localCatalog".equals(method) || "pluginIcon".equals(method) || "toolkitCall".equals(method)) {
                 final JSONObject catalogArgs = args;
-                ExecutorService reader = ("list".equals(method) || "scriptsRoot".equals(method)) ? DIRECTORY_READER
+                ExecutorService reader = "toolkitCall".equals(method) ? TOOL_READER : ("list".equals(method) || "scriptsRoot".equals(method)) ? DIRECTORY_READER
                         : "logs".equals(method) ? LOG_READER : CATALOG_READER;
                 reader.execute(() -> {
                     String response;
@@ -330,6 +334,14 @@ final class PocBridge {
                 return PocSamples.library(activity);
 
             // ---- MCP / 插件 / 示例 / 快捷方式（PocIntegration）------------------
+            case "toolkitCall": {
+                File toolkitRoot = new File(Pref.getScriptDirPath(), com.jdkshen.aijspro.mcp.McpSettings.INSTANCE.operationPath(activity));
+                JSONObject payload = args.optJSONObject("arguments");
+                com.google.gson.JsonObject parsed = new com.google.gson.JsonParser().parse(payload == null ? "{}" : payload.toString()).getAsJsonObject();
+                com.google.gson.JsonObject result = com.jdkshen.aijspro.mcp.McpToolkitBridge.call(activity, toolkitRoot, args.optString("name", "toolkit_status"), parsed);
+                if (result.has("ok") && !result.get("ok").getAsBoolean()) throw new IOException(result.getAsJsonObject("error").get("message").getAsString());
+                return new JSONObject(result.toString());
+            }
             case "mcpState":
             case "mcpSet":
             case "pluginStates":

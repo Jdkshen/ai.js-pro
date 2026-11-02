@@ -25,6 +25,7 @@ part 'settings_page.dart';
 part 'device_page.dart';
 part 'permission_guide.dart';
 part 'project_page.dart';
+part 'toolkit_page.dart';
 
 /// 单实例页面导航：按 [RouteSettings.name] 登记导航栈里的页面。
 ///

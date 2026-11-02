@@ -234,7 +234,7 @@ android {
         // resources/new_api_database.ser，运行期 D8 不会读取它；排除后 APK 少约 2.9 MB。
         // 若将来真的要跑 R8（shrink/API modeling），删掉这条 exclude。
         resources {
-            excludes += ['resources/new_api_database.ser']
+            excludes += ['resources/new_api_database.ser', 'frameworks/**']
         }
     }
 
@@ -683,6 +683,12 @@ dependencies {
     liteImplementation project(':rhino-language')
     implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')
+    // APK tools reuse the engine's pinned DEX implementation; resources stay pure Java.
+    implementation 'org.smali:dexlib2:2.5.2'
+    implementation 'org.smali:baksmali:2.5.2'
+    implementation 'org.smali:smali:2.5.2'
+    implementation 'io.github.reandroid:ARSCLib:1.4.0'
+    implementation 'com.google.re2j:re2j:1.8'
     if (flutterPocEnabled) {
         // Embedding and engine are pinned together in flutter-payload-base/runtime.json.
         // release 也必须是同一份 classes-only embedding + 同一套运行时依赖；只在 debug
@@ -965,6 +971,51 @@ tasks.register('verifyQuickJsNativeLibrariesFresh') {
     }
 }
 
+// MCP 工具进程用的 Capstone JNI：源码/构建脚本/产物三者必须与 lock 一致，防止把旧 .so
+// 打进包（构建脚本只能在真机上跑，所以这里只校验哈希，不重编）。
+def toolkitNativeDir = file('src/main/toolkit-native')
+def toolkitNativeLib = file('src/main/jniLibs/arm64-v8a/libaijs_binarytools.so')
+def toolkitNativeLock = new File(toolkitNativeDir, 'binary-tools.lock.json')
+def toolkitNativeRecipe = rootProject.file('tools/build-toolkit-native.py')
+
+tasks.register('verifyToolkitNativeFresh') {
+    group = 'verification'
+    description = 'Fail packaging when the Capstone JNI library does not match its lock or sources.'
+    inputs.files(new File(toolkitNativeDir, 'binary_tools.cpp'), toolkitNativeLock, toolkitNativeLib, toolkitNativeRecipe)
+
+    doLast {
+        if (!toolkitNativeLib.isFile()) {
+            throw new GradleException('Missing toolkit native library: ' + toolkitNativeLib +
+                    ' — run tools/build-toolkit-native.py on an authorized arm64 device.')
+        }
+        def lock = new groovy.json.JsonSlurper().parse(toolkitNativeLock)
+        def digest = { File target ->
+            def md = java.security.MessageDigest.getInstance('SHA-256')
+            target.withInputStream { stream ->
+                byte[] buffer = new byte[65536]
+                int read
+                while ((read = stream.read(buffer)) > 0) { md.update(buffer, 0, read) }
+            }
+            md.digest().encodeHex().toString()
+        }
+        def problems = []
+        [['sourceSha256', new File(toolkitNativeDir, 'binary_tools.cpp')],
+         ['recipeSha256', toolkitNativeRecipe],
+         ['librarySha256', toolkitNativeLib]].each { entry ->
+            def actual = digest(entry[1])
+            if (lock[entry[0]] != actual) problems << (entry[0] + ' mismatch: lock=' + lock[entry[0]] + ' actual=' + actual)
+        }
+        if (lock['capstoneSha256'] != '240ebc834c51aae41ca9215d3190cc372fd132b9c5c8aa2d5f19ca0c325e28f9') {
+            problems << 'Capstone pin changed without a native rebuild'
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException('Toolkit native library is stale; rebuild it with ' +
+                    'tools/build-toolkit-native.py on an authorized arm64 device:\n - ' +
+                    problems.join('\n - '))
+        }
+    }
+}
+
 tasks.matching { it.name == 'preBuild' }.configureEach {
     dependsOn tasks.named('prepareXiangqiRelease')
     dependsOn tasks.named('verifyBundledSamplesNoNode')
@@ -973,6 +1024,7 @@ tasks.matching { it.name == 'preBuild' }.configureEach {
     dependsOn tasks.named('verifyCommonEngineSamples')
     dependsOn tasks.named('verifyBundledFindImageAssets')
     dependsOn tasks.named('verifyQuickJsNativeLibrariesFresh')
+    dependsOn tasks.named('verifyToolkitNativeFresh')
     dependsOn tasks.named('verifyImGuiFontSubset')
 }
 

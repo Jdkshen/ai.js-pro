@@ -1,0 +1,1154 @@
+{
+  "apk_workspace_open": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string"
+      },
+      "temporary": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "path",
+      "temporary"
+    ]
+  },
+  "apk_list_available_apks": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "prefix": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "prefix",
+      "limit"
+    ]
+  },
+  "apk_workspace_list": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {},
+    "required": []
+  },
+  "apk_list": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "view": {
+        "type": "string",
+        "enum": [
+          "zip_entries",
+          "dex_classes",
+          "resource_table"
+        ]
+      },
+      "prefix": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "view",
+      "prefix",
+      "limit"
+    ]
+  },
+  "apk_search": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "target": {
+        "type": "string",
+        "enum": [
+          "overview",
+          "files",
+          "resource_table_names",
+          "resource_table_values",
+          "resource_table_file_paths",
+          "dex_names",
+          "dex_strings",
+          "dex_string_members",
+          "smali",
+          "native_symbols",
+          "native_strings"
+        ]
+      },
+      "query": {
+        "type": "string"
+      },
+      "queryType": {
+        "type": "string",
+        "enum": [
+          "literal",
+          "regex"
+        ]
+      },
+      "caseSensitive": {
+        "type": "boolean"
+      },
+      "matchMode": {
+        "type": "string",
+        "enum": [
+          "contains",
+          "exact"
+        ]
+      },
+      "prefix": {
+        "type": "string"
+      },
+      "includeMatchOffsets": {
+        "type": "boolean"
+      },
+      "limit": {
+        "type": "integer"
+      },
+      "snippetMaxChars": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "target",
+      "query",
+      "queryType",
+      "caseSensitive",
+      "matchMode",
+      "prefix",
+      "includeMatchOffsets",
+      "limit",
+      "snippetMaxChars"
+    ]
+  },
+  "apk_read_text": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      },
+      "maxChars": {
+        "type": "integer"
+      },
+      "startLine": {
+        "type": "integer"
+      },
+      "startColumn": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "limit",
+      "maxChars",
+      "startLine",
+      "startColumn"
+    ]
+  },
+  "apk_read_bytes": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "byteOffset": {
+        "type": "integer"
+      },
+      "maxBytes": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "byteOffset",
+      "maxBytes"
+    ]
+  },
+  "apk_dex_read_class_outline": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "limit"
+    ]
+  },
+  "apk_dex_xref": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "methodResolution": {
+        "type": "string",
+        "enum": [
+          "exact",
+          "slot",
+          "dispatch",
+          "not_applicable"
+        ]
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "methodResolution",
+      "limit"
+    ]
+  },
+  "apk_resource_read": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "reads": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "locator": {
+              "type": "string"
+            },
+            "variant": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "locator",
+            "variant"
+          ]
+        }
+      },
+      "maxValueChars": {
+        "type": "integer"
+      },
+      "maxValueXmlChars": {
+        "type": "integer"
+      },
+      "maxItemsPerValue": {
+        "type": "integer"
+      },
+      "resolveDepth": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "reads",
+      "maxValueChars",
+      "maxValueXmlChars",
+      "maxItemsPerValue",
+      "resolveDepth"
+    ]
+  },
+  "apk_resource_xref": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "scopes": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "dex",
+            "axml",
+            "resource_table"
+          ]
+        }
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "scopes",
+      "limit"
+    ]
+  },
+  "apk_native_inspect": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator"
+    ]
+  },
+  "apk_native_list_items": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "itemKind": {
+        "type": "string",
+        "enum": [
+          "neededLibraries",
+          "sections",
+          "segments",
+          "imports",
+          "symbols",
+          "entries",
+          "initArray",
+          "finiArray",
+          "relocations"
+        ]
+      },
+      "namePrefix": {
+        "type": "string"
+      },
+      "demangle": {
+        "type": "boolean"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "itemKind",
+      "namePrefix",
+      "demangle",
+      "limit"
+    ]
+  },
+  "apk_native_map_address": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "addressKind": {
+        "type": "string",
+        "enum": [
+          "virtual",
+          "file_offset"
+        ]
+      },
+      "address": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "addressKind",
+      "address"
+    ]
+  },
+  "apk_native_xref": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "addressKind": {
+        "type": "string",
+        "enum": [
+          "virtual",
+          "file_offset"
+        ]
+      },
+      "address": {
+        "type": "string"
+      },
+      "instructionMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "arm",
+          "thumb"
+        ]
+      },
+      "scanKind": {
+        "type": "string",
+        "enum": [
+          "code",
+          "data",
+          "both"
+        ]
+      },
+      "referenceKinds": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "enum": [
+            "call",
+            "jump",
+            "data",
+            "unknown"
+          ]
+        }
+      },
+      "maxScanBytes": {
+        "type": "integer"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "addressKind",
+      "address",
+      "instructionMode",
+      "scanKind",
+      "referenceKinds",
+      "maxScanBytes",
+      "limit"
+    ]
+  },
+  "apk_native_disassemble": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "addressKind": {
+        "type": "string",
+        "enum": [
+          "virtual",
+          "file_offset"
+        ]
+      },
+      "address": {
+        "type": "string"
+      },
+      "instructionMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "arm",
+          "thumb"
+        ]
+      },
+      "stopAtSymbolBoundary": {
+        "type": "boolean"
+      },
+      "maxBytes": {
+        "type": "integer"
+      },
+      "maxInstructions": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "addressKind",
+      "address",
+      "instructionMode",
+      "stopAtSymbolBoundary",
+      "maxBytes",
+      "maxInstructions"
+    ]
+  },
+  "apk_native_analyze_control_flow": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "addressKind": {
+        "type": "string",
+        "enum": [
+          "virtual",
+          "file_offset"
+        ]
+      },
+      "address": {
+        "type": "string"
+      },
+      "instructionMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "arm",
+          "thumb"
+        ]
+      },
+      "outputMode": {
+        "type": "string",
+        "enum": [
+          "full",
+          "summary"
+        ]
+      },
+      "maxAnalysisBytes": {
+        "type": "integer"
+      },
+      "maxBlocks": {
+        "type": "integer"
+      },
+      "maxInstructions": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "addressKind",
+      "address",
+      "instructionMode",
+      "outputMode",
+      "maxAnalysisBytes",
+      "maxBlocks",
+      "maxInstructions"
+    ]
+  },
+  "apk_continue": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "nextCursor": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "nextCursor",
+      "limit"
+    ]
+  },
+  "apk_session_create": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceId"
+    ]
+  },
+  "apk_edit_text": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "targetVersion": {
+        "type": "string"
+      },
+      "edits": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "write_target",
+                "replace_match",
+                "insert_before_match",
+                "insert_after_match"
+              ]
+            },
+            "matchText": {
+              "type": "string"
+            },
+            "writeText": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mode",
+            "matchText",
+            "writeText"
+          ]
+        }
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "targetVersion",
+      "edits"
+    ]
+  },
+  "apk_delete_target": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator"
+    ]
+  },
+  "apk_resource_edit": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "edits": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "locator": {
+              "type": "string"
+            },
+            "variant": {
+              "type": "string"
+            },
+            "targetVersion": {
+              "type": "string"
+            },
+            "valueXml": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "locator",
+            "variant",
+            "targetVersion",
+            "valueXml"
+          ]
+        }
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "edits"
+    ]
+  },
+  "apk_resource_add": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "adds": {
+        "type": "array",
+        "items": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "resource"
+                  ]
+                },
+                "packageId": {
+                  "type": "string"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "variant": {
+                        "type": "string"
+                      },
+                      "valueXml": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "variant",
+                      "valueXml"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "packageId",
+                "values"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "variant"
+                  ]
+                },
+                "locator": {
+                  "type": "string"
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "variant": {
+                        "type": "string"
+                      },
+                      "valueXml": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "variant",
+                      "valueXml"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "locator",
+                "values"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "adds"
+    ]
+  },
+  "apk_patch_bytes": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "patches": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "byteOffset": {
+              "type": "integer"
+            },
+            "expectedHex": {
+              "type": "string"
+            },
+            "replacementHex": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "byteOffset",
+            "expectedHex",
+            "replacementHex"
+          ]
+        }
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "patches"
+    ]
+  },
+  "apk_native_patch_instructions": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "addressKind": {
+        "type": "string",
+        "enum": [
+          "virtual",
+          "file_offset"
+        ]
+      },
+      "address": {
+        "type": "string"
+      },
+      "instructionMode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "arm",
+          "thumb"
+        ]
+      },
+      "expectedHex": {
+        "type": "string"
+      },
+      "replacementAssembly": {
+        "type": "string"
+      },
+      "paddingMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "nop"
+        ]
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "addressKind",
+      "address",
+      "instructionMode",
+      "expectedHex",
+      "replacementAssembly",
+      "paddingMode"
+    ]
+  },
+  "apk_native_patch_string": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "addressKind": {
+        "type": "string",
+        "enum": [
+          "virtual",
+          "file_offset"
+        ]
+      },
+      "address": {
+        "type": "string"
+      },
+      "expectedText": {
+        "type": "string"
+      },
+      "replacementText": {
+        "type": "string"
+      },
+      "paddingMode": {
+        "type": "string",
+        "enum": [
+          "none",
+          "null_pad",
+          "space_pad"
+        ]
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "addressKind",
+      "address",
+      "expectedText",
+      "replacementText",
+      "paddingMode"
+    ]
+  },
+  "apk_session_check": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "runBuildChecks": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "runBuildChecks"
+    ]
+  },
+  "apk_build": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "outputName": {
+        "type": "string"
+      },
+      "overwrite": {
+        "type": "boolean"
+      },
+      "sign": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId",
+      "outputName",
+      "overwrite",
+      "sign"
+    ]
+  },
+  "apk_workspace_delete": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceId"
+    ]
+  },
+  "apk_read_signature": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceId"
+    ]
+  },
+  "apk_copy_entry": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "direction": {
+        "type": "string",
+        "enum": [
+          "workspace_to_local",
+          "local_to_edit_session"
+        ]
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string"
+      },
+      "localPath": {
+        "type": "string"
+      },
+      "overwrite": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "direction",
+      "workspaceId",
+      "editSessionId",
+      "locator",
+      "localPath",
+      "overwrite"
+    ]
+  }
+}

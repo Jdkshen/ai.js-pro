@@ -104,7 +104,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 }
                 else -> error("unreachable supported method")
             }
-            event("$eventName · 成功")
+            event("$eventName · ${if (result.get("isError")?.asBoolean == true) "失败" else "成功"}")
             rpcResult(id, result)
         } catch (e: McpInvalidParamsException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
@@ -163,7 +163,8 @@ internal class McpTools(private val context: Context, private val event: (String
             "- path 是相对操作目录的路径，不要写 /sdcard 绝对路径；先用 list_scripts 查看。",
             "- run_script 的 path/file/source 三选一；要结果和错误日志必须 wait:true，timeoutSeconds 建议 30~120。",
             "- wait 超时返回 timedOut=true，任务仍可能在跑：用 wait_execution/get_execution 继续，不要当成成功。",
-            "- 修改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply；workspace_write 不会直接落盘。",
+            "- 脚本工程修改：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply。独立文件工具 file_* 通过 targetVersion 防旧写，直接作用于操作目录；APK 工具先建不可变快照/编辑会话，再导出新包。",
+            "- 文件与APK工具全部由 AI.js Pro 自己实现，不需要 MT。先 toolkit_status；文件/ZIP用 file_*/zip_*，APK先 apk_list_available_apks → apk_workspace_open → apk_list。旧 mt_* 名称仅为本地兼容别名。ELF 指令覆盖与真实限制见 toolkit_status。",
             "- 读取控件/截图需无障碍服务；capture_screen 缩小后坐标按 sourceWidth/scale 换算。",
             "- 手机终端：terminal_exec（backend 默认 app，可选 shizuku）→ terminal_read(offset=nextOffset) → terminal_write/terminal_stop；shell_rish 是 Shizuku 后端的异步兼容入口，同样返回 jobId，不阻塞等待。app 为普通应用 UID，shizuku 需服务已运行并授权且不回退；两者共用同一任务表。先 get_build_tools 确认工具链，非 PTY。",
             "",
@@ -240,6 +241,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("ui_scroll", "按 up/down/left/right 执行滑动手势滚动", McpToolSchema.uiScrollSchema()))
             add(tool("search_api_docs", "搜索 App 同源离线 API 文档，不启动脚本；query 可省略以浏览目录，engine=all/rhino/quickjs/nodejs（兼容 node/node24），category 精确匹配返回的 categories，kind=all/guide/legacy。offset 默认 0，limit 默认 10/最大 20；返回 id、摘要、来源、引擎标注和 indexSha256；再用 read_api_doc 读说明与示例。文档不是运行验证", McpToolSchema.searchApiDocsSchema()))
             add(tool("read_api_doc", "读取文档 id 的 Markdown、sectionTitles/sections 目录及 examples 代码数组；section 可按目录只读参数/返回值/权限等，includeExamples 默认 true，完整页才返回原文代码和 language；分段时 examplesOmittedReason=paged_content。建议带 indexSha256 防旧 ID 错配；offset/nextOffset 为 UTF-16 字符，maxChars 默认16000、128..32000；不执行示例", McpToolSchema.readApiDocSchema()))
+            McpToolkitBridge.definitions(context, root).forEach { add(it) }
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {
@@ -256,6 +258,10 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun call(invocation: McpToolCall): JsonObject {
         val name = invocation.canonicalName
         val args = invocation.arguments
+        if (name in McpToolkitCatalog.names) {
+            val result = McpToolkitBridge.call(context, root, name, args)
+            return toolJson(result).apply { if (result.get("ok")?.asBoolean == false) addProperty("isError", true) }
+        }
         if (McpAutomationTransport.supports(name)) return McpAutomationTransport.call(context, name, args)
         return when (name) {
             "get_status" -> toolJson(JsonObject().apply {

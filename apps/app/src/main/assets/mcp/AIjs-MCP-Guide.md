@@ -16,6 +16,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 终端与构建 | terminal_exec/read/write/stop/list、shell_rish、get_build_tools |
 | 悬浮窗 | list_overlays、close_overlays |
 | 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
+| 文件与 APK 工具 | toolkit_status、file_*、zip_*、apk_*（工作区/会话/列表/读取/编辑/搜索/DEX/Smali/资源/ELF/打包/签名） |
 
 ## 快速开始（AI 客户端必读）
 
@@ -214,6 +215,17 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 - list_executions/get_execution/wait_execution/stop_script：管理本 MCP 服务启动的任务。
 
 不要把工作区写入当作已修改真实文件；必须完成 workspace_request_apply，并检查返回结果。
+
+## 文件与 APK 工具（toolkit，全部本地实现，不依赖 MT）
+
+这组工具由 AI.js Pro 自己实现，运行在独立的 `:tools` 进程（与主进程、脚本进程隔离），通过私有 ContentProvider + 文件 IPC 通信，不会因为解析大 APK 拖垮脚本引擎。`toolkit_status` 返回工具数、分组和真实限制。
+
+- **文件 `file_*`**：`file_read_text/read_bytes/list/stat/search_text` 只读；写入必须带 `targetVersion`（防旧写）或用原字节校验，`file_edit_text` 支持替换、`file_patch_bytes` 支持偏移补丁。
+- **ZIP `zip_*`**：`zip_list/read_text/read_bytes/test/extract/create/update`。
+- **APK `apk_*`**：先 `apk_workspace_open` 建不可变快照，再 `apk_session_create` 建编辑会话；`apk_list/apk_search/apk_read_text/apk_read_bytes` 浏览，`apk_dex_read_class_outline/apk_dex_xref` 用 baksmali 读 DEX，`apk_resource_read/apk_resource_xref` 读写 ARSC 资源，`apk_edit_text/apk_delete_target/apk_resource_edit/apk_patch_bytes` 修改会话内副本，最后 `apk_session_check` + `apk_build` 导出新包；`apk_read_signature` 读签名。旧 `mt_*` 名称只是本地兼容别名。
+- **ELF 指令分析**：`apk_native_inspect/list_items/disassemble/xref/analyze_control_flow/patch_instructions`。原生库可用时用本机 Capstone 5.0.6 解码 **AArch64、ARM/Thumb、x86、x86-64**；原生库不可用时回退有界 AArch64 子集。只保证有界直接控制流，未知指令明确标 `decoded=false`；间接调用目标、完整数据流和语义等价不作保证。`apk_native_patch_instructions` 当前只支持 AArch64 等长补丁。
+
+对真实文件的写入仍要按工具返回的 targetVersion 做并发校验；APK 快照上限 512MiB、总量 1GiB，单条目分析上限 64MiB、文本 10MiB。
 
 ## 手机终端与编译
 

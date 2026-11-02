@@ -70,6 +70,13 @@ public final class KeyStoreApkSigner implements Signer {
         insertV2Signature(outputApk);
     }
 
+    /** APK toolkit path: preserve v1 bytes, align native ZIP data, then regenerate v2. */
+    public void signAligned(File workspaceDir, File outputApk) throws Exception {
+        writeUnsignedApk(workspaceDir, outputApk);
+        com.jdkshen.aijspro.mcp.ToolkitArchiveAlignment.align(outputApk);
+        insertV2Signature(outputApk);
+    }
+
     /**
      * Writes the workspace as an APK including the v1 signature files. The produced file is a
      * valid v1 signed APK; the v2 block is inserted afterwards because it has to be placed
