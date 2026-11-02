@@ -4,12 +4,26 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ToolkitAssemblerTest {
+    @Test fun clangReceivesAbsolutePcRelativeTargetsAsLinkerSymbols() {
+        val prepared = ToolkitAssemblySource.forClang("start: b 0x10088; adr x0, #0x1008c; ldr x1, [x2, #8]", "aarch64")
+        assertEquals(mapOf("_aijs_abs_0" to 0x10088L, "_aijs_abs_1" to 0x1008cL), prepared.absoluteSymbols)
+        assertEquals("start: b _aijs_abs_0\nadr x0, _aijs_abs_1\nldr x1, [x2, #8]", prepared.source)
+        assertTrue(ToolkitAssemblySource.forClang("b local; local: ret", "aarch64").absoluteSymbols.isEmpty())
+    }
     private fun hex(bytes: ByteArray) = ToolkitIo.hex(bytes)
 
     private fun assertAssembly(source: String, expectedHex: String, base: Long = 0x10080) {
         val actual = ToolkitAssembler.tryAssemble(183, base, source, "aarch64")
         assertNotNull("expected built-in assembly for: $source", actual)
         assertEquals(source, expectedHex, hex(actual!!))
+    }
+
+    private fun assertRejected(source: String) {
+        try {
+            ToolkitAssemblySource.validate(source)
+            fail("expected source validation to reject: $source")
+        } catch (_: IllegalArgumentException) {
+        }
     }
 
     @Test fun commonAarch64InstructionsEncodeAtTheGivenVirtualAddress() {
@@ -33,6 +47,78 @@ class ToolkitAssemblerTest {
         assertAssembly("loop:\n    nop\n    b loop", "1F2003D5FFFFFF17")
         assertAssembly("target:\n    nop\n    bl target", "1F2003D5FFFFFF97")
         assertAssembly(".inst 0xD503201F", "1F2003D5")
+    }
+
+    @Test fun labelsAreCaseSensitiveAndCaseOnlyMismatchFallsBack() {
+        assertAssembly("Foo:\n    nop\n    b Foo", "1F2003D5FFFFFF17")
+        assertNull(
+            "foo must never alias Foo",
+            ToolkitAssembler.tryAssemble(183, 0x10080, "Foo:\n    nop\n    b foo", "aarch64"),
+        )
+        assertAssembly(
+            "Foo: nop; foo: ret; b Foo; b foo",
+            "1F2003D5C0035FD6FEFFFF17FEFFFF17",
+        )
+    }
+
+    @Test fun semicolonSeparatedStatementsAreAssembledInOrder() {
+        assertAssembly("mov x0, #1; ret", "200080D2C0035FD6")
+        assertAssembly("start: nop; b start", "1F2003D5FFFFFF17")
+        assertAssembly(".inst 0xD503201F; .inst 0xD65F03C0", "1F2003D5C0035FD6")
+    }
+
+    @Test fun sourceValidationRejectsDirectiveAndPreprocessorBypasses() {
+        listOf(
+            ".incbin \"payload.bin\"",
+            ".include \"payload.s\"",
+            ".incbin: nop",
+            ".include: nop",
+            "nop; .incbin \"payload.bin\"",
+            "label: .include \"payload.s\"",
+            "label : .include \"payload.s\"",
+            "label: other: .incbin \"payload.bin\"",
+            ".inst 0xD503201F; .incbin \"payload.bin\"",
+            "nop; .macro evil",
+            ".text",
+            "nop; .section .text",
+            "#include \"payload.h\"",
+            "nop; #include \"payload.h\"",
+            "label: #include \"payload.h\"",
+            "nop /* hide */; .include \"payload.s\"",
+            "nop .incbin \"payload.bin\"",
+            "nop \\\n.include \"payload.s\"",
+            "nop ??/\n.include \"payload.s\"",
+            "mov x0, #1\u0000; ret",
+            "nop; %:include \"payload.h\"",
+            "nop; ??=include \"payload.h\"",
+        ).forEach { assertRejected(it) }
+    }
+
+    @Test fun sourceValidationKeepsImmediatesLabelsAndSemicolonStatements() {
+        listOf(
+            "mov x0, #1",
+            "mov x0, #-1",
+            "mov x0, #0x10",
+            "cmp x0, #0",
+            "add x0, x1, #1, lsl #12",
+            "loop:\n    nop\n    b loop",
+            ".inst 0xD503201F",
+            "entry : nop",
+            ".entry: nop",
+            "mov x0, #1; ret",
+            ".Lloop: nop; b .Lloop",
+            "ldr x0, [sp, #-16]",
+            "nop // #include in a comment is not executed",
+        ).forEach { ToolkitAssemblySource.validate(it) }
+    }
+
+    @Test fun obviousUnsupportedOperandFormsDoNotGetMisencoded() {
+        assertAssembly("ldrsw x0, [x1, #4]", "200480B9")
+        assertNull(ToolkitAssembler.tryAssemble(183, 0x10080, "ldrsw w0, [x1, #4]", "aarch64"))
+        assertNull(ToolkitAssembler.tryAssemble(183, 0x10080, "ldrb x0, [x1]", "aarch64"))
+        assertNull(ToolkitAssembler.tryAssemble(183, 0x10080, "mov w0, #0x100000000", "aarch64"))
+        assertAssembly("mov w0, #0xffffffff", "00008012")
+        assertAssembly("mov w0, #-1", "00008012")
     }
 
     @Test fun unsupportedFormsReturnNullForTheOptionalBackend() {

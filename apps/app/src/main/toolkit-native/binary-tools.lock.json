@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "capstone": "5.0.6",
   "capstoneSha256": "240ebc834c51aae41ca9215d3190cc372fd132b9c5c8aa2d5f19ca0c325e28f9",
-  "sourceSha256": "963ab01de88f9921ad83429bdab4bb71022e4995eef82d0b2aec8e3ad7c96744",
-  "recipeSha256": "24968aeed237b98edb7919fd91664d7a0e328415c6cc8f91d2dfc5b1429670d1",
-  "librarySha256": "d9f598bc665bb24da0d958e001d26b22282146acc74a8b2600ba5837550e417f",
+  "sourceSha256": "736cf5a5608137f937cfd5def3feb86d1192debf10fbe52ac3bff5ff71af5b2c",
+  "recipeSha256": "81382218b2cd4abb5cb8cac1bffede2becf40326972762789b7bcc288bfdc17b",
+  "librarySha256": "4b0951d6526b4d8a10f1be0448755e91e7980808d9c2ed4697ffb83e9973adcb",
   "abi": "arm64-v8a",
   "pageSize": 16384
 }

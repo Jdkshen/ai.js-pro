@@ -36,6 +36,21 @@ class ToolkitZipCryptoTest {
     }
 
     @Test
+    fun aesPasswordsUseUtf8IncludingChineseAndSupplementaryCharacters() {
+        newToolkit()
+        val password = "中文🔑password"
+        File(root, "plain.txt").writeText("unicode password")
+        createZip("unicode.zip", listOf("plain.txt" to "plain.txt"), password = password)
+        val data = rawEntryData(File(root, "unicode.zip"), "plain.txt")
+        val expected = javax.crypto.SecretKeyFactory.getInstance("PBKDF2WithHmacSHA1").generateSecret(
+            javax.crypto.spec.PBEKeySpec(password.toCharArray(), data.copyOfRange(0, 16), 1000, 66 * 8)).encoded
+        org.junit.Assert.assertArrayEquals(expected.copyOfRange(64, 66), data.copyOfRange(16, 18))
+        val read = call("zip_read_bytes", obj("path" to "unicode.zip", "password" to password,
+            "entryPath" to "plain.txt", "byteOffset" to 0, "maxBytes" to 100)).getAsJsonObject("data")
+        assertEquals(ToolkitIo.hex("unicode password".toByteArray()), read.get("hex").asString)
+    }
+
+    @Test
     fun createAesZipAndReadTextBytesTestAndExtract() {
         newToolkit()
         File(root, "plain.txt").writeText("第一行\n第二行\n")

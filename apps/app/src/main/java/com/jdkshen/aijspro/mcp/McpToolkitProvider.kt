@@ -63,11 +63,8 @@ class McpToolkitProvider : ContentProvider() {
     private fun assemble(machine: Int, address: Long, source: String, instructionMode: String): ByteArray {
         val spec = ToolkitAssembler.resolve(machine, instructionMode, address, virtualInput = true, mappedAddress = address)
         val effective = spec.effectiveAddress
-        require(source.isNotEmpty() && source.length <= 65536) { "汇编源码必须为 1..65536 字符" }
-        require(!source.contains('\u0000')) { "汇编源码不能包含 NUL" }
-        require(!Regex("(?m)^\\s*(?:[A-Za-z_.$][A-Za-z0-9_.$]*:\\s*)*\\.(?!inst\\b)[A-Za-z]").containsMatchIn(source)) {
-            "汇编仅接受指令、标签与 .inst"
-        }
+        ToolkitAssemblySource.validate(source)
+        val prepared = ToolkitAssemblySource.forClang(source, spec.instructionSet)
         val target = when (spec.instructionSet) {
             "aarch64" -> "aarch64-linux-android26"
             "arm", "thumb" -> "armv7a-linux-androideabi26"
@@ -81,21 +78,30 @@ class McpToolkitProvider : ContentProvider() {
         require(clang.isFile) { "可选 C/C++ 组件缺少 clang；请运行 aijs-toolchain install cpp" }
         val folder = File(context.cacheDir, "assembler-${ToolkitIo.fresh()}"); require(folder.mkdir())
         val input = File(folder, "patch.S"); val output = File(folder, "patch.elf"); val log = File(folder, "compiler.log")
+        val layout = File(folder, "patch.ld")
         try {
             val syntax = when (spec.instructionSet) {
                 "thumb" -> ".syntax unified\n.thumb\n.type _start, %function\n"
                 "arm" -> ".syntax unified\n.arm\n.type _start, %function\n"
+                "x86", "x86_64" -> ".intel_syntax noprefix\n"
                 else -> ""
             }
-            input.writeText("$syntax.text\n.global _start\n_start:\n$source\n.global _aijs_end\n_aijs_end:\n")
+            input.writeText("$syntax.text\n.global _start\n_start:\n${prepared.source}\n.global _aijs_end\n_aijs_end:\n")
+            // A standalone text segment avoids newer LLD's default image-base subtraction
+            // and PHDR/text overlap at small virtual addresses. This ELF is only an
+            // assembler container; it is never loaded or installed on the device.
+            layout.writeText("PHDRS { code PT_LOAD FLAGS(5); }\nSECTIONS { .text ${ToolkitElf.hex(effective)} : { *(.text .text.*) } :code /DISCARD/ : { *(.comment) *(.note*) *(.ARM.exidx*) *(.ARM.extab*) } }\n")
             val command = mutableListOf(
                 clang.path,
                 "--target=$target",
                 "-nostdlib",
-                "-no-pie",
+                "-static",
                 "-fuse-ld=lld",
                 "-Wl,--build-id=none",
-                "-Wl,-Ttext=${ToolkitElf.hex(effective)}",
+                "-Wl,--no-dynamic-linker",
+                "-Wl,-z,max-page-size=4096",
+                "-Wl,-z,common-page-size=4096",
+                "-Wl,-T,${layout.path}",
                 "-Wl,-e,_start",
             )
             when (spec.instructionSet) {
@@ -103,6 +109,7 @@ class McpToolkitProvider : ContentProvider() {
                 "arm" -> command += listOf("-marm", "-march=armv7-a")
                 "thumb" -> command += listOf("-mthumb", "-march=armv7-a")
             }
+            prepared.absoluteSymbols.forEach { (name, value) -> command += "-Wl,--defsym=$name=${ToolkitElf.hex(value)}" }
             command += listOf(input.path, "-o", output.path)
             val builder = ProcessBuilder(command)
             builder.environment().putAll(env); builder.redirectErrorStream(true); builder.redirectOutput(log)
@@ -129,7 +136,7 @@ class McpToolkitProvider : ContentProvider() {
             val outputOffset = text.offset + textOffset
             require(outputOffset >= 0 && size <= elf.bytes.size - outputOffset) { "汇编结果越界" }
             return elf.bytes.copyOfRange(outputOffset.toInt(), (outputOffset + size).toInt())
-        } finally { input.delete(); output.delete(); log.delete(); folder.delete() }
+        } finally { input.delete(); output.delete(); log.delete(); layout.delete(); folder.delete() }
     }
     override fun query(uri: Uri, p: Array<String>?, s: String?, a: Array<String>?, o: String?): Cursor? = null
     override fun getType(uri: Uri): String? = null

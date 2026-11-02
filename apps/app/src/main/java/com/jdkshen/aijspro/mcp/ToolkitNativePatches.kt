@@ -10,7 +10,8 @@ import java.nio.charset.CodingErrorAction
  *
  * No part of this file depends on MT. ARM/Thumb/x86/x86-64 assembly uses the optional clang
  * component exposed by McpToolkitProvider; AArch64 common instructions have a built-in
- * encoder. The analysis is deliberately local: it does not claim a complete control-flow
+ * encoder. replacementAssembly is gated by [ToolkitAssemblySource] before either backend
+ * sees it. The analysis is deliberately local: it does not claim a complete control-flow
  * graph, relocation fix-up, or function-semantics validation.
  *
  * Integration (central router): call [instructions]/[string], then guard the session bytes
@@ -30,8 +31,6 @@ internal object ToolkitNativePatches {
     private const val MAX_STRING_WINDOW = 4096
     private const val MAX_ASSEMBLY_CHARS = 4096
     private val SUPPORTED_MACHINES = setOf(183, 40, 62, 3)
-    // Reject directives even when they follow one or more labels; only .inst is allowed.
-    private val DIRECTIVE = Regex("(?m)^\\s*(?:[A-Za-z_.$][A-Za-z0-9_.$]*:\\s*)*\\.(?!inst\\b)[A-Za-z]")
 
     /**
      * Plan an instruction patch at the actual virtual address. [assembler] receives
@@ -92,10 +91,16 @@ internal object ToolkitNativePatches {
         require(source.isNotEmpty() && source.length <= MAX_ASSEMBLY_CHARS) {
             "replacementAssembly 必须非空且不超过 $MAX_ASSEMBLY_CHARS 字符"
         }
-        require(!source.contains('\u0000')) { "replacementAssembly 不能包含 NUL" }
-        require(!DIRECTIVE.containsMatchIn(source)) { "汇编仅接受指令、标签与 .inst，不允许文件/宏指令" }
+        // Single source policy shared with McpToolkitProvider's external backend:
+        // no NUL, no preprocessor/file-inclusion directives, only .inst.
+        ToolkitAssemblySource.validate(source)
 
-        val builtin = ToolkitAssembler.tryAssemble(machine, effective, source, spec.instructionSet)
+        val builtin = try { ToolkitAssembler.tryAssemble(machine, effective, source, spec.instructionSet) }
+        catch (failure: IllegalArgumentException) {
+            // A supported mnemonic can still use a valid vector/expression form outside the
+            // mini encoder. The shared source gate has already passed; let clang decide.
+            if(assembler == null) throw failure else null
+        }
         val compiled: ByteArray
         val backend: String
         if (builtin != null) {

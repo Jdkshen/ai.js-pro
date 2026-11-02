@@ -13,8 +13,9 @@ internal object ToolkitIo {
     const val MAX_ENTRY = 64 * 1024 * 1024
     const val MAX_TEXT = 10 * 1024 * 1024
     const val MAX_APK = 512L * 1024 * 1024
+    private val gson = GsonBuilder().serializeNulls().disableHtmlEscaping().create()
     fun json(vararg values: Pair<String, Any?>): JsonObject = JsonObject().apply {
-        values.forEach { (key, value) -> add(key, Gson().toJsonTree(value)) }
+        values.forEach { (key, value) -> add(key, if(value is JsonElement) value else gson.toJsonTree(value)) }
     }
     fun ok(data: JsonElement, actions: JsonArray = JsonArray()) = json(
         "ok" to true, "data" to data, "error" to null, "nextActions" to actions)

@@ -26,10 +26,15 @@ internal class ToolkitResources(bytes: ByteArray) {
     fun find(locator: String, variant: String): Entry {
         require(locator.startsWith("resource:")) { "资源定位符需要 resource: 前缀" }
         val id = parseId(locator.substringAfter(':', locator))
-        val values = table.getEntries(id).asSequence().filter { !it.isNull }.toList()
+        val values = table.getPackages().asSequence().flatMap { it.getEntries(id).asSequence() }.filter { !it.isNull }.toList()
         if (values.isEmpty()) throw ToolkitException("RESOURCE_NOT_FOUND", "资源不存在：$locator")
         return values.firstOrNull { it.resConfig.qualifiers == internalVariant(variant) }
             ?: throw ToolkitException("RESOURCE_VARIANT_NOT_FOUND", "资源配置不存在：$locator / $variant")
+    }
+    fun resolveReference(id: Int, variant: String): Entry? {
+        val values = table.getEntries(id).asSequence().filter { !it.isNull }.toList()
+        return values.firstOrNull { it.resConfig.qualifiers == internalVariant(variant) }
+            ?: values.firstOrNull { it.resConfig.qualifiers.isEmpty() }
     }
     fun xml(entry: Entry): String {
         val output = StringWriter(); val serializer = XMLFactory.newSerializer(output)
@@ -46,19 +51,24 @@ internal class ToolkitResources(bytes: ByteArray) {
         "valueXml" to if (includeXml) xml(entry) else null,
         "targetVersion" to ToolkitIo.version(entry.bytes))
     fun write(entry: Entry, source: String) {
+        require(entry.packageBlock.tableBlock === table) { "系统框架只能用于引用解析，不能作为此 APK 的编辑目标" }
         safeXml(source)
         val element = XMLDocument.load(source).documentElement
         require(element != null) { "缺少资源 XML 元素" }
         require(element.getAttributeValue("name") == entry.name) { "编辑资源时不能更改资源名" }
         val tag = element.name
-        require(describe(source).second == entry.typeName || tag == entry.xmlTag) { "资源类型不匹配" }
-        if (element.childElementsCount > 0 && entry.typeName !in listOf("string", "dimen", "color", "integer", "bool"))
+        require(describe(source).second == entry.typeName) { "资源类型不匹配" }
+        val bag = tag in setOf("style", "array", "string-array", "integer-array", "attr", "plurals", "styleable", "declare-styleable") ||
+            entry.typeName !in setOf("string", "dimen", "color", "integer", "bool") &&
+            (element.childElementsCount > 0 || element.getAttributeValue("format") != null || element.getAttributeValue("parent") != null)
+        if (bag)
             XmlCoder().VALUES_XML.encodeBag(element, entry)
         else XmlCoder().VALUES_XML.encodeScalar(element, entry)
     }
     fun add(packageId: String, variant: String, source: String): Entry {
         safeXml(source)
         val pkg = table.getPackageBlockById(parseId(packageId)) ?: error("资源包不存在")
+        require(pkg.tableBlock === table) { "不能向共享系统框架添加资源" }
         val element = XMLDocument.load(source).documentElement ?: error("缺少资源 XML 元素")
         val name = element.getAttributeValue("name") ?: error("缺少资源名")
         val type = describe(source).second
@@ -89,9 +99,9 @@ internal class ToolkitResources(bytes: ByteArray) {
         }
         fun internalVariant(value: String): String = when(value) {
             "", "default" -> ""
-            else -> value.also { require(it.length <= 256 && it != "*" && !it.contains('/') && !it.contains('\\')) { "需要确切的资源配置名" } }
+            else -> ("-" + value.removePrefix("-")).also { require(it.length in 2..256 && it != "-*" && !it.contains('/') && !it.contains('\\')) { "需要确切的资源配置名" } }
         }
-        fun publicVariant(value: String) = value.ifEmpty { "default" }
+        fun publicVariant(value: String) = value.removePrefix("-").ifEmpty { "default" }
         fun describe(source: String): Pair<String, String> {
             safeXml(source)
             val element = XMLDocument.load(source).documentElement ?: error("缺少资源 XML 元素")
@@ -129,7 +139,7 @@ internal class ToolkitResources(bytes: ByteArray) {
                         val codePoint = try {
                             if (body.startsWith("x", ignoreCase = true)) body.substring(1).toInt(16) else body.toInt()
                         } catch (_: NumberFormatException) { -1 }
-                        if (Character.isValidCodePoint(codePoint) && codePoint > 0) {
+                        if (Character.isValidCodePoint(codePoint) && codePoint >= 128 && codePoint !in 0xd800..0xdfff && codePoint !in 0xfffe..0xffff) {
                             out.appendCodePoint(codePoint); index = semicolon + 1; continue
                         }
                     }

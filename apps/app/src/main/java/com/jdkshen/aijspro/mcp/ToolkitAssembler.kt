@@ -11,6 +11,11 @@ import java.nio.ByteOrder
  * code patches (branches, moves, integer arithmetic, ADR/ADRP, common loads/stores and
  * calls). Anything outside that set returns null so the caller can use the optional clang
  * component. ARM, Thumb, x86 and x86-64 always use the optional clang component.
+ *
+ * Labels are case-sensitive, like the external assembler. A branch to a case-only
+ * variant returns null instead of binding Foo to foo; the external backend then
+ * reports the real (case-sensitive) symbol error. Newlines and semicolons both
+ * delimit statements.
  */
 internal object ToolkitAssembler {
     /** Resolved architecture/mode and the virtual address that must be used as the assembler base. */
@@ -32,6 +37,11 @@ internal object ToolkitAssembler {
         val inst: Long?,
         val line: Int,
     )
+
+    private data class Labels(val exact: Map<String, Long>, val folded: Set<String>)
+
+    /** Internal signal: the source used a case-only variant of a known label. */
+    private class LabelCaseMismatch : RuntimeException()
 
     private const val MAX_INSTRUCTIONS = 4096
     private const val MAX_SOURCE = 65536
@@ -86,11 +96,19 @@ internal object ToolkitAssembler {
      * is not covered by the built-in encoder (the caller may then use clang).
      */
     fun tryAssemble(machine: Int, address: Long, source: String, instructionMode: String): ByteArray? {
+        // Apply the shared policy before either backend sees the text.
+        ToolkitAssemblySource.validate(source)
         if (machine != 183) return null
         require(instructionMode.trim().lowercase() in listOf("auto", "aarch64")) {
             "AArch64 只接受 instructionMode=auto"
         }
-        return assembleAArch64(address, source)
+        return try {
+            assembleAArch64(address, source)
+        } catch (_: LabelCaseMismatch) {
+            // The spelling only differs by case from a known label. Never alias it;
+            // let the case-sensitive external assembler handle (and report) it.
+            null
+        }
     }
 
     /** Architecture-specific NOP bytes for padding. */
@@ -104,7 +122,7 @@ internal object ToolkitAssembler {
             }
             "arm" -> {
                 require(count % 4 == 0) { "ARM NOP 填充必须 4 字节对齐" }
-                val one = byteArrayOf(0x00, 0xf0, 0x20, 0xe3.toByte())
+                val one = byteArrayOf(0x00, 0xf0.toByte(), 0x20, 0xe3.toByte())
                 ByteArray(count) { one[it % 4] }
             }
             "thumb" -> {
@@ -141,12 +159,13 @@ internal object ToolkitAssembler {
         }
         val size = address - base
         require(size in 0L..MAX_SOURCE.toLong()) { "汇编结果过大" }
+        val table = Labels(labels, labels.keys.mapTo(HashSet<String>()) { it.lowercase() })
         val output = ByteBuffer.allocate(size.toInt()).order(ByteOrder.LITTLE_ENDIAN)
         address = base
         for (item in items) {
             val mnemonic = item.mnemonic ?: continue
             val word = if (mnemonic == ".inst") item.inst!!.toInt()
-            else encode(mnemonic, item.operands, address, labels, item.line) ?: return null
+            else encode(mnemonic, item.operands, address, table, item.line) ?: return null
             output.putInt(word)
             address += 4
         }
@@ -158,38 +177,46 @@ internal object ToolkitAssembler {
         val items = ArrayList<Item>()
         var instructions = 0
         source.lineSequence().forEachIndexed { index, raw ->
-            var line = raw.substringBefore("//").trim()
-            if (line.isEmpty()) return@forEachIndexed
-            val labels = ArrayList<String>()
-            while (true) {
-                val match = LABEL_PREFIX.matchEntire(line) ?: break
-                labels.add(match.groupValues[1].lowercase())
-                line = match.groupValues[2].trim()
-                if (line.isEmpty()) break
+            val code = raw.substringBefore("//")
+            // The clang integrated assembler treats ';' as a statement separator
+            // for these targets; the mini assembler mirrors that. Strings and block
+            // comments are rejected by ToolkitAssemblySource, so splitting here is
+            // unambiguous.
+            for (statement in code.split(';')) {
+                val line = statement.trim()
+                if (line.isEmpty()) continue
+                val labels = ArrayList<String>()
+                var rest = line
+                while (true) {
+                    val match = LABEL_PREFIX.matchEntire(rest) ?: break
+                    labels.add(match.groupValues[1])
+                    rest = match.groupValues[2].trim()
+                    if (rest.isEmpty()) break
+                }
+                if (rest.isEmpty()) {
+                    items.add(Item(labels, null, emptyList(), null, index + 1))
+                    continue
+                }
+                if (rest.startsWith(".")) {
+                    val parts = rest.split(Regex("\\s+"), limit = 2)
+                    require(parts[0].equals(".inst", true)) { "汇编第 ${index + 1} 行：仅接受指令、标签与 .inst" }
+                    val value = parseNumber(parts.getOrNull(1)?.trim().orEmpty())
+                    require(value in 0L..0xffffffffL) { "汇编第 ${index + 1} 行：.inst 超出 32 位" }
+                    items.add(Item(labels, ".inst", emptyList(), value, index + 1))
+                } else {
+                    val parts = rest.split(Regex("\\s+"), limit = 2)
+                    val mnemonic = parts[0].lowercase()
+                    val operands = if (parts.size > 1) splitOperands(parts[1]) else emptyList()
+                    items.add(Item(labels, mnemonic, operands, null, index + 1))
+                }
+                instructions++
+                require(instructions <= MAX_INSTRUCTIONS) { "汇编指令太多" }
             }
-            if (line.isEmpty()) {
-                items.add(Item(labels, null, emptyList(), null, index + 1))
-                return@forEachIndexed
-            }
-            if (line.startsWith(".")) {
-                val parts = line.split(Regex("\\s+"), limit = 2)
-                require(parts[0].equals(".inst", true)) { "汇编第 ${index + 1} 行：仅接受指令、标签与 .inst" }
-                val value = parseNumber(parts.getOrNull(1)?.trim().orEmpty())
-                require(value in 0L..0xffffffffL) { "汇编第 ${index + 1} 行：.inst 超出 32 位" }
-                items.add(Item(labels, ".inst", emptyList(), value, index + 1))
-            } else {
-                val parts = line.split(Regex("\\s+"), limit = 2)
-                val mnemonic = parts[0].lowercase()
-                val operands = if (parts.size > 1) splitOperands(parts[1]) else emptyList()
-                items.add(Item(labels, mnemonic, operands, null, index + 1))
-            }
-            instructions++
-            require(instructions <= MAX_INSTRUCTIONS) { "汇编指令太多" }
         }
         return items
     }
 
-    private fun encode(mnemonic: String, operands: List<String>, address: Long, labels: Map<String, Long>, line: Int): Int? {
+    private fun encode(mnemonic: String, operands: List<String>, address: Long, labels: Labels, line: Int): Int? {
         fun fail(message: String): Nothing = throw IllegalArgumentException("汇编第 $line 行：$message")
         fun regAt(index: Int, allowSp: Boolean = false, allowZero: Boolean = true): Reg? {
             val token = operands.getOrNull(index) ?: return null
@@ -457,8 +484,12 @@ internal object ToolkitAssembler {
                     "strh" -> 0x79000000L to 2L
                     else -> 0xb9800000L to 4L
                 }
-                if (mnemonic in listOf("ldrb", "strb", "ldrh", "strh", "ldrsw") && rt.is64) {
-                    fail("$mnemonic 目标必须是 32 位寄存器")
+                if (mnemonic == "ldrsw") {
+                    // LDRSW sign-extends into an X register; Wt is not encodable.
+                    if (!rt.is64) return null
+                } else if (rt.is64) {
+                    // LDRB/STRB/LDRH/STRH use W registers; X registers are not encodable.
+                    if (mnemonic in listOf("ldrb", "strb", "ldrh", "strh")) return null
                 }
                 if (offset % scale != 0L) return null
                 val imm = offset / scale
@@ -498,6 +529,9 @@ internal object ToolkitAssembler {
 
     private fun moveImmediate(reg: Reg, value: Long): Int? {
         if (reg.sp) return null
+        // The external assembler rejects a 32-bit immediate that does not fit the
+        // register. Masking it here would silently encode a different value.
+        if (!reg.is64 && value !in -0x80000000L..0xffffffffL) return null
         val mask = if (reg.is64) -1L else 0xffffffffL
         val v = value and mask
         val chunk = singleChunk(v, reg.is64)
@@ -543,11 +577,17 @@ internal object ToolkitAssembler {
         return Reg(number, match.groupValues[1] == "x")
     }
 
-    private fun parseTarget(token: String, labels: Map<String, Long>): Long? {
+    private fun parseTarget(token: String, labels: Labels): Long? {
         val value = token.trim()
-        labels[value.lowercase()]?.let { return it }
+        labels.exact[value]?.let { return it }
         val body = if (value.startsWith("#")) value.substring(1) else value
-        return try { parseNumber(body) } catch (_: Exception) { null }
+        val numeric = try { parseNumber(body) } catch (_: Exception) { null }
+        if (numeric != null) return numeric
+        // A case-only miss is ambiguous for a case-insensitive helper but not for
+        // the assembler. Refuse to guess; tryAssemble turns this into null so the
+        // case-sensitive external backend decides.
+        if (labels.folded.contains(value.lowercase())) throw LabelCaseMismatch()
+        return null
     }
 
     private fun immediate(token: String): Long? {

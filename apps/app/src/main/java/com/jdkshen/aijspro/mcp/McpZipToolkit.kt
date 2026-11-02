@@ -1614,9 +1614,9 @@ internal class McpZipToolkit(private val root: File) {
             if (entry.encrypted) {
                 return ToolkitZipCrypto.openEntry(file, entry.name, nameCharset, password, verifyOnClose)
             }
-            val zipFile = zip ?: throw IOException(
-                "ZIP 含加密条目，当前 JVM/系统 ZIP 实现拒绝打开；请先解密或移除加密条目后再读取",
-            )
+            // Some ZIP implementations reject the whole central directory if any member is
+            // encrypted. zip4j can also read the plain members of such mixed archives.
+            val zipFile = zip ?: return ToolkitZipCrypto.openEntry(file, entry.name, nameCharset, password, verifyOnClose)
             val ze = zipEntries[entry.name]
                 ?: throw IOException("ZIP 条目 '${entry.name}' 无法在目录中定位")
             return try {

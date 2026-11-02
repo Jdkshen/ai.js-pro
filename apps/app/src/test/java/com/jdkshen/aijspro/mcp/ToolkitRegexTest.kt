@@ -40,7 +40,7 @@ class ToolkitRegexTest {
     @Test
     fun catastrophicBacktrackingHitsTheBudgetInsteadOfHanging() {
         val pattern = ToolkitRegex.compile("(a+)+$")
-        val input = "a".repeat(40) + "!"
+        val input = "a".repeat(20000) + "!"
         val started = System.nanoTime()
         try {
             ToolkitRegex.find(ToolkitRegex.matcher(pattern, input, 50))

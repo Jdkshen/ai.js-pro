@@ -100,24 +100,53 @@ class McpApkToolkitTest {
         val read = invoke("apk_read_bytes","locator" to locator,"byteOffset" to 128,"maxBytes" to 4)
         assertEquals("C0035FD6",read.getAsJsonObject("byteWindow").tString("hex"))
     }
-    @Test fun unsignedBuildIsANewArchiveWithAlignedStoredNativeAndResources() {
+    @Test fun unsignedBuildIsANewArchiveAndPreservesCompressionMethods() {
         val hash = ToolkitIo.sha(source)
         invoke("apk_build","outputName" to "result.apk","overwrite" to false,"sign" to false)
         assertEquals(hash,ToolkitIo.sha(source))
         val output = File(home,"result.apk")
-        ZipFile(output).use { zip -> assertNull(zip.getEntry("META-INF/ORIGINAL.SF")); assertEquals(ZipEntry.STORED,zip.getEntry("lib/arm64-v8a/libfixture.so").method) }
+        ZipFile(output).use { zip -> assertNull(zip.getEntry("META-INF/ORIGINAL.SF")); assertEquals(ZipEntry.DEFLATED,zip.getEntry("lib/arm64-v8a/libfixture.so").method) }
         val bytes = output.readBytes(); val b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         var p = 0
         while(p + 30 < bytes.size && b.getInt(p) == 0x04034b50) {
             val length = b.getShort(p+26).toInt() and 65535; val extra = b.getShort(p+28).toInt() and 65535; val name = String(bytes,p+30,length,Charsets.UTF_8)
             val start = p+30+length+extra
-            if(name.endsWith(".so")) assertEquals(0,start % 16384)
-            if(name == "resources.arsc") assertEquals(0,start % 4)
+            if(b.getShort(p+8).toInt() == ZipEntry.STORED) {
+                if(name.endsWith(".so")) assertEquals(0,start % 16384)
+                if(name == "resources.arsc") assertEquals(0,start % 4)
+            }
             val compressed = b.getInt(p+18)
             if(b.getShort(p+6).toInt() and 8 != 0) break
             p = start + compressed
         }
         fails { invoke("apk_build","outputName" to "fixture.apk","overwrite" to true,"sign" to false) }
+    }
+    @Test fun summaryCfgHasEmptyGraphsAndKeepsObservedCounts() {
+        val result = invoke("apk_native_analyze_control_flow", "locator" to "zip_entry:lib/arm64-v8a/libfixture.so",
+            "addressKind" to "virtual", "address" to "0x10080", "outputMode" to "summary",
+            "maxAnalysisBytes" to 16, "maxBlocks" to 4096, "maxInstructions" to 10000)
+        for(key in listOf("blocks", "edges", "externalFlows", "unresolvedFlows")) assertEquals(0, result.getAsJsonArray(key).size())
+        assertTrue(result.getAsJsonObject("analysisSummary").get("instructionCount").asInt > 0)
+    }
+    @Test fun ordinary80MiBImportsCanBeCheckedAndBuiltWithoutWholeEntryAnalysis() {
+        val large = File(home, "large.bin")
+        java.io.RandomAccessFile(large, "rw").use { it.setLength(80L * 1024 * 1024) }
+        invoke("apk_copy_entry", "direction" to "local_to_edit_session", "locator" to "zip_entry:assets/large.bin",
+            "localPath" to large.name, "overwrite" to false)
+        val tail = invoke("apk_read_bytes", "locator" to "zip_entry:assets/large.bin", "byteOffset" to large.length() - 16, "maxBytes" to 16)
+        assertEquals("00".repeat(16), tail.getAsJsonObject("byteWindow").tString("hex"))
+        assertTrue(invoke("apk_session_check", "runBuildChecks" to true).get("valid").asBoolean)
+        invoke("apk_build", "outputName" to "large-built.apk", "sign" to false)
+        ZipFile(File(home,"large-built.apk")).use { assertEquals(large.length(), it.getEntry("assets/large.bin").size) }
+    }
+    @Test fun nativeReferenceResultsHaveTheRefsAliasAndItemsSupport500Entries() {
+        val locator = "zip_entry:lib/arm64-v8a/libfixture.so"
+        val refs = invoke("apk_native_xref", "locator" to locator, "addressKind" to "virtual", "address" to "0x1008c",
+            "instructionMode" to "auto", "scanKind" to "code", "referenceKinds" to listOf("jump"), "maxScanBytes" to 512, "limit" to 50)
+        assertEquals(refs.getAsJsonArray("items"), refs.getAsJsonArray("refs"))
+        assertTrue(refs.getAsJsonArray("refs").size() > 0)
+        val items = invoke("apk_native_list_items", "locator" to locator, "itemKind" to "segments", "namePrefix" to "", "limit" to 500)
+        assertEquals(500, items.getAsJsonObject("pagination").get("limitMax").asInt)
     }
     @Test fun outsidePathsAndUnsafeArchiveNamesAreRejected() {
         fails { tools.call("apk_workspace_open",args("path" to "../outside.apk","temporary" to true)) }

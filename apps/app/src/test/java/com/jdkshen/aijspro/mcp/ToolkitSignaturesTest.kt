@@ -49,7 +49,7 @@ class ToolkitSignaturesTest {
         assertEquals(digest("SHA-256", certificate), metadata.get("sha256").asString)
         assertEquals(digest("SHA-1", certificate), metadata.get("sha1").asString)
         assertEquals(digest("MD5", certificate), metadata.get("md5").asString)
-        assertEquals(CRC32().apply { update(certificate) }.value, metadata.get("crc32").asLong)
+        assertEquals(CRC32().apply { update(certificate) }.value.toString(16).padStart(8, '0'), metadata.get("crc32").asString)
         assertEquals("4a534f4e", metadata.get("serialNumberHex").asString)
         assertTrue(metadata.get("subject").asString.contains("CN=AI.js Pro MCP Parity Test"))
         assertEquals(metadata.get("subject").asString, metadata.get("issuer").asString)
@@ -128,9 +128,9 @@ class ToolkitSignaturesTest {
     }
 
     private fun signedData(certificate: ByteArray, v3: Boolean): ByteArray {
-        val digestsAndCertificates = lengthPrefixed(ByteArray(0), certificate)
-        return if (v3) digestsAndCertificates + uint32(0) + uint32(Int.MAX_VALUE) +
-            lengthPrefixed(ByteArray(0)) else digestsAndCertificates
+        val digestsAndCertificates = lengthPrefixed(ByteArray(0)) + lengthPrefixed(lengthPrefixed(certificate))
+        val sdk = if(v3) uint32(0) + uint32(Int.MAX_VALUE) else ByteArray(0)
+        return lengthPrefixed(digestsAndCertificates + sdk + lengthPrefixed(ByteArray(0)))
     }
 
     private fun pair(id: Int, value: ByteArray): ByteArray =

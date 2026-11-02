@@ -137,6 +137,10 @@ final class ApkSignerV1 {
         int capacity = MAX_LINE_LENGTH;
         while (true) {
             int take = Math.min(capacity, bytes.length - position);
+            // Continuations may be shorter than 72 bytes; keep each physical line valid UTF-8.
+            if (position + take < bytes.length) {
+                while (take > 0 && (bytes[position + take] & 0xc0) == 0x80) take--;
+            }
             out.write(bytes, position, take);
             out.write('\r');
             out.write('\n');

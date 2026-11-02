@@ -8,7 +8,7 @@ internal object ToolkitTextWindow {
         val text = ToolkitTextEdits.normalize(source)
         val starts = arrayListOf(0)
         text.forEachIndexed { index, char -> if(char == '\n') starts.add(index + 1) }
-        val line = args.tInt("startLine", 0, 0, starts.size)
+        val line = args.tInt("startLine", 0, 0, starts.lastIndex)
         val begin = if(line < starts.size) starts[line] else text.length
         val lineEnd = if(line + 1 < starts.size) starts[line + 1] - 1 else text.length
         val columns = text.codePointCount(begin, lineEnd.coerceAtLeast(begin))

@@ -8,6 +8,21 @@ import java.nio.ByteOrder
 class ToolkitNativePatchesTest {
     private fun args(vararg values: Pair<String, Any?>) = ToolkitIo.json(*values)
 
+    @Test fun validOperandsOutsideTheMiniEncoderReachTheExternalBackend() {
+        var called = false
+        val patch = ToolkitNativePatches.instructions(ToolkitElf(aarch64Elf()), args(
+            "addressKind" to "virtual", "address" to "0x10080", "instructionMode" to "auto",
+            "expectedHex" to "1F2003D5", "replacementAssembly" to "ldr q0, [x1]", "paddingMode" to "none"
+        ), { machine, address, source, mode ->
+            assertEquals(183, machine); assertEquals(0x10080L, address)
+            assertEquals("ldr q0, [x1]", source); assertEquals("aarch64", mode)
+            called = true; ToolkitIo.unhex("2000C03D")
+        })
+        assertTrue(called)
+        assertEquals("external", patch.metadata.tString("backend"))
+        assertEquals("2000C03D", ToolkitIo.hex(patch.replacement))
+    }
+
     private fun fails(block: () -> Unit) {
         try {
             block()
@@ -43,6 +58,61 @@ class ToolkitNativePatchesTest {
         assertEquals("aarch64", patch.metadata.tString("instructionSet"))
         assertEquals("builtin", patch.metadata.tString("backend"))
         assertEquals(4, patch.metadata.get("bytesPatched").asInt)
+    }
+
+    @Test fun semicolonSeparatedSourceIsAcceptedByThePatchPlanner() {
+        val elf = ToolkitElf(aarch64Elf(intArrayOf(0xd503201f.toInt(), 0xd503201f.toInt())))
+        val patch = ToolkitNativePatches.instructions(elf, args(
+            "addressKind" to "virtual",
+            "address" to "0x10080",
+            "instructionMode" to "auto",
+            "expectedHex" to "1F2003D51F2003D5",
+            "replacementAssembly" to "nop; ret",
+            "paddingMode" to "none",
+        ), null)
+        assertEquals("1F2003D5C0035FD6", ToolkitIo.hex(patch.replacement))
+        assertEquals("builtin", patch.metadata.tString("backend"))
+    }
+
+    @Test fun caseOnlyLabelMismatchIsDelegatedInsteadOfAliased() {
+        val elf = ToolkitElf(aarch64Elf())
+        var delegated = false
+        val patch = ToolkitNativePatches.instructions(elf, args(
+            "addressKind" to "virtual",
+            "address" to "0x10080",
+            "instructionMode" to "auto",
+            "expectedHex" to "1F2003D5",
+            "replacementAssembly" to "Foo: nop; b foo",
+            "paddingMode" to "none",
+        )) { _, _, _, _ ->
+            delegated = true
+            byteArrayOf(0xC0.toByte(), 0x03, 0x5F, 0xD6.toByte())
+        }
+        assertTrue(delegated)
+        assertEquals("external", patch.metadata.tString("backend"))
+    }
+
+    @Test fun directiveAndPreprocessorBypassesAreRejectedByThePatchPlanner() {
+        val elf = ToolkitElf(aarch64Elf())
+        listOf(
+            "nop; .incbin \"payload.bin\"",
+            "label: .include \"payload.s\"",
+            "label : .include \"payload.s\"",
+            "nop; #include \"payload.h\"",
+            "nop /* hide */; .incbin \"payload.bin\"",
+            ".inst 0xD503201F; .incbin \"payload.bin\"",
+        ).forEach { source ->
+            failsWithMessage("汇编") {
+                ToolkitNativePatches.instructions(elf, args(
+                    "addressKind" to "virtual",
+                    "address" to "0x10080",
+                    "instructionMode" to "auto",
+                    "expectedHex" to "1F2003D5",
+                    "replacementAssembly" to source,
+                    "paddingMode" to "none",
+                ), null)
+            }
+        }
     }
 
     @Test fun nopPaddingIsCountedAndNoGrowthIsRejected() {

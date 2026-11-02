@@ -136,10 +136,14 @@ internal class ToolkitElf(val bytes: ByteArray) {
             require(stride >= (if (wide) 16 else 8) && section.size / stride <= 300000)
             (0 until (section.size / stride).toInt()).map { index ->
                 val p = (section.offset + index * stride).toInt(); val info = word(p + if (wide) 8 else 4)
-                ToolkitIo.json("section" to section.name, "address" to hex(word(p)), "symbolIndex" to if (wide) info ushr 32 else info ushr 8, "type" to if (wide) info and 0xffffffffL else info and 255,
+                val symbolIndex = if (wide) info ushr 32 else info ushr 8
+                val symbol = relocationSymbol(section.link, symbolIndex)
+                ToolkitIo.json("section" to section.name, "address" to hex(word(p)), "symbolIndex" to symbolIndex,
+                    "name" to symbol?.name, "symbolAddress" to symbol?.address?.let(::hex), "symbolDefined" to symbol?.let { it.section != 0 },
+                    "type" to if (wide) info and 0xffffffffL else info and 255,
                     "addend" to if (section.type == 4L) (if (wide) buffer.getLong(p + 16) else buffer.getInt(p + 8).toLong()) else null)
             }
-        }
+        }.filter { prefix.isEmpty() || it.get("name")?.takeUnless { value -> value.isJsonNull }?.asString?.startsWith(prefix) == true }
         else -> throw IllegalArgumentException("不支持的 ELF 列表：$kind")
     }
     fun strings(max: Int): List<JsonObject> {
@@ -221,9 +225,9 @@ internal class ToolkitElf(val bytes: ByteArray) {
     fun instructionJson(instruction: Instruction) = ToolkitIo.json("address" to hex(instruction.address), "fileOffset" to instruction.offset,
         "hex" to instruction.hex, "mnemonic" to instruction.mnemonic, "operands" to instruction.operands,
         "target" to instruction.target?.let(::hex), "referenceKind" to instruction.kind, "decoded" to instruction.decoded, "size" to instruction.size)
-    fun xref(args: JsonObject): JsonObject {
+    fun xref(args: JsonObject, resultLimit: Int = args.tInt("limit", 50, 1, 200)): JsonObject {
         val target = address(args); val max = args.tInt("maxScanBytes", 1048576, 4, 8 * 1024 * 1024)
-        val limit = args.tInt("limit", 50, 1, 200); val kind = args.tString("scanKind", "both")
+        val limit = resultLimit.also { require(it in 1..10001) }; val kind = args.tString("scanKind", "both")
         require(kind in listOf("code", "data", "both"))
         val allowed = args.getAsJsonArray("referenceKinds")?.map { it.asString } ?: listOf("call", "jump", "data", "unknown")
         val result = ArrayList<JsonObject>(); val dataByAddress = HashMap<Long, JsonObject>()
@@ -250,11 +254,13 @@ internal class ToolkitElf(val bytes: ByteArray) {
                     scanned += stride
                     if (relocationType == 0L) continue
                     val symbol = relocationSymbol(section.link, symbolIndex)
+                    val family = relocationFamily(relocationType) ?: continue
                     val slotValue = if (addend == null) relocationSlotValue(slot, signed = symbolIndex != 0L) else null
                     val appliedAddend = addend ?: slotValue
                     val referenced = when {
-                        symbolIndex == 0L -> appliedAddend
-                        symbol != null && symbol.section != 0 && appliedAddend != null -> symbol.address + appliedAddend
+                        family == "relative" && symbolIndex == 0L -> appliedAddend
+                        family == "symbol" && symbol != null && symbol.section != 0 -> symbol.address
+                        family == "absolute" && symbol != null && symbol.section != 0 && appliedAddend != null -> symbol.address + appliedAddend
                         else -> null
                     }
                     if (referenced == null || referenced != target) continue
@@ -386,24 +392,52 @@ internal class ToolkitElf(val bytes: ByteArray) {
         }
         else -> "type-$type"
     }
+    // Only relocation formulas that identify a static target are eligible for data xrefs.
+    // PC-relative instructions, TLS, IFUNC and architecture-specific encodings need analysis
+    // beyond adding a symbol and an addend; do not present those as confirmed references.
+    private fun relocationFamily(type: Long): String? = when (machine) {
+        183 -> when(type) { 257L, 258L -> "absolute"; 1025L, 1026L -> "symbol"; 1027L -> "relative"; else -> null }
+        40 -> when(type) { 2L -> "absolute"; 21L, 22L -> "symbol"; 23L -> "relative"; else -> null }
+        62 -> when(type) { 1L, 10L, 11L -> "absolute"; 6L, 7L -> "symbol"; 8L -> "relative"; else -> null }
+        3 -> when(type) { 1L -> "absolute"; 6L, 7L -> "symbol"; 8L -> "relative"; else -> null }
+        else -> null
+    }
     fun cfg(args: JsonObject): JsonObject {
-        var start = address(args); requireCode(start)
+        val outputMode = args.tString("outputMode", "full"); require(outputMode in listOf("full", "summary")) { "outputMode必须为full或summary" }
+        var start = address(args)
+        val armSpec = if(machine == 40) ToolkitAssembler.resolve(machine, args.tString("instructionMode", "auto"), start,
+            virtualInput = args.tString("addressKind") == "virtual", mappedAddress = start) else null
+        if(armSpec != null) start = armSpec.effectiveAddress
+        requireCode(start)
         val symbol = symbols.filter { it.type == 2 && it.section != 0 && start >= it.address && start - it.address < it.size }.minByOrNull { it.size }
         if (symbol != null) start = symbol.address
         val budget = args.tInt("maxAnalysisBytes", 4096, 4, 65536); val end = start + minOf(budget.toLong(), symbol?.size ?: budget.toLong())
-        val maxBlocks = args.tInt("maxBlocks", 128, 1, 512); val maxInstructions = args.tInt("maxInstructions", 2048, 1, 16384)
-        val decoded=if(ToolkitNative.available) instructions(args.deepCopy().apply { addProperty("addressKind","virtual");addProperty("address",hex(start));addProperty("maxBytes",budget);addProperty("maxInstructions",16384);addProperty("stopAtSymbolBoundary",true) }).associateBy { it.address } else null
+        val maxBlocks = args.tInt("maxBlocks", 128, 1, 4096); val maxInstructions = args.tInt("maxInstructions", 2048, 1, 16384)
+        val decoded=if(ToolkitNative.available) instructions(args.deepCopy().apply { addProperty("addressKind","virtual");addProperty("address",hex(start));addProperty("maxBytes",budget);addProperty("maxInstructions",16384);addProperty("stopAtSymbolBoundary",true); armSpec?.let { addProperty("instructionMode", it.instructionSet) } }).associateBy { it.address } else null
         val queue = ArrayDeque<Long>(); queue.add(start); val seen = HashSet<Long>(); val blocks = ArrayList<JsonObject>(); val edges = ArrayList<JsonObject>()
+        val external = ArrayList<JsonObject>(); val unresolved = ArrayList<JsonObject>(); val decodedAddresses = HashSet<Long>()
         var count = 0; var partial = false
         while (queue.isNotEmpty() && blocks.size < maxBlocks && count < maxInstructions) {
             val begin = queue.removeFirst(); if (!seen.add(begin) || begin < start || begin >= end) continue
             var v = begin; val instructions = ArrayList<JsonObject>()
             while (v < end && count < maxInstructions) {
-                val p = fileOffset(v) ?: break; if (p + 4 > bytes.size) break
-                val instruction = if(decoded!=null) decoded[v] ?: break else decode(v, p.toInt()); instructions.add(instructionJson(instruction)); count++
+                val p = fileOffset(v) ?: break
+                if(decoded == null && p + 4 > bytes.size) break
+                val instruction = if(decoded!=null) decoded[v] ?: break else decode(v, p.toInt())
+                if(!decodedAddresses.add(v)) {
+                    edges.add(ToolkitIo.json("from" to hex(begin), "to" to hex(v), "kind" to "fallthrough")); break
+                }
+                instructions.add(instructionJson(instruction)); count++
                 if (!instruction.decoded) { partial = true; break }
+                if(instruction.kind == "call") {
+                    if(instruction.target != null) external.add(ToolkitIo.json("from" to hex(v), "to" to hex(instruction.target), "kind" to "call"))
+                    else unresolved.add(ToolkitIo.json("from" to hex(v), "kind" to "indirect_call"))
+                }
                 if (instruction.kind == "jump") {
-                    instruction.target?.let { target -> edges.add(ToolkitIo.json("from" to hex(begin), "to" to hex(target), "kind" to "branch")); if (target in start until end) queue.add(target) }
+                    instruction.target?.let { target ->
+                        edges.add(ToolkitIo.json("from" to hex(begin), "to" to hex(target), "kind" to "branch"))
+                        if (target in start until end) queue.add(target) else external.add(ToolkitIo.json("from" to hex(v), "to" to hex(target), "kind" to "branch"))
+                    } ?: unresolved.add(ToolkitIo.json("from" to hex(v), "kind" to "indirect_branch"))
                     if (instruction.conditional && v + instruction.size < end) { edges.add(ToolkitIo.json("from" to hex(begin), "to" to hex(v + instruction.size), "kind" to "fallthrough")); queue.add(v + instruction.size) }
                     break
                 }
@@ -411,10 +445,16 @@ internal class ToolkitElf(val bytes: ByteArray) {
                 v += instruction.size
                 if (v in seen) break
             }
-            blocks.add(ToolkitIo.json("address" to hex(begin), "instructions" to if (args.tString("outputMode", "full") == "full") instructions else emptyList<JsonObject>(), "instructionCount" to instructions.size))
+            blocks.add(ToolkitIo.json("address" to hex(begin), "instructions" to instructions, "instructionCount" to instructions.size))
         }
         partial = partial || queue.isNotEmpty() || count >= maxInstructions
-        return ToolkitIo.json("functionStart" to hex(start), "symbol" to symbol?.name, "blocks" to blocks, "edges" to edges,
+        val summary = ToolkitIo.json("blockCount" to blocks.size, "edgeCount" to edges.size, "instructionCount" to count,
+            "decodedByteCount" to decodedAddresses.sumOf { decoded?.get(it)?.size?.toLong() ?: 4L },
+            "externalFlowCount" to external.size, "unresolvedFlowCount" to unresolved.size)
+        return ToolkitIo.json("functionStart" to hex(start), "symbol" to symbol?.name, "outputMode" to outputMode,
+            "blocks" to if(outputMode == "full") blocks else emptyList<JsonObject>(), "edges" to if(outputMode == "full") edges else emptyList<JsonObject>(),
+            "externalFlows" to if(outputMode == "full") external else emptyList<JsonObject>(), "unresolvedFlows" to if(outputMode == "full") unresolved else emptyList<JsonObject>(),
+            "analysisSummary" to summary, "observedGraphSummary" to summary,
             "instructionCount" to count, "truncated" to partial, "complete" to false, "note" to "有界直接控制流；遇到未解码指令停止该路径，间接分支不猜测")
     }
     companion object {

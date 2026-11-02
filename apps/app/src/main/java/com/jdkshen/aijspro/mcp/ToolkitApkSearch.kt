@@ -49,7 +49,7 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
             }
             copy.addProperty("searchScope", scope)
             val hit = copy.deepCopy().apply { remove("locator"); addProperty("kind", matchKind); addProperty("matchKind", matchKind) }
-            val windowStart = if(snippet == 0) 0 else (at - snippet / 2).coerceAtLeast(0).let { if(it > 0 && Character.isLowSurrogate(text[it])) it - 1 else it }
+            val windowStart = if(snippet == 0) 0 else (at - snippet / 2).coerceAtLeast(0).let { if(it > 0 && it < text.length && Character.isLowSurrogate(text[it])) it - 1 else it }
             val windowEnd = if(snippet == 0) windowStart else text.offsetByCodePoints(windowStart,
                 minOf(snippet, text.codePointCount(windowStart, text.length)))
             if(snippet > 0) {
@@ -57,8 +57,9 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
                 copy.addProperty("snippet", preview); hit.addProperty("snippet", preview)
             }
             val span = if(offsets) {
-                ToolkitIo.json("text" to if(snippet == 0) text.substring(0, text.offsetByCodePoints(0, minOf(1000, text.codePointCount(0, text.length)))) else text.substring(windowStart, windowEnd),
-                    "textStartOffset" to windowStart, "textTruncated" to (windowStart > 0 || windowEnd < text.length), "start" to at, "end" to end)
+                val displayEnd = if(snippet == 0) text.offsetByCodePoints(0, minOf(1000, text.codePointCount(0, text.length))) else windowEnd
+                ToolkitIo.json("text" to text.substring(windowStart, displayEnd),
+                    "textStartOffset" to windowStart, "textTruncated" to (windowStart > 0 || displayEnd < text.length), "start" to at, "end" to end)
             } else null
             if(span != null) { hit.add("matchOffsets", span); copy.add("matchOffsets", span); copy.addProperty("matchOffset", at) }
             val existing = delivered[identity]
@@ -179,9 +180,10 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
                             "xrefAddress" to fileOffset?.let { ToolkitElf.hex(it) })
                         item.add("nativeLocation", location)
                         val kind = if(target == "native_symbols") "native_symbol" else "native_string"
-                        val decoded = if(target == "native_symbols" && source.has("name")) ToolkitNative.demangle(source.tString("name")) else null
+                        val name = source.get("name")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                        val decoded = if(target == "native_symbols" && name.isNotEmpty()) ToolkitNative.demangle(name) else null
                         if(decoded != null) { item.addProperty("demangledName", decoded); location.addProperty("demangledName", decoded) }
-                        add(item, source.get("value")?.asString ?: source.tString("name", ""), target, kind)
+                        add(item, source.get("value")?.takeUnless { it.isJsonNull }?.asString ?: name, target, kind)
                         if(decoded != null) add(item, decoded, target, kind)
                     }
                 } catch(failure: Exception) { partial = true; skipped.add(ToolkitIo.json("scope" to target, "locator" to "zip_entry:$path", "message" to failure.message)) }

@@ -4,10 +4,12 @@
     "additionalProperties": false,
     "properties": {
       "path": {
-        "type": "string"
+        "type": "string",
+        "description": "工具目录内的 APK 路径；已有 APK 上下文用 aijs://current-apk 取回（没有上下文时先按实际路径打开）；已保存工作区用 aijs://workspace/<workspaceId> 且 temporary=false。公开写法只使用 aijs://，旧 URI 仅作输入兼容。"
       },
       "temporary": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "true 为一次性临时工作区；打开已保存工作区必须为 false。"
       }
     },
     "required": [
@@ -59,7 +61,10 @@
         "type": "string"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+        "description": "本页最多1000项，后续用apk_continue；最大值见返回pagination.limitMax。"
       }
     },
     "required": [
@@ -82,6 +87,7 @@
       },
       "target": {
         "type": "string",
+        "description": "搜索范围。overview 覆盖 ZIP 路径、AXML 文本、资源名/值和 DEX（类/字段/方法/字符串）；资源文件路径用 resource_table_file_paths，native 用 native_symbols/native_strings；files 搜索 ZIP 路径及解码后的 AXML；smali 只支持 contains。",
         "enum": [
           "overview",
           "files",
@@ -97,36 +103,47 @@
         ]
       },
       "query": {
-        "type": "string"
+        "type": "string",
+        "maxLength": 16384
       },
       "queryType": {
         "type": "string",
+        "description": "regex 使用 Java java.util.regex（支持环视/反向引用），受时间/字符访问预算限制。",
         "enum": [
           "literal",
           "regex"
         ]
       },
       "caseSensitive": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "false 时使用 Unicode 不区分大小写匹配。"
       },
       "matchMode": {
         "type": "string",
+        "description": "contains 为子串/正则查找；exact 要求整个候选文本匹配。smali 不支持 exact。",
         "enum": [
           "contains",
           "exact"
         ]
       },
       "prefix": {
-        "type": "string"
+        "type": "string",
+        "description": "按目标类型过滤候选：DEX 可用 Java 包名或 JVM 描述符，资源可用 type/name 或 0x ID，ZIP/native 用路径前缀；overview 的 prefix 必须为空。"
       },
       "includeMatchOffsets": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "true 时返回 matchOffsets.start/end（Java UTF-16 偏移，不是码点）和 matchOffset。"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200
       },
       "snippetMaxChars": {
-        "type": "integer"
+        "type": "integer",
+        "description": "匹配预览的最大码点数；0 表示不返回 snippet。",
+        "minimum": 0,
+        "maximum": 1000
       }
     },
     "required": [
@@ -157,16 +174,22 @@
         "type": "string"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 2000
       },
       "maxChars": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 131072
       },
       "startLine": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 0
       },
       "startColumn": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 0
       }
     },
     "required": [
@@ -193,10 +216,15 @@
         "type": "string"
       },
       "byteOffset": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 0,
+        "description": "条目内容中的未压缩字节偏移，不是 ZIP 文件偏移。"
       },
       "maxBytes": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 65536,
+        "description": "单页最多返回的字节数。"
       }
     },
     "required": [
@@ -221,7 +249,10 @@
         "type": "string"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1000,
+        "description": "本页最多1000项，后续用apk_continue；最大值见返回pagination.limitMax。"
       }
     },
     "required": [
@@ -277,6 +308,9 @@
       },
       "reads": {
         "type": "array",
+        "description": "1..200 个独立读取；一项失败不会丢弃同批其他结果。",
+        "minItems": 1,
+        "maxItems": 200,
         "items": {
           "type": "object",
           "additionalProperties": false,
@@ -285,7 +319,8 @@
               "type": "string"
             },
             "variant": {
-              "type": "string"
+              "type": "string",
+              "description": "空字符串或 default 表示默认配置；否则必须精确匹配资源配置名。"
             }
           },
           "required": [
@@ -295,16 +330,32 @@
         }
       },
       "maxValueChars": {
-        "type": "integer"
+        "type": "integer",
+        "description": "value 的最大码点数，超出后截断并标记 valueTruncated。",
+        "default": 4096,
+        "minimum": 1,
+        "maximum": 32768
       },
       "maxValueXmlChars": {
-        "type": "integer"
+        "type": "integer",
+        "description": "valueXml 的最大字符数；超出时不返回 XML（null），并标记 valueXmlTruncated，不能写回半截 XML。整批结果另受 8MiB 预算。",
+        "default": 32768,
+        "minimum": 1,
+        "maximum": 1048576
       },
       "maxItemsPerValue": {
-        "type": "integer"
+        "type": "integer",
+        "description": "复杂资源最多返回的子项数；0 只返回 itemCount/itemsTruncated。",
+        "default": 50,
+        "minimum": 0,
+        "maximum": 2000
       },
       "resolveDepth": {
-        "type": "integer"
+        "type": "integer",
+        "description": "0 不解析引用；1 只解析一级直接引用（优先同配置，其次默认配置），不递归。",
+        "default": 0,
+        "minimum": 0,
+        "maximum": 1
       }
     },
     "required": [
@@ -407,7 +458,10 @@
         "type": "boolean"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 500,
+        "description": "本页最多500项，后续用apk_continue；最大值见返回pagination.limitMax。"
       }
     },
     "required": [
@@ -648,10 +702,13 @@
         "type": "string"
       },
       "nextCursor": {
-        "type": "string"
+        "type": "string",
+        "description": "上一页返回的 nextCursor；5 分钟过期，绑定 workspaceId/editSessionId 和会话 revision，编辑后必须重新查询。"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200
       }
     },
     "required": [
@@ -687,10 +744,14 @@
         "type": "string"
       },
       "targetVersion": {
-        "type": "string"
+        "type": "string",
+        "description": "读取结果返回的内容 SHA-256。新建目标可用 missing，并配合单个 write_target；旧版本会报内容已改变，应重新读取。"
       },
       "edits": {
         "type": "array",
+        "description": "1..200 个编辑；同一批基于一个不可变的 LF 归一化原文，匹配文本必须唯一。普通文本保留原行尾（CRLF/CR/LF），DEX/AXML 走编译。",
+        "minItems": 1,
+        "maxItems": 200,
         "items": {
           "type": "object",
           "additionalProperties": false,
@@ -962,6 +1023,7 @@
       },
       "instructionMode": {
         "type": "string",
+        "description": "auto 用于 AArch64/x86/x86-64，并按地址 T-bit 推断 ARM/Thumb；ARM32 可显式 arm 或 thumb。",
         "enum": [
           "auto",
           "arm",
@@ -969,13 +1031,18 @@
         ]
       },
       "expectedHex": {
-        "type": "string"
+        "type": "string",
+        "description": "当前字节的大写/小写十六进制；必须匹配，最多 256 字节。",
+        "maxLength": 512
       },
       "replacementAssembly": {
-        "type": "string"
+        "type": "string",
+        "description": "汇编指令/标签/.inst。内置汇编器只覆盖 AArch64 常见指令；ARM/Thumb/x86/x86-64 或内置未覆盖形式需要可选 clang（aijs-toolchain install cpp）。结果不得超过 expectedHex 窗口。",
+        "maxLength": 4096
       },
       "paddingMode": {
         "type": "string",
+        "description": "none 要求汇编结果与窗口等长；nop 用对应架构的 NOP 填充剩余字节。",
         "enum": [
           "none",
           "nop"
@@ -1018,13 +1085,16 @@
         "type": "string"
       },
       "expectedText": {
-        "type": "string"
+        "type": "string",
+        "description": "当前严格 UTF-8 文本，必须匹配；不能包含 NUL。"
       },
       "replacementText": {
-        "type": "string"
+        "type": "string",
+        "description": "替换文本，可为空；不能包含 NUL。"
       },
       "paddingMode": {
         "type": "string",
+        "description": "none 要求等长；null_pad/space_pad 只能利用目标位置已有的 NUL/空格 padding 增长，窗口最大 4096 字节，且不调整长度/指针/重定位。",
         "enum": [
           "none",
           "null_pad",
@@ -1054,7 +1124,8 @@
         "type": "string"
       },
       "runBuildChecks": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "true 运行结构检查并返回 valid；false 只返回编辑摘要，valid=null。apk_build 总会重新运行检查。"
       }
     },
     "required": [
@@ -1074,13 +1145,16 @@
         "type": "string"
       },
       "outputName": {
-        "type": "string"
+        "type": "string",
+        "description": "输出文件名，或工具目录内的绝对路径；不能覆盖源 APK。为空时使用源文件名 + _mcp_<session>_<sign|unsigned>.apk。"
       },
       "overwrite": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "目标已存在时必须为 true。"
       },
       "sign": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "false 导出未签名 APK；true 使用本机 AI.js Pro 签名身份重签并移除原签名，不能沿用原作者签名。"
       }
     },
     "required": [
@@ -1108,7 +1182,8 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "读取该工作区 APK 的 V1/V2/V3/V3.1 证书与方案元数据；verified 始终为 false，不是密码学验签，不保证可安装或未被篡改。"
       }
     },
     "required": [

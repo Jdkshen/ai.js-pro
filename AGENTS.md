@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-03 MCP候选dev-1326（MI8已验，未切LAN）**：[实现与验收](docs/reports/2026-11-03_MCP对齐实现进度.md)。补齐下方审查识别的保留条目保护、V2/V3/V3.1元数据、AXML/DEX/搜索/资源、AES/ZipCrypto、Java正则、多架构汇编/重定位引用、返回分页和流式构建。597 App JVM全过；双端各80调用覆盖57/57方法、20项扩展断言、80MiB流程及11项拒绝/原子性真机通过。修手机LLD小地址布局与绝对目标、x86 Intel语法；MCP指南已实际读回。最终APK137.42MiB，SHA `9149a9f6fc48…`，MI8安装摘要一致；23 ELF/16KB/R8/签名/Retrofit/平台阴影守卫通过。工具128名称（119+9），toolkit57+状态1=58。LAN仍1318，候选为测试签名，未发布/未push；K40/无线设备未动。下方“仅审查未改产品、缺口仍存在”是实施前的历史时点，勿重复当作当前结论。
+
 > **2026-11-03 MCP 对照 MT：入口齐，行为未齐（未发布）**：[57工具矩阵与双端实测缺口](docs/reports/2026-11-03_MCP与MT功能实现对照及缺口.md)。MI8 dev1325 对 MT2.26.10 实时MCP，每端38次/20种方法，另做收尾；57对应入口+状态1=58，历史“60”统计不准确。实测缺：v2/v3签名、AXML/DEX/字符串搜索、AXML locator、新建DEX类、资源default/逐项错误/完整XML预算、AES ZIP、zip_update强制额外参数、多架构指令/字符串padding、lookahead。P0是普通ZIP接口可删classes.dex且check仍valid；源码另有重定位xref/保留条目copy与patch/编辑原子性等。不是所有57方法行为均验；Java反编译不在MT MCP契约内。本轮仅审查与MD，产品源码未改、缺口仍存在；自建4工作区/2目录已清，LAN仍1318、MI8仍1325，K40/无线设备未动、未push。发布条件“没有缺口”未满足，不能声称已对齐。
 
 > **2026-11-03 Node 原生资源/动态回调候选 dev-1325（MI8 已验，未切主源）**：[实际根因与验收](docs/reports/2026-11-03_Node原生资源与动态回调修复验收.md)。ARSCLib 平台接口副本造成 R8 将 XML parser 错误优化为空，已净化依赖并加 JAR/最终 DEX 构建发布守卫；另修动态 DEX 空值分支反向导致 getItemCount=0。528 App+617 Engine JVM、5 扫描器测试、MI8 原始编译 M3 卡片图片/三页可见性/停止、Node/Rhino 内联及实际 Java 基本类型回调通过。23 ELF16KB/R8/签名/Retrofit通过，137.39MiB，SHA f5822d67…，Downloads 有候选且与已安装摘要一致。测试残留已清；LAN 仍1318，K40/新机未动，未push。独立模板本轮未刷新，不能称独立APK已验。原资源挂载假设已撤销。

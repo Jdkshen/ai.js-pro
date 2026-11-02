@@ -241,6 +241,7 @@ class McpApkToolkitParityTest {
         assertTrue("over-budget XML must be null, not a half document", budget.get("valueXml").isJsonNull)
         assertTrue(budget.get("valueXmlTruncated").asBoolean)
         assertFalse(budget.get("valueXmlComplete").asBoolean)
+        assertFalse(budget.get("editable").asBoolean)
         assertTrue(budget.get("valueXmlCharCount").asInt > 1)
 
         val resolved = invoke("apk_resource_read", "reads" to listOf(
@@ -260,6 +261,24 @@ class McpApkToolkitParityTest {
     }
 
     private fun args(vararg pairs: Pair<String, Any?>): JsonObject = ToolkitIo.json(*pairs)
+
+    @Test fun listPrefixesAcceptJavaPackagesResourceNamesAndCaseInsensitiveIds() {
+        val title = resource("title").tString("locator")
+        for(prefix in listOf("string/title", title.removePrefix("resource:").uppercase())) {
+            val items = invoke("apk_list", "view" to "resource_table", "prefix" to prefix).getAsJsonArray("items")
+            assertEquals(1, items.size()); assertEquals(title, items.single().asJsonObject.tString("locator"))
+        }
+        val classes = invoke("apk_list", "view" to "dex_classes", "prefix" to "fixture.").getAsJsonArray("items")
+        assertEquals(2, classes.size())
+    }
+    @Test fun largePageLimitsMatchTheSpecificWorkflow() {
+        val first = invoke("apk_list", "view" to "zip_entries", "limit" to 1)
+        assertEquals(1000, first.getAsJsonObject("pagination").get("limitMax").asInt)
+        val rest = invoke("apk_continue", "nextCursor" to first.tString("nextCursor"), "limit" to 1000)
+        assertTrue(rest.getAsJsonArray("items").size() > 0)
+        val outline = invoke("apk_dex_read_class_outline", "locator" to "dex_class:Lfixture/Sample;", "limit" to 1000)
+        assertEquals(1000, outline.getAsJsonObject("pagination").get("limitMax").asInt)
+    }
 
     private fun invoke(name: String, vararg pairs: Pair<String, Any?>): JsonObject {
         val input = args("workspaceId" to workspace, "editSessionId" to session)

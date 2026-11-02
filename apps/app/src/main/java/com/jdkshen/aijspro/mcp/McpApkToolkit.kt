@@ -15,7 +15,7 @@ internal class McpApkToolkit(
     private val pages = LinkedHashMap<String, Page>()
     private var currentWorkspace: String? = null
     private data class Page(val workspace: String, val session: String, val revision: String, val items: List<JsonObject>, var offset: Int,
-                            val kind: String, val metadata: JsonObject, val truncated: Boolean, val at: Long = System.currentTimeMillis())
+                            val kind: String, val metadata: JsonObject, val truncated: Boolean, val limitMax: Int = 200, val at: Long = System.currentTimeMillis())
     private val gson = Gson()
     init { require(store.isDirectory || store.mkdirs()) { "无法创建 APK 工作区目录" } }
     fun definitions(): JsonArray = JsonArray().apply {
@@ -53,7 +53,7 @@ internal class McpApkToolkit(
                     "apk_read_bytes" -> ToolkitIo.ok(readBytes(workspace, session, args))
                     "apk_dex_read_class_outline" -> {
                         val (entry, dex) = dexFor(workspace, session, args.tString("locator"))
-                        page(workspace, session, dex.outline(args.tString("locator")).map { it.apply { addProperty("dexEntry", entry) } }, args.tInt("limit", 200, 1, 200))
+                        page(workspace, session, dex.outline(args.tString("locator")).map { it.apply { addProperty("dexEntry", entry) } }, args.tInt("limit", 200, 1, 1000), limitMax = 1000)
                     }
                     "apk_dex_xref" -> {
                         val locator = args.tString("locator"); val limit = args.tInt("limit", 50, 1, 200)
@@ -75,11 +75,11 @@ internal class McpApkToolkit(
                     "apk_native_list_items" -> {
                         val e = elf(workspace, session, args)
                         val items = e.items(args.tString("itemKind"), args.tString("namePrefix", "")).map { item ->
-                            if(args.tBool("demangle") && item.has("name")) item.addProperty("demangledName", ToolkitNative.demangle(item.tString("name")))
+                            if(args.tBool("demangle") && item.get("name")?.isJsonPrimitive == true) item.addProperty("demangledName", ToolkitNative.demangle(item.tString("name")))
                             item
                         }
-                        page(workspace, session, items, args.tInt("limit", 50, 1, 200),
-                            metadata = ToolkitIo.json("demangleAvailable" to ToolkitNative.demangleAvailable))
+                        page(workspace, session, items, args.tInt("limit", 100, 1, 500),
+                            metadata = ToolkitIo.json("demangleAvailable" to ToolkitNative.demangleAvailable), limitMax = 500)
                     }
                     "apk_native_map_address" -> ToolkitIo.ok(elf(workspace, session, args).map(args))
                     "apk_native_disassemble" -> {
@@ -87,7 +87,12 @@ internal class McpApkToolkit(
                         ToolkitIo.ok(ToolkitIo.json("items" to instructions.map { elf.instructionJson(it) }, "decodedInstructions" to instructions.count { it.decoded },
                             "undecodedInstructions" to instructions.count { !it.decoded }, "complete" to instructions.all { it.decoded }))
                     }
-                    "apk_native_xref" -> ToolkitIo.ok(elf(workspace, session, args).xref(args))
+                    "apk_native_xref" -> {
+                        val result = elf(workspace, session, args).xref(args, resultLimit = 10001)
+                        val items = result.remove("items").asJsonArray.map { it.asJsonObject }
+                        val truncated = result.remove("truncated").asBoolean || items.size > 10000
+                        page(workspace, session, items.take(10000), args.tInt("limit", 50, 1, 200), truncated, kind = "refs", metadata = result)
+                    }
                     "apk_native_analyze_control_flow" -> ToolkitIo.ok(elf(workspace, session, args).cfg(args))
                     "apk_edit_text" -> ToolkitIo.ok(editText(workspace, requiredSession(session), args))
                     "apk_delete_target" -> ToolkitIo.ok(deleteTarget(workspace, requiredSession(session), args))
@@ -309,30 +314,34 @@ internal class McpApkToolkit(
         val prefix = args.tString("prefix", ""); val view = args.tString("view", "zip_entries")
         val items = when (view) {
             "zip_entries" -> entries(workspace, session).filter { it.startsWith(prefix) }.map { ToolkitIo.json("locator" to "zip_entry:$it", "path" to it) }
-            "dex_classes" -> dexes(workspace, session).flatMap { (entry, dex) -> dex.classes.asSequence().filter { it.type.startsWith(prefix) }.map { ToolkitIo.json("locator" to "dex_class:${it.type}", "type" to it.type, "dexEntry" to entry) } }.toList()
-            "resource_table" -> resourceTable(workspace, session).let { resources -> resources.entries().filter { it.name.startsWith(prefix) || resources.locator(it).startsWith(prefix) }.map { resources.item(it) } }
+            "dex_classes" -> dexes(workspace, session).flatMap { (entry, dex) -> dex.classes.asSequence().filter { it.type.startsWith(ToolkitDex.ownerPrefix(prefix)) }.map { ToolkitIo.json("locator" to "dex_class:${it.type}", "type" to it.type, "dexEntry" to entry) } }.toList()
+            "resource_table" -> resourceTable(workspace, session).let { resources -> resources.entries().filter {
+                it.name.startsWith(prefix) || "${it.typeName}/${it.name}".startsWith(prefix) ||
+                    resources.locator(it).removePrefix("resource:").startsWith(prefix.removePrefix("resource:"), ignoreCase = true)
+            }.map { resources.item(it) } }
             else -> throw IllegalArgumentException("view 无效")
-        }; return page(workspace, session, items, args.tInt("limit", 200, 1, 200))
+        }; return page(workspace, session, items, args.tInt("limit", 200, 1, 1000), limitMax = 1000)
     }
     private fun page(workspace: String, session: String, items: List<JsonObject>, limit: Int, truncated: Boolean = false,
-                     kind: String = "items", metadata: JsonObject = JsonObject()): JsonObject {
+                     kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200): JsonObject {
         val key = if (items.size > limit) ToolkitIo.fresh() else ""
         if (key.isNotEmpty()) {
             require(items.size <= 80000) { "结果过大，请缩小 prefix 或搜索范围" }
             while (pages.isNotEmpty() && (pages.size >= 16 || pages.values.sumOf { it.items.size } + items.size > 80000)) pages.remove(pages.keys.first())
-            pages[key] = Page(workspace, session, revision(workspace, session), items, limit, kind, metadata, truncated)
+            pages[key] = Page(workspace, session, revision(workspace, session), items, limit, kind, metadata, truncated, limitMax)
         }
-        return paged(workspace, session, items.take(limit), key, items.size, truncated, kind, metadata)
+        return paged(workspace, session, items.take(limit), key, items.size, truncated, kind, metadata, limitMax)
     }
     private fun paged(workspace: String, session: String, items: List<JsonObject>, key: String, total: Int, truncated: Boolean,
-                      kind: String = "items", metadata: JsonObject = JsonObject()): JsonObject {
+                      kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200): JsonObject {
         val actions = JsonArray()
         if(key.isNotEmpty()) actions.add(action("apk_continue", ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "nextCursor" to key, "limit" to 200)))
         val data = ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "items" to items,
             "nextCursor" to key, "hasMore" to key.isNotEmpty(), "total" to total, "truncated" to truncated,
             "pagination" to ToolkitIo.json("hasMore" to key.isNotEmpty(), "nextCursor" to key.takeIf { it.isNotEmpty() },
-                "returnedCount" to items.size, "limitMax" to 200, "totalAvailableCount" to if(truncated) null else total))
+                "returnedCount" to items.size, "limitMax" to limitMax, "totalAvailableCount" to if(truncated) null else total))
         if(kind == "search") data.add("hits", data.get("items"))
+        if(kind == "refs") data.add("refs", data.get("items"))
         metadata.entrySet().forEach { (name, value) -> data.add(name, value) }
         return ToolkitIo.ok(data, actions)
     }
@@ -340,9 +349,9 @@ internal class McpApkToolkit(
         val key = args.tString("nextCursor"); val page = pages[key] ?: error("分页游标不存在或已过期")
         require(page.workspace == args.tString("workspaceId", "") && page.session == args.tString("editSessionId", "")) { "分页游标不属于此工作区或会话" }
         require(System.currentTimeMillis() - page.at < 300000 && page.revision == revision(page.workspace, page.session)) { "内容已变更或游标已过期，请重新查询" }
-        val next = minOf(page.offset + args.tInt("limit", 200, 1, 200), page.items.size); val values = page.items.subList(page.offset, next)
+        val next = minOf(page.offset + args.tInt("limit", 200, 1, page.limitMax), page.items.size); val values = page.items.subList(page.offset, next)
         page.offset = next; if (next == page.items.size) pages.remove(key)
-        return paged(page.workspace, page.session, values, if(next < page.items.size) key else "", page.items.size, page.truncated, page.kind, page.metadata)
+        return paged(page.workspace, page.session, values, if(next < page.items.size) key else "", page.items.size, page.truncated, page.kind, page.metadata, page.limitMax)
     }
     private fun action(name: String, args: JsonObject) = ToolkitIo.json("tool" to name, "arguments" to args)
     private fun search(workspace: String, session: String, args: JsonObject): JsonObject {
@@ -498,15 +507,19 @@ internal class McpApkToolkit(
             }
             val validate = changed + names.filter { ToolkitApkTargets.isDex(it) || it == "resources.arsc" || it == "AndroidManifest.xml" }
             validate.forEach { entry -> runCatching {
+                val semantic = ToolkitApkTargets.isDex(entry) || entry == "resources.arsc" || entry == "AndroidManifest.xml" ||
+                    entry.endsWith(".so") || ToolkitResources.isBinaryXml(prefix(workspace, session, entry, 8))
+                if(!semantic) return@runCatching
                 val bytes = raw(workspace, session, entry)
                 when { ToolkitApkTargets.isDex(entry) -> ToolkitDex(bytes).classes.forEach { it.methods.forEach { method -> method.implementation?.instructions?.count() } }
                     entry == "resources.arsc" -> ToolkitResources(bytes).entries()
                     entry.endsWith(".so") -> ToolkitElf(bytes)
-                    ToolkitResources.isBinaryXml(bytes) -> ToolkitResources.decodeXml(bytes, optionalResources(workspace, session))
                     entry == "AndroidManifest.xml" -> {
-                        val text = ToolkitIo.text(bytes); ToolkitResources.safeXml(text)
+                        val text = if(ToolkitResources.isBinaryXml(bytes)) ToolkitResources.decodeXml(bytes, optionalResources(workspace, session)) else ToolkitIo.text(bytes)
+                        ToolkitResources.safeXml(text)
                         require(com.reandroid.xml.XMLDocument.load(text).documentElement?.name == "manifest") { "Manifest 不是有效 XML" }
                     }
+                    ToolkitResources.isBinaryXml(bytes) -> ToolkitResources.decodeXml(bytes, optionalResources(workspace, session))
                 }
             }.onFailure { failure(entry, "BUILD_CHECK_FAILED", it.message) } }
         }
@@ -541,7 +554,7 @@ internal class McpApkToolkit(
                     writeUnsigned(workspace, session, names, unsigned)
                     callback(unsigned, target)
                     val signature = ToolkitSignatures.read(target)
-                    require(signature.tBool("signaturePresent") && signature.getAsJsonArray("certificates").size() > 0) { "签名器没有生成可读取的证书信息" }
+                    require(signature.tBool("available") && signature.tBool("signaturePresent") && signature.getAsJsonArray("certificates").size() > 0) { "签名器没有生成完整可读取的证书信息：${signature.get("error")}" }
                 } finally { unsigned.delete() }
             }
             require(target.length() <= ToolkitIo.MAX_APK) { "构建结果超过 512 MiB" }; ZipFile(target).use { require(it.getEntry("AndroidManifest.xml") != null) }

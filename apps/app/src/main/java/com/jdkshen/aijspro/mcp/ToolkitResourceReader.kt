@@ -18,9 +18,10 @@ internal class ToolkitResourceReader(private val resources: ToolkitResources) {
         val variants = linkedMapOf<String, List<String>>()
         val results = JsonArray(); var returnedBytes = 0L
         reads.forEachIndexed { index, request ->
-            val read = request.asJsonObject; val locator = read.tString("locator")
-            val variant = ToolkitResources.publicVariant(ToolkitResources.internalVariant(read.tString("variant", "default")))
+            var locator = ""; var variant = "default"
             try {
+                val read = request.asJsonObject; locator = read.tString("locator")
+                variant = ToolkitResources.publicVariant(ToolkitResources.internalVariant(read.tString("variant", "default")))
                 val id = ToolkitResources.parseId(locator.substringAfter(':'))
                 if(id in byId) variants["resource:0x%08x".format(id)] = byId[id].orEmpty().map { ToolkitResources.publicVariant(it.resConfig.qualifiers) }.distinct()
                 val entry = resources.find(locator, variant)
@@ -28,9 +29,9 @@ internal class ToolkitResourceReader(private val resources: ToolkitResources) {
                 val bytes = result.toString().toByteArray(Charsets.UTF_8).size
                 if(returnedBytes + bytes > 8 * 1024 * 1024) throw ToolkitException("OUTPUT_BUDGET_EXCEEDED", "批量结果超过预算，请减少reads或XML/集合预算")
                 returnedBytes += bytes; results.add(result)
-            } catch (failure: IllegalArgumentException) {
+            } catch (failure: Exception) {
                 results.add(ToolkitIo.json("index" to index, "locator" to locator, "variant" to variant,
-                    "errorCode" to if(failure is ToolkitException) failure.code else "INVALID_ARGUMENT", "message" to failure.message))
+                    "errorCode" to if(failure is ToolkitException) failure.code else if(failure is IllegalArgumentException) "INVALID_ARGUMENT" else "RESOURCE_READ_FAILED", "message" to failure.message))
             }
         }
         return ToolkitIo.json("results" to results, "items" to results,
@@ -45,7 +46,7 @@ internal class ToolkitResourceReader(private val resources: ToolkitResources) {
         val xml = resources.xml(entry)
         val scalar = entry.resValue
         val kind = if(entry.isComplex) "item_list" else kind(scalar?.valueType?.name.orEmpty())
-        val children = entry.resValueMapArray?.listItems().orEmpty()
+        val children = entry.resValueMapArray?.listItems()?.asSequence()?.toList().orEmpty()
         val summary = if(entry.isComplex) "${children.size} items" else entry.valueAsString ?: when(kind) {
             "reference" -> "@0x%08x".format(scalar!!.data)
             "attribute" -> "?0x%08x".format(scalar!!.data)
@@ -61,7 +62,7 @@ internal class ToolkitResourceReader(private val resources: ToolkitResources) {
         full.addProperty("valueXmlCharCount", xml.length)
         full.addProperty("valueXmlTruncated", xml.length > maxXml)
         full.addProperty("valueXmlComplete", xml.length <= maxXml)
-        full.addProperty("editable", true)
+        full.addProperty("editable", xml.length <= maxXml)
         full.add("editableReason", if(xml.length > maxXml) com.google.gson.JsonPrimitive("VALUE_XML_TRUNCATED") else com.google.gson.JsonNull.INSTANCE)
         if(entry.isComplex) {
             full.addProperty("itemCount", children.size)
@@ -77,8 +78,7 @@ internal class ToolkitResourceReader(private val resources: ToolkitResources) {
             val candidates = byId[scalar.data].orEmpty()
             val target = candidates.firstOrNull { it.resConfig.qualifiers == entry.resConfig.qualifiers }
                 ?: candidates.firstOrNull { it.resConfig.qualifiers.isEmpty() }
-                ?: runCatching { resources.find("resource:0x%08x".format(scalar.data), ToolkitResources.publicVariant(entry.resConfig.qualifiers)) }.getOrNull()
-                ?: runCatching { resources.find("resource:0x%08x".format(scalar.data), "default") }.getOrNull()
+                ?: resources.resolveReference(scalar.data, ToolkitResources.publicVariant(entry.resConfig.qualifiers))
             if(target != null) {
                 full.add("resolvedValue", value(target, maxValue, maxXml, maxItems, 0, byId)); resolved = true
             } else full.addProperty("resolveError", "RESOURCE_REFERENCE_UNRESOLVED")

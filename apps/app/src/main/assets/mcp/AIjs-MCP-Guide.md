@@ -16,7 +16,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 终端与构建 | terminal_exec/read/write/stop/list、shell_rish、get_build_tools |
 | 悬浮窗 | list_overlays、close_overlays |
 | 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
-| 文件与 APK 工具 | toolkit_status、file_*、zip_*、apk_*（工作区/会话/列表/读取/编辑/搜索/DEX/Smali/资源/ELF/打包/签名） |
+| 文件与 APK 工具 | toolkit_status、file_*、zip_*、apk_*（工作区/会话/列表/读取/编辑/搜索/DEX/Smali/资源/ELF/打包/签名元数据；签名元数据不是密码学验签） |
 
 ## 快速开始（AI 客户端必读）
 
@@ -218,14 +218,79 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 ## 文件与 APK 工具（toolkit，全部本地实现，不依赖 MT）
 
-这组工具由 AI.js Pro 自己实现，运行在独立的 `:tools` 进程（与主进程、脚本进程隔离），通过私有 ContentProvider + 文件 IPC 通信，不会因为解析大 APK 拖垮脚本引擎。`toolkit_status` 返回工具数、分组和真实限制。
+这组工具由 AI.js Pro 自己实现，运行在独立的 `:tools` 进程（与主进程、脚本进程隔离），通过私有 ContentProvider + 文件 IPC 通信，不会因为解析大 APK 拖垮脚本引擎。`toolkit_status` 返回工具数、分组和真实限制；参数以 `tools/list` 的 inputSchema 为准。路径和 ZIP 条目都按不可信输入校验，拒绝 `..`、绝对越界、URI、反斜线和符号链接逃逸。
 
-- **文件 `file_*`**：`file_read_text/read_bytes/list/stat/search_text` 只读；写入必须带 `targetVersion`（防旧写）或用原字节校验，`file_edit_text` 支持替换、`file_patch_bytes` 支持偏移补丁。
-- **ZIP `zip_*`**：`zip_list/read_text/read_bytes/test/extract/create/update`。
-- **APK `apk_*`**：先 `apk_workspace_open` 建不可变快照，再 `apk_session_create` 建编辑会话；`apk_list/apk_search/apk_read_text/apk_read_bytes` 浏览，`apk_dex_read_class_outline/apk_dex_xref` 用 baksmali 读 DEX，`apk_resource_read/apk_resource_xref` 读写 ARSC 资源，`apk_edit_text/apk_delete_target/apk_resource_edit/apk_patch_bytes` 修改会话内副本，最后 `apk_session_check` + `apk_build` 导出新包；`apk_read_signature` 读签名。旧 `mt_*` 名称只是本地兼容别名。
-- **ELF 指令分析**：`apk_native_inspect/list_items/disassemble/xref/analyze_control_flow/patch_instructions`。原生库可用时用本机 Capstone 5.0.6 解码 **AArch64、ARM/Thumb、x86、x86-64**；原生库不可用时回退有界 AArch64 子集。只保证有界直接控制流，未知指令明确标 `decoded=false`；间接调用目标、完整数据流和语义等价不作保证。`apk_native_patch_instructions` 当前只支持 AArch64 等长补丁。
+参数与预算以当前设备的 `tools/list`、`toolkit_status` 和工具返回为准。
 
-对真实文件的写入仍要按工具返回的 targetVersion 做并发校验；APK 快照上限 512MiB、总量 1GiB，单条目分析上限 64MiB、文本 10MiB。
+### 文件工具
+
+`file_get_access_policy/list/stat/read_text/read_bytes/search_text` 只读；`file_edit_text`、`file_write_bytes`、`file_patch_bytes`、`file_append_*`、`file_truncate_bytes`、`file_replace_text` 等修改接口按 schema 要求 `targetVersion`/`expectedHex` 或原字节校验，路径始终限制在操作目录。文本处理上限 10MiB，二进制写入上限更小；搜索使用 Java 正则并受节点/时间预算，结果可能标 `truncated`。
+
+### 推荐流程：快照 → 编辑会话 → 读取/修改 → 检查 → 构建
+
+1. `toolkit_status` 确认工具可用性与限制；`apk_list_available_apks` 找包。
+2. `apk_workspace_open` 建不可变快照：`temporary=true` 为一次性工作区；已保存工作区用 `temporary=false` 打开。已有 APK 上下文可用 `path="aijs://current-apk"` 取回（没有上下文时先按实际路径打开）；保存后的工作区路径是 `aijs://workspace/<workspaceId>`。公开写法只使用 `aijs://`；旧 URI 输入和旧 `mt_*` 工具名仅作兼容，不应写进新配置。
+3. `apk_session_create` 建写时复制编辑会话；之后的浏览、读取和修改都在会话视图上完成，不会改源 APK。
+4. 先读取再修改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；编辑时原样传回。DEX 类/方法先用 `apk_read_text` 的 `dex_class:`/`dex_method:` 定位符读取文本，再编辑。`apk_edit_text` 新建目标用 `targetVersion="missing"` 加唯一 `write_target`（可新建 DEX 类或普通文本条目）。
+5. 修改后调用 `apk_session_check(runBuildChecks=true)`；`apk_build` 会再检查一次，失败不导出。构建默认不签名；`sign=true` 使用本机 AI.js Pro 身份重签并移除原签名，不能沿原作者签名。
+6. 保留条目保护：普通 `zip_entry:` 的 `apk_patch_bytes` 不能处理 `classes*.dex`、`resources.arsc`、二进制 AXML/Manifest；`apk_delete_target` 不能删除 `classes*.dex`/`resources.arsc`，源码包中这些保留条目被移除时 `apk_session_check` 也会失败。DEX 用 `dex_class:`/`dex_method:`，资源用 `apk_resource_*`，AXML 文本用 `axml:` 定位符。
+
+### 搜索与定位
+
+`apk_search` 的 `target` 覆盖：`overview`（ZIP 路径、解码后的 AXML 文本、资源名/值、DEX 类/字段/方法/字符串）、`files`（ZIP 路径及 AXML 文本）、`resource_table_names/values/file_paths`（`file_paths` 单独使用）、`dex_names`（类名、字段/方法；`prefix` 可用 Java 包名前缀）、`dex_strings`（字段常量、注解和指令字符串）、`dex_string_members`、`smali`（完整 Smali 类）、`native_symbols/native_strings`（仅 native 目标扫描 .so）。
+
+- `queryType=literal|regex`；正则使用 Java `java.util.regex`，支持环视/反向引用。`prefix` 按目标类型过滤（DEX 可用 Java 包名，资源可用名称或 0x ID，ZIP/native 用路径；`overview` 时必须为空）；`matchMode=contains|exact`，`smali` 只支持 contains。
+- `snippetMaxChars` 默认 240，设 0 不返回 snippet；`includeMatchOffsets=true` 返回 Java UTF-16 `start/end` 偏移和 `matchOffset`，不是 Unicode 码点偏移。结果同时放在 `items` 和 `hits`，并带 `nextCursor`/`hasMore`。
+- 扫描是预算内的部分搜索：`truncated=true` 或出现 `notSearchedTargets`/`skippedScopes` 时不能当作“没有匹配”或全量结果；缩小 `prefix` 或目标后重试。
+
+### 正则预算（Java）
+
+`apk_search`、`file_search_text`、`file_replace_text` 使用 Java 正则语义（lookahead/lookbehind、反向引用、内联 flags 等可用）。每个 matcher 默认 750ms（实现上限 5000ms），并限制 8,000,000 次字符访问；同时检查线程中断和栈溢出。文件搜索另有 3 秒总预算，APK 搜索另有 8 秒总预算。超预算时，搜索返回部分结果并标 `truncated`、`stopReason` 或跳过范围；不能返回部分结果的操作报 `REGEX_BUDGET_EXCEEDED`。先加 `prefix` 缩小候选。
+
+### ZIP：AES/ZipCrypto 与预算
+
+`zip_list/read_text/read_bytes/test/extract/create/update` 都支持未加密条目；读取支持 **ZipCrypto 和 AES**（AES 条目必须有合法 0x9901 extra，压缩方式只能是 Stored/Deflate），加密条目必须传非空 `password`。写入只生成 **AES-256** 或明文：`zip_create`/`zip_update` 的非空 `password` 使新增/替换文件条目用 AES-256，目录条目不加密；不新写 ZipCrypto。`zip_update` 对未改/重命名条目保留原始压缩/加密字节与密码，失败保留原档，且不做 APK 签名。
+
+- `zip_read_text`：每页 1..2000 行、2..131072 码点；`startLine/startColumn` 从 0 开始，续页沿用返回的 `encoding`。预览不校验整个条目，完整性用 `zip_test`。
+- `zip_read_bytes`：每页 1..65536 字节，`byteOffset` 是未压缩偏移；同样只是预览。
+- `zip_test`：完整读取每个文件条目并核对长度/CRC；AES 额外校验 HMAC，ZipCrypto 校验密码与 CRC。预算为 50,000 条目/512MiB；预算不足或中断时报告未完成，绝不当作通过。
+- `zip_extract`：显式 `entryPath→destinationPath` 映射；拒绝绝对路径、`..`、反斜线、重复/冲突目标、符号链接和不安全覆盖，`overwrite=true` 才能替换普通文件。解压前检查 50,000 条目、512MiB 声明总量和 250:1 压缩比（小文件按 256KiB 阈值判断）。
+- `zip_create`：Stored/Deflate，level 0..9；输出不能位于源目录内或同时作为输入；最多 50,000 条目，写入/源数据预算 2GiB。
+- `zip_update`：操作无序且不能形成链、交换或竞争目标；`targetVersion` 可选，传入时先校验，省略时也在写入期间检查源未变化。
+- `zip_list`：每页 1..1000；分页游标 30 分钟过期且绑定 ZIP 版本，源变化后必须从空 cursor 重新列出。
+
+### 签名：只读元数据，不是验签
+
+`apk_read_signature` 读取 V1/V2/V3/V3.1 方案和证书元数据：方案、证书 SHA-256/MD5/SHA-1、算法 OID/名称、subject/issuer、序列号和有效期、`hasDifferentCertificates` 等，`verified` 始终为 false。工作区打开摘要只给 `available/signaturePresent/schemes/certificateCount`；构建结果中的 `signatureSummary` 同样是只读元数据。只读取签名块/证书，不做密码学验签、证书链信任、内容摘要核对，也不保证 APK 可安装、可升级或未被篡改。解析失败时 `available=false`，并可能在 `warnings` 中给出原因。
+
+### 资源读取：逐项预算、默认配置与 XML
+
+`apk_resource_read` 一次 1..200 项，`variant` 省略或传 `default` 表示默认配置；精确配置名不存在返回 `RESOURCE_VARIANT_NOT_FOUND`。默认 `maxValueChars=4096`（1..32768）、`maxValueXmlChars=32768`（1..1048576）、`maxItemsPerValue=50`（0..2000）、`resolveDepth=0`（0..1）。
+
+- 每项独立返回；一个 locator 失败只写该项的 `index/locator/variant/errorCode/message`，不丢弃同批其他结果；整批输出上限 8MiB。
+- `value` 按码点截断；`valueXml` 超预算时返回 `null`，并给 `valueXmlTruncated/valueXmlComplete/valueXmlCharCount`，`editableReason` 会标 `VALUE_XML_TRUNCATED`；不要拿半截 XML 写回。复杂资源另给 `itemCount/itemsTruncated/items`。
+- `resolveDepth=1` 仅解析当前项直接引用的第一级目标（优先同配置，其次默认配置），不递归展开；引用目标也受同一预算限制。
+- 写入/编辑 AXML/资源 XML 时会拒绝 DOCTYPE/ENTITY；XML 文本上限 10MiB；解码结果把数字字符引用还原为字符，命名实体保持原样。
+
+### ELF 指令分析与补丁
+
+`apk_native_inspect/list_items/map_address/xref/disassemble/analyze_control_flow` 支持 32/64 位 ELF。原生库可用时用本机 Capstone 5.0.6 解码 **AArch64、ARM/Thumb、x86、x86-64**；原生库不可用时只回退有界 AArch64 小端常见指令子集。未知字节明确标 `decoded=false`；xref 只覆盖直接静态引用和可静态解析的 REL/RELA 槽，CFG 只覆盖有界直接控制流，不保证完整调用图、数据流或语义等价。
+
+- `apk_native_patch_instructions` 支持 **AArch64、ARM/Thumb、x86、x86-64** 的小端等长补丁。内置汇编器只覆盖 AArch64 常见指令；其他架构或内置不覆盖的形式需要可选外部 clang（应用终端运行 `aijs-toolchain install cpp`，不是电脑端工具）。缺后端会明确报错，不会静默改成其他架构。
+- 指令补丁先用 `expectedHex` 校验原字节，汇编结果不得超过原窗口；`paddingMode=none|nop`，最多 256 字节窗口，Thumb/x86 边界校验依赖 Capstone。只保证局部等长替换，不保证栈平衡、寄存器约定、重定位或函数语义。
+- `apk_native_patch_string` 只处理严格 UTF-8 字符串：默认等长；`null_pad`/`space_pad` 只能利用目标位置已有的 NUL/空格 padding 增长，窗口最大 4096 字节；不调整条目大小、长度字段、指针或重定位。
+
+### 分页与陈旧保护
+
+- 分页上限按类型区分：APK列表/DEX大纲1000项、native列表500项，其余列表200项。以 `pagination.limitMax` 为准；有更多时返回 `nextCursor` 和 `nextActions`，用 `apk_continue` 续页。
+- 分页游标绑定 `workspaceId`、`editSessionId` 和会话 revision，5 分钟过期；编辑、删除、重建会话或超时后必须重新查询，不能把两页拼成一份视图。
+- `apk_edit_text`/`apk_resource_edit` 使用 `targetVersion` 防止旧读覆盖；`apk_patch_bytes` 用逐段 `expectedHex`；`apk_native_patch_*` 用 `expectedHex`/`expectedText`。看到“内容已改变”时重新读取，不要重试旧参数。
+- `apk_read_text` 的普通文本源超过 10MiB 时只返回前缀并标 `editable=false`/`sourceTruncated=true`；此时不要写回，改用分页或字节接口。
+- 构建时保留每个条目的 Stored/Deflate 方式，移除 `META-INF` 旧签名文件；Stored 的 `.so` 按 16KiB 对齐、Stored 的 `resources.arsc` 按 4 字节对齐。`apk_session_check` 会检查 Manifest、不能删除的 `classes*.dex`/`resources.arsc` 以及变更的 DEX/ARSC/ELF/AXML/Manifest 结构，但不保证业务行为、安装性或原签名兼容。
+
+### 容量上限
+
+APK 快照单包 512MiB、工作区总量 1GiB、最多 16 个工作区；每个工作区最多 8 个编辑会话，单会话最多 2000 个变更条目/512MiB；单条目分析上限 64MiB，普通文本 10MiB，大条目用 `apk_read_bytes` 分页；分页结果最多 80,000 项、16 个游标；工具响应上限 24MiB。旧 `mt_*` 名称只是 dispatch 兼容别名，不额外注册为规范工具。
 
 ## 手机终端与编译
 

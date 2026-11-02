@@ -30,7 +30,7 @@ internal class ToolkitDex(bytes: ByteArray) {
     fun fieldId(field: FieldReference) = field.definingClass + "->" + field.name + ":" + field.type
     fun renderClass(definition: ClassDef): String {
         val output = StringWriter(); val writer = BaksmaliWriter(output)
-        ClassDefinition(BaksmaliOptions(), definition).writeTo(writer); writer.flush()
+        ClassDefinition(BaksmaliOptions().apply { apiLevel = dex.opcodes.api }, definition).writeTo(writer); writer.flush()
         require(output.buffer.length <= ToolkitIo.MAX_TEXT) { "Smali 类超过 10 MiB" }; return output.toString()
     }
     fun render(locator: String): String {
@@ -43,7 +43,9 @@ internal class ToolkitDex(bytes: ByteArray) {
         }
     }
     private fun memberText(source: String, descriptor: String, method: Boolean): String {
-        val lines = source.split('\n'); val begin = lines.indexOfFirst { it.startsWith(if (method) ".method " else ".field ") && it.substringBefore(" = ").trim().endsWith(descriptor) }
+        val lines = source.split('\n'); val begin = lines.indexOfFirst {
+            it.startsWith(if (method) ".method " else ".field ") && it.substringBefore(" = ").trim().substringAfterLast(' ') == descriptor
+        }
         require(begin >= 0) { "DEX 成员不存在" }
         if (method) {
             val end = (begin + 1 until lines.size).firstOrNull { lines[it].trim() == ".end method" } ?: error("Smali 方法不完整")

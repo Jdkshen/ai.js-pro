@@ -49,9 +49,6 @@ internal object ToolkitZipCrypto {
         password: String,
         verifyOnClose: Boolean,
     ): InputStream {
-        if (password.isEmpty()) {
-            throw IOException("条目 '$entryName' 已加密，需要非空 password")
-        }
         val zip = try {
             ZipFile(archive)
         } catch (e: ZipException) {
@@ -61,16 +58,16 @@ internal object ToolkitZipCrypto {
             // Always make the name charset explicit. Legacy archives otherwise fall back to the
             // JVM/Android default charset and getFileHeader(entryName) would not find the entry.
             zip.setFileNameCharset(charset.name())
-            zip.setPassword(password)
             val header = zip.getFileHeader(entryName)
                 ?: throw IOException("加密 ZIP 中不存在条目 '$entryName'")
-            if (!header.isEncrypted) {
-                throw IOException("条目 '$entryName' 不是加密条目，无法用密码读取")
-            }
+            if (header.isEncrypted && password.isEmpty()) throw IOException("条目 '$entryName' 已加密，需要非空 password")
+            // The pinned 1.x PBKDF2 implementation narrows char values to bytes. Supply the
+            // UTF-8 bytes losslessly as Latin-1 chars, as required by interoperable AES ZIPs.
+            if(header.isEncrypted) zip.setPassword(if (header.encryptionMethod == Zip4jConstants.ENC_METHOD_AES) aesPassword(password) else password)
             // zip4j 1.3.2 initializes the ZipCrypto keys but never compares the 1-byte password
             // check value, so a wrong password would only surface as garbage/CRC failure after a
             // full read. Validate that byte here to make previews fail correctly too.
-            if (header.encryptionMethod == Zip4jConstants.ENC_METHOD_STANDARD) {
+            if (header.isEncrypted && header.encryptionMethod == Zip4jConstants.ENC_METHOD_STANDARD) {
                 checkZipCryptoPassword(archive, header, password)
             }
             val stream = zip.getInputStream(header)
@@ -156,7 +153,7 @@ internal object ToolkitZipCrypto {
             setEncryptFiles(true)
             setEncryptionMethod(Zip4jConstants.ENC_METHOD_AES)
             setAesKeyStrength(Zip4jConstants.AES_STRENGTH_256)
-            setPassword(password)
+            setPassword(aesPassword(password))
             setSourceExternalStream(true)
             setFileNameInZip(entryName)
             setReadHiddenFiles(true)
@@ -191,6 +188,8 @@ internal object ToolkitZipCrypto {
 
     /** True when the entry header method means AES-256/AES encryption (method 99). */
     fun isAes(method: Int): Boolean = method == METHOD_AES
+
+    private fun aesPassword(value: String): String = String(value.toByteArray(Charsets.UTF_8), Charsets.ISO_8859_1)
 
     /**
      * Validates the traditional ZipCrypto 12-byte header check byte. The last decrypted header

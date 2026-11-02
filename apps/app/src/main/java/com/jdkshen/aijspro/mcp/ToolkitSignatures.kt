@@ -21,7 +21,11 @@ internal object ToolkitSignatures {
     private val ids = mapOf(0x7109871a to "V2", 0xf05368c0.toInt() to "V3", 0x1b93ad61 to "V3.1")
     private data class Certificate(val cert: X509Certificate, val schemes: MutableSet<String>)
 
-    fun read(apk: File): JsonObject {
+    fun read(apk: File): JsonObject = try { readMetadata(apk) } catch(failure: Exception) {
+        ToolkitIo.json("available" to false, "signaturePresent" to false, "schemes" to emptyList<String>(),
+            "certificates" to emptyList<Any>(), "error" to (failure.message ?: "签名元数据不可读"), "verified" to false)
+    }
+    private fun readMetadata(apk: File): JsonObject {
         val certs = linkedMapOf<String, Certificate>()
         val schemes = linkedSetOf<String>()
         val warnings = arrayListOf<String>()
@@ -41,8 +45,9 @@ internal object ToolkitSignatures {
                 schemes.add("V1")
                 try {
                     val bytes = ToolkitIo.read(zip.getInputStream(entry), 4 * 1024 * 1024)
-                    CertificateFactory.getInstance("X.509").generateCertificates(ByteArrayInputStream(bytes))
-                        .forEach { add(it.encoded, "V1") }
+                    val certificates = CertificateFactory.getInstance("X.509").generateCertificates(ByteArrayInputStream(bytes))
+                    require(certificates.isNotEmpty()) { "V1证书列表为空" }
+                    certificates.forEach { add(it.encoded, "V1") }
                 } catch (failure: Exception) { warnings.add("V1 ${entry.name}: ${failure.message}") }
             }
         }
@@ -52,6 +57,7 @@ internal object ToolkitSignatures {
                 schemes.add(scheme)
                 try {
                     val signers = sized(buffer(payload))
+                    require(signers.hasRemaining()) { "签名者列表为空" }
                     var count = 0
                     while (signers.hasRemaining()) {
                         require(++count <= 64) { "签名者数量过多" }
@@ -59,6 +65,7 @@ internal object ToolkitSignatures {
                         val signedData = sized(signer)
                         sized(signedData) // content digests, not verified here
                         val certificates = sized(signedData)
+                        require(certificates.hasRemaining()) { "签名证书链为空" }
                         var chain = 0
                         while (certificates.hasRemaining()) {
                             require(++chain <= 64) { "证书链过长" }
