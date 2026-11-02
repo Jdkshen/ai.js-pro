@@ -127,7 +127,7 @@ http://127.0.0.1:8765/mcp
 
 ### 使用链接
 
-- 在 Rikkahub 中调用 `learn_autojs_skill` 获取完整工具说明；
+- 在 Rikkahub 中调用 `learn_autojs_skill` 获取完整工具说明；其末尾附带「MCP 实战要点」（冷进程/dlopen 粘住、terminal 大输出轮询、借目标 App 解密函数的外部进程流程、坑表），逆向/解密类任务先读这一节；
 - 调 `get_status` / `list_engines` 检查手机端状态；
 - 用 `run_script` 时加 `wait: true` 获取真实输出和错误；
 - 设备工具（`get_ui_layout` / `capture_screen` / `ui_*` / `app_*`）需要 AI.js Pro 无障碍服务。

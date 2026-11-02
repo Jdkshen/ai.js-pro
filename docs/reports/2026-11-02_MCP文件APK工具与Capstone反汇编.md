@@ -71,3 +71,14 @@ C:\Python314\python.exe -X utf8 tools\build-toolkit-native.py --check
 ## 六、发布
 
 LAN 更新源 `http://192.168.10.7:8080/update.json` → **dev-1315**（144,042,959 B，SHA-256 `a41adc8e44313ae6ca2c24040eb24600960cba9a36035a4780a229c0fd30fae1`），MI8 已装 dev-1315。GitHub 未推送、未建 Release（遵循发布约定）。
+
+## 七、MCP 实战要点（dev-1316）
+
+接用户 2026-11-02 在 `.4`（Android 16 / arm64 / 无 root）实战「刷步 1.0.0 借壳解密」沉淀的 `AIJS_MCP_操作要点.md`，已并入产品：
+
+- 新增 asset `mcp/AIjs-MCP-Playbook.md`（约 6.6KB）：冷进程与 dlopen 粘住、大输出/文件传输、逆向方法学、调用习惯、坑表 A、借壳解密黄金流程 B、命令速查 C、留档约定 D。
+- `learn_autojs_skill` 返回内容末尾自动追加该文件（`McpTools.helpText()`，资源缺失时降级不报错）。
+- MCP `initialize.instructions` 增补 4 条高频要点：冷进程/stop_all_scripts、terminal 大输出按 nextOffset 轮询、workspace 文本限制与 base64、无状态入口优先/关键数字实测。
+- `docs/guides/MCP连接指南.md` 增加指向说明。
+
+验证：MI8 上 `initialize.instructions` 含新要点；`learn_autojs_skill` 返回尾部含「冷进程与库状态」「坑表」等章节（dev-1316）。
