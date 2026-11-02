@@ -2,7 +2,6 @@ package com.jdkshen.aijspro.ui.editor;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
-import android.graphics.Color;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.Looper;
@@ -43,12 +42,18 @@ final class AceEditorHost {
     volatile AceCodeEditor current;
     WebView view;
     boolean ready, destroyed;
+    private boolean firstFrameShown;
+    private long frameTicket;
 
     private AceEditorHost(Context context) { this.context = context; content = new FrameLayout(context); }
-    @SuppressLint("SetJavaScriptEnabled") private void ensure() {
+    @SuppressLint("SetJavaScriptEnabled") private void ensure(AceCodeEditor owner) {
         if (view != null || destroyed) return;
         view = new WebView(context);
-        view.setBackgroundColor(Color.TRANSPARENT);
+        content.setBackgroundColor(owner.surfaceColor());
+        view.setBackgroundColor(owner.surfaceColor());
+        // Stay attached/visible so Chromium can prepare a frame, but do not
+        // expose its partially filled first compositor surface.
+        view.setAlpha(0f);
         view.getSettings().setJavaScriptEnabled(true);
         view.getSettings().setSupportZoom(false);
         view.getSettings().setBuiltInZoomControls(false);
@@ -93,13 +98,16 @@ final class AceEditorHost {
         });
         if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true);
         content.addView(view, new FrameLayout.LayoutParams(-1, -1));
-        view.loadUrl("https://editor.aijspro.local/editor.html");
+        view.loadUrl(Uri.parse("https://editor.aijspro.local/editor.html").buildUpon()
+                .appendQueryParameter("theme", owner.themeName())
+                .appendQueryParameter("background", String.format(java.util.Locale.ROOT,
+                        "#%06x", owner.surfaceColor() & 0xffffff)).build().toString());
     }
     private static WebResourceResponse missing() {
         return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", null, new ByteArrayInputStream(new byte[0]));
     }
     void select(AceCodeEditor owner) {
-        ensure();
+        ensure(owner);
         if (current != owner) {
             // Finish the old document's composing span before changing the shared
             // textarea. Keep its input connection attached to retain the IME.
@@ -111,17 +119,27 @@ final class AceEditorHost {
             }
             current = owner;
         }
+        updateSurface(owner);
         owner.setVisibleView(view);
         prepare(owner, true);
     }
     void prepare(AceCodeEditor owner, boolean select) {
-        ensure(); owner.loading = true;
+        ensure(owner); owner.loading = true;
         if (!ready) return;
         String key = owner.workspaceKey();
         if (owner.workspaceRoot() != null) roots.put(key, owner.workspaceRoot());
         view.evaluateJavascript("port.openSession(" + JSONObject.quote(owner.sessionId) + ","
                 + JSONObject.quote(owner.documentPath()) + "," + owner.initialFontSize() + ","
                 + JSONObject.quote(owner.themeName()) + "," + JSONObject.quote(key) + "," + select + ")", null);
+    }
+    void updateSurface(AceCodeEditor owner) {
+        if (current != owner || view == null || destroyed) return;
+        content.setBackgroundColor(owner.surfaceColor());
+        view.setBackgroundColor(owner.surfaceColor());
+    }
+    private boolean canShowFirstFrame(AceCodeEditor owner, long ticket) {
+        return !destroyed && !firstFrameShown && view != null && current == owner
+                && documents.get(owner.sessionId) == owner && owner.isActive() && ticket == frameTicket;
     }
     void remove(AceCodeEditor owner) {
         documents.remove(owner.sessionId);
@@ -151,7 +169,28 @@ final class AceEditorHost {
             });
         }
         @JavascriptInterface public void prepared(String id) {
-            handler.post(() -> { AceCodeEditor owner = documents.get(id); if (owner != null) owner.sessionPrepared(); });
+            handler.post(() -> {
+                AceCodeEditor owner = documents.get(id);
+                if (destroyed || owner == null) return;
+                owner.sessionPrepared();
+                if (firstFrameShown || owner != current || !owner.isActive() || view == null) return;
+                // Queued theme/font/cursor restoration has been submitted first.
+                long ticket = ++frameTicket;
+                view.evaluateJavascript("port.commitInitialFrame(" + JSONObject.quote(id) + "," + ticket + ")", null);
+            });
+        }
+        @JavascriptInterface public void frameReady(String id, long ticket) {
+            handler.post(() -> {
+                AceCodeEditor owner = documents.get(id);
+                if (owner == null || !canShowFirstFrame(owner, ticket)) return;
+                view.postVisualStateCallback(ticket, new WebView.VisualStateCallback() {
+                    @Override public void onComplete(long requestId) {
+                        if (!canShowFirstFrame(owner, requestId)) return;
+                        firstFrameShown = true;
+                        view.setAlpha(1f);
+                    }
+                });
+            });
         }
         @JavascriptInterface public void update(String source) {
             try {

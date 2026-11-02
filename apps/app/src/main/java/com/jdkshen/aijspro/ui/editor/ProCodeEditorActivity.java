@@ -2880,6 +2880,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
     }
 
     private void applyWindowSystemUi(AppThemePalette palette) {
+        getWindow().setBackgroundDrawable(new ColorDrawable(palette.editorBackground));
         getWindow().setStatusBarColor(palette.statusBar);
         getWindow().setNavigationBarColor(palette.navigationBar);
         // 从「不隐藏系统栏」的干净状态起步：残留的 FULLSCREEN/IMMERSIVE 会让状态栏

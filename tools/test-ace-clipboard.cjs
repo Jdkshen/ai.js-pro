@@ -215,6 +215,7 @@ function touchSandbox(useLegacy) {
 
 function editorPortSandbox() {
     const messages = [];
+    const frames = [], committed = [], renderCalls = [];
     const clipboard = {text: null};
     let focusCount = 0, keyboardCount = 0;
     let text = 'const a = 1;\nconst b = 2;';
@@ -238,6 +239,8 @@ function editorPortSandbox() {
         getTheme: () => 'ace/theme/tomorrow_night',
         getScrollLeft: () => 0, getScrollTop: () => 0,
         setOptions() {}, setOption() {}, setTheme() {}, on() {},
+        resize(force) { renderCalls.push(['resize', force]); },
+        renderer: {updateFull(force) { renderCalls.push(['paint', force]); }},
         focus() { focusCount++; },
         insert(value) {
             const a = Math.min(start, end), b = Math.max(start, end);
@@ -261,6 +264,7 @@ function editorPortSandbox() {
     const bridge = {
         ready() {},
         update() {},
+        frameReady(id, ticket) { committed.push([id, ticket]); },
         copyToClipboard(value) { clipboard.text = String(value); return 'ok'; },
         readClipboard() {
             return clipboard.text === null
@@ -273,6 +277,7 @@ function editorPortSandbox() {
     const sandbox = {
         console, JSON, Map, Set, Date, performance, URL,
         setTimeout, clearTimeout,
+        requestAnimationFrame(fn) { frames.push(fn); },
         location: {origin: 'https://editor.aijspro.local/'},
         document: {
             getElementById(id) { return id === 'signature' ? signature : {style: {}}; }
@@ -296,11 +301,54 @@ function editorPortSandbox() {
     vm.runInContext(read('editorClipboard.js'), sandbox, {filename: 'editorClipboard.js'});
     vm.runInContext(read('editor.js'), sandbox, {filename: 'editor.js'});
     return {
-        sandbox, messages, clipboard, editor,
+        sandbox, messages, clipboard, editor, committed, renderCalls,
+        frame() { const pending = frames.splice(0); pending.forEach(fn => fn()); },
         select(a, b) { start = a; end = b; },
         text: () => text,
         state: () => ({start, end, focusCount, keyboardCount})
     };
+}
+
+function testInitialAppearance() {
+    for (const [query, theme, background, scheme] of [
+        ['', 'tomorrow_night', '#1d1f21', 'dark'],
+        ['?theme=textmate', 'textmate', '#ffffff', 'light'],
+        ['?theme=tomorrow_night&background=%231d1f21', 'tomorrow_night', '#1d1f21', 'dark'],
+        ['?theme=textmate&background=%23FFFFFF', 'textmate', '#FFFFFF', 'light'],
+        ['?theme=untrusted&background=url(evil)', 'tomorrow_night', '#1d1f21', 'dark']
+    ]) {
+        const style = {setProperty(key, value) { this[key] = value; }};
+        const sandbox = {URLSearchParams, location: {search: query}, document: {documentElement: {style}}};
+        sandbox.window = sandbox;
+        vm.runInNewContext(read('editorInitialAppearance.js'), sandbox);
+        assert.equal(sandbox.EditorInitialAppearance.theme, theme);
+        assert.equal(style.backgroundColor, background);
+        assert.equal(style.colorScheme, scheme);
+        assert.equal(style['--editor-initial-background'], background);
+    }
+    return 'initial dark/light surface before body, invalid input fallback';
+}
+
+function testInitialFrame() {
+    let t = editorPortSandbox();
+    vm.runInContext('currentSessionId="first";active=true;', t.sandbox);
+    t.sandbox.port.commitInitialFrame('first', 7);
+    assert.deepEqual(t.renderCalls, [['resize', true], ['paint', true]]);
+    assert.equal(t.committed.length, 0);
+    t.frame(); assert.equal(t.committed.length, 0, 'wait for Ace layout to reach the next frame');
+    t.frame(); assert.deepEqual(t.committed, [['first', 7]]);
+
+    for (const change of ['currentSessionId="second";', 'active=false;', 'destroyed=true;']) {
+        t = editorPortSandbox();
+        vm.runInContext('currentSessionId="first";active=true;', t.sandbox);
+        t.sandbox.port.commitInitialFrame('first', 8);
+        t.frame(); vm.runInContext(change, t.sandbox); t.frame();
+        assert.equal(t.committed.length, 0, 'do not reveal a switched, inactive or destroyed document');
+    }
+    t = editorPortSandbox();
+    t.sandbox.port.commitInitialFrame('missing', 9);
+    assert.equal(t.renderCalls.length, 0, 'an unopened document cannot reveal the WebView');
+    return 'first frame render fence and cancelled/stale document guards';
 }
 
 function testEditorPortIntegration() {
@@ -381,3 +429,5 @@ function testTouchModule() {
 console.log('PASS:', testClipboardModule());
 console.log('PASS:', testEditorPortIntegration());
 console.log('PASS:', testTouchModule());
+console.log('PASS:', testInitialAppearance());
+console.log('PASS:', testInitialFrame());

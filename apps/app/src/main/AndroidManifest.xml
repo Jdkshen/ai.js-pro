@@ -96,6 +96,7 @@
              用 singleTop 而不是 singleTask：不改变现有任务/返回栈语义。 -->
         <activity
             android:name=".ui.editor.ProCodeEditorActivity"
+            android:theme="@style/EditorTheme.Pro"
             android:configChanges="keyboardHidden|orientation|screenSize|uiMode"
             android:label="代码编辑器"
             android:launchMode="singleTop"

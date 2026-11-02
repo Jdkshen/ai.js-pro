@@ -43,6 +43,7 @@ public final class AceCodeEditor extends FrameLayout {
     private boolean ready, destroyed, undoEnabled = true;
     private boolean active;
     private String themeName = "tomorrow_night";
+    private int surfaceColor = Color.rgb(29, 31, 33);
     private Runnable changeListener;
     private CodeEditor.BreakpointChangeListener breakpointListener;
     private String replacement = "";
@@ -69,6 +70,7 @@ public final class AceCodeEditor extends FrameLayout {
     File workspaceRoot() { return workspaceRoot; }
     String documentPath() { return documentPath; }
     String themeName() { return themeName; }
+    int surfaceColor() { return surfaceColor; }
     float initialFontSize() { return configuredFontSize; }
     boolean isActive() { return active; }
     String workspaceKey() {
@@ -209,6 +211,9 @@ public final class AceCodeEditor extends FrameLayout {
         int bg = theme.getBackgroundColor();
         boolean dark = Color.red(bg) * 299 + Color.green(bg) * 587 + Color.blue(bg) * 114 < 128000;
         themeName = dark ? "tomorrow_night" : "textmate";
+        // Match the bundled Ace theme before Chromium has painted its CSS.
+        surfaceColor = dark ? Color.rgb(29, 31, 33) : Color.WHITE;
+        host.updateSurface(this);
         js("editor.setTheme('ace/theme/" + themeName + "')");
     }
     public void insert(String text) { js("editor.insert(" + JSONObject.quote(text) + ")"); }

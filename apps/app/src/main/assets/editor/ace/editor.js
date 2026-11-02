@@ -15,7 +15,7 @@ const Range = ace.require('ace/range').Range;
 editor.setOptions({fontSize:17,showPrintMargin:false,tabSize:4,useSoftTabs:true,
     enableSnippets:true,enableBasicAutocompletion:true,enableLiveAutocompletion:true,
     showFoldWidgets:true,fadeFoldWidgets:false,hasCssTransforms:true,scrollPastEnd:0.5});
-editor.setTheme('ace/theme/tomorrow_night');
+editor.setTheme('ace/theme/'+(window.EditorInitialAppearance ? window.EditorInitialAppearance.theme : 'tomorrow_night'));
 editor.session.setMode('ace/mode/javascript');
 editor.session.setUseWorker(false); // TypeScript service supplies diagnostics in a separate worker.
 let worker=null, path='script.js', version=0, sequence=0, snapshotSequence=0, active=false, destroyed=false;
@@ -224,6 +224,14 @@ async function openSession(id,docPath,font,theme,root,select) {
 }
 window.port={snapshot:snapshot,
     openSession:openSession,
+    commitInitialFrame:function(id,ticket){
+        if(destroyed || !active || currentSessionId!==id)return;
+        editor.resize(true);editor.renderer.updateFull(true);
+        requestAnimationFrame(()=>requestAnimationFrame(()=>{
+            if(!destroyed && active && currentSessionId===id && window.EditorBridge)
+                EditorBridge.frameReady(id,ticket);
+        }));
+    },
     copySelection:editorClipboard.copySelection,
     cutSelection:editorClipboard.cutSelection,
     copyAll:editorClipboard.copyAll,

@@ -32,6 +32,11 @@
         <item name="android:actionModeBackground">@color/colorAccent</item>
     </style>
 
+    <style name="EditorTheme.Pro" parent="EditorTheme">
+        <!-- The saved app theme may differ from the system day/night preview. -->
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+
     <style name="AppTheme.FullScreen" parent="AppTheme">
         <item name="windowNoTitle">true</item>
         <item name="windowActionBar">false</item>

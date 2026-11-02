@@ -4,7 +4,9 @@ window.installEditorAppearance = function (editor) {
     function updateSurface() {
         const dark=editor.container.classList.contains('ace_dark');
         document.documentElement.style.colorScheme=dark?'dark':'light';
-        document.body.style.backgroundColor=getComputedStyle(editor.container).backgroundColor;
+        const background=getComputedStyle(editor.container).backgroundColor;
+        document.documentElement.style.backgroundColor=background;
+        document.body.style.backgroundColor=background;
         document.body.style.color=getComputedStyle(editor.container).color;
     }
     const appearance={setDark:function(dark){

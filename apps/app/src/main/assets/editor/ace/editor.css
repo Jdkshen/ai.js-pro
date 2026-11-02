@@ -1,4 +1,6 @@
-html,body { height:100%; width:100%; margin:0; overflow:hidden; overscroll-behavior:none; }
+html,body { height:100%; width:100%; margin:0; overflow:hidden; overscroll-behavior:none;
+    background:var(--editor-initial-background,#1d1f21); }
+#editor:not(.ace_editor) { background:var(--editor-initial-background,#1d1f21); }
 #editor { position:absolute; inset:0; font-family:monospace; touch-action:pan-x pan-y; }
 #signature { position:absolute; bottom:0; left:45px; right:8px; padding:5px 8px;
     display:none; color:#eee; background:#29323d; border-radius:4px; font:12px monospace;
