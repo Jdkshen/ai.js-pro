@@ -5,8 +5,10 @@ import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextUtils;
+import android.util.Log;
 
 import androidx.core.content.ContextCompat;
 
@@ -31,17 +33,12 @@ public class AccessibilityServiceTool {
 
     private static final Class<? extends AccessibilityService> sAccessibilityServiceClass = SelectToSpeakService.class;
     private static final AtomicBoolean sFastEnableInProgress = new AtomicBoolean(false);
+    private static volatile String sFastEnableError = "";
+
+    public static String getFastEnableError() { return sFastEnableError; }
 
     public static void enableAccessibilityService() {
-        if (hasSecureSettingsPermission()) {
-            if (enableAccessibilityServiceDirectly(sAccessibilityServiceClass)) {
-                GlobalAppContext.toast(R.string.text_enable_accessibility_service_fast_success);
-            } else {
-                goToAccessibilitySetting();
-            }
-            return;
-        }
-        if (ShizukuShell.isAvailable()) {
+        if (hasSecureSettingsPermission() || ShizukuShell.isAvailable()) {
             enableAccessibilityServiceByShizukuInBackground();
             return;
         }
@@ -61,6 +58,8 @@ public class AccessibilityServiceTool {
             try {
                 enabled = enableAccessibilityServiceByShizukuAndWaitFor(4_000, true);
             } catch (Throwable error) {
+                sFastEnableError = "启用无障碍失败: " + error;
+                Log.w("AccessibilityServiceTool", sFastEnableError, error);
                 enabled = false;
             } finally {
                 sFastEnableInProgress.set(false);
@@ -151,8 +150,7 @@ public class AccessibilityServiceTool {
 
     public static boolean enableAccessibilityServiceDirectlyAndWaitFor(long timeOut) {
         if (!enableAccessibilityServiceDirectly(sAccessibilityServiceClass)) return false;
-        return com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),timeOut)
-                || isAccessibilityServiceEnabled(GlobalAppContext.get());
+        return com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),timeOut);
     }
 
     public static boolean enableAccessibilityServiceByRoot(Class<? extends android.accessibilityservice.AccessibilityService> accessibilityService) {
@@ -179,19 +177,63 @@ public class AccessibilityServiceTool {
      */
     public static boolean enableAccessibilityServiceByShizukuAndWaitFor(
             long timeOut, boolean requestPermission) {
+        sFastEnableError = "";
+        Context context = GlobalAppContext.get();
+        if (com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(context)) return true;
         if (hasSecureSettingsPermission()) {
-            return enableAccessibilityServiceDirectlyAndWaitFor(timeOut);
+            boolean enabled = enableAccessibilityServiceDirectlyAndWaitFor(timeOut);
+            if (!enabled) sFastEnableError = "系统设置已请求启用，但无障碍服务尚未连接";
+            return enabled;
         }
-        if (!ShizukuShell.isAvailable()) return false;
+        if (!ShizukuShell.isAvailable()) { sFastEnableError = "Shizuku 未运行或 Binder 未连接"; return false; }
         if (!ShizukuShell.hasPermission()) {
-            if (!requestPermission || !ShizukuShell.requestPermission(60_000)) return false;
+            if (!requestPermission || !ShizukuShell.requestPermission(60_000)) {
+                sFastEnableError = "尚未授予 AI.js Pro 的 Shizuku 权限";
+                return false;
+            }
         }
-        ShizukuShell.Result result = ShizukuShell.execute(
-                grantAndEnableCommand(sAccessibilityServiceClass), 5_000, 8_192);
-        if (result.code != 0 || !TextUtils.isEmpty(result.error)) return false;
-        if (com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),timeOut)) return true;
-        // MIUI can publish the secure setting slightly before binding the service.
-        return isAccessibilityServiceEnabled(GlobalAppContext.get());
+        long deadline = SystemClock.uptimeMillis() + Math.max(1L, timeOut);
+        String component = context.getPackageName() + "/" + sAccessibilityServiceClass.getName();
+        String binderError = "";
+        boolean written = false;
+        if (Build.VERSION.SDK_INT >= 24) {
+            try {
+                String before = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+                String enabled = AccessibilityServiceComponents.enable(before, component);
+                String user = Integer.toString(android.os.Process.myUid() / 100000);
+                ShizukuSettingsCommand.Result result = ShizukuSettingsCommand.execute(context, Math.min(2500L, remaining(deadline)),
+                        "--user", user, "put", "secure", "enabled_accessibility_services", enabled);
+                if (result.code == 0) result = ShizukuSettingsCommand.execute(context, Math.min(2500L, remaining(deadline)),
+                        "--user", user, "put", "secure", "accessibility_enabled", "1");
+                written = result.code == 0;
+                if (!written) binderError = "exit=" + result.code + " " + (result.error + " " + result.output).trim();
+            } catch (RuntimeException error) {
+                binderError = error.toString();
+            }
+        }
+        // Compatibility for systems without settings shellCommand. The primary
+        // path above does not depend on Shizuku's app_process/UserService startup.
+        if (!written && remaining(deadline) > 0) {
+            ShizukuShell.Result result = ShizukuShell.execute(
+                    grantAndEnableCommand(sAccessibilityServiceClass), (int)Math.min(5000L, remaining(deadline)), 8192);
+            written = result.code == 0;
+            if (!written) {
+                sFastEnableError = "写入无障碍系统设置失败: " + binderError + "; " + commandError(result);
+                Log.w("AccessibilityServiceTool", sFastEnableError);
+                return false;
+            }
+        }
+        if (written && com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(context, remaining(deadline))) return true;
+        sFastEnableError = written ? "系统已接受启用请求，但无障碍服务尚未连接，请检查系统限制或重新启用服务"
+                : "启用无障碍超时: " + binderError;
+        Log.w("AccessibilityServiceTool", sFastEnableError);
+        return false;
+    }
+
+    private static long remaining(long deadline) { return Math.max(0L, deadline - SystemClock.uptimeMillis()); }
+
+    private static String commandError(ShizukuShell.Result result) {
+        return "exit=" + result.code + " " + (result.error + " " + result.output).trim();
     }
 
     public static boolean enableAccessibilityServiceByRootAndWaitFor(long timeOut) {

@@ -153,7 +153,7 @@ final class PocServices {
     }
 
     /**
-     * 后台：通过 Shizuku（首次会弹授权）给应用授予 WRITE_SECURE_SETTINGS 并启用无障碍，
+     * 后台：通过 Shizuku（首次会弹授权）写入系统设置并等待无障碍真正连接，
      * 完成后在主线程回调与 shizukuState 同形状的结果，phase=success/failed。
      */
     private static void enableAccessibilityByShizuku(Activity activity,
@@ -185,7 +185,7 @@ final class PocServices {
             }
             String hint = enabled
                     ? "已通过 Shizuku 启用无障碍服务"
-                    : "未能通过 Shizuku 启用无障碍服务：请确认 Shizuku 已运行并已授权";
+                    : "未能通过 Shizuku 启用无障碍服务：" + AccessibilityServiceTool.getFastEnableError();
             JSONObject value;
             try {
                 value = shizukuState(activity)
@@ -230,7 +230,7 @@ final class PocServices {
     private static JSONObject repairAccessibility(Activity activity) throws JSONException {
         boolean alreadyEnabled = false;
         try {
-            alreadyEnabled = AccessibilityServiceTool.isAccessibilityServiceEnabled(activity);
+            alreadyEnabled = com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(activity);
         } catch (Throwable error) {
             Log.w(TAG, "读取无障碍服务状态失败", error);
         }
@@ -274,7 +274,7 @@ final class PocServices {
         // 以真实服务状态为准（MIUI 上通道可能报成功但服务没绑上）。
         boolean enabledAfter = false;
         try {
-            enabledAfter = AccessibilityServiceTool.isAccessibilityServiceEnabled(activity);
+            enabledAfter = com.jdkshen.aijspro.automation.AutomationConnectionState.isReady(activity);
         } catch (Throwable error) {
             Log.w(TAG, "复查无障碍服务状态失败", error);
         }
@@ -283,10 +283,8 @@ final class PocServices {
             return new JSONObject().put("repaired", true).put("hint", "已恢复无障碍授权");
         }
 
-        String component = activity.getPackageName() + "/" + ACCESSIBILITY_SERVICE;
-        String hint = "未能自动恢复无障碍授权，请用 adb 执行：\n"
-                + "adb shell settings put secure enabled_accessibility_services " + component + "\n"
-                + "adb shell settings put secure accessibility_enabled 1";
+        String hint = "未能自动恢复无障碍连接：" + AccessibilityServiceTool.getFastEnableError()
+                + "\n请到系统无障碍设置确认 AI.js Pro 已开启。";
         // 走到这里说明复查仍未启用：即使某条通道自报成功也不认账，以真实状态为准。
         return new JSONObject().put("repaired", false).put("hint", hint);
     }
