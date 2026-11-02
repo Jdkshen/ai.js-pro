@@ -6,6 +6,8 @@ import org.jf.dexlib2.Opcodes;
 import org.jf.dexlib2.dexbacked.DexBackedDexFile;
 import org.jf.dexlib2.iface.ClassDef;
 import org.jf.dexlib2.iface.instruction.Instruction;
+import org.jf.dexlib2.iface.instruction.OffsetInstruction;
+import org.jf.dexlib2.iface.instruction.WideLiteralInstruction;
 import org.jf.dexlib2.iface.instruction.ReferenceInstruction;
 import org.jf.dexlib2.iface.instruction.RegisterRangeInstruction;
 import org.jf.dexlib2.iface.reference.MethodReference;
@@ -252,6 +254,78 @@ public class Node24DirectDexGeneratorTest {
         assertFalse(hasOpcode(superVoid, Opcode.MOVE_RESULT_OBJECT));
 
         assertGeneratedHelpersAreLegal(dexClass, AllReturns.class);
+    }
+
+    @Test
+    public void primitiveCallbacksPreserveValuesAndDefaultOnlyWhenNull() throws Exception {
+        String[] names = {"booleanValue", "byteValue", "charValue", "shortValue",
+                "intValue", "longValue", "floatValue", "doubleValue"};
+        String[] types = {"Z", "B", "C", "S", "I", "J", "F", "D"};
+        Object[] values = {true, (byte) 7, 'Q', (short) 23, 8, 12345678901L, 1.25f, 2.5d};
+        ClassDef generated = onlyClass(generate(AllReturns.class, null, names).dex);
+        for (int i = 0; i < names.length; i++) {
+            org.jf.dexlib2.iface.Method method = dexMethod(generated, names[i], types[i], types[i]);
+            assertEquals(names[i] + " must preserve a non-null callback result",
+                    values[i], evaluatePrimitiveCallbackReturn(method, values[i]));
+            assertEquals(names[i] + " must default null without unboxing it", 0L,
+                    ((Number) evaluatePrimitiveCallbackReturn(method, null)).longValue());
+        }
+    }
+
+    /** Execute the emitted return tail, including its real DEX branch offsets. */
+    private static Object evaluatePrimitiveCallbackReturn(
+            org.jf.dexlib2.iface.Method method, Object callbackValue) throws Exception {
+        Map<Integer, Instruction> code = new HashMap<>();
+        int address = 0;
+        int entry = -1;
+        boolean dispatchSeen = false;
+        for (Instruction instruction : method.getImplementation().getInstructions()) {
+            code.put(address, instruction);
+            if (dispatchSeen && entry < 0) entry = address;
+            if (instruction instanceof ReferenceInstruction
+                    && ((ReferenceInstruction) instruction).getReference() instanceof MethodReference) {
+                MethodReference ref = (MethodReference) ((ReferenceInstruction) instruction).getReference();
+                if (DISPATCHER.equals(ref.getDefiningClass()) && "invoke".equals(ref.getName())) {
+                    dispatchSeen = true;
+                }
+            }
+            address += instruction.getCodeUnits();
+        }
+        assertTrue("dispatcher return tail must exist", entry >= 0);
+        Object value = null;
+        Object pending = callbackValue;
+        for (int steps = 0; steps < 20; steps++) {
+            Instruction instruction = code.get(entry);
+            assertNotNull("branch must target an instruction boundary", instruction);
+            int next = entry + instruction.getCodeUnits();
+            switch (instruction.getOpcode()) {
+                case MOVE_RESULT_OBJECT: case MOVE_RESULT: case MOVE_RESULT_WIDE:
+                    value = pending; break;
+                case IF_EQZ: case IF_NEZ:
+                    boolean zero = value == null || value instanceof Number
+                            && ((Number) value).longValue() == 0;
+                    if (zero == (instruction.getOpcode() == Opcode.IF_EQZ)) {
+                        next = entry + ((OffsetInstruction) instruction).getCodeOffset();
+                    }
+                    break;
+                case CHECK_CAST:
+                    String type = ((TypeReference) ((ReferenceInstruction) instruction).getReference()).getType();
+                    Class.forName(type.substring(1, type.length() - 1).replace('/', '.')).cast(value);
+                    break;
+                case INVOKE_VIRTUAL:
+                    MethodReference unbox = (MethodReference) ((ReferenceInstruction) instruction).getReference();
+                    pending = value.getClass().getMethod(unbox.getName()).invoke(value);
+                    break;
+                case CONST_4: case CONST_WIDE_16:
+                    value = ((WideLiteralInstruction) instruction).getWideLiteral(); break;
+                case RETURN: case RETURN_WIDE:
+                    return value;
+                default:
+                    fail("unexpected return-tail instruction " + instruction.getOpcode());
+            }
+            entry = next;
+        }
+        throw new AssertionError("primitive callback return did not terminate");
     }
 
     @Test

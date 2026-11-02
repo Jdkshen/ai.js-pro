@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-03 Node 原生资源/动态回调候选 dev-1325（MI8 已验，未切主源）**：[实际根因与验收](docs/reports/2026-11-03_Node原生资源与动态回调修复验收.md)。ARSCLib 平台接口副本造成 R8 将 XML parser 错误优化为空，已净化依赖并加 JAR/最终 DEX 构建发布守卫；另修动态 DEX 空值分支反向导致 getItemCount=0。528 App+617 Engine JVM、5 扫描器测试、MI8 原始编译 M3 卡片图片/三页可见性/停止、Node/Rhino 内联及实际 Java 基本类型回调通过。23 ELF16KB/R8/签名/Retrofit通过，137.39MiB，SHA f5822d67…，Downloads 有候选且与已安装摘要一致。测试残留已清；LAN 仍1318，K40/新机未动，未push。独立模板本轮未刷新，不能称独立APK已验。原资源挂载假设已撤销。
+
 > **2026-11-02 当前LAN dev-1318（.4 已装 1317，可应用内更新）**：[应用内更新安装失败修复](docs/reports/2026-11-02_应用内更新安装失败修复.md)。现象「更新不了」：检查/下载/校验都正常，只卡在安装——`androidx.core` FileProvider 在真机 `resolveContentProvider(...,GET_META_DATA)` 拿不到 provider meta-data，抛 `Missing android.support.FILE_PROVIDER_PATHS meta-data`。`ApkInstallActivity` 改为优先 PackageInstaller 会话安装（MODE_FULL_INSTALL + commit(IntentSender) + STATUS_PENDING_USER_ACTION 拉起系统安装器），保留 FileProvider 回退；`.4`(Android 17)/MI8(Android 15) 日志无异常，`.4` 端到端（检查→下载→校验→系统安装器弹出）通过。dev-1317 修复测试包（144,048,420 B，SHA `5484e449…`），dev-1318 发布版（144,048,424 B，SHA `c96dd6c0…`）。旧版(≤1316)内置更新仍坏，需手动装一次 1317+；K40 仍 1312 未动。仅 LAN、本地提交。
 
 > **2026-11-02 当时LAN dev-1316（MI8已装）**：[MCP 实战要点并入](docs/reports/2026-11-02_MCP文件APK工具与Capstone反汇编.md#七mcp-实战要点dev-1316)。把用户在 `.4` 实战「刷步借壳解密」沉淀的操作要点并入产品：新增 `mcp/AIjs-MCP-Playbook.md`，`learn_autojs_skill` 返回末尾自动追加（冷进程/dlopen 粘住、terminal 大输出轮询、workspace 文本限制、借目标 App 解密函数流程、坑表 A-D、留档约定）；`initialize.instructions` 增补 4 条高频要点。144,047,708 B，SHA `a58a5bd0…`，仅 LAN、本地提交；MI8 已装，K40 未动。

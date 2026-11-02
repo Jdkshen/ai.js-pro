@@ -277,6 +277,8 @@ try {
         . (Join-Path $PSScriptRoot 'jdk17.ps1') | Out-Null
         & python (Join-Path $PSScriptRoot 'check-apk-retrofit.py') $inputApk.FullName
         if ($LASTEXITCODE -ne 0) { throw 'Retrofit APK signature audit failed; refusing publication.' }
+        & python (Join-Path $PSScriptRoot 'check-android-platform-shadowing.py') $inputApk.FullName
+        if ($LASTEXITCODE -ne 0) { throw 'Android/XML Pull API shadowing detected; refusing publication.' }
         $staging = Join-Path $projectRoot '.artifacts\release-staging'
         New-Item -ItemType Directory -Force -Path $staging | Out-Null
         $stagedApk = Join-Path $staging "AI-js-Pro-Flutter-dev-$expected.apk"

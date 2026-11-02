@@ -596,6 +596,37 @@ repositories {
     }
 }
 
+// ARSCLib's desktop JAR bundles Android/XML Pull API definitions. Those names are
+// supplied by Android's boot class path: treating them as program types lets R8
+// incorrectly replace framework XmlResourceParser results with null. Keep the
+// resource implementation, but never feed its platform stubs to Android/R8.
+configurations {
+    toolkitArscUpstream {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+def sanitizeToolkitArsc = tasks.register('sanitizeToolkitArsc', Jar) {
+    archiveFileName.set('ARSCLib-1.4.0-android.jar')
+    destinationDirectory.set(layout.buildDirectory.dir('generated/toolkit-libs'))
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    from({ zipTree(configurations.toolkitArscUpstream.singleFile) })
+    exclude 'android/**', 'org/xmlpull/v1/**'
+    exclude 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA', 'META-INF/*.EC'
+}
+def verifyToolkitAndroidApis = tasks.register('verifyToolkitAndroidApis', Exec) {
+    dependsOn sanitizeToolkitArsc
+    inputs.file(sanitizeToolkitArsc.flatMap { it.archiveFile })
+    inputs.file(rootProject.file('tools/check-android-platform-shadowing.py'))
+    doFirst {
+        commandLine pythonExecutable, rootProject.file('tools/check-android-platform-shadowing.py').absolutePath,
+                sanitizeToolkitArsc.get().archiveFile.get().asFile.absolutePath
+    }
+}
+tasks.named('preBuild').configure { dependsOn verifyToolkitAndroidApis }
+
 dependencies {
     // The app-wide Compose compiler also runs for the non-pilot variants.
     implementation 'androidx.compose.runtime:runtime:1.7.6'
@@ -687,7 +718,10 @@ dependencies {
     implementation 'org.smali:dexlib2:2.5.2'
     implementation 'org.smali:baksmali:2.5.2'
     implementation 'org.smali:smali:2.5.2'
-    implementation 'io.github.reandroid:ARSCLib:1.4.0'
+    toolkitArscUpstream 'io.github.reandroid:ARSCLib:1.4.0'
+    implementation files(sanitizeToolkitArsc.flatMap { it.archiveFile }).builtBy(sanitizeToolkitArsc)
+    // Plain JVM tests need the real API; the Android APK uses the boot API.
+    testImplementation 'xmlpull:xmlpull:1.1.3.1'
     implementation 'com.google.re2j:re2j:1.8'
     if (flutterPocEnabled) {
         // Embedding and engine are pinned together in flutter-payload-base/runtime.json.

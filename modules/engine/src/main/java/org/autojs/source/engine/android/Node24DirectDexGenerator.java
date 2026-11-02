@@ -387,7 +387,7 @@ public final class Node24DirectDexGenerator {
         // 直接拆箱会 NPE（"Expected to unbox a 'boolean' primitive type but was returned null"），
         // 这里补 null 分支返回 Java 默认值（0 / false / '\0'）。
         String nullLabel = "n24def" + RETURN_DEFAULT_LABEL.incrementAndGet();
-        out.append("    if-nez v0, :").append(nullLabel).append('\n');
+        out.append("    if-eqz v0, :").append(nullLabel).append('\n');
         out.append("    check-cast v0, L").append(wrapper).append(";\n");
         out.append("    invoke-virtual {v0}, L").append(wrapper).append(";->")
                 .append(Node24ClassGenerator.unboxMethodName(returnType)).append("()")

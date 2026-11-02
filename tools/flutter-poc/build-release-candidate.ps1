@@ -283,6 +283,9 @@ if ($null -eq $python) {
     }
 
     $auditScript = Join-Path $repo 'tools\audit-apk-size.py'
+    Write-Host 'Checking for bundled Android/XML Pull platform definitions' -ForegroundColor Cyan
+    & $python.Source (Join-Path $repo 'tools\check-android-platform-shadowing.py') $apk.FullName --report (Join-Path $outRoot "platform-api-$stamp.json")
+    if ($LASTEXITCODE -ne 0) { throw 'Android/XML Pull API shadowing detected; refusing candidate.' }
     Write-Host 'Checking Retrofit signatures in final DEX' -ForegroundColor Cyan
     & $python.Source (Join-Path $repo 'tools\check-apk-retrofit.py') $apk.FullName
     if ($LASTEXITCODE -ne 0) { throw 'Retrofit generic signatures/annotations were stripped; refusing candidate.' }

@@ -315,6 +315,8 @@ if ($LASTEXITCODE -ne 0 -or $manifestDump -match 'org\.autojs\.autojspro\.debug\
 }
 
 # Validate before copying any live update files, including the -SkipBuild path.
+& python (Join-Path $PSScriptRoot 'check-android-platform-shadowing.py') $apk.FullName
+if ($LASTEXITCODE -ne 0) { throw 'Android/XML Pull API shadowing detected; no update published' }
 if ($Abi -in @('arm64-v8a', 'x86_64')) {
     & python (Join-Path $PSScriptRoot 'check-android-16kb.py') $apk.FullName --abi $Abi
     if ($LASTEXITCODE -ne 0) { throw 'APK failed the 16KB ELF/RELRO/ZIP gate; no update published' }
