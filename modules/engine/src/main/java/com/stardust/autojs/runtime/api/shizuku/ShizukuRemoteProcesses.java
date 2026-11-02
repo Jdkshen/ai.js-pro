@@ -36,6 +36,7 @@ public final class ShizukuRemoteProcesses {
     };
     private ShizukuRemoteProcesses() { }
     private static IShizukuUserService service(long timeoutMillis) throws IOException {
+        if (android.os.Build.VERSION.SDK_INT >= 37) return ShizukuCompatConnector.connect(timeoutMillis);
         if (Looper.myLooper() == Looper.getMainLooper()) throw new IOException("Shizuku命令必须在工作线程执行");
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(Math.max(1, timeoutMillis));
         if (!ShizukuClient.ensureConnected(Math.min(3000, Math.max(1, timeoutMillis)))) throw new IOException("Shizuku未运行或Binder未连接");

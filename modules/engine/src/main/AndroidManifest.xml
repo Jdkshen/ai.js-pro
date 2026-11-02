@@ -116,6 +116,11 @@
                 android:resource="@xml/accessibility_service_config"/>
         </service>
 
+        <provider
+            android:name="com.stardust.autojs.runtime.api.shizuku.ShizukuCompatProvider"
+            android:authorities="${applicationId}.shizuku.exec"
+            android:exported="true"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
     </application>
 
 </manifest>

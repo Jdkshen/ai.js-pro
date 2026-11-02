@@ -1,5 +1,7 @@
 # AI.js Pro 剩余细节审计与收尾清单
 
+> **2026-11-02 Android17 Shizuku终端候选 dev-1312（新机已装已验，未切主源）**：[共用后端修复与验收](reports/2026-11-02_Android17_Shizuku终端兼容修复.md)。SDK37只读APK引导和受保护的Provider一次性交接Binder已补齐；1117 JVM、新机终端/MCP/三引擎、停止/超时/所有者死亡、私有/split安装、空闲重连及C/C++/so通过，AX仍正常。通用终端不再整体列“启动不了”。剩余为可视终端逐按钮、root/Sui、多用户、旧系统硬件回归、真实16KB及未来Shizuku旧进程接口移除适配；完整Java/Gradle/APK工具链仍不包含。新模板和783文档已同步，Downloads/LAN为手动候选1312，自动源保持1305；未push，旧机/K40未动。
+
 > **2026-11-02 新手机 Shizuku 无障碍候选 dev-1311（新机已验，未切主源）**：[定位与修复](reports/2026-11-02_新手机Shizuku启动无障碍修复.md)。`.4` 新机 Android17/SDK37、Shizuku已授权，但其UserService在系统LoadedApk.makeApplication空指针退出。无障碍改走Shizuku Binder直调settings，保留其他服务/用户并以真实连接判成功，错误透传。519 App JVM、最终R8/22ELF16KB/Retrofit、新机3轮启用78/62/63ms和专用按钮通过，已装1311且摘要一致；无障碍当前已连接。Downloads/LAN有手动包和MD，主源仍1305，旧机/K40未动、未push。通用Shizuku终端仍受UserService异常影响；附加修复按钮稳定复测未完成，不能算通过。
 
 > **2026-11-02 编程器闪屏候选 dev-1310（MI8 已验，未切主源）**：[首帧与主题修复](reports/2026-11-02_编程器打开文件闪屏修复.md)。1309 录屏抓到半屏白块；提前设置原生/网页底色、预载主题，首个文档恢复后经布局与视觉状态回调再显示，并防旧回调。JS 回归及 MI8 深浅/重开/进程重启六段录屏通过，输入/保存/撤销通过；R8/签名/22 ELF16KB/Retrofit 通过，仅增2134字节。Downloads/LAN有手动包和MD，主源仍1305，主题/用户标签保留、自建文件已清，K40未动、未push。Android36和其他WebView实现仍未穷举验证。
