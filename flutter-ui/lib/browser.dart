@@ -1434,190 +1434,100 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
   }
 
   Widget fileRow(Map<String, dynamic> file) {
-    final directory = file['directory'] == true,
-        project = file['project'] == true;
-    // 示例页在 AI.js Pro 里是**独立一套行组件**，比文件页大一号：
-    //   文件页 MiuixScriptListHost.kt:642/647/656/667/568·573·598·604/692
-    //          → 行 60dp、圆标 44dp(内 24)、名称 16·15sp、次级 12·11sp、缩进 74dp
-    //   示例页 MiuixSampleFragment.kt:277/290/294/299/300/312
-    //          → 行 74dp、圆标 50dp(内 28)、名称 18sp、次级 14sp、缩进 82dp
-    // FileBrowser 只被两处实例化（main.dart:489 脚本页 / :495 示例页），
-    // readOnly 就是示例页的标识（全工程仅 main.dart:499 传 true）。
-    final sample = widget.readOnly;
-    final rowMinHeight = sample ? 74.0 : 60.0;
-    final circleSize = sample ? 50.0 : 44.0;
-    final circleIconSize = sample ? 28.0 : 24.0;
-    final nameFontSize = sample ? 18.0 : 15.0;
-    final infoFontSize = sample ? 14.0 : 11.0;
-    final dividerIndent = sample ? 82.0 : 74.0;
-    final rowPadding = sample
-        ? const EdgeInsets.fromLTRB(18, 6, 8, 6)
-        : const EdgeInsets.fromLTRB(16, 5, 6, 5);
-    // AJ Pro pz/sy: blue folder, starred project, extension initial; JS green,
-    // AUTO red/R, other extensions gray. Both tabs use the same rules.
+    final scheme = Theme.of(context).colorScheme;
+    final directory = file['directory'] == true;
+    final project = file['project'] == true;
     final pending = file['pendingSample'] == true;
     final extension = fileExtension(file);
-    final color = pending
-        ? const Color(0xff607d8b)
-        : directory
-            ? const Color(0xff2196f3)
-            : extension == 'js'
-                ? const Color(0xff99cc99)
-                : extension == 'auto'
-                    ? const Color(0xfffd999a)
-                    : const Color(0xff888888);
-    final date = modifiedDate(file['modified']);
     final full = file['path']?.toString() ?? '';
+    final date = modifiedDate(file['modified']);
+    final day = date.isEmpty ? '' : date.substring(0, 10);
     final parentPath = full.isEmpty ? '' : File(full).parent.path;
     final relativeParent = parentPath.startsWith('$path/')
-        ? parentPath.substring(path.length + 1)
-        : '';
-    final muted = Theme.of(context).colorScheme.onSurface.withOpacity(.55);
-    final choosing = selecting;
+        ? parentPath.substring(path.length + 1) : '';
     final chosen = selected.contains(full);
-    return Material(
-        color: choosing
-            ? Theme.of(context).colorScheme.primary.withValues(alpha: .10)
-            : Colors.transparent,
-        child: Column(children: [
-          InkWell(
-              onTap: () => selecting ? toggleSelection(file) : open(file),
-              onLongPress: () => selecting
-                  ? toggleSelection(file)
-                  : (widget.readOnly ? itemMenu(file) : startSelection(file)),
-              child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: rowMinHeight),
-                  child: Padding(
-                      padding: rowPadding,
-                      child: Row(children: [
-                        SizedBox(
-                            width: circleSize,
-                            height: circleSize,
-                            child: Stack(clipBehavior: Clip.none, children: [
-                              Container(
-                                  width: circleSize,
-                                  height: circleSize,
-                                  decoration: BoxDecoration(
-                                      color: color, shape: BoxShape.circle),
-                                  child: pending || directory ? Icon(
-                                      pending
-                                          ? Icons.cloud_download_outlined
-                                          : Icons.folder_rounded,
-                                      color: Colors.white,
-                                      size: circleIconSize) : Center(child: Text(
-                                          browserFileSymbol(file),
-                                          style: TextStyle(color: Colors.white,
-                                              fontSize: circleIconSize, fontWeight: FontWeight.w500)))),
-                              if (project)
-                                Positioned(
-                                    right: -1,
-                                    bottom: -1,
-                                    child: Container(
-                                        padding: const EdgeInsets.all(1),
-                                        decoration: BoxDecoration(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .surface,
-                                            shape: BoxShape.circle),
-                                        child: const Icon(Icons.star_rounded,
-                                            size: 15,
-                                            color: Color(0xffffb300)))),
-                            ])),
-                        const SizedBox(width: 14),
-                        Expanded(
-                            child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                              Text(browserFileName(file),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(fontSize: nameFontSize)),
-                              if (search.isNotEmpty &&
-                                  relativeParent.isNotEmpty)
-                                Text(relativeParent,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        fontSize: infoFontSize, color: muted)),
-                              // 对齐 AI.js Pro 的 res/values/strings.xml：
-                              //   text_file_modified = "%1$s\n修改于 %2$s"  → 第 2 行是**大小**
-                              //   text_directory_modified = "文件夹\n修改于 %1$s"
-                              // 原实现第 2 行放的是类型名（fileType），且文件行会丢掉大小语义。
-                              // 类型名改由左侧圆标图标表达（与原实现一致）。
-                              if (pending) ...[
-                                Text(pendingSampleText(file),
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                        fontSize: infoFontSize, color: muted)),
-                                if (downloadFraction(file) != null)
-                                  Padding(
-                                      padding: const EdgeInsets.only(
-                                          top: 5, right: 16),
-                                      child: LinearProgressIndicator(
-                                          value: downloadFraction(file),
-                                          minHeight: 3))
-                              ] else if (sample)
-                                Text(sampleDescription(file),
-                                    style: TextStyle(
-                                        fontSize: infoFontSize, color: muted))
-                              else ...[
-                                Text(
-                                    directory
-                                        ? '文件夹'
-                                        : formatSize(file['size']),
-                                    style: TextStyle(
-                                        fontSize: infoFontSize, color: muted)),
-                                if (date.isNotEmpty)
-                                  Text('修改于 $date',
-                                      style: TextStyle(
-                                          fontSize: infoFontSize, color: muted))
-                              ]
-                            ])),
-                        if (selecting)
-                          Padding(
-                              padding: const EdgeInsets.only(right: 12),
-                              child: Icon(
-                                  chosen
-                                      ? Icons.check_circle
-                                      : Icons.radio_button_unchecked,
-                                  size: 22,
-                                  color: choosing
-                                      ? Theme.of(context).colorScheme.primary
-                                      : Theme.of(context).colorScheme.outline))
-                        else if (pending)
-                          pendingSampleAction(file)
-                        else ...[
-                          if (editable(file))
+    final subtitle = pending ? pendingSampleText(file)
+        : widget.readOnly ? sampleDescription(file)
+        : directory ? (day.isEmpty ? '文件夹' : '更新于 $day')
+        : [fileType(file), formatSize(file['size']), if (day.isNotEmpty) day].join(' · ');
+    final shape = BorderRadius.circular(15);
+    return Padding(
+        padding: EdgeInsets.symmetric(horizontal: project ? 12 : 6, vertical: project ? 4 : 0),
+        child: Material(
+            color: chosen ? scheme.primary.withValues(alpha: .10)
+                : project ? scheme.primary.withValues(alpha: .035) : Colors.transparent,
+            shape: RoundedRectangleBorder(borderRadius: shape,
+                side: project ? BorderSide(color: scheme.primary.withValues(alpha: .15)) : BorderSide.none),
+            child: InkWell(
+                borderRadius: shape,
+                onTap: () => selecting ? toggleSelection(file) : open(file),
+                onLongPress: () => selecting ? toggleSelection(file)
+                    : (widget.readOnly ? itemMenu(file) : startSelection(file)),
+                child: ConstrainedBox(
+                    constraints: const BoxConstraints(minHeight: 76),
+                    child: Padding(
+                        padding: EdgeInsets.fromLTRB(project ? 12 : 10, 12, 2, 12),
+                        child: Row(children: [
+                          WorkspaceFileIcon(file: file),
+                          const SizedBox(width: 12),
+                          Expanded(child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(children: [
+                                  Expanded(child: Text(browserFileName(file),
+                                      maxLines: 1, overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(fontSize: 15, height: 1.3,
+                                          fontWeight: project ? FontWeight.w600 : FontWeight.w500,
+                                          color: scheme.onSurface))),
+                                  if (project) ...[
+                                    const SizedBox(width: 6),
+                                    const WorkspaceTag('项目')
+                                  ]
+                                ]),
+                                const SizedBox(height: 5),
+                                Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(fontSize: 11, height: 1.35,
+                                        color: scheme.onSurfaceVariant)),
+                                if (search.isNotEmpty && relativeParent.isNotEmpty)
+                                  Padding(padding: const EdgeInsets.only(top: 3),
+                                      child: Text(relativeParent, maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant))),
+                                if (pending && downloadFraction(file) != null)
+                                  Padding(padding: const EdgeInsets.only(top: 7, right: 10),
+                                      child: LinearProgressIndicator(value: downloadFraction(file), minHeight: 3))
+                              ])),
+                          const SizedBox(width: 4),
+                          if (selecting)
+                            Padding(padding: const EdgeInsets.symmetric(horizontal: 12),
+                                child: Icon(chosen ? Icons.check_circle : Icons.radio_button_unchecked,
+                                    size: 22, color: scheme.primary))
+                          else if (pending) pendingSampleAction(file)
+                          else ...[
+                            if (editable(file))
+                              ActionIcon(
+                                  tooltip: '${widget.readOnly ? '查看源码' : '编辑'}：${file['name']}',
+                                  width: 40, height: 48,
+                                  icon: Icon(Icons.edit_outlined, size: 19, color: scheme.onSurfaceVariant),
+                                  onPressed: () => openNativeEditor(file)),
+                            if (runnable(file) || project)
+                              ActionIcon(
+                                  tooltip: '${project ? '运行项目' : extension == 'xml' ? '预览布局' : '运行'}：${file['name']}',
+                                  width: 44, height: 48,
+                                  icon: Container(width: 32, height: 32,
+                                      decoration: BoxDecoration(
+                                          color: scheme.primary.withValues(alpha: .10),
+                                          borderRadius: BorderRadius.circular(10)),
+                                      child: Icon(extension == 'xml' ? Icons.visibility_outlined : Icons.play_arrow_rounded,
+                                          size: 21, color: scheme.primary)),
+                                  onPressed: running.contains(file['path']) ? null : () => run(file)),
                             ActionIcon(
-                                tooltip: '${widget.readOnly ? '查看源码' : '编辑'}：${file['name']}',
-                                height: 48,
-                                icon: const Icon(Icons.edit_outlined, size: 22),
-                                onPressed: () => openNativeEditor(file)),
-                          if (runnable(file) || project)
-                            ActionIcon(
-                                tooltip:
-                                    '${project ? '运行项目' : extension == 'xml' ? '预览布局' : '运行'}：${file['name']}',
-                                height: 48,
-                                icon: const Icon(Icons.play_arrow_rounded,
-                                    size: 27),
-                                onPressed: running.contains(file['path'])
-                                    ? null
-                                    : () => run(file)),
-                          ActionIcon(
-                              tooltip: '更多操作：${file['name']}',
-                              height: 48,
-                              icon:
-                                  const Icon(Icons.more_vert_rounded, size: 24),
-                              onPressed: () => itemMenu(file))
-                        ]
-                      ])))),
-          Divider(
-              height: 1,
-              thickness: .5,
-              // 示例页缩进 82dp（MiuixSampleFragment.kt:312），文件页 74dp
-              indent: dividerIndent)
-        ]));
+                                tooltip: '更多操作：${file['name']}', width: 36, height: 48,
+                                icon: Icon(Icons.more_vert_rounded, size: 21, color: scheme.onSurfaceVariant),
+                                onPressed: () => itemMenu(file))
+                          ]
+                        ]))))));
   }
 
   Widget selectionBar() => Padding(

@@ -45,6 +45,10 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
     'android.permission.POST_NOTIFICATIONS': '发送通知（POST_NOTIFICATIONS）'
   };
   final form = GlobalKey<FormState>();
+  final expandedSections = <String>{'脚本和加密'};
+  static const configurationSections = {
+    '脚本和加密', '运行库与资源', '打包优化', '架构与权限', '应用签名', '启动界面'
+  };
   final fields = <String, TextEditingController>{
     for (final name in [
       'name',
@@ -408,7 +412,10 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
 
   Future<bool> save({bool notify = true}) async {
     if (loading || saving || loaded == null || running) return false;
-    if (!(form.currentState?.validate() ?? false)) return false;
+    if (!(form.currentState?.validate() ?? false)) {
+      setState(() => expandedSections.addAll(configurationSections));
+      return false;
+    }
     final change = patch();
     final signingChange = signingPatch();
     final version = revision;
@@ -936,7 +943,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
               const DropdownMenuItem(
                   value: '__default', child: Text('沿用模板默认设置')),
               ...options.entries.map((entry) =>
-                  DropdownMenuItem(value: entry.key, child: Text(entry.value))),
+                  DropdownMenuItem(value: entry.key, child: Text(entry.value, maxLines: 1, overflow: TextOverflow.ellipsis))),
               if (choice == '__custom')
                 const DropdownMenuItem(
                     value: '__custom', child: Text('保留项目现有自定义配置'))
@@ -994,21 +1001,113 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                   helperText: helper,
                   helperMaxLines: 3,
                   suffixIcon: suffix,
-                  border: const OutlineInputBorder(),
+                  filled: true,
+                  fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: .25),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: .6))),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.5)),
                   isDense: true)));
 
-  Widget card(String title, List<Widget> children) => Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: GlassSurface(
-          blur: false,
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            Text(title,
-                style:
-                    const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 14),
-            ...children
-          ])));
+  Widget card(String title, List<Widget> children) {
+    final scheme = Theme.of(context).colorScheme;
+    final collapsible = configurationSections.contains(title);
+    final expanded = !collapsible || expandedSections.contains(title);
+    final icons = {
+      '应用信息': Icons.apps_rounded, '脚本和加密': Icons.code_rounded,
+      '运行库与资源': Icons.inventory_2_outlined, '打包优化': Icons.tune_rounded,
+      '架构与权限': Icons.admin_panel_settings_outlined, '应用签名': Icons.key_outlined,
+      '启动界面': Icons.phone_android_outlined, '本地打包': Icons.android_rounded
+    };
+    final subtitles = {
+      '脚本和加密': '入口、加密等级与应用图标',
+      '运行库与资源': '运行库、模型与附加文件',
+      '打包优化': '资源精简与组件设置',
+      '架构与权限': '${abis.length} 种架构 · ${permissions.length} 项权限',
+      '应用签名': customSignature ? '使用自定义签名' : '使用内置签名',
+      '启动界面': '启动页、日志与运行偏好'
+    };
+    return Padding(padding: const EdgeInsets.only(bottom: 12),
+        child: Material(
+            color: Color.alphaBlend(scheme.onSurface.withValues(alpha: .025), scheme.surface),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18),
+                side: BorderSide(color: scheme.outlineVariant.withValues(alpha: .45))),
+            clipBehavior: Clip.antiAlias,
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              InkWell(
+                  key: ValueKey('project-section-$title'),
+                  onTap: !collapsible ? null : () => setState(() {
+                    if (expanded) expandedSections.remove(title); else expandedSections.add(title);
+                  }),
+                  child: Padding(padding: const EdgeInsets.all(16),
+                      child: Row(children: [
+                        Icon(icons[title] ?? Icons.description_outlined, size: 21, color: scheme.primary),
+                        const SizedBox(width: 11),
+                        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                          Text(title, style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: scheme.onSurface)),
+                          if (subtitles[title] != null) ...[
+                            const SizedBox(height: 4),
+                            Text(subtitles[title]!, style: TextStyle(fontSize: 11, color: scheme.onSurfaceVariant))
+                          ]
+                        ])),
+                        if (collapsible) Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                            size: 22, color: scheme.onSurfaceVariant)
+                      ]))),
+              // Keep collapsed fields mounted: validators and unsaved values still apply.
+              Offstage(offstage: !expanded,
+                  child: Padding(padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children)))
+            ])));
+  }
+
+  Widget projectOverview() {
+    final scheme = Theme.of(context).colorScheme;
+    final name = fields['name']!.text.trim();
+    final segments = File(projectPath).uri.pathSegments.where((s) => s.isNotEmpty).toList();
+    final title = name.isNotEmpty ? name : segments.isEmpty ? '脚本项目' : segments.last;
+    final engine = const {'node': 'Node.js', 'nodejs': 'Node.js', 'quickjs': 'QuickJS', 'rhino': 'Rhino'}[loaded?['engine']] ?? '脚本项目';
+    return Container(
+        margin: const EdgeInsets.only(bottom: 20),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+            color: scheme.primary.withValues(alpha: .055),
+            border: Border.all(color: scheme.primary.withValues(alpha: .14)),
+            borderRadius: BorderRadius.circular(20)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const WorkspaceFileIcon(file: {'directory': true, 'project': true}, size: 52),
+            const SizedBox(width: 14),
+            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title,
+                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 20, height: 1.25, fontWeight: FontWeight.w600, color: scheme.onSurface)),
+              const SizedBox(height: 8),
+              Wrap(spacing: 6, runSpacing: 6, children: [
+                WorkspaceTag(engine),
+                if (fields['versionName']!.text.isNotEmpty) WorkspaceTag('v${fields['versionName']!.text}'),
+                WorkspaceTag(loaded == null ? '未读取' : dirty ? '未保存' : '已保存')
+              ])
+            ]))
+          ]),
+          const SizedBox(height: 15),
+          Container(height: 1, color: scheme.primary.withValues(alpha: .10)),
+          const SizedBox(height: 10),
+          Row(children: [
+            Icon(Icons.folder_open_outlined, size: 16, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 8),
+            Expanded(child: SelectableText(projectPath, maxLines: 2,
+                style: TextStyle(fontSize: 11, height: 1.45, color: scheme.onSurfaceVariant))),
+            IconButton(tooltip: '复制项目路径', visualDensity: VisualDensity.compact,
+                icon: Icon(Icons.copy_outlined, size: 17, color: scheme.onSurfaceVariant),
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: projectPath));
+                  if (mounted) message(context, '项目路径已复制');
+                })
+          ])
+        ]));
+  }
 
   String stageLabel(String raw) {
     const names = {
@@ -1179,10 +1278,6 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
       key: form,
       child: Column(children: [
         card('应用信息', [
-          Text(
-              '${loaded?['engine'] == 'node' ? 'Node.js' : loaded?['engine'] == 'rhino' ? 'Rhino' : loaded?['engine']} 引擎 · ${loaded?['signature'] == 'project' ? '使用项目已有签名' : '使用内置签名'}',
-              style: const TextStyle(fontSize: 12)),
-          const SizedBox(height: 14),
           textField('name', '应用名称',
               validator: (text) =>
                   (text?.trim().isEmpty ?? true) ? '请输入应用名称' : null),
@@ -1213,6 +1308,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                   onPressed: busy ? null : chooseMain,
                   icon: const Icon(Icons.folder_open_outlined))),
           DropdownButtonFormField<int>(
+              isExpanded: true,
               key: const ValueKey('project-encryptLevel'),
               value: [0, 1, 2, 3].contains(encryptLevel) ? encryptLevel : null,
               decoration: const InputDecoration(
@@ -1335,6 +1431,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
           Text(abiHelper, style: const TextStyle(fontSize: 12)),
           const SizedBox(height: 14),
           DropdownButtonFormField<String>(
+              isExpanded: true,
               key: const ValueKey('project-abi'),
               value: abiChoice,
               decoration: const InputDecoration(
@@ -1347,7 +1444,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                       enabled: entry.key == 'all' ||
                           abiInfo('shipped').isEmpty ||
                           abiInfo('shipped').contains(entry.key),
-                      child: Text(entry.value)))
+                      child: Text(entry.value, maxLines: 1, overflow: TextOverflow.ellipsis)))
                   .toList(),
               validator: (choice) => choice == null
                   ? '请选择 ABI 架构'
@@ -1556,6 +1653,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
       child: WillPopScope(
           onWillPop: leave,
           child: Scaffold(
+              backgroundColor: Theme.of(context).colorScheme.surfaceContainerLowest,
               appBar: AppBar(
                   foregroundColor: Theme.of(context).colorScheme.onSurface,
                   systemOverlayStyle: utilitySystemBars(context),
@@ -1571,7 +1669,9 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                   ]),
               body: loaded == null && loading
                   ? const Center(child: CircularProgressIndicator())
-                  : ListView(padding: const EdgeInsets.all(16), children: [
+                  : Align(alignment: Alignment.topCenter,
+                      child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 760),
+                          child: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 24), children: [
                       if (nativeBridge?['detected'] == true)
                         card('第三方 native 库提示', [
                           Text(
@@ -1582,21 +1682,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                                   color: Theme.of(context).colorScheme.error)),
                           const SizedBox(height: 8),
                         ]),
-                      SelectableText(projectPath,
-                          style: const TextStyle(fontSize: 12)),
-                      Padding(
-                          padding: const EdgeInsets.only(top: 4, bottom: 12),
-                          child: Text(
-                              loaded == null
-                                  ? '项目配置尚未读取'
-                                  : dirty
-                                      ? '配置未保存'
-                                      : '配置已保存',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: dirty
-                                      ? Theme.of(context).colorScheme.primary
-                                      : null))),
+                      projectOverview(),
                       if (error != null)
                         card('操作未完成', [
                           SelectableText(error!,
@@ -1615,7 +1701,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                       buildStatus(),
                       if (loaded != null) configuration(),
                       if (loading) const LinearProgressIndicator()
-                    ]),
+                    ]))),
               bottomNavigationBar: loaded == null
                   ? null
                   : SafeArea(
@@ -1624,7 +1710,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                           radius: 0,
                           blur: false,
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
+                              horizontal: 16, vertical: 12),
                           child:
                               Column(mainAxisSize: MainAxisSize.min, children: [
                             if (running)
@@ -1634,18 +1720,26 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                                       style: TextStyle(fontSize: 12))),
                             Row(children: [
                               Expanded(
-                                  child: OutlinedButton(
+                                  child: OutlinedButton.icon(
+                                      icon: const Icon(Icons.save_outlined, size: 18),
+                                      style: OutlinedButton.styleFrom(
+                                          minimumSize: const Size(0, 48),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13))),
                                       onPressed:
                                           busy || running ? null : () => save(),
-                                      child: Text(saving && !submitting
+                                      label: Text(saving && !submitting
                                           ? '正在保存…'
                                           : '保存配置'))),
                               const SizedBox(width: 10),
                               Expanded(
-                                  child: ElevatedButton(
+                                  child: ElevatedButton.icon(
+                                      icon: const Icon(Icons.android_rounded, size: 19),
+                                      style: ElevatedButton.styleFrom(
+                                          elevation: 0, minimumSize: const Size(0, 48),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13))),
                                       onPressed:
                                           busy || running ? null : buildProject,
-                                      child: Text(submitting
+                                      label: Text(submitting
                                           ? '正在提交…'
                                           : job?['status'] == 'failed'
                                               ? '保存并重试'
