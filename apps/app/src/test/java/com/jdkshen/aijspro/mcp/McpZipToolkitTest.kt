@@ -53,8 +53,10 @@ class McpZipToolkitTest {
             assertTrue(obj.get("description").asString.isNotEmpty())
         }
         val update = definitions.first { it.asJsonObject.get("name").asString == "zip_update" }.asJsonObject
-        val required = update.getAsJsonObject("inputSchema").getAsJsonArray("required").map { it.asString }
-        assertTrue(required.contains("targetVersion"))
+        val schema = update.getAsJsonObject("inputSchema")
+        val required = schema.getAsJsonArray("required").map { it.asString }
+        assertFalse(required.contains("targetVersion"))
+        assertTrue(schema.getAsJsonObject("properties").has("targetVersion"))
     }
 
     @Test

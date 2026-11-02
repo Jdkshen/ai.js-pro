@@ -24,8 +24,8 @@ import java.security.MessageDigest
 import java.util.Calendar
 import java.util.GregorianCalendar
 import java.util.TimeZone
-import com.google.re2j.Pattern
-import com.google.re2j.PatternSyntaxException
+import java.util.regex.Pattern
+import java.util.regex.PatternSyntaxException
 import kotlin.math.min
 
 /**
@@ -102,7 +102,7 @@ internal class McpFileToolkit(private val root: File) {
             "^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})" +
                 "(?:\\.([0-9]{1,3}))?(Z|[+-][0-9]{2}:[0-9]{2})$"
         )
-        private val CASE_INSENSITIVE = Pattern.CASE_INSENSITIVE
+        private val CASE_INSENSITIVE = Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE
 
         private val TEXT_CODECS: List<TextCodec> = listOf(
             TextCodec("utf-8", Charsets.UTF_8, ByteArray(0)),
@@ -1434,6 +1434,7 @@ internal class McpFileToolkit(private val root: File) {
         val data = JsonObject().apply {
             addProperty("root", rootDir.path)
             addProperty("home", rootDir.path)
+            addProperty("homePath", rootDir.path)
             addProperty("access", "read_write")
             addProperty("readable", true)
             addProperty("writable", true)
@@ -2480,7 +2481,7 @@ internal class McpFileToolkit(private val root: File) {
         return result
     }
 
-    private fun expandTemplate(parts: List<TemplatePart>, matcher: com.google.re2j.Matcher): String {
+    private fun expandTemplate(parts: List<TemplatePart>, matcher: java.util.regex.Matcher): String {
         val builder = StringBuilder()
         for (part in parts) {
             val number = part.groupNumber
@@ -2525,11 +2526,11 @@ internal class McpFileToolkit(private val root: File) {
         val decoded = readDecodedFile(path, encoding, targetVersion)
         val flags = Pattern.MULTILINE or (if (caseSensitive) 0 else CASE_INSENSITIVE)
         val pattern = try {
-            Pattern.compile(if (patternType == "literal") Pattern.quote(contentPattern) else contentPattern, flags)
+            ToolkitRegex.compile(if (patternType == "literal") Pattern.quote(contentPattern) else contentPattern, flags)
         } catch (error: PatternSyntaxException) {
             throw IllegalArgumentException("正则无效：${error.message}")
         }
-        val matcher = pattern.matcher(decoded.text)
+        val matcher = ToolkitRegex.matcher(pattern, decoded.text)
         val groupCount = matcher.groupCount()
         val template = if (replacementMode == "template") {
             parseTemplate(writeText, groupCount, namedGroupNumbers(contentPattern))
@@ -2539,7 +2540,7 @@ internal class McpFileToolkit(private val root: File) {
         val builder = StringBuilder(decoded.text.length)
         var last = 0
         var count = 0L
-        while (matcher.find()) {
+        while (ToolkitRegex.find(matcher)) {
             builder.append(decoded.text, last, matcher.start())
             if (replacementMode == "template") {
                 builder.append(expandTemplate(template, matcher))
@@ -2608,15 +2609,15 @@ internal class McpFileToolkit(private val root: File) {
             var flags = if (caseSensitive) 0 else CASE_INSENSITIVE
             if (multiline) flags = flags or Pattern.MULTILINE
             regex = try {
-                Pattern.compile(if (type == "literal") Pattern.quote(pattern) else pattern, flags)
+                ToolkitRegex.compile(if (type == "literal") Pattern.quote(pattern) else pattern, flags)
             } catch (error: PatternSyntaxException) {
                 throw IllegalArgumentException("正则无效：${error.message}")
             }
         }
 
         fun matches(value: String): Boolean {
-            val matcher = regex.matcher(value)
-            return if (mode == "exact") matcher.matches() else matcher.find()
+            val matcher = ToolkitRegex.matcher(regex, value)
+            return if (mode == "exact") ToolkitRegex.matches(matcher) else ToolkitRegex.find(matcher)
         }
     }
 
@@ -2771,7 +2772,10 @@ internal class McpFileToolkit(private val root: File) {
 
             val matchedBy = ArrayList<String>()
             if (nameMatcher != null) {
-                if (!nameMatcher.matches(child.name)) continue
+                try { if (!nameMatcher.matches(child.name)) continue }
+                catch (failure: ToolkitRegex.BudgetExceeded) {
+                    stopReason = "regexBudget"; canContinue = false; addWarning(warnings, failure.message.orEmpty()); break
+                }
                 matchedBy.add("name")
             }
             val fileSize = child.length()
@@ -2967,8 +2971,10 @@ internal class McpFileToolkit(private val root: File) {
             outcome = ContentOutcome.DECODE_ERROR
         } catch (error: IOException) {
             outcome = ContentOutcome.IO_ERROR
+        } catch (error: ToolkitRegex.BudgetExceeded) {
+            outcome = ContentOutcome.BUDGET
         } catch (error: StackOverflowError) {
-            outcome = ContentOutcome.DECODE_ERROR
+            outcome = ContentOutcome.BUDGET
         }
         return outcome
     }
@@ -3010,6 +3016,10 @@ internal class McpFileToolkit(private val root: File) {
                 addProperty("pattern", patternText)
                 addProperty("patternType", patternType)
                 add("matches", JsonArray())
+                add("matchedLines", JsonArray())
+                add("blocks", JsonArray())
+                addProperty("scanSize", fileBytes.size)
+                addProperty("searchedThroughByteOffset", 0)
                 addProperty("count", 0)
                 addProperty("totalLines", 0)
                 addProperty("truncated", true)
@@ -3022,7 +3032,7 @@ internal class McpFileToolkit(private val root: File) {
         val spans = lineSpans(text)
         val flags = Pattern.MULTILINE or (if (caseSensitive) 0 else CASE_INSENSITIVE)
         val pattern = try {
-            Pattern.compile(if (patternType == "literal") Pattern.quote(patternText) else patternText, flags)
+            ToolkitRegex.compile(if (patternType == "literal") Pattern.quote(patternText) else patternText, flags)
         } catch (error: PatternSyntaxException) {
             throw IllegalArgumentException("正则无效：${error.message}")
         }
@@ -3070,21 +3080,22 @@ internal class McpFileToolkit(private val root: File) {
             }
             val span = spans[line]
             val content = text.substring(span.start, span.contentEnd)
-            if (content.length <= MAX_SEARCH_TEXT_LINE_CHARS) {
-                if (pattern.matcher(content).find()) {
-                    matchIndices.add(line)
-                    if (matchIndices.size.toLong() >= needed) break
+            try {
+                if (content.length <= MAX_SEARCH_TEXT_LINE_CHARS) {
+                    if (ToolkitRegex.find(ToolkitRegex.matcher(pattern, content))) {
+                        matchIndices.add(line)
+                        if (matchIndices.size.toLong() >= needed) break
+                    }
+                } else {
+                    if (!lineScanLimited) addWarning(warnings, "存在超过 1 MiB 的行，仅搜索并返回前 1 MiB：${path.path}")
+                    lineScanLimited = true
+                    if (ToolkitRegex.find(ToolkitRegex.matcher(pattern, content.substring(0, MAX_SEARCH_TEXT_LINE_CHARS)))) {
+                        matchIndices.add(line)
+                        if (matchIndices.size.toLong() >= needed) break
+                    }
                 }
-            } else {
-                if (!lineScanLimited) {
-                    addWarning(warnings, "存在超过 1 MiB 的行，仅搜索并返回前 1 MiB：${path.path}")
-                }
-                lineScanLimited = true
-                val head = content.substring(0, MAX_SEARCH_TEXT_LINE_CHARS)
-                if (pattern.matcher(head).find()) {
-                    matchIndices.add(line)
-                    if (matchIndices.size.toLong() >= needed) break
-                }
+            } catch (failure: ToolkitRegex.BudgetExceeded) {
+                timeBudget = true; addWarning(warnings, failure.message ?: "正则匹配预算耗尽"); break
             }
             line++
         }
@@ -3175,6 +3186,24 @@ internal class McpFileToolkit(private val root: File) {
             ordinal++
         }
 
+        val intervals = ArrayList<Pair<Int, Int>>()
+        matches.forEach { value ->
+            val index = value.asJsonObject.get("lineIndex").asInt
+            val start = maxOf(0, index - contextBefore); val end = minOf(spans.size, index + contextAfter + 1)
+            val previous = intervals.lastOrNull()
+            if(previous != null && start <= previous.second) intervals[intervals.lastIndex] = previous.first to maxOf(previous.second, end)
+            else intervals.add(start to end)
+        }
+        val blocks = JsonArray(); var blockChars = 0
+        for((start, end) in intervals) {
+            if(blockChars >= maxChars) { contextClipped = true; break }
+            val raw = text.substring(spans[start].start, spans[end - 1].end)
+            var fragment = takeCodePoints(raw, maxChars - blockChars)
+            if(fragment.length < raw.length && fragment.endsWith('\r') && raw[fragment.length] == '\n') fragment = fragment.dropLast(1)
+            if(fragment.length < raw.length) contextClipped = true
+            blockChars += textCodePoints(fragment)
+            blocks.add(JsonObject().apply { addProperty("startLine", start); addProperty("startColumn", 0); addProperty("text", fragment) })
+        }
         val more = ordinal < matchIndices.size
         val nextCursor = if (more && !timeBudget) {
             encodeCursor(JsonObject().apply {
@@ -3212,6 +3241,14 @@ internal class McpFileToolkit(private val root: File) {
             addProperty("pattern", patternText)
             addProperty("patternType", patternType)
             add("matches", matches)
+            add("matchedLines", JsonArray().apply { matches.forEach { add(it.asJsonObject.get("lineIndex")) } })
+            add("blocks", blocks)
+            addProperty("scanSize", fileBytes.size)
+            val through = if(!timeBudget && line >= spans.size) fileBytes.size else {
+                val end = spans.getOrNull(line)?.end ?: text.length
+                encodeText(text.substring(0, end), codec).size.coerceAtMost(fileBytes.size)
+            }
+            addProperty("searchedThroughByteOffset", through)
             addProperty("count", matches.size())
             addProperty("totalLines", spans.size)
             addProperty("truncated", truncated)

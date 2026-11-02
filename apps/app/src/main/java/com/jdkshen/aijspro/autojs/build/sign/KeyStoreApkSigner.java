@@ -19,6 +19,8 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+import java.util.zip.ZipFile;
+import java.util.Enumeration;
 
 /**
  * Signs a packaged APK with a user supplied key, producing a JAR (v1) signature plus an APK
@@ -73,6 +75,64 @@ public final class KeyStoreApkSigner implements Signer {
     /** APK toolkit path: preserve v1 bytes, align native ZIP data, then regenerate v2. */
     public void signAligned(File workspaceDir, File outputApk) throws Exception {
         writeUnsignedApk(workspaceDir, outputApk);
+        com.jdkshen.aijspro.mcp.ToolkitArchiveAlignment.align(outputApk, true);
+        insertV2Signature(outputApk);
+    }
+
+    /** Sign an existing edited archive without changing its entries' compression methods. */
+    public void signAlignedArchive(File inputApk, File outputApk) throws Exception {
+        if (inputApk.getCanonicalFile().equals(outputApk.getCanonicalFile())) {
+            throw new IOException("Archive signer requires distinct input and output files");
+        }
+        try (ZipFile source = new ZipFile(inputApk)) {
+            TreeMap<String, ZipEntry> entries = new TreeMap<>();
+            Enumeration<? extends ZipEntry> iterator = source.entries();
+            while (iterator.hasMoreElements()) {
+                ZipEntry entry = iterator.nextElement();
+                String upper = entry.getName().toUpperCase(java.util.Locale.US);
+                if (upper.startsWith("META-INF/") && (upper.endsWith(".SF") || upper.endsWith(".RSA")
+                        || upper.endsWith(".DSA") || upper.endsWith(".EC") || upper.equals("META-INF/MANIFEST.MF"))) continue;
+                if (entries.put(entry.getName(), entry) != null) throw new IOException("Duplicate APK entry");
+            }
+            Map<String, byte[]> digests = new LinkedHashMap<>();
+            byte[] buffer = new byte[65536];
+            long total = 0;
+            for (ZipEntry entry : entries.values()) {
+                if (entry.isDirectory()) continue;
+                MessageDigest digest = MessageDigest.getInstance("SHA-256");
+                try (InputStream input = source.getInputStream(entry)) {
+                    int count;
+                    while ((count = input.read(buffer)) != -1) {
+                        total += count;
+                        if (total > 512L * 1024 * 1024) throw new IOException("APK contents exceed 512 MiB");
+                        digest.update(buffer, 0, count);
+                    }
+                }
+                digests.put(entry.getName(), digest.digest());
+            }
+            ApkSignerV1.ManifestFile manifest = ApkSignerV1.buildManifest(key, digests);
+            byte[] signatureFile = ApkSignerV1.buildSignatureFile(key, manifest, true);
+            byte[] certificate = ApkSignerV1.buildPkcs7Signature(key, signatureFile);
+            try (ZipOutputStream output = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(outputApk)))) {
+                for (ZipEntry original : entries.values()) {
+                    ZipEntry entry = new ZipEntry(original.getName());
+                    entry.setMethod(original.getMethod());
+                    if (original.getTime() >= 0) entry.setTime(original.getTime());
+                    if (original.getMethod() == ZipEntry.STORED) {
+                        entry.setSize(original.getSize()); entry.setCompressedSize(original.getSize()); entry.setCrc(original.getCrc());
+                    }
+                    output.putNextEntry(entry);
+                    if (!original.isDirectory()) try (InputStream input = source.getInputStream(original)) {
+                        int count;
+                        while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                    }
+                    output.closeEntry();
+                }
+                putEntry(output, MANIFEST_PATH, manifest.bytes);
+                putEntry(output, SIGNATURE_FILE_PATH, signatureFile);
+                putEntry(output, SIGNATURE_BLOCK_PATH, certificate);
+            }
+        }
         com.jdkshen.aijspro.mcp.ToolkitArchiveAlignment.align(outputApk);
         insertV2Signature(outputApk);
     }

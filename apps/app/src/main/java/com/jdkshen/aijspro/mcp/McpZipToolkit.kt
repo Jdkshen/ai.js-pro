@@ -15,6 +15,7 @@ import java.io.FilterInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.io.InputStreamReader
+import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.io.Reader
 import java.io.SequenceInputStream
@@ -26,6 +27,7 @@ import java.util.Locale
 import java.util.TreeSet
 import java.util.UUID
 import java.util.zip.CRC32
+import java.util.zip.Deflater
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -33,9 +35,10 @@ import java.util.zip.ZipOutputStream
 /**
  * ZIP tools for the AI.js Pro MCP server.
  *
- * This class deliberately depends only on java.io/java.util.zip/Gson so it can run on Android
- * API 21 and in plain JVM unit tests. All caller supplied paths are confined to [root]; ZIP
- * contents are treated as untrusted input and are read with explicit entry, size and ratio
+ * Listing and raw-entry copying use java.io/java.util.zip so existing limits stay in place.
+ * AES/ZipCrypto decryption and AES-256 writing are isolated in [ToolkitZipCrypto], which wraps the
+ * zip4j 1.3.2 API already exposed by `:engine`. All caller supplied paths are confined to [root];
+ * ZIP contents are treated as untrusted input and are read with explicit entry, size and ratio
  * budgets.
  */
 internal class McpZipToolkit(private val root: File) {
@@ -99,32 +102,32 @@ internal class McpZipToolkit(private val root: File) {
         ))
         add(definition(
             "zip_read_text", "读取 ZIP 文本",
-            "按行/列分页读取 ZIP 中某个文本条目的内容，保留原始 LF、CRLF、CR。encoding 传空字符串自动识别，续页必须沿用返回的 encoding。该预览不校验整个条目；需要完整性时调用 zip_test。",
+            "按行/列分页读取 ZIP 中某个文本条目的内容，保留原始 LF、CRLF、CR。支持未加密、ZipCrypto 与 AES-256 条目；正确密码才可解密。encoding 传空字符串自动识别，续页必须沿用返回的 encoding。该预览不校验整个条目；需要完整性时调用 zip_test。",
             readTextSchema(), readOnly = true,
         ))
         add(definition(
             "zip_read_bytes", "读取 ZIP 字节",
-            "以大写十六进制分页读取 ZIP 条目的未压缩字节。偏移量是条目内容偏移，不是 ZIP 文件偏移。该预览不校验整个条目；需要完整性时调用 zip_test。",
+            "以大写十六进制分页读取 ZIP 条目的未压缩字节。偏移量是条目内容偏移，不是 ZIP 文件偏移。支持未加密、ZipCrypto 与 AES-256 条目。该预览不校验整个条目；需要完整性时调用 zip_test。",
             readBytesSchema(), readOnly = true,
         ))
         add(definition(
             "zip_test", "校验 ZIP 完整性",
-            "完整读取每个非目录条目并核对长度与 CRC，遇到首个错误停止。会受扫描条目数和字节预算限制；预算不足或线程被中断时报告未完成，绝不把截断扫描当作通过。",
+            "完整读取每个非目录条目并核对长度与 CRC；AES 条目额外校验 HMAC，ZipCrypto 条目校验密码与 CRC。遇到首个错误停止。会受扫描条目数和字节预算限制；预算不足或线程被中断时报告未完成，绝不把截断扫描当作通过。",
             testSchema(), readOnly = true,
         ))
         add(definition(
             "zip_extract", "解压 ZIP",
-            "按显式 entryPath→destinationPath 映射解压。会拒绝绝对条目、..、反斜线、重复目标、目标冲突、符号链接和不安全覆盖；overwrite 必须显式为 true 才能替换已有普通文件。解压前检查条目数、声明总大小和压缩比。",
+            "按显式 entryPath→destinationPath 映射解压，支持未加密、ZipCrypto 与 AES-256 条目。会拒绝绝对条目、..、反斜线、重复目标、目标冲突、符号链接和不安全覆盖；overwrite 必须显式为 true 才能替换已有普通文件。解压前检查条目数、声明总大小和压缩比。",
             extractSchema(), readOnly = false,
         ))
         add(definition(
             "zip_create", "创建 ZIP",
-            "从本地文件或目录创建普通 ZIP（Stored 或 Deflate），支持隐藏文件和空目录。输出不能位于源目录内，也不能同时作为输入。password 仅在空字符串时受支持；加密请先不要依赖本工具。",
+            "从本地文件或目录创建 ZIP（Stored 或 Deflate），支持隐藏文件和空目录。输出不能位于源目录内，也不能同时作为输入。password 为空字符串时不加密；非空时文件条目使用 AES-256 加密，目录条目保持不加密。",
             createSchema(), readOnly = false,
         ))
         add(definition(
             "zip_update", "修改 ZIP",
-            "按原始 ZIP 中的名称增加、删除或重命名条目，操作无序且不可形成链、交换或竞争目标。写入同目录临时文件，targetVersion 必须匹配当前 ZIP 版本以防止旧状态覆盖；失败时保留原档。不执行 APK 签名。",
+            "按原始 ZIP 中的名称增加、删除或重命名条目，操作无序且不可形成链、交换或竞争目标。写入同目录临时文件；未改与重命名条目保留原压缩/加密原始字节与密码，新增/替换条目按 password 使用 AES-256 或明文。targetVersion 是可选扩展：传入时校验，省略时仍按当前版本操作并在写入期间检查源未变化。失败时保留原档。不执行 APK 签名。",
             updateSchema(), readOnly = false,
         ))
     }
@@ -157,7 +160,7 @@ internal class McpZipToolkit(private val root: File) {
 
     private fun readTextSchema(): JsonObject = schema(
         "path" to str("ZIP 文件路径，root 相对或 root 内绝对路径"),
-        "password" to str("条目密码；未加密条目传空字符串。当前不支持加密条目"),
+        "password" to str("条目密码；未加密条目传空字符串。支持 AES-256 与 ZipCrypto，密码错误时拒绝读取"),
         "entryPath" to str("ZIP 内完整文件路径；与 zip_list 的 entryPath + relativePath 直接拼接"),
         "encoding" to str("文本编码，空字符串自动识别；如 utf-8、utf-8-bom、utf-16le、gb18030"),
         "startLine" to long("从 0 开始的逻辑行号", 0, MAX_SAFE_INTEGER),
@@ -169,7 +172,7 @@ internal class McpZipToolkit(private val root: File) {
 
     private fun readBytesSchema(): JsonObject = schema(
         "path" to str("ZIP 文件路径，root 相对或 root 内绝对路径"),
-        "password" to str("条目密码；未加密条目传空字符串。当前不支持加密条目"),
+        "password" to str("条目密码；未加密条目传空字符串。支持 AES-256 与 ZipCrypto，密码错误时拒绝读取"),
         "entryPath" to str("ZIP 内完整文件路径"),
         "byteOffset" to long("从 0 开始的未压缩字节偏移", 0, MAX_SAFE_INTEGER),
         "maxBytes" to int("单页最大字节数", 1, 65536),
@@ -178,7 +181,7 @@ internal class McpZipToolkit(private val root: File) {
 
     private fun testSchema(): JsonObject = schema(
         "path" to str("ZIP 文件路径，root 相对或 root 内绝对路径"),
-        "password" to str("统一密码；未加密 ZIP 传空字符串。当前不支持加密条目"),
+        "password" to str("统一密码；未加密 ZIP 传空字符串。AES-256 条目同时校验 HMAC，ZipCrypto 校验 CRC"),
         required = arrayOf("path", "password"),
     )
 
@@ -198,7 +201,7 @@ internal class McpZipToolkit(private val root: File) {
                 add("required", JsonArray().apply { add("entryPath"); add("destinationPath") })
             })
         },
-        "password" to str("统一密码；未加密条目传空字符串。当前不支持加密条目"),
+        "password" to str("统一密码；未加密条目传空字符串。支持 AES-256 与 ZipCrypto"),
         "overwrite" to bool("是否允许替换已存在的普通目标文件"),
         required = arrayOf("path", "entries", "password", "overwrite"),
     )
@@ -221,7 +224,7 @@ internal class McpZipToolkit(private val root: File) {
         },
         "overwrite" to bool("是否允许替换已存在的普通输出文件"),
         "level" to int("0 仅存储；1..9 使用 Deflate，数字越大压缩越强", 0, 9),
-        "password" to str("当前仅支持空字符串；加密 ZIP 不受支持"),
+        "password" to str("空字符串不加密；非空时文件条目使用 AES-256 加密"),
         required = arrayOf("outputPath", "sources", "overwrite", "level", "password"),
     )
 
@@ -241,9 +244,9 @@ internal class McpZipToolkit(private val root: File) {
                 })
             })
         },
-        "password" to str("新增/替换条目的统一密码；当前仅支持空字符串"),
-        "targetVersion" to str("必填。先调用 zip_list/zip_test 取得 version；版本不一致时拒绝写入"),
-        required = arrayOf("path", "operations", "password", "targetVersion"),
+        "password" to str("新增/替换条目的统一密码；空字符串不加密，非空时使用 AES-256。未改/重命名条目保留原加密与密码"),
+        "targetVersion" to str("可选扩展。传入时先调用 zip_list/zip_test 取得 version 并校验；省略时仍按当前 ZIP 版本操作，写入期间检测源未变化"),
+        required = arrayOf("path", "operations", "password"),
     )
 
     private fun updateAddSchema(): JsonObject = objectFields(
@@ -446,7 +449,7 @@ internal class McpZipToolkit(private val root: File) {
         return archive.use {
             val entry = archive.fileEntry(entryPath)
             archive.ensureReadable(entry, password)
-            val page = archive.readTextPage(entry, encoding, startLine, startColumn, lineLimit, maxChars)
+            val page = archive.readTextPage(entry, password, encoding, startLine, startColumn, lineLimit, maxChars)
             val data = JsonObject().apply {
                 addProperty("path", archive.file.path)
                 addProperty("entryPath", entry.name)
@@ -498,7 +501,7 @@ internal class McpZipToolkit(private val root: File) {
             if (entry.size >= 0 && byteOffset > entry.size) {
                 throw IllegalArgumentException("byteOffset 超出条目长度: $byteOffset > ${entry.size}")
             }
-            val page = archive.readBytePage(entry, byteOffset, maxBytes)
+            val page = archive.readBytePage(entry, password, byteOffset, maxBytes)
             val data = JsonObject().apply {
                 addProperty("path", archive.file.path)
                 addProperty("entryPath", entry.name)
@@ -538,24 +541,28 @@ internal class McpZipToolkit(private val root: File) {
             if (files.size > maxCrcEntries) {
                 throw IOException("CRC 校验未完成：条目数 ${files.size} 超过本次扫描预算 $maxCrcEntries，不能判定为通过")
             }
-            archive.entries.firstOrNull { it.encrypted }?.let {
-                throw IOException("ZIP 含加密条目 '${it.name}'；当前不支持密码校验，不能判定为通过")
-            }
             var checked = 0
             var bytes = 0L
             for (entry in files) {
                 checkInterrupted()
                 archive.ensureReadable(entry, password)
-                if (entry.encrypted) throw IOException("条目 '${entry.name}' 已加密，当前不支持密码校验")
-                if (entry.method != METHOD_STORED && entry.method != METHOD_DEFLATED) {
+                if (entry.method != METHOD_STORED && entry.method != METHOD_DEFLATED && !ToolkitZipCrypto.isAes(entry.method)) {
                     throw IOException("条目 '${entry.name}' 使用不支持的压缩算法 ${entry.method}")
+                }
+                if (ToolkitZipCrypto.isAes(entry.method)) {
+                    val extra = entry.aesExtra
+                        ?: throw IOException("AES 条目 '${entry.name}' 缺少 0x9901 extra，不能判定为通过")
+                    ToolkitZipCrypto.aesCompressionMethod(extra)
                 }
                 if (checked >= maxCrcEntries) {
                     throw IOException("CRC 校验未完成：已检查 $checked 项，达到条目预算 $maxCrcEntries，不能判定为通过")
                 }
                 val remaining = maxCrcBytes - bytes
+                // zip_test reads to EOF, but keep verification off here so a budget/read error is
+                // not masked by zip4j's CRC/MAC check during close. AES gets the dedicated
+                // authenticated pass below; ZipCrypto's plaintext CRC is checked directly.
                 val budget = BudgetInputStream(
-                    archive.openEntryStream(entry), remaining,
+                    archive.openEntryStream(entry, password, verifyOnClose = false), remaining,
                     "CRC 校验未完成：读取超过预算 $maxCrcBytes 字节（条目 '${entry.name}'），不能判定为通过",
                 )
                 try {
@@ -573,7 +580,10 @@ internal class McpZipToolkit(private val root: File) {
                     if (entry.size >= 0 && count != entry.size) {
                         throw IOException("条目 '${entry.name}' 长度不符：声明 ${entry.size}，实际 $count（已检查 $checked 项）")
                     }
-                    if (entry.crc >= 0 && crc.value != entry.crc) {
+                    // AE-2 AES entries store CRC=0 and use the HMAC as authentication. Do not
+                    // reject that valid form; AE-1/non-zero CRC values are still checked.
+                    val crcIsMandatory = !ToolkitZipCrypto.isAes(entry.method) || entry.crc != 0L
+                    if (crcIsMandatory && entry.crc >= 0 && crc.value != entry.crc) {
                         throw IOException(
                             "条目 '${entry.name}' CRC 校验失败：声明 ${entry.crc.toString(16)}，" +
                                 "实际 ${crc.value.toString(16)}（此前 $checked 项通过）",
@@ -582,6 +592,13 @@ internal class McpZipToolkit(private val root: File) {
                 } finally {
                     try { budget.close() } catch (_: IOException) {}
                 }
+                if (ToolkitZipCrypto.isAes(entry.method)) {
+                    // CRC/HMAC authentication: zip4j validates the MAC when the stream is fully
+                    // read and closed with verification enabled.
+                    ToolkitZipCrypto.verifyAuthentication(
+                        archive.file, entry.name, archive.nameCharset, password, maxCrcBytes,
+                    ) { checkInterrupted() }
+                }
                 checked++
             }
             val data = JsonObject().apply {
@@ -589,6 +606,7 @@ internal class McpZipToolkit(private val root: File) {
                 addProperty("version", archive.version)
                 addProperty("entries", archive.entries.size)
                 addProperty("filesChecked", checked)
+                addProperty("checkedEntries", checked)
                 addProperty("bytesChecked", bytes)
                 addProperty("complete", true)
                 addProperty("status", "passed")
@@ -745,11 +763,12 @@ internal class McpZipToolkit(private val root: File) {
                 try {
                     val remaining = (maxTotalUncompressed - totalWritten).coerceAtLeast(0L)
                     val budget = BudgetInputStream(
-                        archive.openEntryStream(item.entry), remaining,
+                        archive.openEntryStream(item.entry, password, verifyOnClose = true), remaining,
                         "解压未完成：实际写入超过总大小预算 $maxTotalUncompressed（条目 '${item.entry.name}'）",
                     )
                     var count = 0L
                     val crc = CRC32()
+                    var readCompleted = false
                     try {
                         BufferedOutputStream(FileOutputStream(temp)).use { output ->
                             val buffer = ByteArray(IO_BUFFER)
@@ -762,13 +781,23 @@ internal class McpZipToolkit(private val root: File) {
                                 count += n
                             }
                         }
+                        readCompleted = true
                     } finally {
-                        try { budget.close() } catch (_: IOException) {}
+                        if (readCompleted) {
+                            // Propagate zip4j's full-read CRC/HMAC authentication for AES and
+                            // ZipCrypto; the temporary output is deleted by the outer catch.
+                            budget.close()
+                        } else {
+                            try { budget.close() } catch (_: IOException) {}
+                        }
                     }
                     if (item.entry.size >= 0 && count != item.entry.size) {
                         throw IOException("条目 '${item.entry.name}' 长度不符：声明 ${item.entry.size}，实际 $count")
                     }
-                    if (item.entry.crc >= 0 && crc.value != item.entry.crc) {
+                    // AE-2 AES entries intentionally use CRC=0; their HMAC is verified by
+                    // zip4j when the stream is closed. AE-1/non-zero CRC values are still checked.
+                    val crcIsMandatory = !ToolkitZipCrypto.isAes(item.entry.method) || item.entry.crc != 0L
+                    if (crcIsMandatory && item.entry.crc >= 0 && crc.value != item.entry.crc) {
                         throw IOException("条目 '${item.entry.name}' CRC 校验失败，已删除本次临时文件")
                     }
                     totalWritten += count
@@ -786,7 +815,10 @@ internal class McpZipToolkit(private val root: File) {
                 addProperty("path", archive.file.path)
                 addProperty("version", archive.version)
                 addProperty("extractedFiles", selected.size)
+                addProperty("completedFiles", selected.size)
                 addProperty("extractedBytes", totalWritten)
+                addProperty("createdDirectories", directoryDestinations.size)
+                add("warnings", JsonArray())
                 add("destinations", destinations)
                 addProperty("overwrite", overwrite)
             }
@@ -859,9 +891,6 @@ internal class McpZipToolkit(private val root: File) {
         val level = args.requiredInt("level", 0, 9)
         val password = args.requiredString("password")
         if (sourcesJson.size() == 0) throw IllegalArgumentException("sources 不能为空")
-        if (password.isNotEmpty()) {
-            throw IllegalArgumentException("当前 ZIP 工具仅支持未加密输出；password 必须为空字符串")
-        }
 
         val output = resolvePath(rawOutput, "outputPath")
         if (output.exists() && output.isDirectory) {
@@ -935,7 +964,7 @@ internal class McpZipToolkit(private val root: File) {
         }
         val temp = File(parent, ".${output.name}.${UUID.randomUUID()}.tmp")
         try {
-            writeOutputZip(temp, plans, null, level)
+            writeOutputZip(temp, plans, null, level, password)
             verifyTempNames(temp, plans.map { it.name })
             installTemp(temp, output, overwrite || !output.exists())
         } catch (e: Exception) {
@@ -947,6 +976,9 @@ internal class McpZipToolkit(private val root: File) {
             val data = JsonObject().apply {
                 addProperty("path", outputArchive.file.path)
                 addProperty("version", outputArchive.version)
+                addProperty("size", outputArchive.file.length())
+                addProperty("changed", true)
+                add("warnings", JsonArray())
                 addProperty("entries", plans.size)
                 addProperty("files", plans.count { !it.directory })
                 addProperty("bytes", plans.filter { !it.directory }.sumOf { it.sourceFile?.length() ?: 0L })
@@ -1040,31 +1072,38 @@ internal class McpZipToolkit(private val root: File) {
         val rawPath = args.requiredString("path")
         val operationsJson = args.requiredArray("operations")
         val password = args.requiredString("password")
-        val targetVersion = args.requiredString("targetVersion")
+        // targetVersion is an optional extension. Omitting it must remain a normal MT-contract
+        // call; an empty string is treated as omitted for clients that serialize optionals that way.
+        val targetElement = args.get("targetVersion")
+        val providedTarget = if (targetElement != null && !targetElement.isJsonNull) {
+            args.requiredString("targetVersion")
+        } else {
+            ""
+        }
+        val targetVersion = providedTarget.takeIf { it.isNotEmpty() }
         if (operationsJson.size() == 0) throw IllegalArgumentException("operations 不能为空")
-        if (password.isNotEmpty()) {
-            throw IllegalArgumentException("当前 ZIP 修改仅支持未加密输出；password 必须为空字符串")
-        }
-        if (targetVersion.isEmpty()) {
-            throw IllegalArgumentException("targetVersion 不能为空；请先调用 zip_list/zip_test 获取当前 version")
-        }
 
         val archive = openArchive(rawPath)
         val analysis: UpdateAnalysis
         val temp: File
+        val expectedVersion = targetVersion ?: archive.version
         try {
-            if (archive.version != targetVersion) {
+            if (targetVersion != null && archive.version != targetVersion) {
                 throw IllegalArgumentException(
                     "ZIP 版本冲突：targetVersion=$targetVersion，当前版本=${archive.version}；" +
                         "请重新 zip_list/zip_test 后重试，旧状态未写入",
                 )
             }
             for (entry in archive.entries) {
-                if (entry.encrypted) {
-                    throw IOException("ZIP 含加密条目 '${entry.name}'；当前修改工具不支持加密 ZIP，原档未改动")
-                }
-                if (entry.method != METHOD_STORED && entry.method != METHOD_DEFLATED) {
+                if (entry.method != METHOD_STORED && entry.method != METHOD_DEFLATED &&
+                    !ToolkitZipCrypto.isAes(entry.method)
+                ) {
                     throw IOException("ZIP 条目 '${entry.name}' 使用不支持的压缩算法 ${entry.method}，原档未改动")
+                }
+                if (ToolkitZipCrypto.isAes(entry.method)) {
+                    val extra = entry.aesExtra
+                        ?: throw IOException("AES 条目 '${entry.name}' 缺少 0x9901 extra，拒绝重写，原档未改动")
+                    ToolkitZipCrypto.aesCompressionMethod(extra)
                 }
                 if (entry.symlink) {
                     throw SecurityException("ZIP 含符号链接条目 '${entry.name}'，拒绝重写，原档未改动")
@@ -1075,7 +1114,7 @@ internal class McpZipToolkit(private val root: File) {
             val parent = archive.file.parentFile ?: throw IOException("ZIP 文件没有父目录")
             temp = File(parent, ".${archive.file.name}.${UUID.randomUUID()}.tmp")
             try {
-                writeOutputZip(temp, analysis.output, archive, 6)
+                writeOutputZip(temp, analysis.output, archive, 6, password)
                 verifyTempNames(temp, analysis.output.map { it.name })
             } catch (e: Exception) {
                 temp.delete()
@@ -1085,8 +1124,10 @@ internal class McpZipToolkit(private val root: File) {
             archive.close()
         }
         try {
+            // Even without targetVersion, the source must still be byte-for-byte the version this
+            // analysis was based on; otherwise a concurrent writer could be silently overwritten.
             val current = scanCentral(archive.file)
-            if (current.version != targetVersion) {
+            if (current.version != expectedVersion) {
                 throw IllegalArgumentException(
                     "ZIP 在写入期间被其他修改更新（版本 ${current.version}），已放弃本次修改并保留原档",
                 )
@@ -1101,12 +1142,15 @@ internal class McpZipToolkit(private val root: File) {
             val data = JsonObject().apply {
                 addProperty("path", outputArchive.file.path)
                 addProperty("version", outputArchive.version)
+                addProperty("size", outputArchive.file.length())
+                addProperty("changed", true)
+                add("warnings", JsonArray())
                 addProperty("entries", outputArchive.entries.size)
                 addProperty("added", analysis.added)
                 addProperty("deleted", analysis.deleted)
                 addProperty("renamed", analysis.renamed)
                 addProperty("replaced", analysis.replaced)
-                addProperty("targetVersion", targetVersion)
+                addProperty("targetVersion", expectedVersion)
             }
             success(data)
         }
@@ -1383,7 +1427,13 @@ internal class McpZipToolkit(private val root: File) {
                 METHOD_STORED
             } else {
                 val originalEntry = originalByName[entry.name]
-                if (originalEntry != null && !originalEntry.directory) originalEntry.method else METHOD_DEFLATED
+                if (originalEntry != null && !originalEntry.directory) {
+                    // AES entries store method 99 in the ZIP header; the real Stored/Deflate
+                    // choice lives in the AES extra. Replacements must preserve that real method.
+                    originalEntry.actualMethod
+                } else {
+                    METHOD_DEFLATED
+                }
             }
             output.add(OutputEntry(
                 name = entry.name,
@@ -1422,6 +1472,7 @@ internal class McpZipToolkit(private val root: File) {
         val name: String,
         val flags: Int,
         val method: Int,
+        val actualMethod: Int,
         val crc: Long,
         val compressedSize: Long,
         val size: Long,
@@ -1429,16 +1480,25 @@ internal class McpZipToolkit(private val root: File) {
         val directory: Boolean,
         val encrypted: Boolean,
         val symlink: Boolean,
+        val localOffset: Long,
+        val versionMadeBy: Int,
+        val aesExtra: ByteArray?,
+        val commentBytes: ByteArray,
     )
 
     private data class PendingCentral(
         val nameBytes: ByteArray,
         val flags: Int,
         val method: Int,
+        val actualMethod: Int,
         val crc: Long,
         val compressedSize: Long,
         val size: Long,
         val externalAttributes: Long,
+        val localOffset: Long,
+        val versionMadeBy: Int,
+        val aesExtra: ByteArray?,
+        val commentBytes: ByteArray,
     )
 
     private inner class Archive(
@@ -1446,6 +1506,7 @@ internal class McpZipToolkit(private val root: File) {
         val version: String,
         val entries: List<CentralEntry>,
         val byName: Map<String, CentralEntry>,
+        val nameCharset: Charset,
         private val zip: ZipFile?,
         private val zipEntries: Map<String, ZipEntry>,
     ) : Closeable {
@@ -1519,15 +1580,23 @@ internal class McpZipToolkit(private val root: File) {
 
         fun ensureReadable(entry: CentralEntry, password: String) {
             if (entry.encrypted) {
-                throw IOException(
-                    if (password.isEmpty()) {
-                        "条目 '${entry.name}' 已加密；当前 ZIP 工具不支持密码解密"
-                    } else {
-                        "条目 '${entry.name}' 已加密；当前 ZIP 工具不支持密码解密（密码参数已校验但无法使用）"
-                    },
-                )
-            }
-            if (entry.method != METHOD_STORED && entry.method != METHOD_DEFLATED) {
+                if (password.isEmpty()) {
+                    throw IOException("条目 '${entry.name}' 已加密，需要非空 password 才能解密读取")
+                }
+                if (entry.method != METHOD_STORED && entry.method != METHOD_DEFLATED &&
+                    !ToolkitZipCrypto.isAes(entry.method)
+                ) {
+                    throw IOException(
+                        "加密条目 '${entry.name}' 使用不支持的压缩/加密算法 ${entry.method}；" +
+                            "仅支持 ZipCrypto(Stored/Deflate) 与 AES-256",
+                    )
+                }
+                if (ToolkitZipCrypto.isAes(entry.method)) {
+                    val extra = entry.aesExtra
+                        ?: throw IOException("AES 条目 '${entry.name}' 缺少 0x9901 extra，无法解密")
+                    ToolkitZipCrypto.aesCompressionMethod(extra)
+                }
+            } else if (entry.method != METHOD_STORED && entry.method != METHOD_DEFLATED) {
                 throw IOException(
                     "条目 '${entry.name}' 使用不支持的压缩算法 ${entry.method}；仅支持 Stored(0) 与 Deflate(8)",
                 )
@@ -1537,7 +1606,14 @@ internal class McpZipToolkit(private val root: File) {
             }
         }
 
-        fun openEntryStream(entry: CentralEntry): InputStream {
+        fun openEntryStream(
+            entry: CentralEntry,
+            password: String,
+            verifyOnClose: Boolean,
+        ): InputStream {
+            if (entry.encrypted) {
+                return ToolkitZipCrypto.openEntry(file, entry.name, nameCharset, password, verifyOnClose)
+            }
             val zipFile = zip ?: throw IOException(
                 "ZIP 含加密条目，当前 JVM/系统 ZIP 实现拒绝打开；请先解密或移除加密条目后再读取",
             )
@@ -1552,13 +1628,14 @@ internal class McpZipToolkit(private val root: File) {
 
         fun readTextPage(
             entry: CentralEntry,
+            password: String,
             requestedEncoding: String,
             startLine: Long,
             startColumn: Long,
             lineLimit: Int,
             maxChars: Int,
         ): TextPage {
-            val input = BufferedInputStream(openEntryStream(entry))
+            val input = BufferedInputStream(openEntryStream(entry, password, verifyOnClose = false))
             val prefix = readPrefix(input, 8192)
             val bom = detectBom(prefix)
             val selection = selectEncoding(prefix, bom, requestedEncoding)
@@ -1573,9 +1650,9 @@ internal class McpZipToolkit(private val root: File) {
             }
         }
 
-        fun readBytePage(entry: CentralEntry, offset: Long, maxBytes: Int): BytePage {
+        fun readBytePage(entry: CentralEntry, password: String, offset: Long, maxBytes: Int): BytePage {
             val input = BudgetInputStream(
-                openEntryStream(entry), maxReadBytes,
+                openEntryStream(entry, password, verifyOnClose = false), maxReadBytes,
                 "字节读取未完成：本次实际解压超过预算 $maxReadBytes 字节（条目 '${entry.name}'）",
             )
             try {
@@ -1656,7 +1733,7 @@ internal class McpZipToolkit(private val root: File) {
         if (zip == null) {
             return Archive(
                 file, scanned.version, scanned.entries, scanned.entries.associateBy { it.name },
-                null, emptyMap(),
+                scanned.nameCharset, null, emptyMap(),
             )
         }
         try {
@@ -1681,7 +1758,10 @@ internal class McpZipToolkit(private val root: File) {
                     )
                 }
             }
-            return Archive(file, scanned.version, scanned.entries, scanned.entries.associateBy { it.name }, zip, zipEntries)
+            return Archive(
+                file, scanned.version, scanned.entries, scanned.entries.associateBy { it.name },
+                scanned.nameCharset, zip, zipEntries,
+            )
         } catch (e: Exception) {
             zip.close()
             throw e
@@ -1839,9 +1919,32 @@ internal class McpZipToolkit(private val root: File) {
             }
             val nameBytes = central.copyOfRange(offset + 46, offset + 46 + nameLength)
             val displayName = String(nameBytes, Charsets.UTF_8)
+            val versionMadeBy = u16(central, offset + 4)
+            val extraStart = offset + 46 + nameLength
+            val extraEnd = extraStart + extraLength
+            val commentBytes = central.copyOfRange(extraEnd, extraEnd + commentLength)
+            var aesExtra: ByteArray? = null
+            var aesMethod = -1
+            var extraPos = extraStart
+            while (extraPos + 4 <= extraEnd) {
+                val id = u16(central, extraPos)
+                val len = u16(central, extraPos + 2)
+                if (extraPos + 4 + len > extraEnd) throw IOException("ZIP 中央目录 extra 字段被截断")
+                if (id == 0x9901) {
+                    if (len != 7) throw IOException("AES 条目 '$displayName' 的 0x9901 extra 长度应为 7，实际 $len")
+                    aesExtra = central.copyOfRange(extraPos, extraPos + 11)
+                    aesMethod = u16(central, extraPos + 9)
+                }
+                extraPos += 4 + len
+            }
+            // A few writers leave short, unstructured padding at the end of an extra field.
+            // Complete records above are authoritative; do not reject otherwise readable ZIPs.
+            if (method == 99) {
+                val extra = aesExtra
+                    ?: throw IOException("AES 条目 '$displayName' 缺少 0x9901 extra")
+                ToolkitZipCrypto.aesCompressionMethod(extra)
+            }
             if (size == 0xFFFFFFFFL || compressedSize == 0xFFFFFFFFL || diskStart == 0xFFFF || localOffset == 0xFFFFFFFFL) {
-                val extraStart = offset + 46 + nameLength
-                val extraEnd = extraStart + extraLength
                 var p = extraStart
                 var found = false
                 while (p + 4 <= extraEnd) {
@@ -1877,10 +1980,15 @@ internal class McpZipToolkit(private val root: File) {
                     nameBytes = nameBytes,
                     flags = flags,
                     method = method,
+                    actualMethod = if (method == 99) aesMethod else method,
                     crc = crc,
                     compressedSize = compressedSize,
                     size = size,
                     externalAttributes = externalAttributes,
+                    localOffset = localOffset,
+                    versionMadeBy = versionMadeBy,
+                    aesExtra = aesExtra,
+                    commentBytes = commentBytes,
                 ),
             )
             offset += recordLength
@@ -1901,6 +2009,7 @@ internal class McpZipToolkit(private val root: File) {
                     name = name,
                     flags = raw.flags,
                     method = raw.method,
+                    actualMethod = raw.actualMethod,
                     crc = raw.crc,
                     compressedSize = raw.compressedSize,
                     size = raw.size,
@@ -1908,6 +2017,10 @@ internal class McpZipToolkit(private val root: File) {
                     directory = name.endsWith("/"),
                     encrypted = (raw.flags and 0x0001) != 0 || (raw.flags and 0x0040) != 0 || raw.method == 99,
                     symlink = (unixMode and 0xF000L) == 0xA000L,
+                    localOffset = raw.localOffset,
+                    versionMadeBy = raw.versionMadeBy,
+                    aesExtra = raw.aesExtra,
+                    commentBytes = raw.commentBytes,
                 ),
             )
         }
@@ -2325,7 +2438,43 @@ internal class McpZipToolkit(private val root: File) {
         val comment: String? = null,
     )
 
+    private data class RawCentralRecord(
+        val nameBytes: ByteArray,
+        val flags: Int,
+        val method: Int,
+        val time: Int,
+        val date: Int,
+        val crc: Long,
+        val compressedSize: Long,
+        val size: Long,
+        val versionMadeBy: Int,
+        val versionNeeded: Int,
+        val externalAttributes: Long,
+        val localOffset: Long,
+        val aesExtra: ByteArray?,
+        val commentBytes: ByteArray,
+    )
+
     private fun writeOutputZip(
+        temp: File,
+        plans: List<OutputEntry>,
+        source: Archive?,
+        level: Int,
+        password: String,
+    ) {
+        // Any update carries `original` entries. Copy those raw so an unchanged/replaced-free
+        // archive keeps its original compression method and, for encrypted entries, the exact
+        // salt/verifier/ciphertext/MAC bytes. AES output necessarily needs the same writer.
+        val needsRawWriter = plans.any { it.original != null } || password.isNotEmpty()
+        if (needsRawWriter) {
+            writeRawOutputZip(temp, plans, source, level, password)
+        } else {
+            writeJdkOutputZip(temp, plans, source, level)
+        }
+    }
+
+    /** Fast path for unencrypted creation where no original entry needs raw copying. */
+    private fun writeJdkOutputZip(
         temp: File,
         plans: List<OutputEntry>,
         source: Archive?,
@@ -2354,7 +2503,7 @@ internal class McpZipToolkit(private val root: File) {
                 val original = plan.original
                 if (original != null) {
                     if (original.encrypted) {
-                        throw IOException("条目 '${original.name}' 已加密；修改 ZIP 需要先解密")
+                        throw IOException("条目 '${original.name}' 已加密；原始字节路径不可用")
                     }
                     if (original.method != METHOD_STORED && original.method != METHOD_DEFLATED) {
                         throw IOException("条目 '${original.name}' 使用不支持的压缩算法 ${original.method}")
@@ -2367,7 +2516,7 @@ internal class McpZipToolkit(private val root: File) {
                     }
                     zipOut.putNextEntry(outEntry)
                     val zipFile = source ?: throw IOException("缺少源 ZIP")
-                    val input = zipFile.openEntryStream(original)
+                    val input = zipFile.openEntryStream(original, "", verifyOnClose = false)
                     try {
                         val crc = CRC32()
                         var count = 0L
@@ -2437,6 +2586,472 @@ internal class McpZipToolkit(private val root: File) {
                     zipOut.closeEntry()
                 }
             }
+        }
+    }
+
+    /**
+     * Raw-entry writer used for update and AES creation.
+     *
+     * Unchanged/renamed original entries are copied as compressed (or encrypted) bytes together
+     * with their local-header timing/flags; only the name, local offset and central extra/AES
+     * metadata are rebuilt. New unencrypted files are streamed with a data descriptor. New
+     * encrypted files are first produced by zip4j in a one-entry temporary ZIP, then their raw
+     * bytes are copied here so all output entries follow the same central-directory writer.
+     */
+    private fun writeRawOutputZip(
+        temp: File,
+        plans: List<OutputEntry>,
+        source: Archive?,
+        level: Int,
+        password: String,
+    ) {
+        val readers = LinkedHashMap<File, RandomAccessFile>()
+        try {
+            BufferedOutputStream(FileOutputStream(temp)).use { buffered ->
+                val out = CountingOutputStream(buffered)
+                val records = ArrayList<RawCentralRecord>(plans.size)
+                var totalUncompressed = 0L
+                for (plan in plans) {
+                    checkInterrupted()
+                    if (plan.name.isEmpty()) throw IllegalArgumentException("ZIP 条目名不能为空")
+                    if (plan.name.indexOf('\u0000') >= 0) throw SecurityException("ZIP 条目名不能包含 NUL")
+                    if (plan.directory) {
+                        records.add(writeRawDirectory(out, plan))
+                    } else {
+                        val original = plan.original
+                        if (original != null) {
+                            val archive = source ?: throw IOException("缺少源 ZIP")
+                            records.add(copyRawEntry(out, readers, archive.file, original, plan.name))
+                        } else {
+                            val file = plan.sourceFile ?: throw IOException("条目 '${plan.name}' 没有数据源")
+                            if (!file.isFile) throw IOException("源文件不存在或不是普通文件: ${file.path}")
+                            if (file.length() > maxCreateBytes) {
+                                throw IOException("源文件超过预算 $maxCreateBytes 字节: ${file.path}")
+                            }
+                            if (password.isNotEmpty()) {
+                                val parent = temp.parentFile ?: throw IOException("临时 ZIP 没有父目录")
+                                val encryptedTemp = File(parent, ".zip-aes-${UUID.randomUUID()}.tmp")
+                                try {
+                                    ToolkitZipCrypto.createEncryptedZip(
+                                        encryptedTemp, file, plan.name, plan.method, level, password,
+                                    )
+                                    val scanned = scanCentral(encryptedTemp)
+                                    if (scanned.entries.size != 1) {
+                                        throw IOException("临时 AES ZIP 条目数异常: ${scanned.entries.size}")
+                                    }
+                                    val encryptedEntry = scanned.entries[0]
+                                    if (encryptedEntry.directory) {
+                                        throw IOException("临时 AES ZIP 意外产生目录条目 '${encryptedEntry.name}'")
+                                    }
+                                    records.add(
+                                        copyRawEntry(
+                                            out, readers, encryptedTemp, encryptedEntry, plan.name,
+                                            timeOverride = plan.time,
+                                        ),
+                                    )
+                                } finally {
+                                    readers.remove(encryptedTemp)?.let { reader ->
+                                        try { reader.close() } catch (_: IOException) {}
+                                    }
+                                    encryptedTemp.delete()
+                                }
+                            } else {
+                                records.add(writeNewRawEntry(out, plan, level))
+                            }
+                        }
+                    }
+                    totalUncompressed = saturatingAdd(totalUncompressed, records[records.size - 1].size)
+                    if (totalUncompressed > maxCreateBytes) {
+                        throw IOException("写入未完成：输出解压后大小超过预算 $maxCreateBytes 字节")
+                    }
+                    if (out.count > 0xFFFFFFFFL) {
+                        throw IOException("输出 ZIP 超过 4 GiB，当前不支持 ZIP64 写出")
+                    }
+                }
+                if (records.size > 0xFFFF) {
+                    throw IOException("输出条目数 ${records.size} 超过普通 ZIP 的 65535 上限")
+                }
+                val centralStart = out.count
+                for (record in records) writeCentralRecord(out, record)
+                val centralSize = out.count - centralStart
+                if (centralStart > 0xFFFFFFFFL || centralSize > 0xFFFFFFFFL) {
+                    throw IOException("输出 ZIP 中央目录超过 4 GiB，当前不支持 ZIP64 写出")
+                }
+                writeEndOfCentralDirectory(out, records.size, centralStart, centralSize)
+                out.flush()
+            }
+        } finally {
+            for (reader in readers.values) {
+                try { reader.close() } catch (_: IOException) {}
+            }
+        }
+    }
+
+    private fun writeRawDirectory(out: CountingOutputStream, plan: OutputEntry): RawCentralRecord {
+        val nameBytes = plan.name.toByteArray(Charsets.UTF_8)
+        if (nameBytes.size > 0xFFFF) throw IOException("ZIP 条目名过长: '${plan.name}'")
+        val (time, date) = dosDateTime(plan.time)
+        val localOffset = out.count
+        writeLocalHeader(
+            out, 20, 0x0800, METHOD_STORED, time, date, 0, 0, 0, nameBytes, ByteArray(0),
+        )
+        return RawCentralRecord(
+            nameBytes = nameBytes,
+            flags = 0x0800,
+            method = METHOD_STORED,
+            time = time,
+            date = date,
+            crc = 0,
+            compressedSize = 0,
+            size = 0,
+            versionMadeBy = 20,
+            versionNeeded = 20,
+            externalAttributes = 0x10L,
+            localOffset = localOffset,
+            aesExtra = null,
+            commentBytes = plan.original?.commentBytes ?: ByteArray(0),
+        )
+    }
+
+    private fun writeNewRawEntry(
+        out: CountingOutputStream,
+        plan: OutputEntry,
+        level: Int,
+    ): RawCentralRecord {
+        val file = plan.sourceFile ?: throw IOException("条目 '${plan.name}' 没有数据源")
+        val method = plan.method
+        if (method != METHOD_STORED && method != METHOD_DEFLATED) {
+            throw IOException("条目 '${plan.name}' 使用不支持的压缩算法 $method")
+        }
+        val nameBytes = plan.name.toByteArray(Charsets.UTF_8)
+        if (nameBytes.size > 0xFFFF) throw IOException("ZIP 条目名过长: '${plan.name}'")
+        val (time, date) = dosDateTime(plan.time)
+        val localOffset = out.count
+        writeLocalHeader(
+            out, 20, 0x0800 or 0x0008, method, time, date, 0, 0, 0, nameBytes, ByteArray(0),
+        )
+        val lengthBefore = file.length()
+        val modifiedBefore = file.lastModified()
+        val crc = CRC32()
+        var count = 0L
+        var compressed = 0L
+        if (method == METHOD_STORED) {
+            BufferedInputStream(FileInputStream(file)).use { input ->
+                val buffer = ByteArray(IO_BUFFER)
+                while (true) {
+                    checkInterrupted()
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    crc.update(buffer, 0, n)
+                    count += n
+                    if (count > maxCreateBytes) {
+                        throw IOException("写入未完成：输出超过预算 $maxCreateBytes 字节")
+                    }
+                    out.write(buffer, 0, n)
+                }
+            }
+            compressed = count
+        } else {
+            val deflater = Deflater(level.coerceIn(0, 9), true)
+            try {
+                BufferedInputStream(FileInputStream(file)).use { input ->
+                    val buffer = ByteArray(IO_BUFFER)
+                    val compressedBuffer = ByteArray(IO_BUFFER)
+                    while (true) {
+                        checkInterrupted()
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        crc.update(buffer, 0, n)
+                        count += n
+                        if (count > maxCreateBytes) {
+                            throw IOException("写入未完成：输出超过预算 $maxCreateBytes 字节")
+                        }
+                        deflater.setInput(buffer, 0, n)
+                        while (!deflater.needsInput()) {
+                            val written = deflater.deflate(compressedBuffer)
+                            if (written > 0) {
+                                out.write(compressedBuffer, 0, written)
+                                compressed += written
+                            }
+                        }
+                    }
+                }
+                deflater.finish()
+                val compressedBuffer = ByteArray(IO_BUFFER)
+                while (!deflater.finished()) {
+                    checkInterrupted()
+                    val written = deflater.deflate(compressedBuffer)
+                    if (written > 0) {
+                        out.write(compressedBuffer, 0, written)
+                        compressed += written
+                    }
+                }
+            } finally {
+                deflater.end()
+            }
+        }
+        // A changed source is detected after the bytes have been written; the caller deletes the
+        // temporary output and leaves the destination untouched.
+        if (file.length() != lengthBefore || file.lastModified() != modifiedBefore) {
+            throw IOException("源文件在写入期间变化，已放弃: ${file.path}")
+        }
+        if (count > 0xFFFFFFFFL || compressed > 0xFFFFFFFFL) {
+            throw IOException("条目 '${plan.name}' 超过普通 ZIP 的 4 GiB 上限")
+        }
+        writeDataDescriptor(out, crc.value, compressed, count)
+        return RawCentralRecord(
+            nameBytes = nameBytes,
+            flags = 0x0800 or 0x0008,
+            method = method,
+            time = time,
+            date = date,
+            crc = crc.value,
+            compressedSize = compressed,
+            size = count,
+            versionMadeBy = 20,
+            versionNeeded = 20,
+            externalAttributes = 0,
+            localOffset = localOffset,
+            aesExtra = null,
+            commentBytes = ByteArray(0),
+        )
+    }
+
+    private fun copyRawEntry(
+        out: CountingOutputStream,
+        readers: MutableMap<File, RandomAccessFile>,
+        sourceFile: File,
+        entry: CentralEntry,
+        outputName: String,
+        timeOverride: Long? = null,
+    ): RawCentralRecord {
+        val reader = readers.getOrPut(sourceFile) { RandomAccessFile(sourceFile, "r") }
+        val fileLength = reader.length()
+        if (entry.localOffset < 0 || entry.localOffset > fileLength - 30) {
+            throw IOException("ZIP 条目 '${entry.name}' 的本地头偏移无效")
+        }
+        reader.seek(entry.localOffset)
+        val header = ByteArray(30)
+        reader.readFully(header)
+        if (u32(header, 0) != 0x04034b50L) {
+            throw IOException("ZIP 条目 '${entry.name}' 的本地头签名无效")
+        }
+        val localVersion = u16(header, 4)
+        val localFlags = u16(header, 6)
+        val localMethod = u16(header, 8)
+        val localTime = u16(header, 10)
+        val localDate = u16(header, 12)
+        val nameLength = u16(header, 26)
+        val extraLength = u16(header, 28)
+        if (localMethod != entry.method) {
+            throw IOException(
+                "ZIP 条目 '${entry.name}' 的本地头压缩算法 $localMethod 与中央目录 ${entry.method} 不一致",
+            )
+        }
+        if (entry.compressedSize < 0 || entry.size < 0 ||
+            entry.compressedSize > 0xFFFFFFFFL || entry.size > 0xFFFFFFFFL
+        ) {
+            throw IOException("ZIP 条目 '${entry.name}' 超过普通 ZIP 的 4 GiB 上限")
+        }
+        val dataOffset = entry.localOffset + 30L + nameLength + extraLength
+        if (dataOffset < entry.localOffset || dataOffset + entry.compressedSize > fileLength) {
+            throw IOException("ZIP 条目 '${entry.name}' 的压缩数据超出文件范围")
+        }
+        val aes = ToolkitZipCrypto.isAes(entry.method)
+        val aesExtra = if (aes) {
+            entry.aesExtra ?: throw IOException("AES 条目 '${entry.name}' 缺少 0x9901 extra")
+        } else {
+            null
+        }
+        // ZipCrypto's 12-byte password-check header uses the DOS time (not CRC) when bit 3 is
+        // set. Keep that bit for ZipCrypto so its check byte keeps the same meaning; AES and
+        // unencrypted entries can safely write real local sizes and drop the descriptor.
+        val zipCryptoDescriptor = entry.encrypted && !aes && (localFlags and 0x0008) != 0
+        var flags = localFlags or 0x0800
+        if (!zipCryptoDescriptor) flags = flags and 0xFFF7
+        val versionNeeded = if (aes) maxOf(localVersion, 51) else maxOf(localVersion, 20)
+        val nameBytes = outputName.toByteArray(Charsets.UTF_8)
+        if (nameBytes.size > 0xFFFF) throw IOException("ZIP 条目名过长: '$outputName'")
+        val extra = aesExtra ?: ByteArray(0)
+        val (writeTime, writeDate) = if (timeOverride != null) {
+            dosDateTime(timeOverride)
+        } else {
+            localTime to localDate
+        }
+        val localOffset = out.count
+        // ZipCrypto with bit 3 follows the classic streaming form: local CRC/sizes are zero and
+        // the real values follow in the data descriptor. zip4j copies them from the central
+        // directory when reading. AES and unencrypted entries can carry real local sizes.
+        val localCrc = if (zipCryptoDescriptor) 0L else entry.crc
+        val localCompressedSize = if (zipCryptoDescriptor) 0L else entry.compressedSize
+        val localSize = if (zipCryptoDescriptor) 0L else entry.size
+        writeLocalHeader(
+            out, versionNeeded, flags, entry.method, writeTime, writeDate,
+            localCrc, localCompressedSize, localSize, nameBytes, extra,
+        )
+        copyRange(reader, out, dataOffset, entry.compressedSize)
+        if (zipCryptoDescriptor) {
+            writeDataDescriptor(out, entry.crc, entry.compressedSize, entry.size)
+        }
+        return RawCentralRecord(
+            nameBytes = nameBytes,
+            flags = flags,
+            method = entry.method,
+            time = writeTime,
+            date = writeDate,
+            crc = entry.crc,
+            compressedSize = entry.compressedSize,
+            size = entry.size,
+            versionMadeBy = entry.versionMadeBy,
+            versionNeeded = versionNeeded,
+            externalAttributes = entry.externalAttributes,
+            localOffset = localOffset,
+            aesExtra = aesExtra,
+            commentBytes = entry.commentBytes,
+        )
+    }
+
+    private fun copyRange(
+        reader: RandomAccessFile,
+        out: CountingOutputStream,
+        offset: Long,
+        length: Long,
+    ) {
+        reader.seek(offset)
+        val buffer = ByteArray(IO_BUFFER)
+        var remaining = length
+        while (remaining > 0) {
+            checkInterrupted()
+            val want = minOf(buffer.size.toLong(), remaining).toInt()
+            val count = reader.read(buffer, 0, want)
+            if (count < 0) throw IOException("源 ZIP 数据在复制期间提前结束")
+            out.write(buffer, 0, count)
+            remaining -= count
+        }
+    }
+
+    private fun writeLocalHeader(
+        out: OutputStream,
+        versionNeeded: Int,
+        flags: Int,
+        method: Int,
+        time: Int,
+        date: Int,
+        crc: Long,
+        compressedSize: Long,
+        size: Long,
+        name: ByteArray,
+        extra: ByteArray,
+    ) {
+        val header = ByteArray(30)
+        putU32(header, 0, 0x04034b50L)
+        putU16(header, 4, versionNeeded)
+        putU16(header, 6, flags)
+        putU16(header, 8, method)
+        putU16(header, 10, time)
+        putU16(header, 12, date)
+        putU32(header, 14, crc)
+        putU32(header, 18, compressedSize)
+        putU32(header, 22, size)
+        putU16(header, 26, name.size)
+        putU16(header, 28, extra.size)
+        out.write(header)
+        out.write(name)
+        out.write(extra)
+    }
+
+    private fun writeDataDescriptor(
+        out: OutputStream,
+        crc: Long,
+        compressedSize: Long,
+        size: Long,
+    ) {
+        val descriptor = ByteArray(16)
+        putU32(descriptor, 0, 0x08074b50L)
+        putU32(descriptor, 4, crc)
+        putU32(descriptor, 8, compressedSize)
+        putU32(descriptor, 12, size)
+        out.write(descriptor)
+    }
+
+    private fun writeCentralRecord(out: OutputStream, record: RawCentralRecord) {
+        val header = ByteArray(46)
+        putU32(header, 0, 0x02014b50L)
+        putU16(header, 4, record.versionMadeBy)
+        putU16(header, 6, record.versionNeeded)
+        putU16(header, 8, record.flags)
+        putU16(header, 10, record.method)
+        putU16(header, 12, record.time)
+        putU16(header, 14, record.date)
+        putU32(header, 16, record.crc)
+        putU32(header, 20, record.compressedSize)
+        putU32(header, 24, record.size)
+        putU16(header, 28, record.nameBytes.size)
+        putU16(header, 30, record.aesExtra?.size ?: 0)
+        putU16(header, 32, record.commentBytes.size)
+        putU16(header, 34, 0)
+        putU16(header, 36, 0)
+        putU32(header, 38, record.externalAttributes)
+        putU32(header, 42, record.localOffset)
+        out.write(header)
+        out.write(record.nameBytes)
+        record.aesExtra?.let { out.write(it) }
+        out.write(record.commentBytes)
+    }
+
+    private fun writeEndOfCentralDirectory(
+        out: OutputStream,
+        entries: Int,
+        centralStart: Long,
+        centralSize: Long,
+    ) {
+        val eocd = ByteArray(22)
+        putU32(eocd, 0, 0x06054b50L)
+        putU16(eocd, 4, 0)
+        putU16(eocd, 6, 0)
+        putU16(eocd, 8, entries)
+        putU16(eocd, 10, entries)
+        putU32(eocd, 12, centralSize)
+        putU32(eocd, 16, centralStart)
+        putU16(eocd, 20, 0)
+        out.write(eocd)
+    }
+
+    private fun dosDateTime(time: Long): Pair<Int, Int> {
+        val calendar = java.util.Calendar.getInstance()
+        calendar.timeInMillis = time
+        val year = calendar.get(java.util.Calendar.YEAR)
+        if (year < 1980) return 0 to ((1 shl 5) or 1)
+        val dosYear = (year - 1980).coerceAtMost(127)
+        val date = (dosYear shl 9) or
+            ((calendar.get(java.util.Calendar.MONTH) + 1) shl 5) or
+            calendar.get(java.util.Calendar.DAY_OF_MONTH)
+        val timeOfDay = (calendar.get(java.util.Calendar.HOUR_OF_DAY) shl 11) or
+            (calendar.get(java.util.Calendar.MINUTE) shl 5) or
+            (calendar.get(java.util.Calendar.SECOND) / 2)
+        return timeOfDay to date
+    }
+
+    private class CountingOutputStream(private val delegate: OutputStream) : OutputStream() {
+        var count: Long = 0L
+            private set
+
+        override fun write(value: Int) {
+            delegate.write(value)
+            count++
+        }
+
+        override fun write(buffer: ByteArray, offset: Int, length: Int) {
+            delegate.write(buffer, offset, length)
+            count += length
+        }
+
+        override fun flush() {
+            delegate.flush()
+        }
+
+        override fun close() {
+            delegate.close()
         }
     }
 
@@ -2888,6 +3503,17 @@ internal class McpZipToolkit(private val root: File) {
     // ---------------------------------------------------------------------------------------------
     // Little-endian central directory helpers
     // ---------------------------------------------------------------------------------------------
+
+    private fun putU16(bytes: ByteArray, offset: Int, value: Int) {
+        bytes[offset] = (value and 0xFF).toByte()
+        bytes[offset + 1] = ((value ushr 8) and 0xFF).toByte()
+    }
+
+    private fun putU32(bytes: ByteArray, offset: Int, value: Long) {
+        for (index in 0 until 4) {
+            bytes[offset + index] = ((value ushr (8 * index)) and 0xFF).toByte()
+        }
+    }
 
     private fun u16(bytes: ByteArray, offset: Int): Int {
         if (offset < 0 || offset + 2 > bytes.size) throw IOException("ZIP 结构被截断")

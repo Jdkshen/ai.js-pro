@@ -2,8 +2,6 @@ package com.jdkshen.aijspro.mcp
 
 import com.google.gson.*
 import java.io.*
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
 import java.util.zip.*
 
 /** Immutable APK snapshots and copy-on-write edit sessions. Never calls MT. */
@@ -12,10 +10,12 @@ internal class McpApkToolkit(
     private val store: File,
     private val schemas: JsonObject,
     private val signer: ((File, File) -> Unit)? = null,
-    private val assembler: ((Int, Long, String) -> ByteArray)? = null,
+    private val assembler: ((Int, Long, String, String) -> ByteArray)? = null,
 ) {
     private val pages = LinkedHashMap<String, Page>()
-    private data class Page(val workspace: String, val session: String, val revision: String, val items: List<JsonObject>, var offset: Int, val at: Long = System.currentTimeMillis())
+    private var currentWorkspace: String? = null
+    private data class Page(val workspace: String, val session: String, val revision: String, val items: List<JsonObject>, var offset: Int,
+                            val kind: String, val metadata: JsonObject, val truncated: Boolean, val at: Long = System.currentTimeMillis())
     private val gson = Gson()
     init { require(store.isDirectory || store.mkdirs()) { "无法创建 APK 工作区目录" } }
     fun definitions(): JsonArray = JsonArray().apply {
@@ -30,10 +30,11 @@ internal class McpApkToolkit(
             "apk_workspace_delete" -> {
                 val workspace = workspace(args.tString("workspaceId")); val id = workspace.tString("workspaceId")
                 safeRemove(directory(id), store); pages.entries.removeAll { it.value.workspace == id }
+                if(currentWorkspace == id) currentWorkspace = null
                 ToolkitIo.ok(ToolkitIo.json("workspaceId" to id, "deleted" to true))
             }
             "apk_continue" -> continuePage(args)
-            "apk_read_signature" -> ToolkitIo.ok(readSignature(snapshot(args.tString("workspaceId"))))
+            "apk_read_signature" -> ToolkitIo.ok(readSignature(snapshot(args.tString("workspaceId"))).apply { addProperty("workspaceId", args.tString("workspaceId")) })
             else -> {
                 val workspace = args.tString("workspaceId"); workspace(workspace)
                 val session = args.tString("editSessionId", "")
@@ -42,7 +43,13 @@ internal class McpApkToolkit(
                     "apk_session_create" -> ToolkitIo.ok(createSession(workspace))
                     "apk_list" -> list(workspace, session, args)
                     "apk_search" -> search(workspace, session, args)
-                    "apk_read_text" -> ToolkitIo.ok(readText(workspace, session, args))
+                    "apk_read_text" -> {
+                        val data = readText(workspace, session, args); val actions = JsonArray()
+                        if(data.tBool("hasMore")) actions.add(action("apk_read_text", args.deepCopy().apply {
+                            add("startLine", data.get("nextLine")); add("startColumn", data.get("nextColumn"))
+                        }))
+                        ToolkitIo.ok(data, actions)
+                    }
                     "apk_read_bytes" -> ToolkitIo.ok(readBytes(workspace, session, args))
                     "apk_dex_read_class_outline" -> {
                         val (entry, dex) = dexFor(workspace, session, args.tString("locator"))
@@ -51,9 +58,10 @@ internal class McpApkToolkit(
                     "apk_dex_xref" -> {
                         val locator = args.tString("locator"); val limit = args.tInt("limit", 50, 1, 200)
                         val items = ArrayList<JsonObject>()
-                        for ((entry, dex) in dexes(workspace, session)) {
+                        val allDex = dexes(workspace, session).toList(); val universe = allDex.flatMap { it.second.classes }
+                        for ((entry, dex) in allDex) {
                             if (items.size >= 10000) break
-                            items.addAll(dex.references(locator, args.tString("methodResolution", "exact"), 10001 - items.size).map { it.apply { addProperty("dexEntry", entry) } })
+                            items.addAll(dex.references(locator, args.tString("methodResolution", if(locator.startsWith("dex_method:")) "dispatch" else "not_applicable"), 10001 - items.size, universe).map { it.apply { addProperty("dexEntry", entry) } })
                         }; page(workspace, session, items, limit, items.size >= 10000)
                     }
                     "apk_resource_read" -> ToolkitIo.ok(readResources(workspace, session, args))
@@ -66,8 +74,12 @@ internal class McpApkToolkit(
                     }
                     "apk_native_list_items" -> {
                         val e = elf(workspace, session, args)
-                        val data = page(workspace, session, e.items(args.tString("itemKind"), args.tString("namePrefix", "")), args.tInt("limit", 50, 1, 200))
-                        data.getAsJsonObject("data").addProperty("demangleAvailable", false); data
+                        val items = e.items(args.tString("itemKind"), args.tString("namePrefix", "")).map { item ->
+                            if(args.tBool("demangle") && item.has("name")) item.addProperty("demangledName", ToolkitNative.demangle(item.tString("name")))
+                            item
+                        }
+                        page(workspace, session, items, args.tInt("limit", 50, 1, 200),
+                            metadata = ToolkitIo.json("demangleAvailable" to ToolkitNative.demangleAvailable))
                     }
                     "apk_native_map_address" -> ToolkitIo.ok(elf(workspace, session, args).map(args))
                     "apk_native_disassemble" -> {
@@ -89,13 +101,18 @@ internal class McpApkToolkit(
                     else -> throw IllegalArgumentException("未知 APK 工具：$name")
                 }
             }
+        }.also { response ->
+            response.getAsJsonObject("data")?.let { data ->
+                args.get("workspaceId")?.let { data.add("workspaceId", it) }
+                args.get("editSessionId")?.let { data.add("editSessionId", it) }
+            }
         }
     }
     private fun description(name: String): String = when(name) {
         "apk_workspace_open" -> "创建 APK 只读快照。path 在工具目录内；temporary=true 为一次性工作区。后续修改先 apk_session_create。"
         "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。"
         "apk_native_disassemble", "apk_native_xref", "apk_native_analyze_control_flow" -> "有界直接指令分析：原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），否则回退 AArch64 常见指令子集；未知指令明确标出，间接引用与完整数据流不作成功保证。"
-        "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64 指令，expectedHex 防旧数据。内置 nop/ret/br/blr/b/bl/.inst；其它指令需可选 C/C++ 组件。"
+        "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64、ARM/Thumb、x86/x86-64 指令，expectedHex 防旧数据。常见指令可直接处理，一般汇编可通过可选 C/C++ 组件完成。"
         else -> "AI.js Pro 本地 APK 工具：${name.removePrefix("apk_").replace('_', ' ')}；使用 tools/list 参数定义，locator 来自列表/搜索，不依赖 MT。"
     }
     private fun directory(id: String) = File(store, ToolkitIo.id(id))
@@ -106,12 +123,17 @@ internal class McpApkToolkit(
     private fun requiredSession(session: String) = session.also { require(it.isNotEmpty()) { "此操作必须在编辑会话中执行" } }
     private fun open(args: JsonObject): JsonObject {
         val path = args.tString("path"); val temporary = args.tBool("temporary", true)
+        if(path == "aijs://current-apk" || path == "mt://current-apk") {
+            val current = currentWorkspace ?: throw ToolkitException("NO_APK_CONTEXT", "当前没有 APK 上下文，请先在工具页或通过路径打开一个 APK")
+            return workspace(current)
+        }
         if (path.startsWith("aijs://workspace/") || path.startsWith("mt://workspace/")) {
-            require(!temporary) { "已保存工作区需 temporary=false" }; return workspace(path.substringAfterLast('/'))
+            require(!temporary) { "已保存工作区需 temporary=false" }
+            val info = workspace(path.substringAfterLast('/')); currentWorkspace = info.tString("workspaceId"); return info
         }
         val source = ToolkitIo.resolve(root, path); require(source.isFile && source.name.endsWith(".apk", true) && source.length() <= ToolkitIo.MAX_APK) { "需要工具目录内不超过 512 MiB 的 APK" }
         val hash = ToolkitIo.sha(source)
-        if (!temporary) workspaces().firstOrNull { !it.tBool("temporary") && it.tString("sourcePath") == source.path && it.tString("sha256") == hash }?.let { return it }
+        if (!temporary) workspaces().firstOrNull { !it.tBool("temporary") && it.tString("sourcePath") == source.path && it.tString("sha256") == hash }?.let { currentWorkspace = it.tString("workspaceId"); return it }
         require(workspaces().size < 16) { "最多保留 16 个 APK 工作区，请删除不需要的临时工作区" }
         val existingSize = workspaces().sumOf { it.get("size").asLong }
         require(existingSize + source.length() <= 1024L * 1024 * 1024) { "APK 快照总量超过 1 GiB" }
@@ -126,11 +148,16 @@ internal class McpApkToolkit(
             }
             val info = ToolkitIo.json("workspaceId" to id, "path" to "aijs://workspace/$id", "sourcePath" to source.path,
                 "temporary" to temporary, "sha256" to hash, "size" to copy.length(), "createdAt" to System.currentTimeMillis())
-            File(folder, "workspace.json").writeText(gson.toJson(info)); return info
+            val signature = ToolkitSignatures.read(copy)
+            info.add("signatureSummary", ToolkitIo.json("available" to signature.get("available"), "signaturePresent" to signature.get("signaturePresent"),
+                "schemes" to signature.get("schemes"), "certificateCount" to signature.getAsJsonArray("certificates").size()))
+            File(folder, "workspace.json").writeText(gson.toJson(info)); currentWorkspace = id; return info
         } catch (error: Exception) { safeRemove(folder, store); throw error }
     }
     private fun listAvailable(args: JsonObject): JsonObject {
         val prefix = args.tString("prefix", ""); var visited = 0; var truncated = false; val items = ArrayList<JsonObject>()
+        currentWorkspace?.let { id -> if("aijs://current-apk".startsWith(prefix)) items.add(ToolkitIo.json("path" to "aijs://current-apk",
+            "name" to File(workspace(id).tString("sourcePath")).name, "kind" to "current_apk", "workspaceId" to id)) }
         fun scan(folder: File, depth: Int) {
             if (depth > 16 || visited >= 20000 || items.size >= 10000) { truncated = true; return }
             for (file in folder.listFiles()?.sortedBy { it.name } ?: emptyList()) {
@@ -147,7 +174,8 @@ internal class McpApkToolkit(
         val parent = File(directory(workspace), "sessions"); parent.mkdirs()
         require((parent.listFiles()?.size ?: 0) < 8) { "单个工作区最多 8 个编辑会话" }
         val id = ToolkitIo.fresh(); val folder = File(parent, id); require(folder.mkdir()); require(File(folder, "entries").mkdir())
-        val info = ToolkitIo.json("workspaceId" to workspace, "editSessionId" to id, "revision" to ToolkitIo.fresh(), "deleted" to emptyList<String>(), "changedEntries" to emptyMap<String,String>())
+        val info = ToolkitIo.json("workspaceId" to workspace, "editSessionId" to id, "revision" to ToolkitIo.fresh(), "deleted" to emptyList<String>(),
+            "changedEntries" to emptyMap<String,String>(), "classChanges" to emptyMap<String,String>(), "classChangesComplete" to true)
         File(folder, "session.json").writeText(gson.toJson(info)); return info
     }
     private fun sessionInfo(workspace: String, session: String) = JsonParser().parse(File(sessionDir(workspace, session), "session.json").readText()).asJsonObject
@@ -171,19 +199,35 @@ internal class McpApkToolkit(
             ToolkitIo.read(zip.getInputStream(item), max)
         }
     }
-    private fun write(workspace: String, session: String, changes: Map<String,ByteArray>, deletions: Set<String> = emptySet()) {
+    private fun write(workspace: String, session: String, changes: Map<String,ByteArray>, deletions: Set<String> = emptySet(),
+                      streaming: Map<String, (File) -> Unit> = emptyMap(), classChange: Pair<String, String>? = null) {
         val folder = sessionDir(workspace, session); val info = sessionInfo(workspace, session)
         val changed = info.getAsJsonObject("changedEntries"); val deleted = info.getAsJsonArray("deleted").map { it.asString }.toMutableSet()
         val created = ArrayList<File>(); val superseded = ArrayList<File>()
         try {
-            changes.forEach { (path, bytes) ->
-                ToolkitIo.entry(path); require(bytes.size <= ToolkitIo.MAX_ENTRY)
-                val file = File(File(folder, "entries"), ToolkitIo.fresh()); file.writeBytes(bytes); created.add(file)
+            require(changes.keys.intersect(streaming.keys).isEmpty()) { "写入目标重复" }
+            val writers = linkedMapOf<String, (File) -> Unit>()
+            changes.forEach { (path, bytes) -> require(bytes.size <= ToolkitIo.MAX_ENTRY); writers[path] = { it.writeBytes(bytes) } }
+            writers.putAll(streaming)
+            writers.forEach { (path, writer) ->
+                ToolkitIo.entry(path)
+                val file = File(File(folder, "entries"), ToolkitIo.fresh()); created.add(file); writer(file)
+                require(file.isFile && file.length() <= ToolkitIo.MAX_APK) { "编辑条目过大或写入失败" }
                 changed.get(path)?.asString?.let { superseded.add(File(file.parentFile, ToolkitIo.id(it))) }
                 changed.addProperty(path, file.name); deleted.remove(path)
             }
             deletions.forEach { path -> ToolkitIo.entry(path); changed.remove(path)?.asString?.let { superseded.add(File(File(folder, "entries"), ToolkitIo.id(it))) }; deleted.add(path) }
-            require(changed.size() <= 2000 && File(folder, "entries").listFiles().orEmpty().sumOf { it.length() } <= 512L * 1024 * 1024) { "编辑会话超过容量限制" }
+            if(classChange != null) {
+                val classes = info.getAsJsonObject("classChanges") ?: JsonObject().also { info.add("classChanges", it); info.addProperty("classChangesComplete", false) }
+                val (owner, action) = classChange; val prior = classes.get(owner)?.asString
+                when {
+                    action == "deleted" && prior == "added" -> classes.remove(owner)
+                    prior == "added" -> classes.addProperty(owner, "added")
+                    action == "added" && prior == "deleted" -> classes.addProperty(owner, "changed")
+                    else -> classes.addProperty(owner, action)
+                }
+            }
+            require(changed.size() <= 2000 && changed.entrySet().sumOf { File(File(folder, "entries"), ToolkitIo.id(it.value.asString)).length() } <= 512L * 1024 * 1024) { "编辑会话超过容量限制" }
             info.add("deleted", gson.toJsonTree(deleted)); info.addProperty("revision", ToolkitIo.fresh())
             ToolkitIo.atomic(File(folder, "session.json")) { it.writeText(gson.toJson(info)) }
             superseded.forEach { it.delete() }
@@ -191,14 +235,22 @@ internal class McpApkToolkit(
     }
     private fun resourceTable(workspace: String, session: String): ToolkitResources = ToolkitResources(raw(workspace, session, "resources.arsc"))
     private fun optionalResources(workspace: String, session: String): ToolkitResources? = if (entries(workspace, session).contains("resources.arsc")) resourceTable(workspace, session) else null
-    private fun dexes(workspace: String, session: String): Sequence<Pair<String,ToolkitDex>> = entries(workspace, session).asSequence().filter { it.matches(Regex("classes(?:[2-9][0-9]*)?\\.dex")) }.map { it to ToolkitDex(raw(workspace, session, it)) }
+    private fun dexes(workspace: String, session: String): Sequence<Pair<String,ToolkitDex>> = entries(workspace, session).asSequence().filter { ToolkitApkTargets.isDex(it) }.map { it to ToolkitDex(raw(workspace, session, it)) }
     private fun dexFor(workspace: String, session: String, locator: String): Pair<String,ToolkitDex> {
         val found = dexes(workspace, session).filter { (_, dex) -> dex.classes.any { it.type == dex.type(locator) } }.toList()
         require(found.size == 1) { if(found.isEmpty()) "DEX 类不存在" else "多个 DEX 含同名类，暂不支持此定位符" }; return found.single()
     }
-    private fun entryLocator(locator: String): String { require(locator.startsWith("zip_entry:")) { "需要 zip_entry: 定位符" }; return ToolkitIo.entry(locator.removePrefix("zip_entry:")) }
+    private fun entryLocator(locator: String): String {
+        require(locator.startsWith("zip_entry:")) { "需要 zip_entry: 定位符" }
+        return ToolkitIo.entry(locator.removePrefix("zip_entry:")).also { require(!it.endsWith('/')) { "目录不是普通文件目标" } }
+    }
     private fun text(workspace: String, session: String, locator: String): String = when {
         locator.startsWith("dex_") -> dexFor(workspace, session, locator).second.render(locator)
+        locator.startsWith("axml:") -> {
+            val bytes = raw(workspace, session, ToolkitApkTargets.axmlPath(locator))
+            require(ToolkitResources.isBinaryXml(bytes)) { "目标不是 AXML" }
+            ToolkitResources.decodeXml(bytes, optionalResources(workspace, session))
+        }
         locator.startsWith("resource:") -> resourceTable(workspace, session).let { it.xml(it.find(locator, "")) }
         else -> {
             val bytes = raw(workspace, session, entryLocator(locator), ToolkitIo.MAX_TEXT)
@@ -206,21 +258,52 @@ internal class McpApkToolkit(
         }
     }
     private fun readText(workspace: String, session: String, args: JsonObject): JsonObject {
-        val locator = args.tString("locator"); val content = text(workspace, session, locator).replace("\r\n", "\n").replace('\r', '\n')
-        val lines = content.split('\n'); val line = args.tInt("startLine", 0, 0, lines.size); val column = args.tInt("startColumn", 0, 0, if(line < lines.size) lines[line].length else 0)
-        val maxChars = args.tInt("maxChars", 20000, 1, 65536); val limit = args.tInt("limit", 500, 1, 2000)
-        val offset = lines.take(line).sumOf { it.length + 1 } + column
-        val value = content.substring(minOf(offset, content.length)).lineSequence().take(limit).joinToString("\n").take(maxChars)
-        val end = minOf(content.length, offset + value.length); val prefix = content.substring(0, end)
-        val nextLine = prefix.count { it == '\n' }; val nextColumn = prefix.length - (prefix.lastIndexOf('\n') + 1)
-        return ToolkitIo.json("locator" to locator, "text" to value, "targetVersion" to ToolkitIo.version(content.toByteArray(Charsets.UTF_8)), "startLine" to line, "startColumn" to column,
-            "nextLine" to nextLine, "nextColumn" to nextColumn, "hasMore" to (end < content.length), "totalChars" to content.length)
+        val locator = args.tString("locator")
+        var truncated = false
+        val content = if(locator.startsWith("zip_entry:")) {
+            val path = entryLocator(locator)
+            val size = entryLength(workspace, session, path)
+            if(size > ToolkitIo.MAX_TEXT && !ToolkitResources.isBinaryXml(prefix(workspace, session, path, 8))) {
+                truncated = true
+                val bytes = prefix(workspace, session, path, ToolkitIo.MAX_TEXT)
+                var decoded: String? = null
+                for(trim in 0..3) {
+                    if(decoded != null) break
+                    decoded = runCatching { ToolkitIo.text(bytes.copyOf(bytes.size - trim)) }.getOrNull()
+                }
+                decoded ?: throw IllegalArgumentException("条目不是有效 UTF-8 文本，请使用 apk_read_bytes")
+            } else text(workspace, session, locator)
+        } else text(workspace, session, locator)
+        return ToolkitTextWindow.read(content, args).apply {
+            addProperty("locator", locator)
+            addProperty("editable", !truncated && !locator.startsWith("dex_field:"))
+            addProperty("textSourceKind", if(truncated) "prefix" else "full_source")
+            addProperty("sourceTruncated", truncated)
+            if(truncated) addProperty("editableReason", "TEXT_SOURCE_TRUNCATED")
+        }
     }
     private fun readBytes(workspace: String, session: String, args: JsonObject): JsonObject {
-        val locator = args.tString("locator"); val bytes = raw(workspace, session, entryLocator(locator))
-        val offset = args.tInt("byteOffset", 0, 0, bytes.size); val count = minOf(args.tInt("maxBytes", 256, 1, 65536), bytes.size - offset)
-        return ToolkitIo.json("locator" to locator, "targetVersion" to ToolkitIo.version(bytes), "byteWindow" to ToolkitIo.json("byteOffset" to offset, "hex" to ToolkitIo.hex(bytes.copyOfRange(offset, offset + count)), "byteCount" to count),
-            "nextByteOffset" to offset + count, "hasMore" to (offset + count < bytes.size), "size" to bytes.size)
+        val locator = args.tString("locator"); val entry = entryLocator(locator)
+        val size = entryLength(workspace, session, entry); require(size <= ToolkitIo.MAX_APK) { "原始条目读取最大512MiB" }
+        val offset = args.tInt("byteOffset", 0, 0, size.toInt())
+        val count = minOf(args.tInt("maxBytes", 256, 1, 65536), size.toInt() - offset)
+        val value = ByteArray(count)
+        val deadline = System.nanoTime() + 8_000_000_000L
+        streamEntry(workspace, session, entry) { input ->
+            var remaining = offset.toLong()
+            while(remaining > 0) {
+                require(System.nanoTime() < deadline && !Thread.currentThread().isInterrupted) { "原始字节定位超过预算，请使用较小偏移或导出条目读取" }
+                val skipped = input.skip(minOf(remaining, 1024 * 1024L))
+                if(skipped > 0) remaining -= skipped else { require(input.read() >= 0) { "条目提前结束" }; remaining-- }
+            }
+            var read = 0
+            while(read < count) { val next = input.read(value, read, count - read); require(next >= 0) { "条目提前结束" }; read += next }
+        }
+        val stamp = if(session.isEmpty()) null else sessionInfo(workspace, session).getAsJsonObject("changedEntries").get(entry)?.asString
+        val version = ToolkitIo.version(("${stamp ?: workspace(workspace).tString("sha256")}:$entry:$size").toByteArray(Charsets.UTF_8))
+        return ToolkitIo.json("locator" to locator, "targetVersion" to version,
+            "byteWindow" to ToolkitIo.json("byteOffset" to offset, "hex" to ToolkitIo.hex(value), "byteCount" to count),
+            "nextByteOffset" to offset + count, "hasMore" to (offset + count < size), "size" to size)
     }
     private fun list(workspace: String, session: String, args: JsonObject): JsonObject {
         val prefix = args.tString("prefix", ""); val view = args.tString("view", "zip_entries")
@@ -231,19 +314,27 @@ internal class McpApkToolkit(
             else -> throw IllegalArgumentException("view 无效")
         }; return page(workspace, session, items, args.tInt("limit", 200, 1, 200))
     }
-    private fun page(workspace: String, session: String, items: List<JsonObject>, limit: Int, truncated: Boolean = false): JsonObject {
+    private fun page(workspace: String, session: String, items: List<JsonObject>, limit: Int, truncated: Boolean = false,
+                     kind: String = "items", metadata: JsonObject = JsonObject()): JsonObject {
         val key = if (items.size > limit) ToolkitIo.fresh() else ""
         if (key.isNotEmpty()) {
             require(items.size <= 80000) { "结果过大，请缩小 prefix 或搜索范围" }
             while (pages.isNotEmpty() && (pages.size >= 16 || pages.values.sumOf { it.items.size } + items.size > 80000)) pages.remove(pages.keys.first())
-            pages[key] = Page(workspace, session, revision(workspace, session), items, limit)
+            pages[key] = Page(workspace, session, revision(workspace, session), items, limit, kind, metadata, truncated)
         }
-        return paged(workspace, session, items.take(limit), key, items.size, truncated)
+        return paged(workspace, session, items.take(limit), key, items.size, truncated, kind, metadata)
     }
-    private fun paged(workspace: String, session: String, items: List<JsonObject>, key: String, total: Int, truncated: Boolean): JsonObject {
+    private fun paged(workspace: String, session: String, items: List<JsonObject>, key: String, total: Int, truncated: Boolean,
+                      kind: String = "items", metadata: JsonObject = JsonObject()): JsonObject {
         val actions = JsonArray()
         if(key.isNotEmpty()) actions.add(action("apk_continue", ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "nextCursor" to key, "limit" to 200)))
-        return ToolkitIo.ok(ToolkitIo.json("items" to items, "nextCursor" to key, "hasMore" to key.isNotEmpty(), "total" to total, "truncated" to truncated), actions)
+        val data = ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "items" to items,
+            "nextCursor" to key, "hasMore" to key.isNotEmpty(), "total" to total, "truncated" to truncated,
+            "pagination" to ToolkitIo.json("hasMore" to key.isNotEmpty(), "nextCursor" to key.takeIf { it.isNotEmpty() },
+                "returnedCount" to items.size, "limitMax" to 200, "totalAvailableCount" to if(truncated) null else total))
+        if(kind == "search") data.add("hits", data.get("items"))
+        metadata.entrySet().forEach { (name, value) -> data.add(name, value) }
+        return ToolkitIo.ok(data, actions)
     }
     private fun continuePage(args: JsonObject): JsonObject {
         val key = args.tString("nextCursor"); val page = pages[key] ?: error("分页游标不存在或已过期")
@@ -251,56 +342,16 @@ internal class McpApkToolkit(
         require(System.currentTimeMillis() - page.at < 300000 && page.revision == revision(page.workspace, page.session)) { "内容已变更或游标已过期，请重新查询" }
         val next = minOf(page.offset + args.tInt("limit", 200, 1, 200), page.items.size); val values = page.items.subList(page.offset, next)
         page.offset = next; if (next == page.items.size) pages.remove(key)
-        return paged(page.workspace, page.session, values, if(next < page.items.size) key else "", page.items.size, false)
+        return paged(page.workspace, page.session, values, if(next < page.items.size) key else "", page.items.size, page.truncated, page.kind, page.metadata)
     }
     private fun action(name: String, args: JsonObject) = ToolkitIo.json("tool" to name, "arguments" to args)
     private fun search(workspace: String, session: String, args: JsonObject): JsonObject {
-        val query = args.tString("query"); require(query.isNotEmpty() && query.length <= 512) { "搜索词长度必须为 1..512" }
-        val target = args.tString("target", "overview"); val prefix = args.tString("prefix", ""); val exact = args.tString("matchMode", "contains") == "exact"
-        val queryType = args.tString("queryType", "literal"); require(queryType in listOf("literal", "regex"))
-        val ignore = !args.tBool("caseSensitive")
-        val pattern = if(queryType == "regex") com.google.re2j.Pattern.compile(query, if(ignore) com.google.re2j.Pattern.CASE_INSENSITIVE else 0) else null
-        val result = ArrayList<JsonObject>(); var scanned = 0; var truncated = false
-        val max = 10000; val snippet = args.tInt("snippetMaxChars", 240, 1, 2000)
-        fun add(item: JsonObject, value: String) {
-            if (++scanned > 300000 || result.size >= max) { truncated = true; return }
-            val matcher = pattern?.matcher(value)
-            val matched = if(matcher != null) { if(exact) matcher.matches() else matcher.find() } else if(exact) value.equals(query, ignore) else value.contains(query, ignore)
-            val at = if(matcher != null && matched) matcher.start() else value.indexOf(query, ignoreCase = ignore)
-            if (matched) {
-                val copy = item.deepCopy(); copy.addProperty("snippet", value.take(snippet))
-                if (args.tBool("includeMatchOffsets")) copy.addProperty("matchOffset", at); result.add(copy)
-            }
-        }
-        val names = entries(workspace, session)
-        if (target in listOf("overview", "files")) names.filter { it.startsWith(prefix) }.forEach { add(ToolkitIo.json("locator" to "zip_entry:$it", "kind" to "file"), it) }
-        if (target in listOf("overview", "resource_table_names", "resource_table_values", "resource_table_file_paths") && "resources.arsc" in names) {
-            val resources = resourceTable(workspace, session)
-            resources.entries().forEach { e -> if (e.name.startsWith(prefix)) add(resources.item(e), if (target == "resource_table_names") e.typeName + "/" + e.name else if(target == "overview") e.name + " " + resources.xml(e) else resources.xml(e)) }
-        }
-        if (target in listOf("overview", "dex_names", "dex_strings", "dex_string_members", "smali")) for ((entry, dex) in dexes(workspace, session)) {
-            if (truncated) break
-            if (target in listOf("overview", "dex_names", "smali")) dex.classes.filter { it.type.startsWith(prefix) }.forEach { c -> if (!truncated) add(ToolkitIo.json("locator" to "dex_class:${c.type}", "dexEntry" to entry), if (target == "smali") dex.renderClass(c) else c.type) }
-            if (target in listOf("dex_strings", "dex_string_members")) dex.strings(100001).forEach { item -> if(!truncated && item.tString("locator").substringAfter(':').startsWith(prefix.removePrefix("dex_method:"), false)) add(item, item.tString("value")) }
-        }
-        if (target in listOf("native_symbols", "native_strings")) names.filter { it.endsWith(".so") && it.startsWith(prefix) }.forEach { entry ->
-            if(!truncated) {
-                val elf = ToolkitElf(raw(workspace, session, entry)); val items = if(target == "native_symbols") elf.items("symbols", "") else elf.strings(100001)
-                items.forEach { item -> if(!truncated) add(item.apply { addProperty("locator", "zip_entry:$entry") }, item.get("value")?.asString ?: item.tString("name", "")) }
-            }
-        }
-        require(target in listOf("overview","files","resource_table_names","resource_table_values","resource_table_file_paths","dex_names","dex_strings","dex_string_members","smali","native_symbols","native_strings")) { "搜索范围无效" }
-        return page(workspace, session, result, args.tInt("limit", 50, 1, 200), truncated)
+        val result = ToolkitApkSearch(entries(workspace, session), { raw(workspace, session, it) },
+            { optionalResources(workspace, session) }, { dexes(workspace, session) }).search(args)
+        return page(workspace, session, result.hits, args.tInt("limit", 50, 1, 200), result.partial, "search", result.metadata)
     }
     private fun readResources(workspace: String, session: String, args: JsonObject): JsonObject {
-        val resources = resourceTable(workspace, session); val reads = args.getAsJsonArray("reads") ?: error("缺少 reads"); require(reads.size() in 1..200)
-        val maxValue = args.tInt("maxValueChars", 4096, 1, 65536); val maxXml = args.tInt("maxValueXmlChars", 16384, 1, 65536)
-        val values = reads.map { read ->
-            val request = read.asJsonObject; val e = resources.find(request.tString("locator"), request.tString("variant", "")); val full = resources.item(e, true)
-            val value = full.get("value")?.takeIf { !it.isJsonNull }?.asString.orEmpty(); val xml = full.tString("valueXml")
-            full.addProperty("value", value.take(maxValue)); full.addProperty("valueXml", xml.take(maxXml)); full.addProperty("valueXmlComplete", xml.length <= maxXml)
-            full.addProperty("valueComplete", value.length <= maxValue); full.addProperty("referencesResolved", false); full
-        }; return ToolkitIo.json("items" to values, "note" to "返回确切资源 XML；引用保留，不将 resolveDepth 当作已完成引用展开")
+        return ToolkitResourceReader(resourceTable(workspace, session)).read(args)
     }
     private fun editResources(workspace: String, session: String, args: JsonObject, add: Boolean): JsonObject {
         val resources = resourceTable(workspace, session); val changes = args.getAsJsonArray(if(add) "adds" else "edits") ?: error("缺少编辑列表"); require(changes.size() in 1..200)
@@ -314,45 +365,78 @@ internal class McpApkToolkit(
                 val values = edit.getAsJsonArray("values") ?: error("缺少 values"); require(values.size() in 1..200)
                 val kind = edit.tString("kind"); require(kind in listOf("resource", "variant"))
                 val existing = if(kind == "variant") resources.find(edit.tString("locator"), resources.entries().firstOrNull { resources.locator(it) == edit.tString("locator") }?.resConfig?.qualifiers ?: "") else null
+                val descriptions = values.map { ToolkitResources.describe(it.asJsonObject.tString("valueXml")) }
+                require(descriptions.distinct().size == 1) { "同一新增资源的所有配置必须使用相同 name/type" }
+                val (newName, newType) = descriptions.first()
+                if(existing != null) require(existing.name == newName && existing.typeName == newType) { "新增配置的 name/type 与目标不一致" }
+                else {
+                    val packageId = ToolkitResources.parseId(edit.tString("packageId"))
+                    require(resources.entries().none { it.resourceId ushr 24 == packageId && it.name == newName && it.typeName == newType }) { "资源名称已存在，请使用 kind=variant" }
+                }
                 values.forEach { item ->
                     val v = item.asJsonObject; val entry = resources.add(if(existing != null) "0x%02x".format(existing.resourceId ushr 24) else edit.tString("packageId"), v.tString("variant", ""), v.tString("valueXml"))
                     if(existing != null) require(entry.resourceId == existing.resourceId) { "新增配置的资源名/类型必须与定位符一致" }; results.add(resources.item(entry))
                 }
             }
         }
-        write(workspace, session, mapOf("resources.arsc" to resources.bytes())); return ToolkitIo.json("items" to results, "savedToSession" to true)
+        write(workspace, session, mapOf("resources.arsc" to resources.bytes())); return ToolkitIo.json("items" to results, "results" to results, "savedToSession" to true)
     }
     private fun editText(workspace: String, session: String, args: JsonObject): JsonObject {
-        val locator = args.tString("locator"); val old = runCatching { text(workspace, session, locator).replace("\r\n", "\n").replace('\r', '\n') }.getOrElse { if(args.tString("targetVersion") == "missing" && locator.startsWith("zip_entry:")) "" else throw it }
-        val exists = !(args.tString("targetVersion") == "missing")
-        require(!exists || ToolkitIo.version(old.toByteArray()) == args.tString("targetVersion")) { "内容已改变，请重新读取" }
-        if(!exists) require(entryLocator(locator) !in entries(workspace, session)) { "条目已经存在" }
-        val edits = args.getAsJsonArray("edits") ?: error("缺少 edits"); require(edits.size() in 1..200); var content = old
-        edits.forEach { raw ->
-            val edit = raw.asJsonObject; val mode = edit.tString("mode"); val match = edit.tString("matchText", ""); val value = edit.tString("writeText")
-            if(mode == "write_target") content = value else {
-                require(match.isNotEmpty()) { "匹配文本不能为空" }; val at = content.indexOf(match); require(at >= 0 && content.indexOf(match, at + match.length) < 0) { "匹配文本必须唯一命中" }
-                content = when(mode) { "replace_match" -> content.replaceRange(at, at + match.length, value); "insert_before_match" -> content.replaceRange(at, at, value); "insert_after_match" -> content.replaceRange(at + match.length, at + match.length, value); else -> error("编辑模式无效") }
-            }; require(content.toByteArray().size <= ToolkitIo.MAX_TEXT) { "文本超过 10 MiB" }
-        }
-        if(locator.startsWith("dex_")) {
-            val (entry, dex) = dexFor(workspace, session, locator); write(workspace, session, mapOf(entry to dex.update(locator, content, sessionDir(workspace, session))))
+        val locator = args.tString("locator"); val version = args.tString("targetVersion")
+        require(!locator.startsWith("dex_field:")) { "dex_field 只读" }
+        val names = entries(workspace, session)
+        val missing = version == "missing"
+        val dexTarget = locator.startsWith("dex_")
+        val entry = if(dexTarget) null else if(locator.startsWith("axml:")) ToolkitApkTargets.axmlPath(locator) else entryLocator(locator)
+        val present = if(dexTarget) dexes(workspace, session).any { it.second.classes.any { c -> c.type == it.second.type(locator) } } else entry in names
+        if(missing) require(!present && !locator.startsWith("dex_method:")) { "目标已存在或不支持新建此类型" }
+        else require(present) { "目标不存在，请先重新读取" }
+        val old = if(missing) "" else text(workspace, session, locator)
+        require(missing || ToolkitIo.version(ToolkitTextEdits.normalize(old).toByteArray(Charsets.UTF_8)) == version) { "内容已改变，请重新读取" }
+        val edits = args.getAsJsonArray("edits") ?: error("缺少 edits")
+        if(missing) require(edits.size() == 1 && edits[0].asJsonObject.tString("mode") == "write_target") { "新建目标需要单个 write_target" }
+        val originalBytes = if(entry != null && !missing) raw(workspace, session, entry) else null
+        if(originalBytes != null && !ToolkitResources.isBinaryXml(originalBytes)) require(originalBytes.size <= ToolkitIo.MAX_TEXT) { "普通文本编辑最大10MiB，不能编辑截断预览" }
+        val axml = locator.startsWith("axml:") || originalBytes?.let { ToolkitResources.isBinaryXml(it) } == true
+        val content = ToolkitTextEdits.apply(old, edits, preserveLineEndings = !dexTarget && !axml)
+        val changes: Map<String, ByteArray>
+        val savedText: String
+        if(dexTarget) {
+            val selected = if(missing) dexes(workspace, session).firstOrNull() ?: ("classes.dex" to ToolkitDex.empty()) else dexFor(workspace, session, locator)
+            val bytes = selected.second.update(locator, content, sessionDir(workspace, session), allowCreate = missing)
+            savedText = ToolkitDex(bytes).render(locator)
+            changes = mapOf(selected.first to bytes)
         } else {
-            val entry = entryLocator(locator); require(entry != "resources.arsc" && !entry.endsWith(".dex")) { "资源表用资源接口，DEX 用 Smali 定位符" }
-            val bytes = if(exists && ToolkitResources.isBinaryXml(raw(workspace, session, entry))) ToolkitResources.encodeXml(content, optionalResources(workspace, session)) else content.toByteArray(Charsets.UTF_8)
-            write(workspace, session, mapOf(entry to bytes))
+            require(entry != null && entry != "resources.arsc" && !ToolkitApkTargets.isDex(entry)) { "资源表/DEX 请使用语义编辑接口" }
+            val bytes = if(axml) ToolkitResources.encodeXml(content, optionalResources(workspace, session)) else content.toByteArray(Charsets.UTF_8)
+            savedText = if(axml) ToolkitResources.decodeXml(bytes, optionalResources(workspace, session)) else content
+            changes = mapOf(entry to bytes)
         }
-        return ToolkitIo.json("locator" to locator, "targetVersion" to ToolkitIo.version(content.toByteArray()), "savedToSession" to true)
+        val next = ToolkitIo.version(ToolkitTextEdits.normalize(savedText).toByteArray(Charsets.UTF_8))
+        write(workspace, session, changes, classChange = if(dexTarget) locator.substringAfter(':').substringBefore("->") to if(missing) "added" else "changed" else null)
+        return ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "locator" to locator,
+            "targetVersion" to next, "newTargetVersion" to next, "savedToSession" to true)
     }
     private fun deleteTarget(workspace: String, session: String, args: JsonObject): JsonObject {
         val locator = args.tString("locator")
-        if(locator.startsWith("dex_")) { val (entry, dex) = dexFor(workspace, session, locator); write(workspace, session, mapOf(entry to dex.update(locator, null, sessionDir(workspace, session)))) }
-        else { val entry = entryLocator(locator); require(entry in entries(workspace, session)); write(workspace, session, emptyMap(), setOf(entry)) }
+        if(locator.startsWith("dex_")) {
+            val (entry, dex) = dexFor(workspace, session, locator)
+            write(workspace, session, mapOf(entry to dex.update(locator, null, sessionDir(workspace, session))),
+                classChange = dex.type(locator) to if(locator.startsWith("dex_class:")) "deleted" else "changed")
+        }
+        else {
+            val entry = if(locator.startsWith("axml:")) ToolkitApkTargets.axmlPath(locator) else entryLocator(locator)
+            require(entry in entries(workspace, session)) { "目标不存在或已删除" }
+            ToolkitApkTargets.ordinary(entry, allowAxml = true)
+            if(locator.startsWith("axml:")) require(ToolkitResources.isBinaryXml(raw(workspace, session, entry))) { "目标不是 AXML" }
+            write(workspace, session, emptyMap(), setOf(entry))
+        }
         return ToolkitIo.json("deleted" to true, "locator" to locator)
     }
     private fun patchBytes(workspace: String, session: String, args: JsonObject): JsonObject {
-        val entry = entryLocator(args.tString("locator")); require(!entry.endsWith(".dex")) { "DEX 修改请使用 Smali，避免破坏签名和校验和" }
-        val bytes = raw(workspace, session, entry); val patches = args.getAsJsonArray("patches") ?: error("缺少 patches"); require(patches.size() in 1..200)
+        val entry = entryLocator(args.tString("locator")); val bytes = raw(workspace, session, entry)
+        ToolkitApkTargets.ordinary(entry, bytes)
+        val patches = args.getAsJsonArray("patches") ?: error("缺少 patches"); require(patches.size() in 1..200)
         val ranges = ArrayList<IntRange>()
         patches.forEach { raw -> val patch = raw.asJsonObject; val before = ToolkitIo.unhex(patch.tString("expectedHex")); val after = ToolkitIo.unhex(patch.tString("replacementHex")); val start = patch.tInt("byteOffset", 0, 0, bytes.size)
             require(before.isNotEmpty() && before.size == after.size && before.size <= bytes.size - start) { "原始字节补丁必须等长且不越界" }
@@ -362,25 +446,16 @@ internal class McpApkToolkit(
     }
     private fun elf(workspace: String, session: String, args: JsonObject) = ToolkitElf(raw(workspace, session, entryLocator(args.tString("locator"))))
     private fun patchNativeString(workspace: String, session: String, args: JsonObject): JsonObject {
-        val elf = elf(workspace, session, args); val offset = elf.fileOffset(elf.address(args)) ?: error("地址没有文件内容")
-        val old = args.tString("expectedText").toByteArray(Charsets.UTF_8); val replacement = args.tString("replacementText").toByteArray(Charsets.UTF_8)
-        require(old.isNotEmpty() && replacement.size <= old.size && old.size <= elf.bytes.size - offset) { "字符串补丁不能增长或越界" }
-        val mode = args.tString("paddingMode", "none"); require(mode in listOf("none","null_pad","space_pad")); require(mode != "none" || old.size == replacement.size)
-        val output = ByteArray(old.size) { if(mode == "space_pad") 32 else 0 }; replacement.copyInto(output)
-        return patchBytes(workspace, session, ToolkitIo.json("locator" to args.tString("locator"), "patches" to listOf(ToolkitIo.json("byteOffset" to offset, "expectedHex" to ToolkitIo.hex(old), "replacementHex" to ToolkitIo.hex(output)))))
+        return applyNativePatch(workspace, session, args, ToolkitNativePatches.string(elf(workspace, session, args), args))
     }
     private fun patchInstructions(workspace: String, session: String, args: JsonObject): JsonObject {
-        val elf = elf(workspace, session, args); require(elf.machine == 183 && elf.little) { "当前指令补丁支持 AArch64" }
-        val address = elf.address(args); val offset = elf.fileOffset(address) ?: error("地址没有文件内容")
-        require(address % 4 == 0L && elf.segments.any { it.type == 1L && it.flags and 1 != 0L && address >= it.address && address - it.address < it.size }) { "指令必须在对齐的可执行区段" }
-        val expected = ToolkitIo.unhex(args.tString("expectedHex")); require(expected.isNotEmpty() && expected.size % 4 == 0)
-        val source = args.tString("replacementAssembly"); require(source.length <= 65536 && !Regex("(?m)^\\s*\\.(?!inst\\b)[A-Za-z]").containsMatchIn(source)) { "汇编仅接受指令、标签与 .inst，不允许文件或宏指令" }
-        val compiled = ToolkitElf.assembleSmall(source, address) ?: assembler?.invoke(elf.machine, address, source) ?: error("该汇编指令需安装可选 C/C++ 组件：应用终端运行 aijs-toolchain install cpp")
-        require(compiled.isNotEmpty() && compiled.size <= expected.size && compiled.size % 4 == 0) { "汇编结果不能增长，且须为完整指令" }
-        val mode = args.tString("paddingMode", "none"); require(mode in listOf("none", "nop")); require(mode != "none" || compiled.size == expected.size)
-        val bytes = ByteArray(expected.size); compiled.copyInto(bytes)
-        for (i in compiled.size until expected.size step 4) byteArrayOf(0x1f,0x20,0x03,0xd5.toByte()).copyInto(bytes, i)
-        return patchBytes(workspace, session, ToolkitIo.json("locator" to args.tString("locator"), "patches" to listOf(ToolkitIo.json("byteOffset" to offset, "expectedHex" to ToolkitIo.hex(expected), "replacementHex" to ToolkitIo.hex(bytes)))))
+        return applyNativePatch(workspace, session, args, ToolkitNativePatches.instructions(elf(workspace, session, args), args, assembler))
+    }
+    private fun applyNativePatch(workspace: String, session: String, args: JsonObject, patch: ToolkitNativePatches.Patch): JsonObject {
+        val result = patchBytes(workspace, session, ToolkitIo.json("locator" to args.tString("locator"),
+            "patches" to listOf(ToolkitIo.json("byteOffset" to patch.byteOffset, "expectedHex" to ToolkitIo.hex(patch.expected), "replacementHex" to ToolkitIo.hex(patch.replacement)))))
+        patch.metadata.entrySet().forEach { (name, value) -> result.add(name, value) }
+        return result
     }
     private fun resourceXref(workspace: String, session: String, args: JsonObject): JsonObject {
         val id = ToolkitResources.parseId(args.tString("locator").substringAfter(':')); val scopes = args.getAsJsonArray("scopes")?.map { it.asString } ?: listOf("dex","axml","resource_table")
@@ -409,48 +484,112 @@ internal class McpApkToolkit(
         return page(workspace, session, items, args.tInt("limit", 50, 1, 200), partial)
     }
     private fun check(workspace: String, session: String, run: Boolean): JsonObject {
-        val info = sessionInfo(workspace, session); val changed = info.getAsJsonObject("changedEntries").keySet(); val failures = ArrayList<JsonObject>()
+        val info = sessionInfo(workspace, session); val changed = info.getAsJsonObject("changedEntries").keySet().toSet(); val failures = ArrayList<JsonObject>()
+        val names = entries(workspace, session).toSet()
+        val base = ZipFile(snapshot(workspace)).use { it.entries().asSequence().map { entry -> entry.name }.toSet() }
+        val deleted = info.getAsJsonArray("deleted").map { it.asString }.toSet()
         if(run) {
-            val names = entries(workspace, session)
-            if("AndroidManifest.xml" !in names) failures.add(ToolkitIo.json("locator" to "zip_entry:AndroidManifest.xml", "error" to "缺少 Manifest"))
-            changed.forEach { entry -> runCatching {
+            fun failure(entry: String, code: String, message: String?) {
+                failures.add(ToolkitIo.json("locator" to "zip_entry:$entry", "errorCode" to code, "message" to message, "error" to message))
+            }
+            if("AndroidManifest.xml" !in names) failure("AndroidManifest.xml", "MANIFEST_MISSING", "缺少 Manifest")
+            base.filter { (ToolkitApkTargets.isDex(it) || it == "resources.arsc") && it !in names }.forEach {
+                failure(it, "RESERVED_ENTRY_MISSING", "编辑会话移除了保留条目，请撤销此变更")
+            }
+            val validate = changed + names.filter { ToolkitApkTargets.isDex(it) || it == "resources.arsc" || it == "AndroidManifest.xml" }
+            validate.forEach { entry -> runCatching {
                 val bytes = raw(workspace, session, entry)
-                when { entry.endsWith(".dex") -> ToolkitDex(bytes).classes.forEach { it.methods.forEach { method -> method.implementation?.instructions?.count() } }
+                when { ToolkitApkTargets.isDex(entry) -> ToolkitDex(bytes).classes.forEach { it.methods.forEach { method -> method.implementation?.instructions?.count() } }
                     entry == "resources.arsc" -> ToolkitResources(bytes).entries()
                     entry.endsWith(".so") -> ToolkitElf(bytes)
                     ToolkitResources.isBinaryXml(bytes) -> ToolkitResources.decodeXml(bytes, optionalResources(workspace, session))
+                    entry == "AndroidManifest.xml" -> {
+                        val text = ToolkitIo.text(bytes); ToolkitResources.safeXml(text)
+                        require(com.reandroid.xml.XMLDocument.load(text).documentElement?.name == "manifest") { "Manifest 不是有效 XML" }
+                    }
                 }
-            }.onFailure { failures.add(ToolkitIo.json("locator" to "zip_entry:$entry", "error" to it.message)) } }
+            }.onFailure { failure(entry, "BUILD_CHECK_FAILED", it.message) } }
         }
-        return ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "changedEntries" to changed, "deleted" to info.getAsJsonArray("deleted"),
-            "buildChecksRun" to run, "valid" to if(run) failures.isEmpty() else null, "failures" to failures, "note" to "结构检查不保证应用业务行为或原签名兼容")
+        val classes = info.getAsJsonObject("classChanges")
+        val completeCounts = info.get("classChangesComplete")?.asBoolean == true
+        fun count(kind: String) = if(completeCounts) classes?.entrySet()?.count { it.value.asString == kind } ?: 0 else null
+        return ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "changedEntries" to changed, "deleted" to deleted,
+            "buildChecksRun" to run, "runBuildChecks" to run, "valid" to if(run) failures.isEmpty() else null,
+            "buildCheckStatus" to if(!run) "not_requested" else if(failures.isEmpty()) "passed" else "failed",
+            "pendingCompileCount" to 0, "failedCount" to failures.size, "failures" to failures,
+            "changedDexEntries" to (changed + deleted).filter { ToolkitApkTargets.isDex(it) },
+            "changedClassCount" to count("changed"), "deletedClassCount" to count("deleted"), "addedClassCount" to count("added"),
+            "classCountsComplete" to completeCounts, "addedZipEntries" to changed.filter { it !in base },
+            "changedZipEntries" to changed.filter { it in base }, "deletedZipEntries" to deleted,
+            "note" to "所有语义编辑先编译再原子保存；结构检查不保证应用业务行为、安装性或原签名兼容")
     }
     private fun build(workspace: String, session: String, args: JsonObject): JsonObject {
         val checked = check(workspace, session, true); require(checked.getAsJsonArray("failures").size() == 0) { "会话检查失败：${checked.get("failures")}" }
-        val name = args.tString("outputName"); require(name.endsWith(".apk", true)); val output = ToolkitIo.resolve(root, name)
-        require(output != File(workspace(workspace).tString("sourcePath"))) { "不能覆盖源 APK" }
-        require(!output.exists() || args.tBool("overwrite")) { "输出已存在，需 overwrite=true" }
-        val names = entries(workspace, session).filterNot { it.startsWith("META-INF/", true) && (it.endsWith(".SF", true) || it.endsWith(".RSA", true) || it.endsWith(".DSA", true) || it.endsWith(".EC", true) || it.equals("META-INF/MANIFEST.MF", true)) }
         val signing = args.tBool("sign", false)
+        val requested = args.tString("outputName", "")
+        val name = requested.ifEmpty { File(workspace(workspace).tString("sourcePath")).nameWithoutExtension + "_mcp_${session}_${if(signing) "sign" else "unsigned"}.apk" }
+        require(File(name).isAbsolute || !name.contains('/')) { "outputName 只接受文件名或绝对路径" }
+        require(name.endsWith(".apk", true)); val output = ToolkitIo.resolve(root, name)
+        require(output != File(workspace(workspace).tString("sourcePath"))) { "不能覆盖源 APK" }
+        require(!output.exists() || output.isFile && args.tBool("overwrite")) { "输出已存在或不是普通文件，需 overwrite=true" }
+        val names = entries(workspace, session).filterNot { it.startsWith("META-INF/", true) && (it.endsWith(".SF", true) || it.endsWith(".RSA", true) || it.endsWith(".DSA", true) || it.endsWith(".EC", true) || it.equals("META-INF/MANIFEST.MF", true)) }
         ToolkitIo.atomic(output) { target ->
-            if (!signing) ZipOutputStream(BufferedOutputStream(target.outputStream())).use { zip ->
-                names.forEach { entry -> zip.putNextEntry(ZipEntry(entry)); streamEntry(workspace, session, entry) { copyBounded(it, zip, ToolkitIo.MAX_APK) }; zip.closeEntry() }
-            } else {
+            if (!signing) writeUnsigned(workspace, session, names, target) else {
                 val callback = signer ?: error("当前环境没有 APK 签名器")
-                val folder = File(sessionDir(workspace, session), "sign-${ToolkitIo.fresh()}"); require(folder.mkdir())
+                val unsigned = File(sessionDir(workspace, session), "unsigned-${ToolkitIo.fresh()}.apk")
                 try {
-                    var total = 0L
-                    names.forEach { entry -> val file = ToolkitIo.resolve(folder, entry); require(file.parentFile.isDirectory || file.parentFile.mkdirs()); file.outputStream().use { out -> streamEntry(workspace, session, entry) { input -> total += copyBounded(input,out,ToolkitIo.MAX_APK-total) } } }
-                    callback(folder, target)
-                } finally { safeRemove(folder, sessionDir(workspace, session)) }
+                    writeUnsigned(workspace, session, names, unsigned)
+                    callback(unsigned, target)
+                    val signature = ToolkitSignatures.read(target)
+                    require(signature.tBool("signaturePresent") && signature.getAsJsonArray("certificates").size() > 0) { "签名器没有生成可读取的证书信息" }
+                } finally { unsigned.delete() }
             }
-            if(!signing) ToolkitArchiveAlignment.align(target)
             require(target.length() <= ToolkitIo.MAX_APK) { "构建结果超过 512 MiB" }; ZipFile(target).use { require(it.getEntry("AndroidManifest.xml") != null) }
         }
-        return ToolkitIo.json("path" to output.path, "size" to output.length(), "sha256" to ToolkitIo.sha(output), "signed" to signing,
+        val signature = ToolkitSignatures.read(output)
+        val result = ToolkitIo.json("path" to output.path, "size" to output.length(), "sha256" to ToolkitIo.sha(output), "signed" to signing,
+            "signatureSummary" to signature,
             "signingIdentity" to if(signing) "AI.js Pro 本机身份，替换原签名" else "unsigned", "sourceUnchanged" to true)
+        listOf("changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries").forEach {
+            result.add(it, checked.get(it))
+        }
+        return result
+    }
+    private fun writeUnsigned(workspace: String, session: String, names: List<String>, target: File) {
+        val changed = sessionInfo(workspace, session).getAsJsonObject("changedEntries").keySet()
+        ZipFile(snapshot(workspace)).use { base ->
+            ZipOutputStream(BufferedOutputStream(target.outputStream())).use { zip ->
+                var total = 0L
+                names.forEach { name ->
+                    val original = base.getEntry(name); val entry = ZipEntry(name)
+                    if(original != null && original.time >= 0) entry.time = original.time
+                    entry.method = original?.method ?: if(name.endsWith(".so") || name == "resources.arsc") ZipEntry.STORED else ZipEntry.DEFLATED
+                    if(entry.method == ZipEntry.STORED) {
+                        val crc = CRC32(); var count = 0L
+                        streamEntry(workspace, session, name) { input ->
+                            val buffer = ByteArray(65536)
+                            while(true) { val read = input.read(buffer); if(read < 0) break; count += read
+                                require(count <= ToolkitIo.MAX_APK) { "ZIP 条目过大" }; crc.update(buffer, 0, read) }
+                        }
+                        entry.size = count; entry.compressedSize = count; entry.crc = crc.value
+                        require(name in changed || original == null || original.crc == crc.value) { "源条目 CRC 不符：$name" }
+                    }
+                    zip.putNextEntry(entry)
+                    val crc = CRC32()
+                    streamEntry(workspace, session, name) { input ->
+                        val buffer = ByteArray(65536)
+                        while(true) { val read = input.read(buffer); if(read < 0) break; total += read
+                            require(total <= ToolkitIo.MAX_APK) { "展开后内容超过512MiB" }; crc.update(buffer, 0, read); zip.write(buffer, 0, read) }
+                    }
+                    require(name in changed || original == null || original.crc == crc.value) { "源条目 CRC 不符：$name" }
+                    zip.closeEntry()
+                }
+            }
+        }
+        ToolkitArchiveAlignment.align(target)
     }
     private fun streamEntry(workspace: String, session: String, entry: String, consume: (InputStream) -> Unit) {
+        if(session.isNotEmpty()) require(sessionInfo(workspace, session).getAsJsonArray("deleted").none { it.asString == entry }) { "条目已删除" }
         val changed = if(session.isEmpty()) null else sessionInfo(workspace, session).getAsJsonObject("changedEntries").get(entry)?.asString
         if(changed != null) File(File(sessionDir(workspace, session), "entries"), ToolkitIo.id(changed)).inputStream().use(consume)
         else ZipFile(snapshot(workspace)).use { zip -> val item = zip.getEntry(entry) ?: error("条目不存在"); zip.getInputStream(item).use(consume) }
@@ -458,20 +597,59 @@ internal class McpApkToolkit(
     private fun copyEntry(workspace: String, session: String, args: JsonObject): JsonObject {
         val entry = entryLocator(args.tString("locator")); val local = ToolkitIo.resolve(root, args.tString("localPath")); val overwrite = args.tBool("overwrite")
         when(args.tString("direction")) {
-            "workspace_to_local" -> { require(!local.exists() || overwrite) { "本地文件已存在" }; ToolkitIo.atomic(local) { file -> file.outputStream().use { out -> streamEntry(workspace, session, entry) { copyBounded(it,out,ToolkitIo.MAX_APK) } } } }
-            "local_to_edit_session" -> { requiredSession(session); require(local.isFile && local.length() <= ToolkitIo.MAX_ENTRY); require(entry !in entries(workspace, session) || overwrite) { "会话条目已存在" }; write(workspace, session, mapOf(entry to local.inputStream().use { ToolkitIo.read(it) })) }
+            "workspace_to_local" -> {
+                ToolkitApkTargets.ordinary(entry, prefix(workspace, session, entry, 8))
+                require(local != File(workspace(workspace).tString("sourcePath"))) { "不能覆盖源 APK" }
+                require(!local.exists() || local.isFile && overwrite) { "本地目标已存在或不是普通文件" }
+                ToolkitIo.atomic(local) { file -> file.outputStream().use { out -> streamEntry(workspace, session, entry) { copyBounded(it,out,ToolkitIo.MAX_APK) } } }
+            }
+            "local_to_edit_session" -> {
+                requiredSession(session); require(local.isFile && local.length() <= ToolkitIo.MAX_APK)
+                val exists = entry in entries(workspace, session)
+                require(!exists || overwrite) { "会话条目已存在" }
+                if(exists) ToolkitApkTargets.ordinary(entry, prefix(workspace, session, entry, 8))
+                val head = local.inputStream().use { input -> ByteArray(8).let { bytes -> val count = input.read(bytes); if(count < 0) byteArrayOf() else bytes.copyOf(count) } }
+                ToolkitApkTargets.ordinary(entry, head)
+                val hash = ToolkitIo.sha(local)
+                write(workspace, session, emptyMap(), streaming = mapOf(entry to { file ->
+                    local.inputStream().use { input -> file.outputStream().use { output -> copyBounded(input, output, ToolkitIo.MAX_APK) } }
+                    require(ToolkitIo.sha(file) == hash && ToolkitIo.sha(local) == hash) { "复制期间本地源文件已变化" }
+                }))
+            }
             else -> error("复制方向无效")
         }; return ToolkitIo.json("copied" to true, "locator" to "zip_entry:$entry", "localPath" to local.path)
     }
+    private fun prefix(workspace: String, session: String, entry: String, max: Int): ByteArray {
+        var value = byteArrayOf()
+        streamEntry(workspace, session, entry) { input ->
+            val output = ByteArrayOutputStream(minOf(max, 65536)); val buffer = ByteArray(8192)
+            while(output.size() < max) {
+                val read = input.read(buffer, 0, minOf(buffer.size, max - output.size()))
+                if(read < 0) break
+                if(read == 0) continue
+                output.write(buffer, 0, read)
+            }
+            value = output.toByteArray()
+        }
+        return value
+    }
+    private fun entryLength(workspace: String, session: String, entry: String): Long {
+        if(session.isNotEmpty()) {
+            val info = sessionInfo(workspace, session)
+            require(info.getAsJsonArray("deleted").none { it.asString == entry }) { "条目已删除" }
+            info.getAsJsonObject("changedEntries").get(entry)?.asString?.let {
+                return File(File(sessionDir(workspace, session), "entries"), ToolkitIo.id(it)).length()
+            }
+        }
+        return ZipFile(snapshot(workspace)).use { zip ->
+            val found = zip.getEntry(entry) ?: error("APK 条目不存在：$entry")
+            require(!found.isDirectory && found.size >= 0) { "需要普通 ZIP 文件条目" }; found.size
+        }
+    }
     private fun readSignature(apk: File): JsonObject {
-        // Read v1 certificates without asserting verification of the whole APK.
-        val certs = ArrayList<JsonObject>()
-        ZipFile(apk).use { zip -> zip.entries().asSequence().filter { it.name.startsWith("META-INF/", true) && (it.name.endsWith(".RSA", true) || it.name.endsWith(".DSA", true) || it.name.endsWith(".EC", true)) }.take(16).forEach { entry ->
-            val bytes = ToolkitIo.read(zip.getInputStream(entry), 1024 * 1024)
-            CertificateFactory.getInstance("X.509").generateCertificates(ByteArrayInputStream(bytes)).filterIsInstance<X509Certificate>().forEach { cert -> certs.add(ToolkitIo.json("subject" to cert.subjectX500Principal.name, "issuer" to cert.issuerX500Principal.name,
-                "notBefore" to cert.notBefore.time, "notAfter" to cert.notAfter.time, "algorithm" to cert.sigAlgName, "sha256" to ToolkitIo.version(cert.encoded))) }
-        } }
-        return ToolkitIo.json("certificates" to certs, "verified" to false, "coverage" to "v1 certificate metadata", "note" to "未验证 APK 签名；只含 v2/v3 的包需使用独立签名校验器")
+        val signature = ToolkitSignatures.read(apk)
+        return ToolkitIo.json("signature" to signature, "certificates" to signature.get("certificates"),
+            "verified" to false, "coverage" to "V1/V2/V3/V3.1 certificate metadata")
     }
     private fun copyBounded(input: InputStream, output: OutputStream, max: Long): Long {
         val buffer = ByteArray(65536); var copied = 0L

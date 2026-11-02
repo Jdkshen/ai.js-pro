@@ -20,6 +20,7 @@ internal class ToolkitElf(val bytes: ByteArray) {
     val segments = ArrayList<Segment>()
     val sections = ArrayList<Section>()
     val symbols = ArrayList<Symbol>()
+    private val symbolTables = HashMap<Int, List<Symbol>>()
     private val buffer: ByteBuffer
     init {
         require(bytes.size in 52..ToolkitIo.MAX_ENTRY && bytes[0] == 0x7f.toByte() && String(bytes, 1, 3, Charsets.US_ASCII) == "ELF") { "不是受支持的 ELF 文件" }
@@ -50,15 +51,19 @@ internal class ToolkitElf(val bytes: ByteArray) {
             sections.add(Section(if (names == null) "" else string(names.first + u32(p), names.first + names.second), type,
                 word(p + 8), word(p + if (wide) 16 else 12), offset, size, u32(p + if (wide) 40 else 24).toInt(), word(p + if (wide) 56 else 36)))
         }
-        sections.filter { it.type == 2L || it.type == 11L }.forEach { section ->
-            val strings = sections.getOrNull(section.link) ?: return@forEach
+        sections.forEachIndexed { sectionIndex, section ->
+            if (section.type != 2L && section.type != 11L) return@forEachIndexed
+            val strings = sections.getOrNull(section.link) ?: return@forEachIndexed
             val stride = if (section.entrySize == 0L) if (wide) 24L else 16L else section.entrySize
             require(stride >= (if (wide) 24L else 16L) && section.size / stride <= 500000) { "ELF 符号表无效或过大" }
+            val table = ArrayList<Symbol>((section.size / stride).toInt())
             repeat((section.size / stride).toInt()) { index ->
                 val p = (section.offset + index * stride).toInt(); val info = bytes[p + if (wide) 4 else 12].toInt() and 255
-                symbols.add(Symbol(string(strings.offset + u32(p), strings.offset + strings.size), word(p + if (wide) 8 else 4),
-                    word(p + if (wide) 16 else 8), info and 15, info ushr 4, u16(p + if (wide) 6 else 14)))
+                val symbol = Symbol(string(strings.offset + u32(p), strings.offset + strings.size), word(p + if (wide) 8 else 4),
+                    word(p + if (wide) 16 else 8), info and 15, info ushr 4, u16(p + if (wide) 6 else 14))
+                symbols.add(symbol); table.add(symbol)
             }
+            symbolTables[sectionIndex] = table
         }
     }
     private fun range(offset: Long, size: Long) { require(offset >= 0 && size >= 0 && offset <= bytes.size && size <= bytes.size - offset) { "ELF 数据范围越界" } }
@@ -115,7 +120,7 @@ internal class ToolkitElf(val bytes: ByteArray) {
         "entryAddress" to hex(entryAddress), "neededLibraries" to needed(), "sectionCount" to sections.size,
         "segmentCount" to segments.size, "symbolCount" to symbols.size, "importCount" to symbols.count { it.section == 0 && it.name.isNotEmpty() },
         "disassembler" to if(ToolkitNative.available) "capstone-5.0.6" else "bounded-aarch64-fallback", "instructionCoverage" to if(ToolkitNative.available) "ARM64、ARM/Thumb、x86、x86_64；未识别字节明确标出" else "原生库不可用，仅AArch64常见指令回退",
-        "demangleAvailable" to false)
+        "demangleAvailable" to ToolkitNative.demangleAvailable)
     fun items(kind: String, prefix: String): List<JsonObject> = when(kind) {
         "neededLibraries" -> needed().filter { it.startsWith(prefix) }.map { ToolkitIo.json("name" to it) }
         "sections" -> sections.filter { it.name.startsWith(prefix) }.map { ToolkitIo.json("name" to it.name, "type" to it.type, "address" to hex(it.address), "fileOffset" to it.offset, "size" to it.size, "flags" to it.flags) }
@@ -221,7 +226,57 @@ internal class ToolkitElf(val bytes: ByteArray) {
         val limit = args.tInt("limit", 50, 1, 200); val kind = args.tString("scanKind", "both")
         require(kind in listOf("code", "data", "both"))
         val allowed = args.getAsJsonArray("referenceKinds")?.map { it.asString } ?: listOf("call", "jump", "data", "unknown")
-        val result = ArrayList<JsonObject>(); var scanned = 0L; var partial = false
+        val result = ArrayList<JsonObject>(); val dataByAddress = HashMap<Long, JsonObject>()
+        var scanned = 0L; var partial = false; var relocationXrefs = 0; var relocationScanTruncated = false
+        // Relocation slots are high-value data references. Scan them first, under the same
+        // byte budget, so a large text segment cannot starve them.
+        if (kind != "code" && "data" in allowed) {
+            relocationLoop@ for (section in sections.filter { it.type == 4L || it.type == 9L }) {
+                if (section.size == 0L) continue
+                val stride = relocationStride(section)
+                val count = (section.size / stride).toInt()
+                for (index in 0 until count) {
+                    if (scanned + stride > max || result.size >= limit) {
+                        partial = true; relocationScanTruncated = true; break@relocationLoop
+                    }
+                    val p = (section.offset + index * stride).toInt()
+                    val slot = word(p)
+                    val info = word(p + if (wide) 8 else 4)
+                    val relocationType = if (wide) info and 0xffffffffL else info and 255L
+                    val symbolIndex = if (wide) info ushr 32 else info ushr 8
+                    val addend = if (section.type == 4L) {
+                        if (wide) buffer.getLong(p + 16) else buffer.getInt(p + 8).toLong()
+                    } else null
+                    scanned += stride
+                    if (relocationType == 0L) continue
+                    val symbol = relocationSymbol(section.link, symbolIndex)
+                    val slotValue = if (addend == null) relocationSlotValue(slot, signed = symbolIndex != 0L) else null
+                    val appliedAddend = addend ?: slotValue
+                    val referenced = when {
+                        symbolIndex == 0L -> appliedAddend
+                        symbol != null && symbol.section != 0 && appliedAddend != null -> symbol.address + appliedAddend
+                        else -> null
+                    }
+                    if (referenced == null || referenced != target) continue
+                    relocationXrefs++
+                    val item = dataByAddress[slot] ?: ToolkitIo.json(
+                        "address" to hex(slot),
+                        "fileOffset" to fileOffset(slot)?.toInt(),
+                        "referenceKind" to "data",
+                    ).also { result.add(it); dataByAddress[slot] = it }
+                    item.addProperty("relocation", true)
+                    item.addProperty("relocationSlot", hex(slot))
+                    item.addProperty("relocationType", relocationType)
+                    item.addProperty("relocationTypeName", relocationTypeName(relocationType))
+                    item.addProperty("relocationSection", section.name)
+                    item.addProperty("relocationEntryOffset", section.offset + index * stride)
+                    item.addProperty("symbolIndex", symbolIndex)
+                    symbol?.let { item.addProperty("symbol", it.name) }
+                    addend?.let { item.addProperty("addend", it) }
+                    if (result.size >= limit) { partial = true; relocationScanTruncated = true; break@relocationLoop }
+                }
+            }
+        }
         outer@ for (segment in segments.filter { it.type == 1L }) {
             val code = segment.flags and 1 != 0L
             if ((code && kind == "data") || (!code && kind == "code")) continue
@@ -255,12 +310,81 @@ internal class ToolkitElf(val bytes: ByteArray) {
                     val instruction = decode(v, p)
                     if (instruction.target == target && instruction.kind in allowed) result.add(instructionJson(instruction))
                     if (!instruction.decoded) partial = true
-                } else if ((if(wide) buffer.getLong(p) else u32(p)) == target && "data" in allowed) result.add(ToolkitIo.json("address" to hex(v), "fileOffset" to p, "referenceKind" to "data"))
+                } else if ((if(wide) buffer.getLong(p) else u32(p)) == target && "data" in allowed) {
+                    if (!dataByAddress.containsKey(v)) {
+                        val item = ToolkitIo.json("address" to hex(v), "fileOffset" to p, "referenceKind" to "data")
+                        result.add(item); dataByAddress[v] = item
+                    }
+                }
                 n += step; scanned += step
             }
         }
         return ToolkitIo.json("items" to result, "scannedBytes" to scanned, "truncated" to partial, "complete" to false,
-            "note" to "仅直接静态引用；间接跳转、重定位组合、ADR/ADRP+ADD 数据流与未解码指令不构成完整调用图")
+            "relocationXrefs" to relocationXrefs, "relocationScanTruncated" to relocationScanTruncated,
+            "note" to "仅直接静态引用；已把可静态解析到目标地址的 REL/RELA 重定位槽纳入 data xref（与普通指针字面值同样受扫描预算限制）；间接跳转、完整控制流/数据流、ADR/ADRP+ADD 数据流与未解码指令仍不构成完整调用图")
+    }
+
+    private fun relocationStride(section: Section): Long {
+        val minimum = when {
+            wide && section.type == 4L -> 24L
+            wide -> 16L
+            section.type == 4L -> 12L
+            else -> 8L
+        }
+        val stride = if (section.entrySize > 0) section.entrySize else minimum
+        require(stride >= minimum && section.size / stride <= 300000) { "ELF 重定位表无效或过大" }
+        return stride
+    }
+
+    private fun relocationSymbol(link: Int, index: Long): Symbol? {
+        if (index < 0 || index > Int.MAX_VALUE.toLong()) return null
+        return symbolTables[link]?.getOrNull(index.toInt())
+    }
+
+    private fun relocationSlotValue(address: Long, signed: Boolean): Long? {
+        val offset = fileOffset(address) ?: return null
+        val width = if (wide) 8 else 4
+        if (offset < 0 || width > bytes.size - offset) return null
+        return when {
+            wide -> buffer.getLong(offset.toInt())
+            signed -> buffer.getInt(offset.toInt()).toLong()
+            else -> u32(offset.toInt())
+        }
+    }
+
+    private fun relocationTypeName(type: Long): String = when (machine) {
+        183 -> when (type) {
+            257L -> "R_AARCH64_ABS64"
+            258L -> "R_AARCH64_ABS32"
+            1025L -> "R_AARCH64_GLOB_DAT"
+            1026L -> "R_AARCH64_JUMP_SLOT"
+            1027L -> "R_AARCH64_RELATIVE"
+            else -> "type-$type"
+        }
+        40 -> when (type) {
+            2L -> "R_ARM_ABS32"
+            21L -> "R_ARM_GLOB_DAT"
+            22L -> "R_ARM_JUMP_SLOT"
+            23L -> "R_ARM_RELATIVE"
+            else -> "type-$type"
+        }
+        62 -> when (type) {
+            1L -> "R_X86_64_64"
+            6L -> "R_X86_64_GLOB_DAT"
+            7L -> "R_X86_64_JUMP_SLOT"
+            8L -> "R_X86_64_RELATIVE"
+            10L -> "R_X86_64_32"
+            11L -> "R_X86_64_32S"
+            else -> "type-$type"
+        }
+        3 -> when (type) {
+            1L -> "R_386_32"
+            6L -> "R_386_GLOB_DAT"
+            7L -> "R_386_JMP_SLOT"
+            8L -> "R_386_RELATIVE"
+            else -> "type-$type"
+        }
+        else -> "type-$type"
     }
     fun cfg(args: JsonObject): JsonObject {
         var start = address(args); requireCode(start)
@@ -299,30 +423,9 @@ internal class ToolkitElf(val bytes: ByteArray) {
             require(n.signum() >= 0 && n.bitLength() <= 63) { "地址数值超出范围" }; return n.toLong()
         }
         fun hex(value: Long) = "0x" + java.lang.Long.toHexString(value)
-        fun assembleSmall(source: String, base: Long): ByteArray? {
-            val lines = source.lineSequence().map { it.substringBefore("//").trim() }.filter { it.isNotEmpty() }.toList()
-            require(lines.size <= 4096) { "汇编指令太多" }
-            val labels = HashMap<String, Long>(); var address = base
-            for (line in lines) if (line.endsWith(':')) { require(line.matches(Regex("[A-Za-z_][A-Za-z0-9_]*:"))); require(labels.put(line.dropLast(1), address) == null) } else address += 4
-            val result = ByteBuffer.allocate((address - base).toInt()).order(ByteOrder.LITTLE_ENDIAN); address = base
-            for (line in lines) {
-                if (line.endsWith(':')) continue
-                val parts = line.lowercase().split(Regex("[\\s,]+")); val name = parts[0]
-                val word: Long = when {
-                    name == "nop" && parts.size == 1 -> 0xd503201f
-                    name == "ret" && parts.size == 1 -> 0xd65f03c0
-                    name in listOf("ret", "br", "blr") && parts.size == 2 && parts[1].matches(Regex("x([0-9]|[12][0-9]|30)")) ->
-                        (if(name == "ret") 0xd65f0000 else if(name == "br") 0xd61f0000 else 0xd63f0000).toLong() or (parts[1].drop(1).toLong() shl 5)
-                    name in listOf("b", "bl") && parts.size == 2 -> {
-                        val target = labels[parts[1]] ?: runCatching { number(parts[1]) }.getOrNull() ?: return null
-                        val delta = target - address; require(delta % 4 == 0L && delta in -134217728L..134217724L) { "分支范围超限" }
-                        (if(name == "bl") 0x94000000L else 0x14000000L) or ((delta shr 2) and 0x3ffffff)
-                    }
-                    name == ".inst" && parts.size == 2 -> number(parts[1]).also { require(it <= 0xffffffffL) }
-                    else -> return null
-                }
-                result.putInt(word.toInt()); address += 4
-            }; return result.array()
-        }
+        fun assembleSmall(source: String, base: Long): ByteArray? =
+            // The legacy entry point stays AArch64-only and keeps its nullable contract so
+            // existing callers still fall back to the optional clang backend.
+            ToolkitAssembler.tryAssemble(183, base, source, "aarch64")
     }
 }

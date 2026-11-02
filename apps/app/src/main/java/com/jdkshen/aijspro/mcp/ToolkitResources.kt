@@ -12,6 +12,7 @@ import java.io.*
 /** Resource table / binary XML access using the pinned open-source ARSCLib. */
 internal class ToolkitResources(bytes: ByteArray) {
     val table: TableBlock = TableBlock.load(ByteArrayInputStream(bytes))
+    init { systemFramework?.let { table.addFramework(it) } }
     fun entries(): List<Entry> {
         val result = ArrayList<Entry>()
         table.getResources().forEachRemaining { resource ->
@@ -23,9 +24,12 @@ internal class ToolkitResources(bytes: ByteArray) {
     }
     fun locator(entry: Entry) = "resource:0x%08x".format(entry.resourceId)
     fun find(locator: String, variant: String): Entry {
+        require(locator.startsWith("resource:")) { "资源定位符需要 resource: 前缀" }
         val id = parseId(locator.substringAfter(':', locator))
-        return table.getEntries(id).asSequence().firstOrNull { it.resConfig.qualifiers == variant }
-            ?: throw IllegalArgumentException("资源或配置不存在：$locator / $variant")
+        val values = table.getEntries(id).asSequence().filter { !it.isNull }.toList()
+        if (values.isEmpty()) throw ToolkitException("RESOURCE_NOT_FOUND", "资源不存在：$locator")
+        return values.firstOrNull { it.resConfig.qualifiers == internalVariant(variant) }
+            ?: throw ToolkitException("RESOURCE_VARIANT_NOT_FOUND", "资源配置不存在：$locator / $variant")
     }
     fun xml(entry: Entry): String {
         val output = StringWriter(); val serializer = XMLFactory.newSerializer(output)
@@ -37,7 +41,7 @@ internal class ToolkitResources(bytes: ByteArray) {
     }
     fun item(entry: Entry, includeXml: Boolean = false): JsonObject = ToolkitIo.json(
         "locator" to locator(entry), "id" to "0x%08x".format(entry.resourceId),
-        "name" to entry.name, "type" to entry.typeName, "variant" to entry.resConfig.qualifiers,
+        "name" to entry.name, "type" to entry.typeName, "variant" to publicVariant(entry.resConfig.qualifiers),
         "complex" to entry.isComplex, "value" to (entry.valueAsString ?: entry.resValue?.toString()),
         "valueXml" to if (includeXml) xml(entry) else null,
         "targetVersion" to ToolkitIo.version(entry.bytes))
@@ -47,7 +51,7 @@ internal class ToolkitResources(bytes: ByteArray) {
         require(element != null) { "缺少资源 XML 元素" }
         require(element.getAttributeValue("name") == entry.name) { "编辑资源时不能更改资源名" }
         val tag = element.name
-        require(tag == entry.typeName || tag == entry.xmlTag || (tag == "item" && element.getAttributeValue("type") == entry.typeName)) { "资源类型不匹配" }
+        require(describe(source).second == entry.typeName || tag == entry.xmlTag) { "资源类型不匹配" }
         if (element.childElementsCount > 0 && entry.typeName !in listOf("string", "dimen", "color", "integer", "bool"))
             XmlCoder().VALUES_XML.encodeBag(element, entry)
         else XmlCoder().VALUES_XML.encodeScalar(element, entry)
@@ -57,15 +61,50 @@ internal class ToolkitResources(bytes: ByteArray) {
         val pkg = table.getPackageBlockById(parseId(packageId)) ?: error("资源包不存在")
         val element = XMLDocument.load(source).documentElement ?: error("缺少资源 XML 元素")
         val name = element.getAttributeValue("name") ?: error("缺少资源名")
-        val type = if (element.name == "item") element.getAttributeValue("type") else element.name
+        val type = describe(source).second
         require(!type.isNullOrBlank() && name.matches(Regex("[A-Za-z_][A-Za-z0-9_.]*"))) { "资源名或类型无效" }
-        require(pkg.getEntries(type, name).asSequence().none { it.resConfig.qualifiers == variant }) { "资源配置已存在" }
-        val entry = pkg.getOrCreate(variant, type, name); write(entry, source); return entry
+        val config = internalVariant(variant)
+        require(pkg.getEntries(type, name).asSequence().none { it.resConfig.qualifiers == config }) { "资源配置已存在" }
+        val entry = pkg.getOrCreate(config, type, name)
+        require(entry.resConfig.qualifiers == config) { "资源配置名称无效或不是规范形式" }
+        write(entry, source); return entry
     }
     fun bytes(): ByteArray { table.refreshFull(); return table.bytes }
 
     companion object {
-        fun parseId(value: String): Int = value.removePrefix("0x").toLong(16).also { require(it in 0..0xffffffffL) }.toInt()
+        private val systemFramework: TableBlock? by lazy {
+            val archive = File("/system/framework/framework-res.apk")
+            if(!archive.isFile) null else runCatching {
+                java.util.zip.ZipFile(archive).use { zip ->
+                    val entry = zip.getEntry("resources.arsc") ?: error("系统资源表不存在")
+                    TableBlock.load(ByteArrayInputStream(ToolkitIo.read(zip.getInputStream(entry))))
+                }
+            }.getOrNull()
+        }
+        val systemReferencesAvailable: Boolean get() = systemFramework != null
+        fun parseId(value: String): Int {
+            val normalized = value.removePrefix("resource:").replace(Regex("^0[xX]"), "")
+            require(normalized.matches(Regex("[0-9a-fA-F]{1,8}"))) { "资源 ID 必须为32位十六进制" }
+            return normalized.toLong(16).toInt()
+        }
+        fun internalVariant(value: String): String = when(value) {
+            "", "default" -> ""
+            else -> value.also { require(it.length <= 256 && it != "*" && !it.contains('/') && !it.contains('\\')) { "需要确切的资源配置名" } }
+        }
+        fun publicVariant(value: String) = value.ifEmpty { "default" }
+        fun describe(source: String): Pair<String, String> {
+            safeXml(source)
+            val element = XMLDocument.load(source).documentElement ?: error("缺少资源 XML 元素")
+            val name = element.getAttributeValue("name") ?: error("缺少资源名")
+            val type = when(element.name) {
+                "item", "path", "reference" -> element.getAttributeValue("type") ?: error("资源 XML 缺少 type")
+                "string-array", "integer-array" -> "array"
+                "declare-styleable" -> "styleable"
+                else -> element.name
+            }
+            require(type.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) && name.matches(Regex("[A-Za-z_][A-Za-z0-9_.]*"))) { "资源类型或名称无效" }
+            return name to type
+        }
         fun safeXml(value: String) {
             require(value.toByteArray(Charsets.UTF_8).size <= ToolkitIo.MAX_TEXT) { "XML 超过 10 MiB" }
             require(!Regex("<!\\s*(DOCTYPE|ENTITY)", RegexOption.IGNORE_CASE).containsMatchIn(value)) { "XML 不允许文档类型或外部实体" }

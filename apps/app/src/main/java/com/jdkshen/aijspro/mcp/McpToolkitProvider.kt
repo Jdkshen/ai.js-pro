@@ -32,10 +32,11 @@ class McpToolkitProvider : ContentProvider() {
             if (toolkit == null || selectedRoot != root.path) {
                 val schemas = context.assets.open("mcp/toolkit-apk-schemas.json").bufferedReader().use { JsonParser().parse(it).asJsonObject }
                 val store = File(File(context.filesDir, "apk-toolkit"), ToolkitIo.version(root.path.toByteArray()).take(16))
-                toolkit = McpToolkit(root, store, schemas, { directory, output ->
+                toolkit = McpToolkit(root, store, schemas, { archive, output ->
                     val signer = AutoSigningIdentity.signer(output.parentFile, "APK工具")
-                    if (signer is com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner) signer.signAligned(directory, output) else signer.sign(directory, output)
-                }, { machine, address, source -> assemble(machine, address, source) })
+                    check(signer is com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner) { "签名身份不支持归档签名" }
+                    signer.signAlignedArchive(archive, output)
+                }, { machine, address, source, instructionMode -> assemble(machine, address, source, instructionMode) })
                 selectedRoot = root.path
             }
             when(method) {
@@ -45,29 +46,89 @@ class McpToolkitProvider : ContentProvider() {
             }
         } catch (failure: Exception) {
             ToolkitIo.json("ok" to false, "data" to null, "error" to ToolkitIo.json("type" to failure.javaClass.simpleName,
+                "code" to if(failure is ToolkitException) failure.code else if(failure is ToolkitRegex.BudgetExceeded) "REGEX_BUDGET_EXCEEDED" else if(failure is IllegalArgumentException) "INVALID_ARGUMENT" else "TOOL_FAILED",
+                "argument" to if(failure is ToolkitException) failure.argument else null,
+                "severity" to "warning", "recoverable" to true, "retrySameArguments" to false,
                 "message" to (failure.message ?: "工具调用失败").take(4000)), "nextActions" to emptyList<Any>())
         }
-        ToolkitIo.atomic(response) { it.writeText(Gson().toJson(payload), Charsets.UTF_8) }
+        val json = GsonBuilder().serializeNulls().disableHtmlEscaping().create()
+        var serialized = json.toJson(payload)
+        if(serialized.toByteArray(Charsets.UTF_8).size > 24 * 1024 * 1024) serialized = json.toJson(ToolkitIo.json(
+            "ok" to false, "data" to null, "error" to ToolkitIo.json("code" to "RESPONSE_TOO_LARGE",
+                "message" to "结果超过24MiB，请缩小批量、文本或集合预算后重试", "recoverable" to true), "nextActions" to emptyList<Any>()))
+        ToolkitIo.atomic(response) { it.writeText(serialized, Charsets.UTF_8) }
         return Bundle().apply { putBoolean("ready", true); putInt("pid", Process.myPid()) }
     }
-    private fun assemble(machine: Int, address: Long, source: String): ByteArray {
-        require(machine == 183) { "可选汇编器当前支持 AArch64" }
+
+    private fun assemble(machine: Int, address: Long, source: String, instructionMode: String): ByteArray {
+        val spec = ToolkitAssembler.resolve(machine, instructionMode, address, virtualInput = true, mappedAddress = address)
+        val effective = spec.effectiveAddress
+        require(source.isNotEmpty() && source.length <= 65536) { "汇编源码必须为 1..65536 字符" }
+        require(!source.contains('\u0000')) { "汇编源码不能包含 NUL" }
+        require(!Regex("(?m)^\\s*(?:[A-Za-z_.$][A-Za-z0-9_.$]*:\\s*)*\\.(?!inst\\b)[A-Za-z]").containsMatchIn(source)) {
+            "汇编仅接受指令、标签与 .inst"
+        }
+        val target = when (spec.instructionSet) {
+            "aarch64" -> "aarch64-linux-android26"
+            "arm", "thumb" -> "armv7a-linux-androideabi26"
+            "x86" -> "i686-linux-android26"
+            "x86_64" -> "x86_64-linux-android26"
+            else -> error("未知指令集：${spec.instructionSet}")
+        }
         val context = requireNotNull(context); val env = ToolchainRuntime.environment(context)
         val cpp = env["AIJS_CPP_ROOT"] ?: error("请先在应用终端安装可选组件：aijs-toolchain install cpp")
+        val clang = File(cpp, "bin/clang")
+        require(clang.isFile) { "可选 C/C++ 组件缺少 clang；请运行 aijs-toolchain install cpp" }
         val folder = File(context.cacheDir, "assembler-${ToolkitIo.fresh()}"); require(folder.mkdir())
         val input = File(folder, "patch.S"); val output = File(folder, "patch.elf"); val log = File(folder, "compiler.log")
         try {
-            input.writeText(".text\n.global _start\n_start:\n$source\n")
-            val builder = ProcessBuilder(File(cpp, "bin/clang").path, "--target=aarch64-linux-android26", "-nostdlib", "-fuse-ld=lld",
-                "-Wl,--build-id=none", "-Wl,-Ttext=${ToolkitElf.hex(address)}", "-Wl,-e,_start", input.path, "-o", output.path)
+            val syntax = when (spec.instructionSet) {
+                "thumb" -> ".syntax unified\n.thumb\n.type _start, %function\n"
+                "arm" -> ".syntax unified\n.arm\n.type _start, %function\n"
+                else -> ""
+            }
+            input.writeText("$syntax.text\n.global _start\n_start:\n$source\n.global _aijs_end\n_aijs_end:\n")
+            val command = mutableListOf(
+                clang.path,
+                "--target=$target",
+                "-nostdlib",
+                "-no-pie",
+                "-fuse-ld=lld",
+                "-Wl,--build-id=none",
+                "-Wl,-Ttext=${ToolkitElf.hex(effective)}",
+                "-Wl,-e,_start",
+            )
+            when (spec.instructionSet) {
+                "aarch64" -> command += "-march=armv8-a"
+                "arm" -> command += listOf("-marm", "-march=armv7-a")
+                "thumb" -> command += listOf("-mthumb", "-march=armv7-a")
+            }
+            command += listOf(input.path, "-o", output.path)
+            val builder = ProcessBuilder(command)
             builder.environment().putAll(env); builder.redirectErrorStream(true); builder.redirectOutput(log)
             val process = builder.start()
-            try { if(!process.waitFor(20, TimeUnit.SECONDS)) { process.destroy(); throw IOException("汇编器超时") }
+            try {
+                if (!process.waitFor(20, TimeUnit.SECONDS)) { process.destroy(); throw IOException("汇编器超时") }
                 require(process.exitValue() == 0 && output.isFile) { "汇编失败：${log.readText().take(4000)}" }
-            } finally { if(process.isAlive) process.destroy() }
-            val elf = ToolkitElf(output.readBytes()); val text = elf.sections.singleOrNull { it.name == ".text" } ?: error("汇编缺少.text")
-            require(text.address == address && text.size <= 65536 && elf.sections.none { (it.type == 4L || it.type == 9L) && it.size > 0 }) { "汇编含未解决重定位或地址不匹配" }
-            return elf.bytes.copyOfRange(text.offset.toInt(), (text.offset + text.size).toInt())
+            } finally { if (process.isAlive) process.destroy() }
+            val elf = ToolkitElf(output.readBytes())
+            val text = elf.sections.firstOrNull { it.name == ".text" } ?: error("汇编缺少 .text")
+            require(text.address == effective) { "汇编 .text 地址不匹配：expected=${ToolkitElf.hex(effective)} actual=${ToolkitElf.hex(text.address)}" }
+            require(elf.sections.none { (it.type == 4L || it.type == 9L) && it.size > 0 }) { "汇编含未解决重定位" }
+            val startSymbol = elf.symbols.firstOrNull { it.name == "_start" }
+            val endSymbol = elf.symbols.firstOrNull { it.name == "_aijs_end" }
+            val start = startSymbol?.address?.let { if (spec.instructionSet == "arm" || spec.instructionSet == "thumb") it and -2L else it } ?: text.address
+            val end = endSymbol?.address?.let { if (spec.instructionSet == "arm" || spec.instructionSet == "thumb") it and -2L else it }
+                ?: (text.address + text.size)
+            require(start == effective) { "汇编入口地址不匹配：expected=${ToolkitElf.hex(effective)} actual=${ToolkitElf.hex(start)}" }
+            require(end >= start) { "汇编结束符号无效" }
+            val size = end - start
+            require(size in 0L..65536L) { "汇编结果过大" }
+            val textOffset = start - text.address
+            require(textOffset >= 0 && size <= text.size - textOffset) { "汇编符号超出 .text 范围" }
+            val outputOffset = text.offset + textOffset
+            require(outputOffset >= 0 && size <= elf.bytes.size - outputOffset) { "汇编结果越界" }
+            return elf.bytes.copyOfRange(outputOffset.toInt(), (outputOffset + size).toInt())
         } finally { input.delete(); output.delete(); log.delete(); folder.delete() }
     }
     override fun query(uri: Uri, p: Array<String>?, s: String?, a: Array<String>?, o: String?): Cursor? = null

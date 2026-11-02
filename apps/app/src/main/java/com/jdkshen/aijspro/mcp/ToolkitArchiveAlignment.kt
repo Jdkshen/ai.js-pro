@@ -5,15 +5,22 @@ import java.util.zip.*
 
 /** ZIP alignment only; ELF LOAD alignment still belongs to the input native libraries. */
 internal object ToolkitArchiveAlignment {
-    @JvmStatic fun align(file: File) {
+    @JvmStatic @JvmOverloads fun align(file: File, forceStored: Boolean = false) {
         ToolkitIo.atomic(file) { target ->
             ZipFile(file).use { source ->
                 val counter = Counter(target.outputStream())
                 ZipOutputStream(counter).use { zip ->
                     source.entries().asSequence().forEach { original ->
-                        val entry = ZipEntry(original.name); val alignment = when { original.name.endsWith(".so") -> 16384; original.name == "resources.arsc" -> 4; else -> 1 }
-                        if (!original.isDirectory && alignment > 1) {
+                        val entry = ZipEntry(original.name)
+                        if(original.time >= 0) entry.time = original.time
+                        val required = when { original.name.endsWith(".so") -> 16384; original.name == "resources.arsc" -> 4; else -> 1 }
+                        val stored = original.method == ZipEntry.STORED || forceStored && required > 1
+                        val alignment = if(stored && !original.isDirectory) required else 1
+                        entry.method = if(stored) ZipEntry.STORED else ZipEntry.DEFLATED
+                        if(stored) {
                             entry.method = ZipEntry.STORED; entry.size = original.size; entry.compressedSize = original.size; entry.crc = original.crc
+                        }
+                        if (alignment > 1) {
                             val headerEnd = counter.count + 30 + original.name.toByteArray(Charsets.UTF_8).size
                             if (headerEnd % alignment != 0L) {
                                 val padding = ((alignment - ((headerEnd + 4) % alignment)) % alignment).toInt()

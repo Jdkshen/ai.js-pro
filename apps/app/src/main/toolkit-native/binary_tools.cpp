@@ -4,6 +4,9 @@
 #include <sstream>
 #include <iomanip>
 #include <vector>
+#include <cxxabi.h>
+#include <cstdlib>
+#include <cstring>
 
 static std::string quote(const char* value) {
     std::string result = "\"";
@@ -15,6 +18,25 @@ static std::string quote(const char* value) {
     return result + '"';
 }
 static std::string hex(uint64_t value) { std::ostringstream s; s << "0x" << std::hex << value; return s.str(); }
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_jdkshen_aijspro_mcp_ToolkitNative_demangleSymbol(JNIEnv* env, jobject, jbyteArray input) {
+    if (!input || env->GetArrayLength(input) > 4096) return nullptr;
+    std::vector<char> name(static_cast<size_t>(env->GetArrayLength(input)) + 1, 0);
+    env->GetByteArrayRegion(input, 0, env->GetArrayLength(input), reinterpret_cast<jbyte*>(name.data()));
+    if (env->ExceptionCheck() || std::strlen(name.data()) != name.size() - 1) return nullptr;
+    char* decoded = nullptr;
+    try {
+        int status = -1;
+        decoded = abi::__cxa_demangle(name.data(), nullptr, nullptr, &status);
+        const size_t count = decoded ? strnlen(decoded, 65537) : 0;
+        jbyteArray result = status == 0 && decoded && count <= 65536 ? env->NewByteArray(static_cast<jsize>(count)) : nullptr;
+        if (result) env->SetByteArrayRegion(result, 0, static_cast<jsize>(count), reinterpret_cast<const jbyte*>(decoded));
+        std::free(decoded); return result;
+    } catch (...) {
+        std::free(decoded); return nullptr;
+    }
+}
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_jdkshen_aijspro_mcp_ToolkitNative_decodeWindow(JNIEnv* env, jobject, jbyteArray input,
