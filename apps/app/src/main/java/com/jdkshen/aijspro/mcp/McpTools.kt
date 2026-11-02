@@ -167,6 +167,9 @@ internal class McpTools(private val context: Context, private val event: (String
             "- 文件与APK工具全部由 AI.js Pro 自己实现，不需要 MT。先 toolkit_status；文件/ZIP用 file_*/zip_*，APK先 apk_list_available_apks → apk_workspace_open → apk_list。旧 mt_* 名称仅为本地兼容别名。ELF 指令覆盖与真实限制见 toolkit_status。",
             "- 读取控件/截图需无障碍服务；capture_screen 缩小后坐标按 sourceWidth/scale 换算。",
             "- 手机终端：terminal_exec（backend 默认 app，可选 shizuku）→ terminal_read(offset=nextOffset) → terminal_write/terminal_stop；shell_rish 是 Shizuku 后端的异步兼容入口，同样返回 jobId，不阻塞等待。app 为普通应用 UID，shizuku 需服务已运行并授权且不回退；两者共用同一任务表。先 get_build_tools 确认工具链，非 PTY。",
+            "- 冷进程：换 .so / 做对照实验前先 stop_all_scripts；脚本进程会复用，已 dlopen 的库和 isAvailable() 结果会粘住。",
+            "- terminal 大输出：按 terminal_read(offset=上次 nextOffset, maxChars≤65536) 轮询到 running=false 且 nextOffset==outputEnd；二进制/特殊后缀文件用 base64 分块写入，workspace 只收部分文本类型。",
+            "- 借目标 App 的解密/校验函数时优先选无状态自包含入口；长度/字节序等关键数字先实测再信旧文档；两次结果不同先怀疑进程复用与 native 全局状态。更多实战要点与坑表见 learn_autojs_skill 末尾「MCP 实战要点」。",
             "",
             "常用示例：",
             "run_script 内存脚本：{\"name\":\"run_script\",\"arguments\":{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}}",
@@ -915,7 +918,14 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun helpText(): String {
         val base = context.assets.open("mcp/AIjs-MCP-Guide.md")
             .bufferedReader(Charsets.UTF_8).use { it.readText() }
-        return McpTerminalHelp.merge(base)
+        // 实战要点（冷进程/dlopen、terminal 大输出、借壳解密流程等）单独成篇，
+        // 追加在完整说明之后；缺资源时不能让 learn_autojs_skill 整体失败。
+        val playbook = runCatching {
+            context.assets.open("mcp/AIjs-MCP-Playbook.md")
+                .bufferedReader(Charsets.UTF_8).use { it.readText() }
+        }.getOrNull()
+        val merged = McpTerminalHelp.merge(base)
+        return if (playbook.isNullOrBlank()) merged else merged.trimEnd() + "\n\n---\n\n" + playbook.trimEnd() + "\n"
     }
     private fun terminalEnvironment(args: JsonObject): LinkedHashMap<String, String> {
         val env = linkedMapOf<String, String>()
