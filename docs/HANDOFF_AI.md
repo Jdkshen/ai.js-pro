@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-11-02 C/C++可选组件候选1306（MI8已验）**：[使用与验收](reports/2026-11-02_MCP终端按需C与C++编译组件.md)。新授权只恢复C/C++下载组件，主APK只增19.43KiB；组件另下75.47MiB。aijs-toolchain安装/状态/卸载、自动PATH、get_build_tools状态与783条文档同步；1113 JVM及真实中断重装/编译/失败/卸载通过。主LAN更新清单仍1305，1306手动测试包在LAN/Downloads；不自动push，K40未动。未恢复Java/Gradle/完整APK编译，未更新独立模板。
+
 > **2026-11-01 当前LAN dev-1305（MI8已装）**：[Shizuku接入与发布](reports/2026-11-01_Shizuku三引擎终端接入与局域网发布.md)。共享多进程连接、UserService按命令回收、三引擎API、终端后端/MCP shell_rish、rish/i私有及split安装、新内置模板完成。1103 JVM、三引擎43项及独立APK/停止/安装/界面/重连验收通过；782条同源文档，136.12MiB，PC/MI8完整LAN下载一致，Downloads有包。只本地提交、未push、K40未动。Android17/root-Sui/权限系统矩阵未穷举；外置旧插件模板未更新。
 
 > **2026-11-01 Shizuku新方向（仅评审）**：[指南审阅与实施方案](reports/2026-11-01_Shizuku改造指南审阅与实施方案.md)。已MCP读取192.168.10.4原文及核对源码/官方SDK。建议按Binder、Rish/安装、终端/MCP、三引擎四任务实施；纠正当前终端两套实现等过时描述。尚未改功能或发布；LAN仍1303，DP审阅300秒超时不算通过。

@@ -11,6 +11,7 @@ import com.google.gson.JsonPrimitive
 import com.stardust.autojs.runtime.api.ShizukuClient
 import com.stardust.autojs.runtime.api.ShizukuShell
 import com.stardust.autojs.runtime.api.shizuku.RishRuntime
+import com.stardust.autojs.runtime.tool.ToolchainRuntime
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -53,7 +54,7 @@ internal class McpAndroidTerminal(private val context: Context) {
         // The ordinary app terminal still owns its own process group. RishRuntime only injects
         // function definitions/environment into this app-UID shell so `rish`/`i` work without
         // requiring an executable file in PATH.
-        val wrapped = RishRuntime.wrapCommand(context, command)
+        val wrapped = ToolchainRuntime.wrapCommand(context, RishRuntime.wrapCommand(context, command))
         val wrapper = "umask 077; printf '%s' \"\$\$\" > ${quote(marker.path)}; exec /system/bin/sh -c ${quote(wrapped)}"
         val builder = ProcessBuilder("/system/bin/setsid", "-w", "/system/bin/sh", "-c", wrapper)
             .directory(directory).redirectErrorStream(true)
@@ -61,6 +62,7 @@ internal class McpAndroidTerminal(private val context: Context) {
         // Preserve the existing base environment as the authoritative HOME/TMPDIR/AIJS values;
         // RishRuntime contributes PATH/RISH entries, then the caller's env keeps its old priority.
         processEnvironment.putAll(RishRuntime.environment(context))
+        processEnvironment.putAll(ToolchainRuntime.environment(context))
         processEnvironment.putAll(environment)
         processEnvironment.putAll(env)
         // RishRuntime must be told the real runtime package (including .phonebuild suffixes).
@@ -113,6 +115,9 @@ internal class McpAndroidTerminal(private val context: Context) {
             if (terminated.compareAndSet(false, true)) runCatching { process.destroy() }
         }
     }
+
+    fun compilerComponents(): JsonObject =
+        com.google.gson.JsonParser().parse(ToolchainRuntime.status(context).toString()).asJsonObject
 
     companion object {
         private const val RISH_APPLICATION_ID = "RISH_APPLICATION_ID"

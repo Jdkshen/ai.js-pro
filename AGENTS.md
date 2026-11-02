@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-02 可选C/C++候选dev-1306（MI8已装，未切主源）**：[实现与验收](docs/reports/2026-11-02_MCP终端按需C与C++编译组件.md)。用户新授权只恢复按需下载C/C++，覆盖下方历史取消中的此部分，不恢复Java/Gradle/APK工具链。APK仅增19896字节，编译组件另下75.47MiB/展开226.82MiB；终端aijs-toolchain、动态PATH与MCP状态完成。1113 JVM、真实下载中断重装、C/C++/so/静态库、错误与卸载重装、783条文档通过。Downloads和LAN有手动测试包，主更新源仍1305，K40未动；DP草稿任务超时，主助手集成验收。Android17/16KB和完整APK编译不在已验结论内。
+
 > **2026-11-01 当前LAN dev-1305（MI8已装）**：[Shizuku三引擎、终端与发布](docs/reports/2026-11-01_Shizuku三引擎终端接入与局域网发布.md)。补多进程Binder/inrt Provider，受控UserService与所有者清理；三引擎统一shizuku API，终端app/Shizuku、MCP shell_rish、内置rish/i及私有/split流式安装；新模板、示例、782条文档同步。1103 JVM、三引擎43项、终端/停止/大文件/split/独立APK/界面/空闲重连通过，PC/MI8完整HTTP下载摘要一致；136.12MiB，Downloads有包。仅LAN、本地提交，K40未动。Android17/root-Sui/完整权限矩阵仍待；外置插件模板未改。以下1303“仅审阅”是历史时点，已由本轮覆盖。
 
 > **2026-11-01 Shizuku指南审阅（未改产品代码）**：[修订与四任务方案](docs/reports/2026-11-01_Shizuku改造指南审阅与实施方案.md)。MCP读取`.4`两份20363字节/486行文档且摘要一致。确认多进程初始化缺口、inrt缺Provider、QuickJS已有shizuku而Rhino/Node未统一；终端实际共用底层，原文返回契约/超时/参数处理需修订。仅评审和文档，LAN仍1303；DP只读审阅超时，未计通过。

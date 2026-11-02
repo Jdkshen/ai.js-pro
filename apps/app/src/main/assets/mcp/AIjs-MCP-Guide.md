@@ -219,7 +219,7 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 MCP 和应用内终端复用同一底层，默认使用手机应用 UID，无需占用三引擎运行槽。`terminal_exec` 可显式选择 `backend="shizuku"`；Shizuku/Sui须已运行并授权，失败不会回退 app。后端实际身份可能为shell或root，诊断以真实状态为准。仍是管道终端（`pty=false`）；全屏编辑器、终端控制序列、交互PTY和完整作业控制不属于本接口。workingDirectory须在MCP操作目录内，命令可访问所选身份实际有权限的文件。
 
-1. `get_build_tools` 检测 PATH 中 clang/clang++、javac/java、Gradle、aapt2、zipalign、apksigner 等；`found=true` 仅表示定位到命令，`verified=false` 表示尚未试编译。
+1. `get_build_tools` 检测 PATH 中 clang/clang++、javac/java、Gradle、aapt2、zipalign、apksigner 等；`found=true` 仅表示定位到命令，`verified=false` 表示尚未试编译。`optionalComponents` 另返回可选 C/C++ 组件的状态与安装命令；此查询不会下载或执行编译器。
 2. `terminal_exec(command, workingDirectory?, env?, timeoutSeconds?, backend?)` 异步创建任务，立即返回jobId；backend只接受app（默认）/shizuku。env是字符串对象，不能伪造内部后端变量或替换RISH_APPLICATION_ID。最多3个并发、保留最近16条；超时默认300秒，范围1..3600。
 3. `terminal_read(jobId, offset?, maxChars?, waitMillis?)` 按上次 nextOffset 继续读合并后的 stdout/stderr。offset/nextOffset 是 UTF-16 字符偏移，默认 0；maxChars 默认 16384、最大 65536；waitMillis 为 0..10000，仅控制等待输出，不会停止任务。每任务保留最近 256Ki 字符；truncated=true 时有旧输出被淘汰，可将完整编译日志重定向到项目文件。
 4. `terminal_write(jobId,input?,eof?)` 排队写 stdin，不自动补换行；eof=true 关闭输入。accepted 只表示入队，读取结果中的 inputError/pendingInput 确认是否写入。
@@ -254,6 +254,30 @@ CLASSPATH="$AIJS_APK" app_process /system/bin "$AIJS_BUILD_MAIN" smali assemble 
 ```
 
 终端本身不等于完整工具链。主 APK 没有预装 clang、JDK/javac、完整 Android SDK/NDK/Gradle；C/C++、Java 源码、完整 Android 项目需另行配置手机 ABI/Android 兼容工具链。电脑 SDK/NDK 的 Windows/Linux 主机可执行文件不能直接在手机运行，`./gradlew assembleDebug` 也要求兼容 Java 和资源编译器。Android 共享存储通常不能执行 ELF；普通应用还受到可执行文件存储和 SELinux 规则限制。大型工具链应走可选插件，不往主 APK 塞整套 SDK。
+
+### C/C++ 按需下载组件
+
+新增 `aijs-toolchain` 函数只出现在 App 终端/MCP 的 **app 后端**。主 APK 只含管理入口；编译器 ZIP 及头文件独立下载到应用 no_backup 私有目录，不会增加主 APK 的编译器载荷。安装可停止，进度按终端输出读取；失败保留原先激活的版本。使用已核验的组件清单，下载完成验证 SHA-256/大小，再解压和切换版本。当前基础组件为 ARM64、Android 9/API28+ 主机，目标为 Android API26+ ARM64；不含跨 ABI、CMake/Ninja、JDK、Gradle 或完整 APK 构建环境。
+
+```json
+{"name":"terminal_exec","arguments":{"backend":"app","command":"aijs-toolchain install cpp --manifest http://192.168.10.7:8080/toolchains/cpp-arm64-v1.json","timeoutSeconds":1800}}
+```
+
+返回 jobId 后持续 `terminal_read(offset=nextOffset)`，直到 processActive=false，且 status=SUCCEEDED、exitCode=0；不能把开始下载当成安装成功。之后新命令自动有 clang/clang++/llvm-ar，`get_build_tools.optionalComponents` 可读取安装状态。一个任务内 `install ... && clang --version` 也会刷新 PATH。
+
+```sh
+aijs-toolchain status
+clang --version
+mkdir -p "$HOME/cpp-work"
+cd "$HOME/cpp-work"
+printf '#include <stdio.h>\nint main(){puts("Hello C");return 0;}\n' > main.c
+clang main.c -O2 -o hello
+./hello
+# C++：clang++ main.cpp -std=c++17 -O2 -o hello-cxx
+# 共享库：clang -shared -fPIC main.c -Wl,-z,max-page-size=16384 -o libdemo.so
+```
+
+编译不需要 Shizuku；Shizuku 身份通常不能读取应用私有编译目录。源码可来自共享存储，可执行产物应放私有目录。Android 对 target29+ 应用执行私有目录下载文件有限制；入口会报告不支持，不更改 targetSdk 绕过。卸载组件前先结束使用它的任务，再执行 `aijs-toolchain remove cpp`；项目源码不放组件目录，卸载不会主动删除项目目录。该管理入口不代表 Node 原生 child_process 已自动注入终端函数。
 
 应用内终端同步增加实时输出、输入与停止，退出界面会清理自己的命令；其默认执行期限为 1 小时，界面仅保留最近 64Ki 字符。
 

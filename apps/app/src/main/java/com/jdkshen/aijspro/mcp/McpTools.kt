@@ -221,7 +221,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程；不会停止三个脚本引擎。shizuku 任务调用 ShizukuShell 的 process.destroy() 由 UserService 终止远端进程组；processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
             add(tool("terminal_list", "列出本 MCP 服务创建的终端任务（最多 3 个并发、保留 16 条，服务停止会终止任务）；每项 backend 为 app 或 shizuku"))
             add(tool("shell_rish", "兼容工具：以 Shizuku 后端异步运行 shell 命令并立即返回 jobId（等价 terminal_exec backend=shizuku）；需 Shizuku 已运行并授权，不回退应用 UID。与 terminal_exec 共用任务表，用 terminal_read/terminal_write/terminal_stop 管理，timeoutSeconds 默认 300、最大 3600，不做同步 600 秒等待", McpToolSchema.shellRishSchema()))
-            add(tool("get_build_tools", "检测手机终端当前 PATH 的 C/C++、Java、Android 编译工具，并说明内置 D8/Smali 入口；不下载安装工具链"))
+            add(tool("get_build_tools", "检测手机终端 PATH 的编译工具，返回可选 C/C++ 组件状态及终端安装命令、内置 D8/Smali 入口；此查询不会下载或运行编译器"))
             add(tool("app_list", "列出已安装应用（PackageManager，无 root）；query 过滤 label/包名，includeSystem 默认 true，limit 最大 200", McpToolSchema.appListSchema()))
             add(tool("app_info", "读取单个应用版本、SDK、安装路径与启动入口", McpToolSchema.appInfoSchema()))
             add(tool("app_launch", "按包名启动应用；activity 可选（.MainActivity 简写）", McpToolSchema.appLaunchSchema()))

@@ -45,7 +45,8 @@ internal object McpBuildTools {
                 addProperty("d8Example", "mkdir -p out && CLASSPATH=\"\$AIJS_APK\" app_process /system/bin \"\$AIJS_BUILD_MAIN\" d8 --min-api 26 --output out input.jar")
                 addProperty("smaliExample", "CLASSPATH=\"\$AIJS_APK\" app_process /system/bin \"\$AIJS_BUILD_MAIN\" smali assemble src -o classes.dex")
             })
-            addProperty("note", "found 只表示 PATH 中可定位，未执行编译器。内置 D8 转换 class/JAR→DEX，Smali 汇编→DEX；均不编译 Java 源码。C/C++、Java 源码及完整 Android 工程需另装兼容本机 ABI/Android 的工具链和 SDK；电脑 NDK 二进制不能直接在手机运行。shell 使用应用权限，共享存储通常不能直接执行 ELF。终端不会自动安装依赖。")
+            add("optionalComponents", backend.compilerComponents())
+            addProperty("note", "found 只表示 PATH 中可定位，未执行编译器。C/C++可通过aijs-toolchain显式下载可选组件，主APK不内嵌编译器；optionalComponents提供状态和安装命令。内置D8转换class/JAR→DEX，Smali汇编→DEX，均不编译Java源码；JDK/Gradle/完整Android SDK需另配。编译使用app后端，共享存储通常不能直接执行ELF。不会后台自动安装依赖。")
         }
     }
 }

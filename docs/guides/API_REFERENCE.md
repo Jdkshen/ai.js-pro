@@ -387,3 +387,30 @@ i base.apk split_config.apk
 `rish`为命令模式兼容入口，读取已安装APK代码，通过同UID本地通道管理远端命令；不含官方PTY、不解压外置DEX、不内置ADB、不自动启动Shizuku。`i`支持私有APK和split，通过会话流式写入；默认-r及应用所在用户，-g/--user须显式传入。仅在App终端/MCP app后端自动提供这两个函数，不能假设Node原生child_process或普通脚本shell已有这些终端函数。
 
 停止/超时只处理该命令的远端进程组；命令自行setsid脱离组的守护进程不在保证内。普通4KB手机的验证不能替代真实16KB或Android17系统验收。
+
+## C/C++ 可选编译组件（终端/MCP）
+
+此接口属于 App 终端和 MCP app 后端，不是三引擎脚本全局函数。主 APK 只提供管理入口，编译器、链接器、头文件和标准库通过组件 ZIP 按需下载；没有使用需求时不下载。当前组件只支持 ARM64 Android9/API28+ 主机，生成 Android API26+ ARM64 的可执行文件、`.so` 和静态库。C++ 默认静态链接 libc++，不需要额外配置 libc++_shared.so 搜索路径。
+
+| 命令/接口 | 含义 |
+| --- | --- |
+| `aijs-toolchain status` | 查询组件安装状态，不运行编译器 |
+| `aijs-toolchain install cpp --manifest URL` | 从明确清单地址下载并验证 ZIP，在暂存目录解压后切换版本；进度写终端，失败保留旧版本 |
+| `aijs-toolchain path` | 激活组件所在私有目录，未安装时为空 |
+| `aijs-toolchain remove cpp` | 取消激活并删除组件；先结束使用它的编译任务，项目目录独立保存 |
+| `get_build_tools` | MCP 返回 PATH 工具和 optionalComponents 状态；found 不等于已经通过试编译 |
+
+```sh
+aijs-toolchain install cpp --manifest http://192.168.10.7:8080/toolchains/cpp-arm64-v1.json
+mkdir -p "$HOME/cpp-work"
+cd "$HOME/cpp-work"
+printf '#include <stdio.h>\nint main(){puts("Hello C");return 0;}\n' > main.c
+clang main.c -O2 -o hello
+./hello
+# C++：clang++ main.cpp -std=c++17 -O2 -o hello-cxx
+# .so：clang -shared -fPIC main.c -Wl,-z,max-page-size=16384 -o libdemo.so
+```
+
+MCP 通过 `terminal_exec({backend:'app',command:'aijs-toolchain ...',timeoutSeconds:1800})` 创建异步任务，再用 terminal_read/write/stop；processActive=false 且 status=SUCCEEDED/exitCode=0 才表示任务完成。安装后新命令自动配置 PATH/CC/CXX，同一任务的 install 成功后也刷新 PATH。编译无需 Shizuku，产物放 `$HOME` 等应用私有目录；共享存储通常不能执行 ELF。组件位于 no_backup 目录，不包含项目源码，也不进入主 APK/系统备份。
+
+未包含完整 Android APK 工程构建、JDK/Gradle、CMake/Ninja、其他 ABI 和调试器。当前 target28 应用的实测不能代替 target29+ 私有目录执行限制的适配；入口检测到不支持时报告原因。来源、版本、下载大小及摘要以具体组件清单为准。
