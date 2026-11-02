@@ -259,14 +259,23 @@ CLASSPATH="$AIJS_APK" app_process /system/bin "$AIJS_BUILD_MAIN" smali assemble 
 
 新增 `aijs-toolchain` 函数只出现在 App 终端/MCP 的 **app 后端**。主 APK 只含管理入口；编译器 ZIP 及头文件独立下载到应用 no_backup 私有目录，不会增加主 APK 的编译器载荷。安装可停止，进度按终端输出读取；失败保留原先激活的版本。使用已核验的组件清单，下载完成验证 SHA-256/大小，再解压和切换版本。当前基础组件为 ARM64、Android 9/API28+ 主机，目标为 Android API26+ ARM64；不含跨 ABI、CMake/Ninja、JDK、Gradle 或完整 APK 构建环境。
 
+dev-1307起默认使用公网加速源，网络失败依次尝试备用加速源和GitHub直连，手机不需要连接开发电脑。显式`--manifest`仍支持LAN/自托管，不替换用户指定源。dev-1306也能使用下方公网完整地址，但不支持省略`--manifest`。
+
 ```json
-{"name":"terminal_exec","arguments":{"backend":"app","command":"aijs-toolchain install cpp --manifest http://192.168.10.7:8080/toolchains/cpp-arm64-v1.json","timeoutSeconds":1800}}
+{"name":"terminal_exec","arguments":{"backend":"app","command":"aijs-toolchain install cpp","timeoutSeconds":1800}}
 ```
 
 返回 jobId 后持续 `terminal_read(offset=nextOffset)`，直到 processActive=false，且 status=SUCCEEDED、exitCode=0；不能把开始下载当成安装成功。之后新命令自动有 clang/clang++/llvm-ar，`get_build_tools.optionalComponents` 可读取安装状态。一个任务内 `install ... && clang --version` 也会刷新 PATH。
 
 ```sh
 aijs-toolchain status
+# 公网默认安装（dev-1307+）
+aijs-toolchain install cpp
+# 公网完整地址，dev-1306也可用；网络不通时可换另一条
+aijs-toolchain install cpp --manifest https://gh-proxy.org/https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-arm64-v1.json
+# 备用加速：https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-arm64-v1.json
+# GitHub直连：https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-arm64-v1.json
+# 局域网自定义：aijs-toolchain install cpp --manifest http://192.168.10.7:8080/toolchains/cpp-arm64-v1.json
 clang --version
 mkdir -p "$HOME/cpp-work"
 cd "$HOME/cpp-work"

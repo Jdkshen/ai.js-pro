@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-11-02 公网C/C++候选1307**：[实现与验收](reports/2026-11-02_C与C++公网下载及终端退出修复.md)。用户指出无外网链接后，组件固定版本已公网分发（仅组件，prerelease/non-latest），默认三路源与MCP信息完成；修HTTPS成功后独立CLI不退出。MI8全新目录公网下载、C/C++运行、默认命令与5项切换检查通过；候选仅比1306增1KiB。主LAN1305/GitHub latest1297保持，代码本地提交，K40未动；下载地址与包在报告。
+
 > **2026-11-02 C/C++可选组件候选1306（MI8已验）**：[使用与验收](reports/2026-11-02_MCP终端按需C与C++编译组件.md)。新授权只恢复C/C++下载组件，主APK只增19.43KiB；组件另下75.47MiB。aijs-toolchain安装/状态/卸载、自动PATH、get_build_tools状态与783条文档同步；1113 JVM及真实中断重装/编译/失败/卸载通过。主LAN更新清单仍1305，1306手动测试包在LAN/Downloads；不自动push，K40未动。未恢复Java/Gradle/完整APK编译，未更新独立模板。
 
 > **2026-11-01 当前LAN dev-1305（MI8已装）**：[Shizuku接入与发布](reports/2026-11-01_Shizuku三引擎终端接入与局域网发布.md)。共享多进程连接、UserService按命令回收、三引擎API、终端后端/MCP shell_rish、rish/i私有及split安装、新内置模板完成。1103 JVM、三引擎43项及独立APK/停止/安装/界面/重连验收通过；782条同源文档，136.12MiB，PC/MI8完整LAN下载一致，Downloads有包。只本地提交、未push、K40未动。Android17/root-Sui/权限系统矩阵未穷举；外置旧插件模板未更新。

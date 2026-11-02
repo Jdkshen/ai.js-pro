@@ -49,7 +49,9 @@ public final class ToolchainRuntime {
             result.put("abi", Build.SUPPORTED_ABIS.length == 0 ? "unknown" : Build.SUPPORTED_ABIS[0]);
             result.put("sdkInt", Build.VERSION.SDK_INT);
             result.put("statusCommand", "aijs-toolchain status");
-            result.put("installCommand", "aijs-toolchain install cpp --manifest <清单URL>");
+            result.put("installCommand", "aijs-toolchain install cpp");
+            result.put("customInstallCommand", "aijs-toolchain install cpp --manifest <清单URL>");
+            result.put("publicManifests", new org.json.JSONArray().put(ToolchainSources.PROXY).put(ToolchainSources.BACKUP_PROXY).put(ToolchainSources.GITHUB));
             result.put("note", "仅按需下载C/C++组件；安装不代表已试编译。使用app后端，编译器及可执行产物放应用私有目录。");
         } catch (Exception ignored) { }
         return result;

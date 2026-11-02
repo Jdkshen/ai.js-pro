@@ -170,7 +170,7 @@ public final class EmbeddedTerminalActivity extends Activity {
         appendLine("实时输出 · 每条命令独立进程组 · 停止会结束当前命令及子进程");
         appendLine("后端 app（默认）= 应用 UID，可调用 rish/i 函数入口；shizuku = Shizuku 授权身份，需已运行并授权，不会回退 app。");
         appendLine("默认超时 1 小时；编译器需单独配置。D8/Smali 可用 $AIJS_APK / $AIJS_BUILD_MAIN 调用。");
-        appendLine("C/C++ 可按需下载：aijs-toolchain help；使用 app 后端，编译器不计入主 APK。");
+        appendLine("公网安装 C/C++：aijs-toolchain install cpp；使用 app 后端，编译器不计入主 APK。");
         updateBackendHint();
         appendPrompt();
         mCommand.requestFocus();

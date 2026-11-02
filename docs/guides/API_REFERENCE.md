@@ -395,13 +395,16 @@ i base.apk split_config.apk
 | 命令/接口 | 含义 |
 | --- | --- |
 | `aijs-toolchain status` | 查询组件安装状态，不运行编译器 |
-| `aijs-toolchain install cpp --manifest URL` | 从明确清单地址下载并验证 ZIP，在暂存目录解压后切换版本；进度写终端，失败保留旧版本 |
+| `aijs-toolchain install cpp` | dev-1307+默认公网加速下载，网络失败尝试备用加速源和GitHub直连；不需要与开发电脑同一局域网 |
+| `aijs-toolchain install cpp --manifest URL` | 显式使用公网、LAN或自托管清单，不自动替换用户指定源；验证ZIP后切换版本，失败保留旧版本 |
 | `aijs-toolchain path` | 激活组件所在私有目录，未安装时为空 |
 | `aijs-toolchain remove cpp` | 取消激活并删除组件；先结束使用它的编译任务，项目目录独立保存 |
 | `get_build_tools` | MCP 返回 PATH 工具和 optionalComponents 状态；found 不等于已经通过试编译 |
 
 ```sh
-aijs-toolchain install cpp --manifest http://192.168.10.7:8080/toolchains/cpp-arm64-v1.json
+aijs-toolchain install cpp
+# dev-1306也可显式使用公网地址：
+# aijs-toolchain install cpp --manifest https://gh-proxy.org/https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-arm64-v1.json
 mkdir -p "$HOME/cpp-work"
 cd "$HOME/cpp-work"
 printf '#include <stdio.h>\nint main(){puts("Hello C");return 0;}\n' > main.c
@@ -411,6 +414,8 @@ clang main.c -O2 -o hello
 # .so：clang -shared -fPIC main.c -Wl,-z,max-page-size=16384 -o libdemo.so
 ```
 
-MCP 通过 `terminal_exec({backend:'app',command:'aijs-toolchain ...',timeoutSeconds:1800})` 创建异步任务，再用 terminal_read/write/stop；processActive=false 且 status=SUCCEEDED/exitCode=0 才表示任务完成。安装后新命令自动配置 PATH/CC/CXX，同一任务的 install 成功后也刷新 PATH。编译无需 Shizuku，产物放 `$HOME` 等应用私有目录；共享存储通常不能执行 ELF。组件位于 no_backup 目录，不包含项目源码，也不进入主 APK/系统备份。
+MCP 通过 `terminal_exec({backend:'app',command:'aijs-toolchain ...',timeoutSeconds:1800})` 创建异步任务，再用 terminal_read/write/stop；processActive=false 且 status=SUCCEEDED/exitCode=0 才表示任务完成。get_build_tools.optionalComponents的installCommand/publicManifests提供默认命令和公网地址。公网加速清单为`https://gh-proxy.org/https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-arm64-v1.json`，直连为`https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-arm64-v1.json`。备用加速清单为`https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-arm64-v1.json`。需要局域网时显式传`--manifest http://192.168.10.7:8080/toolchains/cpp-arm64-v1.json`。
+
+安装后新命令自动配置 PATH/CC/CXX，同一任务的 install 成功后也刷新 PATH。编译无需 Shizuku，产物放 `$HOME` 等应用私有目录；共享存储通常不能执行 ELF。组件位于 no_backup 目录，不包含项目源码，也不进入主 APK/系统备份。
 
 未包含完整 Android APK 工程构建、JDK/Gradle、CMake/Ninja、其他 ABI 和调试器。当前 target28 应用的实测不能代替 target29+ 私有目录执行限制的适配；入口检测到不支持时报告原因。来源、版本、下载大小及摘要以具体组件清单为准。
