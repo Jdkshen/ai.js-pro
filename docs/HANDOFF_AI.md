@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-11-03 APK 编译/逆向 MCP 增强评估（未改产品）**：[评估与任务草案](reports/2026-11-03_APK编译逆向MCP增强评估.md)。源码+手机128工具清单核对，DP只读复核已完成。电脑调用生产归档对齐函数并经独立zipalign复现普通Stored Manifest/assets未4字节对齐；P0待修，签名元数据也仍非密码学验签。建议补方法级搜索/出向调用、可选JADX/AAPT2、独立DEX/SO、异步任务/会话回退；Java/Gradle源码工具链仅备选，未恢复安装。LAN仍1327，本轮没有发布/改APK/操作手机界面。
+
 > **2026-11-03 已发布 LAN dev-1327**：[Node Widget 入口与象棋编译资源修复](reports/2026-11-03_NodeWidget入口与象棋编译资源修复.md)。修同一行 `"ui"; "nodejs";` 回落 Rhino，以及 staging 丢 `build/project-res.apk`/sidecar；Engine623+App629全过，MI8四Widget真实入口/交互和象棋UI三页通过，无ERROR。137.42MiB，仅增184B，SHA `b03e1638…`，沿用现有LAN签名原包发布；Downloads含修复ZIP与APK，原ZIP保留。内置独立模板未刷新/独立APK未验；K40未动、未push。
 
 > **2026-11-03 LAN已发布dev-1326**：[发布记录](reports/2026-11-03_dev1326局域网发布.md)。用户授权后直接发布同一已验收/MI8已装APK，签名与1318开发通道相同，SHA `9149a9f6fc48…`、137.42MiB；PC/MI8完整HTTP下载及Downloads副本摘要一致。沿用同包597 App/双端57方法/20扩展/80MiB/拒绝原子性验收，发布器重查签名、23ELF16KB、Retrofit和平台阴影。当前LAN1326，下面候选未发布状态为历史；未push/建Release，K40/无线设备未动。
