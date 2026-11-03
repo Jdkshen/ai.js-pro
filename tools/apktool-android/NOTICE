@@ -1,0 +1,14 @@
+Apktool
+Copyright (C) 2010 Ryszard Wiśniewski <brut.alll@gmail.com>
+Copyright (C) 2010 Connor Tumbleson <connor.tumbleson@gmail.com>
+
+This product includes an Android-compatible replacement for
+brut.androlib.res.decoder.ResNinePatchStreamDecoder derived from Apktool
+tag v3.0.3, modified for Android by the AI.js Pro contributors.
+
+Apktool is licensed under the Apache License, Version 2.0. See LICENSE in
+this directory. The Android compatibility replacement is distributed under
+the same license.
+
+Upstream source:
+https://github.com/iBotPeaches/Apktool/tree/v3.0.3

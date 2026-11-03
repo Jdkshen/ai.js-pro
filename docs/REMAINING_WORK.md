@@ -1,5 +1,8 @@
 # AI.js Pro 剩余细节审计与收尾清单
 
+> **2026-11-04 已发布 LAN dev-1329**：[MCP逆向工具、自发现与验收](reports/2026-11-04_MCP逆向工具与自发现指南.md)。新增18项逆向工具，公开169名（160+9）、toolkit99；Apktool完整工程/Android九宫格、radare2+r2ghidra、YARA、Unicorn五架构、Frida有界客户端。标准资源/提示、分页指南和8种机读计划已内置，另见 [MCP调用入口](MCP逆向调用说明.md)。1270 JVM、MI8正式MCP/伪代码/取消恢复/回编译验签通过；23主包和209可选ELF项静态16KiB通过；主包只增约91KiB。APK144374557B，SHA f3ded732…，PC/MI8完整LAN下载一致。Frida需Server/Gadget；完整APKiD、实际16KiB页设备及Android17原机未验；K40未动、无push。
+
+
 > **2026-11-03 已发布 LAN dev-1328**：[实现、验收与边界](reports/2026-11-03_MCP编译逆向增强与Node资源恢复.md)。新增23项独立MCP工具（151公开入口）：真实验签/ZIP对齐、方法级DEX导航、可选JADX/AAPT2、后台取消与会话回退、独立DEX/SO/分包读取。修复chess-auto资源摘要不匹配的本机重编/恢复页和源目录映射。1246本地回归、MI8完整项目入口/三页/错误摘要→一键修复→重开、同名DEX选择及签名导出通过；PC/手机完整LAN下载摘要一致。APK144281420B/SHA7068ee94…；Downloads有APK和新工程ZIP。原ZIP保留。Android17原机/独立APK/长时对弈未验，K40未动、未push。
 
 > **2026-11-03 APK 编译/逆向 MCP 增强评估（未改产品）**：[评估与任务草案](reports/2026-11-03_APK编译逆向MCP增强评估.md)。源码+手机128工具清单核对，DP只读复核已完成。电脑调用生产归档对齐函数并经独立zipalign复现普通Stored Manifest/assets未4字节对齐；P0待修，签名元数据也仍非密码学验签。建议补方法级搜索/出向调用、可选JADX/AAPT2、独立DEX/SO、异步任务/会话回退；Java/Gradle源码工具链仅备选，未恢复安装。LAN仍1327，本轮没有发布/改APK/操作手机界面。
