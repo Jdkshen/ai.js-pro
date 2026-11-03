@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-03 已发布 LAN dev-1327**：[Node Widget 入口与象棋编译资源修复](docs/reports/2026-11-03_NodeWidget入口与象棋编译资源修复.md)。修同一行 `"ui"; "nodejs";` 回落 Rhino，以及 staging 丢 `build/project-res.apk`/sidecar；Engine623+App629全过，MI8四Widget真实入口/交互和象棋UI三页通过，无ERROR。137.42MiB，仅增184B，SHA `b03e1638…`，沿用现有LAN签名原包发布；Downloads含修复ZIP与APK，原ZIP保留。内置独立模板未刷新/独立APK未验；K40未动、未push。
+
 > **2026-11-03 已发布LAN dev-1326**：[发布与下载验证](docs/reports/2026-11-03_dev1326局域网发布.md)。用户授权后复用已验收、MI8已安装的相同APK发布（AllowInstalledCandidate），新旧LAN证书相同；SHA `9149a9f6fc48…`，137.42MiB。PC/MI8通过真实LAN完整下载，摘要/大小与清单、实装、本地Downloads副本一致；23 ELF16KB/Retrofit/平台阴影守卫通过。继承同包597 App、双端57方法各80调用/20扩展/80MiB/拒绝原子性的既有验收。本轮未重装、K40/无线设备未动，未push/建Release。以下1326“候选未切LAN”是发布前历史状态，当前源为1326；沿用开发通道证书，不是改用新的公开正式签名。
 
 > **2026-11-03 MCP候选dev-1326（MI8已验，未切LAN）**：[实现与验收](docs/reports/2026-11-03_MCP对齐实现进度.md)。补齐下方审查识别的保留条目保护、V2/V3/V3.1元数据、AXML/DEX/搜索/资源、AES/ZipCrypto、Java正则、多架构汇编/重定位引用、返回分页和流式构建。597 App JVM全过；双端各80调用覆盖57/57方法、20项扩展断言、80MiB流程及11项拒绝/原子性真机通过。修手机LLD小地址布局与绝对目标、x86 Intel语法；MCP指南已实际读回。最终APK137.42MiB，SHA `9149a9f6fc48…`，MI8安装摘要一致；23 ELF/16KB/R8/签名/Retrofit/平台阴影守卫通过。工具128名称（119+9），toolkit57+状态1=58。LAN仍1318，候选为测试签名，未发布/未push；K40/无线设备未动。下方“仅审查未改产品、缺口仍存在”是实施前的历史时点，勿重复当作当前结论。

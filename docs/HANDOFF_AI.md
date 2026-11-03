@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-11-03 已发布 LAN dev-1327**：[Node Widget 入口与象棋编译资源修复](reports/2026-11-03_NodeWidget入口与象棋编译资源修复.md)。修同一行 `"ui"; "nodejs";` 回落 Rhino，以及 staging 丢 `build/project-res.apk`/sidecar；Engine623+App629全过，MI8四Widget真实入口/交互和象棋UI三页通过，无ERROR。137.42MiB，仅增184B，SHA `b03e1638…`，沿用现有LAN签名原包发布；Downloads含修复ZIP与APK，原ZIP保留。内置独立模板未刷新/独立APK未验；K40未动、未push。
+
 > **2026-11-03 LAN已发布dev-1326**：[发布记录](reports/2026-11-03_dev1326局域网发布.md)。用户授权后直接发布同一已验收/MI8已装APK，签名与1318开发通道相同，SHA `9149a9f6fc48…`、137.42MiB；PC/MI8完整HTTP下载及Downloads副本摘要一致。沿用同包597 App/双端57方法/20扩展/80MiB/拒绝原子性验收，发布器重查签名、23ELF16KB、Retrofit和平台阴影。当前LAN1326，下面候选未发布状态为历史；未push/建Release，K40/无线设备未动。
 
 > **2026-11-03 MCP候选dev-1326（MI8已验，未切LAN）**：[实现与验收](reports/2026-11-03_MCP对齐实现进度.md)。本轮审查列出的核心差异已修复。597 App JVM、双端各80调用/57方法、20项扩展、80MiB流式构建及11项拒绝/原子性真机通过；符号/重定位、AXML/新DEX、资源预算、中文emoji AES互读、五模式汇编和绝对地址均有证据。手机LLD布局/Intel语法、签名/压缩方式及分页已收尾。最终137.42MiB，SHA `9149a9f6fc48…`，MI8安装摘要一致，MCP指南读回有效。LAN仍1318；测试签名候选不可直接发布；K40/无线设备未动、未push。以下审查清单保留历史时点，当前边界和证据以新报告为准。

@@ -33,9 +33,13 @@ import java.util.Locale;
  *   <li>否则复制到 {@code <filesDir>/native-staging/<稳定短hash>}，hash 取项目规范化绝对
  *       路径的 SHA-1 前 12 个十六进制字符，同一路径每次得到同一个目录；</li>
  *   <li>复制前先删掉同 hash 的旧副本，避免上次残留的 .so/旧文件影响本次运行；</li>
- *   <li>保留相对路径与文件名；跳过名为 {@code build}、{@code .git} 的目录，跳过
- *       {@code *.apk}（打包产物，脚本运行时用不到；项目自带的 26MB ImGui APK 就靠这条省掉），
- *       但 <b>不跳过</b> .so/.dex/.js/图片等资源；</li>
+ *   <li>保留相对路径与文件名；跳过 {@code .git} 目录与普通 {@code *.apk}
+ *       （打包产物，脚本运行时用不到；项目自带的 26MB ImGui APK 就靠这条省掉）；</li>
+ *   <li>{@code build} 目录默认视为构建中间产物，但 Node/UI 工程的编译资源包恰好放在
+ *       {@code build/project-res.apk}（可选 sidecar {@code build/project-res.json}），运行时
+ *       {@code ProjectResourceBundle} 只会从这里加载。因此对任意嵌套路径下的 {@code build}
+ *       目录只保留这一对文件；其它 APK、dex、intermediates 等一律不复制，也不递归其中的子目录；</li>
+ *   <li><b>不跳过</b> {@code build} 之外的 .so/.dex/.js/图片等普通资源；</li>
  *   <li>单文件上限 {@value #MAX_FILE_BYTES_TEXT}、整个项目上限 {@value #MAX_TOTAL_BYTES_TEXT}，
  *       超限直接抛中文 {@link IOException}，不做静默截断/跳过；</li>
  *   <li>复制用 {@link FileInputStream}/{@link FileOutputStream}，失败向上抛（服务端会转成
@@ -66,9 +70,13 @@ public final class NativeProjectStaging {
     private static final int BUFFER_SIZE = 64 * 1024;
     /** 递归深度上限：防止符号链接成环时把服务主线程卡死。 */
     private static final int MAX_DEPTH = 32;
-    /** 目录名跳过：构建产物与版本库元数据。 */
+    /** 构建目录名：只保留编译资源对，见 {@link #copyCompiledResources}。 */
     private static final String DIR_BUILD = "build";
+    /** 版本库元数据目录：整棵跳过。 */
     private static final String DIR_GIT = ".git";
+    /** 编译资源包及其可选 sidecar：只允许从任意 {@code build} 目录直接保留这两个文件。 */
+    private static final String COMPILED_RES_APK = "project-res.apk";
+    private static final String COMPILED_RES_JSON = "project-res.json";
     /** 文件扩展名跳过：APK 是打包产物，脚本运行不需要。 */
     private static final String EXTENSION_APK = ".apk";
     /** hash 取 SHA-1 十六进制的前 12 位。 */
@@ -149,7 +157,7 @@ public final class NativeProjectStaging {
 
         CopyStats stats = new CopyStats();
         try {
-            copyTree(project, target, stats, 0);
+            copyProjectContents(project, target, stats);
         } catch (IOException error) {
             deleteRecursively(target);
             throw error;
@@ -165,6 +173,18 @@ public final class NativeProjectStaging {
     // ------------------------------------------------------------------
     // 复制
     // ------------------------------------------------------------------
+
+    /**
+     * 复制整棵项目内容；包内可见的入口供纯 JVM 单测直接验证跳过/保留规则
+     * （不接触 Android Context/Log，也不负责创建暂存根目录）。
+     */
+    static void copyProjectContents(File projectDir, File targetDir) throws IOException {
+        copyProjectContents(projectDir, targetDir, new CopyStats());
+    }
+
+    private static void copyProjectContents(File projectDir, File targetDir, CopyStats stats) throws IOException {
+        copyTree(projectDir, targetDir, stats, 0);
+    }
 
     private static void copyTree(File sourceDir, File targetDir, CopyStats stats, int depth) throws IOException {
         if (depth > MAX_DEPTH) {
@@ -187,6 +207,11 @@ public final class NativeProjectStaging {
                 if (isSkippedDirectory(name)) {
                     continue;
                 }
+                if (DIR_BUILD.equals(name)) {
+                    // build 只保留编译资源对，不递归其它中间产物（见 copyCompiledResources）。
+                    copyCompiledResources(child, targetDir, stats);
+                    continue;
+                }
                 File targetChild = new File(targetDir, name);
                 if (!targetChild.mkdirs() && !targetChild.isDirectory()) {
                     throw new IOException("暂存项目失败：无法创建目录：" + targetChild.getPath());
@@ -200,6 +225,31 @@ public final class NativeProjectStaging {
             }
             // 既不是普通文件也不是目录的条目（FIFO/设备节点等）直接跳过：项目里不该有，
             // 盲目打开可能把服务主线程卡住。
+        }
+    }
+
+    /**
+     * {@code build} 目录的例外规则：运行时只需要 {@code project-res.apk} 和可选的
+     * {@code project-res.json}（两者由 {@code tools/build-project-res.ps1} 生成）。
+     * 只从该目录的直接子项里复制这一对文件；缺少 APK 时整个 build 目录都不保留，
+     * 缺少 sidecar 则只复制 APK。其它 APK、dex、intermediates、子目录一律忽略。
+     *
+     * <p>仍复用 {@link #copyFile}，单文件/整树上限与超限报错语义不变。
+     */
+    private static void copyCompiledResources(File sourceBuild, File targetDir, CopyStats stats)
+            throws IOException {
+        File apk = new File(sourceBuild, COMPILED_RES_APK);
+        if (!apk.isFile()) {
+            return;
+        }
+        File targetBuild = new File(targetDir, DIR_BUILD);
+        if (!targetBuild.mkdirs() && !targetBuild.isDirectory()) {
+            throw new IOException("暂存项目失败：无法创建目录：" + targetBuild.getPath());
+        }
+        copyFile(apk, new File(targetBuild, COMPILED_RES_APK), stats);
+        File sidecar = new File(sourceBuild, COMPILED_RES_JSON);
+        if (sidecar.isFile()) {
+            copyFile(sidecar, new File(targetBuild, COMPILED_RES_JSON), stats);
         }
     }
 
@@ -257,9 +307,9 @@ public final class NativeProjectStaging {
     // 规则 / 工具
     // ------------------------------------------------------------------
 
-    /** 跳过构建产物与版本库元数据目录（按原样名字比较，和 Unix 习惯一致）。 */
+    /** 跳过版本库元数据目录；{@code build} 由 {@link #copyCompiledResources} 单独处理。 */
     private static boolean isSkippedDirectory(String name) {
-        return DIR_BUILD.equals(name) || DIR_GIT.equals(name);
+        return DIR_GIT.equals(name);
     }
 
     /** 跳过 APK 打包产物（扩展名大小写不敏感）。 */

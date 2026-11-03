@@ -111,4 +111,53 @@ public class JavaScriptSourceEngineTest {
         );
         assertEquals(JavaScriptSource.ENGINE, source.getEngineName());
     }
+    @Test
+    public void sameLineUiAndNodeDirectivesSelectNodeFromFileEntry() {
+        StringScriptSource source = new StringScriptSource("\"ui\"; \"nodejs\"; const ui = require('ui');");
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+        assertEquals(JavaScriptSource.EXECUTION_MODE_UI, source.getExecutionMode());
+    }
+
+    @Test
+    public void engineFirstStillReadsFollowingUiAndAutoModes() {
+        StringScriptSource source = new StringScriptSource("'nodejs'; 'ui'; 'auto'; console.log(1);");
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+        assertEquals(JavaScriptSource.EXECUTION_MODE_UI | JavaScriptSource.EXECUTION_MODE_AUTO,
+                source.getExecutionMode());
+    }
+
+    @Test
+    public void commentsBomAndStrictPrologueCanPrecedeEngineAndMode() {
+        StringScriptSource source = new StringScriptSource(
+                "\ufeff/* Widget example */\n'use strict'; // header\n'ui'; /* engine */ 'nodejs'; class Widget {}");
+        assertEquals(JavaScriptSource.ENGINE_NODE24, source.getEngineName());
+        assertEquals(JavaScriptSource.EXECUTION_MODE_UI, source.getExecutionMode());
+    }
+
+    @Test
+    public void threeEngineDirectivesAllowSameLineCode() {
+        for (String[] entry : new String[][]{{"nodejs", JavaScriptSource.ENGINE_NODE24},
+                {"quickjs", JavaScriptSource.ENGINE_QUICKJS}, {"rhino", JavaScriptSource.ENGINE_RHINO}}) {
+            StringScriptSource source = new StringScriptSource("'ui'; '" + entry[0] + "'; console.log(1);");
+            assertEquals(entry[1], source.getEngineName());
+            assertEquals(JavaScriptSource.EXECUTION_MODE_UI, source.getExecutionMode());
+        }
+    }
+
+    @Test
+    public void executableCodeAndStringExpressionsNeverSelectLaterEngine() {
+        for (String code : new String[]{"'ui'; run(); 'nodejs';", "'nodejs' + value;",
+                "'nodejs'.toUpperCase();", "const text = 'nodejs';", "/* 'nodejs'; */ run();"}) {
+            StringScriptSource source = new StringScriptSource(code);
+            assertEquals(code, JavaScriptSource.ENGINE_RHINO, source.getEngineName());
+        }
+    }
+
+    @Test
+    public void explicitForcedEngineStillWinsOverInlinePrologue() {
+        StringScriptSource source = new StringScriptSource("'ui'; 'nodejs'; class Widget {}");
+        source.setForcedEngine("quickjs");
+        assertEquals(JavaScriptSource.ENGINE_QUICKJS, source.getEngineName());
+    }
+
 }

@@ -27,8 +27,9 @@ import java.io.IOException;
  * 执行即可；真正需要原生库的目录会被主进程判为 native 项目（走本项目判定 / :native 回退）。
  *
  * <p>本类只做「策略」：判定是否项目、解析项目根、把入口脚本映射到暂存副本；真正的文件复制
- * 复用 {@link NativeProjectStaging}（跳过 {@code build}/{@code .git} 目录与 {@code *.apk}，
- * 单文件 64MB / 整树 256MB 上限，失败抛中文 {@link IOException}）。
+ * 复用 {@link NativeProjectStaging}（跳过普通构建产物、{@code .git} 与 {@code *.apk}，
+ * 保留 {@code build/project-res.apk} 及其资源 sidecar），
+ * 单文件 64MB / 整树 256MB 上限，失败抛中文 {@link IOException}。
  *
  * <p>与 {@code :native} 的关键区别：暂存根目录用 {@code <filesDir>/script-staging/}，
  * Phase0 的 {@code :native} 用 {@code <filesDir>/native-staging/} —— 两个进程同跑同一个项目时，
