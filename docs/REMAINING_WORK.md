@@ -1,5 +1,8 @@
 # AI.js Pro 剩余细节审计与收尾清单
 
+> **2026-11-04 已发布 LAN dev-1330**：[MCP免Root Gadget集成](reports/2026-11-04_MCP免RootGadget集成.md)。新增apk_inject_gadget，四ABI组件按需下载，二进制Manifest/独立DEX加载器、原资源保留、重签验签、本机令牌与客户端v2升级；不需要Root/Server。170入口（161+9）、toolkit100、650 App回归和MI8普通UID安装/附加/原生42/重开/拒绝/取消通过。主包137.70MiB，仅增约18KiB，SHA43c50a05…；PC/MI8完整LAN下载与实装摘要一致。真实16KiB页、Android17及其他ABI设备未验，K40未动、无push。
+
+
 > **2026-11-04 已发布 LAN dev-1329**：[MCP逆向工具、自发现与验收](reports/2026-11-04_MCP逆向工具与自发现指南.md)。新增18项逆向工具，公开169名（160+9）、toolkit99；Apktool完整工程/Android九宫格、radare2+r2ghidra、YARA、Unicorn五架构、Frida有界客户端。标准资源/提示、分页指南和8种机读计划已内置，另见 [MCP调用入口](MCP逆向调用说明.md)。1270 JVM、MI8正式MCP/伪代码/取消恢复/回编译验签通过；23主包和209可选ELF项静态16KiB通过；主包只增约91KiB。APK144374557B，SHA f3ded732…，PC/MI8完整LAN下载一致。Frida需Server/Gadget；完整APKiD、实际16KiB页设备及Android17原机未验；K40未动、无push。
 
 

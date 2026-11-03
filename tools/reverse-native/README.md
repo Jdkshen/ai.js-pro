@@ -210,3 +210,12 @@ json-glib, and Gum dependencies.
 - The initial delegated change was compile-only. Root subsequently ran the
   MI8 Gadget/MCP checks described above; this is sample evidence rather than
   a guarantee for every server, target process or Android release.
+
+
+## Rootless Gadget (dev-1330)
+
+`prepare-reverse-components.py frida-gadget` packages the unmodified official Frida 17.25.2 Gadget for arm64-v8a, armeabi-v7a, x86 and x86_64. Release asset SHA256 pins and corresponding upstream source links are included. These are APK payloads, not a root Server; the host never loads them.
+
+`apk_inject_gadget` patches binary Manifest attributes directly, adds a non-exported startup Provider in a fresh API21 DEX, adds INTERNET/hasCode/extractNativeLibs, raises minSdk to at least21, copies original resources/code unchanged, signs and verifies a new APK. Listen is loopback only with a random token and on_load=resume. Startup loading covers the default process after attachBaseContext. It does not install/uninstall applications.
+
+The native client v2-token accepts an optional token in its bounded JSON request and passes it to FridaRemoteDeviceOptions. Components are immutable per version: installing the updated manifest activates v2-token alongside old v1. No Root/Server setup is included. Java bridge bundling is a separate requirement for Java.perform scripts.

@@ -777,6 +777,10 @@ internal object ToolkitApkVerifier {
                     readBytes += bytes.size
                     val abiDir = Regex("^lib/([^/]+)/.+\\.so$", RegexOption.IGNORE_CASE)
                         .find(entry.name)?.groupValues?.get(1)
+                    if(ToolkitGadget.isConfiguration(entry.name,bytes)) {
+                        items.add(ToolkitIo.json("path" to entry.name,"kind" to "frida-gadget-configuration","abiDirectory" to abiDir,"elfApplicable" to false,"status" to "valid"))
+                        continue
+                    }
                     val elf = try {
                         parseElf(bytes, entry.name)
                     } catch (failure: ElfFailure) {

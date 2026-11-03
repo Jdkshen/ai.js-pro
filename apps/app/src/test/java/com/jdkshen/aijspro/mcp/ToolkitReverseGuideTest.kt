@@ -71,14 +71,14 @@ class ToolkitReverseGuideTest {
             .joinToString("") { "%02x".format(it.toInt() and 0xff) }
         assertEquals("sha256:$expected", index.get("guideSha256").asString)
         assertEquals(expected, index.get("guideSha256Hex").asString)
-        assertEquals("dev1329-1", index.get("guideVersion").asString)
+        assertEquals("dev1330-1", index.get("guideVersion").asString)
         assertEquals("index", index.get("selectedSection").asString)
         assertFalse(index.get("hasMore").asBoolean)
         val ids = index.getAsJsonArray("sectionIds").map { it.asString }
         assertTrue(ids.containsAll(listOf("overview", "quickstart", "jobs", "components", "native", "rebuild", "dynamic", "emulate", "workflows", "limitations")))
         assertEquals(ids.size, ids.toSet().size)
         assertEquals(8, index.getAsJsonArray("workflows").size())
-        assertEquals(18, index.getAsJsonArray("candidateTools").size())
+        assertEquals(19, index.getAsJsonArray("candidateTools").size())
         index.getAsJsonArray("candidateTools").forEach {
             assertTrue("registered reverse tool should be available: $it", it.asJsonObject.get("available").asBoolean)
         }
@@ -228,7 +228,7 @@ class ToolkitReverseGuideTest {
         val sectionIds = Regex("""(?m)^<!-- section:id=([a-z][a-z0-9-]{0,39}) -->$""")
             .findAll(guideText()).map { it.groupValues[1] }.toSet()
         assertEquals(8, workflows.getAsJsonArray("workflows").size())
-        val expectedComponents = setOf("jadx", "apk-resources", "apktool", "radare2", "r2ghidra", "yara", "unicorn", "frida")
+        val expectedComponents = setOf("jadx", "apk-resources", "apktool", "radare2", "r2ghidra", "yara", "unicorn", "frida", "frida-gadget")
         val statusSchema = schemas.getAsJsonObject("apk_component_status")
         assertEquals(0, statusSchema.getAsJsonObject("properties").size())
         val installEnum = schemas.getAsJsonObject("apk_component_install").getAsJsonObject("properties")
@@ -305,10 +305,10 @@ class ToolkitReverseGuideTest {
             "reverse_guide", "reverse_capabilities", "reverse_plan", "apk_decode_project", "apk_build_project",
             "apk_install_framework", "native_analyze", "native_functions", "native_function_detail",
             "native_decompile", "native_xrefs", "native_compare", "artifact_fingerprint", "yara_scan",
-            "native_emulate", "frida_status", "frida_processes", "frida_eval",
+            "native_emulate", "frida_status", "frida_processes", "frida_eval", "apk_inject_gadget",
         )
         val candidates = workflows.getAsJsonArray("candidateTools").map { it.asString }.toSet()
         assertEquals(expectedCandidates, candidates)
-        assertTrue("all 18 reverse tools must be registered", currentTools().containsAll(expectedCandidates))
+        assertTrue("all 19 reverse tools must be registered", currentTools().containsAll(expectedCandidates))
     }
 }

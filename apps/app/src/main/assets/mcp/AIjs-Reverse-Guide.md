@@ -1,9 +1,9 @@
 <!-- section:id=overview -->
 # AI.js Pro 逆向 MCP 自发现指南
 
-> 适用基线：**dev1329-1**。本机公开 MCP 入口 **169 个**（**160 个规范名 + 9 个兼容别名**）。其中 18 个逆向工具已全部注册：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`。
+> 适用基线：**dev1330-1**。本机公开 MCP 入口 **170 个**（**161 个规范名 + 9 个兼容别名**）。其中 19 个逆向工具已全部注册：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
 >
-> 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida 还需要外部 Server/Gadget、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。
+> 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida使用免Root Gadget集成流程、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。
 
 ## 这份指南解决什么问题
 
@@ -14,20 +14,20 @@
 3. **真实执行**：由已注册的 `apk_*`、`file_*`、`zip_*`、`native_*`、`frida_*` 等工具完成；计划本身不执行、不下载、不注入。
 
 ```text
-reverse_guide(topic=index)      # 章节、工作流、18 个逆向工具状态
+reverse_guide(topic=index)      # 章节、工作流、19 个逆向工具状态
 reverse_guide(topic=<section>)  # 按 section id 读正文，可分页
 reverse_plan(goal=<goal>)       # 取机读 steps；组件和工具状态明确
 按 plan 执行可用步骤             # 计划本身不执行
 ```
 
-## 本版真实边界（dev1329-1）
+## 本版真实边界（dev1330-1）
 
-- **18 个逆向工具已注册**，但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
-- 可选组件共 8 个：`jadx`、`apk-resources`、`apktool`、`radare2`、`r2ghidra`、`yara`、`unicorn`、`frida`。`apk_component_install/remove` 的 `component` 枚举就是这 8 个。
+- **19 个逆向工具已注册**，但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
+- 可选组件共 9 个：`jadx`、`apk-resources`、`apktool`、`radare2`、`r2ghidra`、`yara`、`unicorn`、`frida`、`frida-gadget`。`apk_component_install/remove` 的 `component` 枚举就是这 9 个。
 - **Apktool 3.0.3** 已在本机真机通过 decode → edit → rebuild：使用私有 `app_process` + AAPT2 wrapper，不把 apktool 类加载进主进程。但**任意 APK 不保证**可解包/回编译，失败必须报原始 stderr。
 - **radare2** 的 `native_*` 工具直接读手机路径，不读 APK 快照 locator；要从快照分析 so，先用 `apk_copy_entry(direction=workspace_to_local)` 导出。
 - **r2ghidra** 是可选伪代码后端，当前构建仍待完成；只能通过 `apk_component_status` 确认，不能声称已安装，也不能把 `native_decompile` 当作必然可用。
-- **Frida** 工具已注册，但必须已有可访问的 frida-server/Gadget；工具不会自动 root、自动启动服务或自动提权。
+- **Frida免Root**：先 `apk_inject_gadget` 生成重签APK，安装打开后用返回的 `endpoint/token` 连接；无需Root或Server。
 - **Unicorn** 只模拟 `codeHex` 原始机器码，不是 Android/ELF/JNI 运行时；不接受 so 路径。
 - `artifact_fingerprint` 是内置启发式指纹，**不是完整 APKiD**，不能宣称做了 APKiD 检测或给出 APKiD 规则结论。
 - `apk_component_status` 只接受 `{}`，**没有** `component` 字段；逐个组件看返回的 `data.components[]`。
@@ -317,7 +317,8 @@ jadx, apk-resources, apktool, radare2, r2ghidra, yara, unicorn, frida
 | `r2ghidra` | native_decompile 伪代码 | **build pending**；需匹配 radare2 ABI |
 | `yara` | yara_scan | 可执行下载策略；规则 ≤1 MiB |
 | `unicorn` | native_emulate | 可执行下载策略；仅 CPU 模拟 |
-| `frida` | frida_status/processes/eval | 需外部 frida-server/Gadget，同 ABI，可访问 endpoint |
+| `frida` | frida_status/processes/eval | 免Root客户端，连接已打开的Gadget应用，传endpoint/token |
+| `frida-gadget` | apk_inject_gadget | 官方17.25.2四架构库，按需下载；只复制入目标APK |
 
 ```json
 {"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"apk_component_install","arguments":{"component":"radare2","background":true,"timeoutSeconds":900}}}
@@ -521,37 +522,48 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 - `apk_build_project` 成功也不保证目标 App 能启动或业务正常；必须记录构建日志、输出 SHA-256 和独立 `apk_verify` 结果。
 
 <!-- section:id=dynamic -->
-## 动态观察：Frida 已注册，但仍需外部 Server/Gadget
+## 免Root Gadget：生成APK、安装打开、MCP连接
 
-### 现状
+本版仅提供免Root集成，不需要Root或Frida Server。`apk_inject_gadget` 将官方17.25.2 Gadget复制到APK，直接修改二进制Manifest，新增启动Provider和独立DEX；原DEX、资源表和其他资源不重编。输出自动ZIP对齐、重新签名并验签，原APK保留。
 
-`frida_status`、`frida_processes`、`frida_eval` **已注册**，但只是客户端工具：必须有可访问的 frida-server 或 Gadget，且与目标进程 ABI 匹配。工具不会自动 root、自动启动 frida-server、自动注入 Gadget 或绕过系统限制。Frida 组件也需显式安装。
-
-### 合理顺序
-
-1. `apk_component_status` 确认 `frida` 已安装/可用；
-2. `frida_status` 确认 endpoint 连接、版本和权限；
-3. `frida_processes` 列出可见进程，不接受任意 PID 猜测；
-4. `frida_eval` 只对已确认目标运行已审阅脚本，记录脚本哈希、设备、应用版本和时间。
+### 完整调用顺序
 
 ```json
-{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"frida_status","arguments":{"endpoint":"127.0.0.1:27042","background":true,"timeoutSeconds":60}}}
+{"name":"apk_component_install","arguments":{"component":"frida-gadget","background":true,"timeoutSeconds":900}}
+{"name":"apk_component_install","arguments":{"component":"frida","background":true,"timeoutSeconds":900}}
 ```
+
+旧版Frida客户端会显示 `needsUpdate=true/available=false`；重新安装frida会升级为 `v2-token`，无需卸载旧组件。每个安装都先轮询 `apk_job_status`，终态用 `apk_job_result` 按 `nextOffset` 读完；成功后继续。
 
 ```json
-{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"frida_eval","arguments":{"endpoint":"127.0.0.1:27042","pid":12345,"script":"${FRIDA_SCRIPT_JS}","durationMs":5000,"background":true,"timeoutSeconds":120}}}
+{"name":"apk_inject_gadget","arguments":{"path":"target.apk","outPath":"target-gadget.apk","port":27042,"background":true,"timeoutSeconds":300}}
 ```
 
-- `endpoint` 必须是 `host:port`，默认 `127.0.0.1:27042`。
-- `frida_eval` 的 `pid` 为整数；`script` 为脚本字符串（≤64 KiB），不是文件路径；`durationMs` 1..10000。
-- 结果只在任务 `SUCCEEDED` 后通过 `apk_job_result` 读取；任务里返回的消息不是“永久 hook 已生效”。停止任务会杀掉本次客户端进程组。
+同样读完集成任务结果，保存 `path/packageName/endpoint/token/sha256`。**这一步不会安装或卸载应用**。由用户安装输出APK并打开，之后再连接。重签证书与原应用不同，系统不能直接覆盖安装；必须先保留原数据并安排安装，不要自动卸载原应用。
 
-### 权限与证据边界
+```json
+{"name":"frida_status","arguments":{"endpoint":"127.0.0.1:27042","token":"替换为实际返回的token"}}
+{"name":"frida_processes","arguments":{"endpoint":"127.0.0.1:27042","token":"替换为实际返回的token"}}
+{"name":"frida_eval","arguments":{"endpoint":"127.0.0.1:27042","token":"替换为实际返回的token","pid":12345,"script":"send({platform:Process.platform,arch:Process.arch});","durationMs":1000}}
+```
 
-- 只能分析你有权测试的设备和应用；不能连接他人设备、绕过锁屏或提取他人数据。
-- 应用 UID 不能任意附加其他应用；需要目标可调试、同签名或设备侧授权。
-- 动态结果受时序、反调试、进程重启、JIT 和多线程影响；必须保存原始日志和输入，不能只写一句“hook 成功”。
-- 静态字符串、Java 伪代码和“看起来像密钥”的常量都不是运行时证据。
+`pid`必须替换为该次 `frida_processes` 返回的JSON整数。以上为 `tools/call` 的 params；完整RPC格式见 rpc 章节。所有后台任务均要读取最终结果，注册/排队不等于成功。
+
+### 加载及连接行为
+
+- Gadget只监听 `127.0.0.1`，使用随机连接令牌；`on_load=resume`让应用立即继续启动，不会停在白屏等AI连接。
+- 可改 `port`（1024..65535）。冲突使用 `fail`，不会悄悄切换端口或误连接另一个应用。换端口需从原APK重新生成。
+- Android库名为 `libaijsgadget.so`，配置为官方Android命名 `libaijsgadget.config.so`；强制 `extractNativeLibs=true`，Manifest新增普通INTERNET权限、非导出Provider。
+- 原APK含原生库时覆盖其全部支持ABI；纯Java APK使用当前手机ABI。组件含arm64-v8a/armeabi-v7a/x86/x86_64，宿主下载组件仍需arm64/API26+。
+- 自动加载发生于应用默认进程Provider初始化，早于Application.onCreate，但晚于attachBaseContext；其他进程不自动加载。Provider加载失败会记录AIjsGadget日志，保留应用启动。
+- `frida_eval`脚本≤64KiB、durationMs≤10000；结束时卸载脚本/分离，取消只终止本次客户端进程组。
+- **Frida17不内置Java桥**：直接 `Java.perform()` 会报Java未定义；需要用frida-java-bridge和frida-compile打包脚本后传入。本工具不冒充已内置Java桥编译器。
+
+### 当前边界
+
+只支持完整单APK；Split/依赖分包、sharedUserId及重复集成明确拒绝。输出Manifest的minSdk至少21，运行需Android21+。不改包名，不绕过签名校验、完整性校验或加固；重签可能影响签名权限/第三方登录/原数据覆盖。保留原APK，目标能否正常工作必须实际验证。
+
+上游行为依据：[Frida Gadget官方说明](https://frida.re/docs/gadget/)。`reverse_plan(goal=dynamic)`返回同一套机读步骤，不执行、不自动安装。
 
 <!-- section:id=emulate -->
 ## Unicorn 原始机器码模拟
@@ -692,7 +704,7 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 | `decode` | APK、符号/类 locator | 需先确认 jadx；JADX 阅读可执行，apktool 工程 decode 可选 |
 | `rebuild` | 工作区/会话/locator/targetVersion | 会话编辑+构建可执行；apktool 工程 build 可选 |
 | `native` | APK、so 条目、地址 | Capstone 静态路径可执行；radare2 工具已注册，需组件和导出路径 |
-| `dynamic` | endpoint、PID、Frida 脚本 | 已注册；需 frida 组件 + 外部 Server/Gadget |
+| `dynamic` | endpoint、PID、Frida 脚本 | 免Root集成；需frida/frida-gadget组件及安装打开输出APK |
 | `fingerprint` | 文件/APK 路径、规则 | 现有工具 + 启发式指纹可执行；YARA 可选 |
 | `emulate` | `codeHex`、架构 | 已注册；需 unicorn 组件，仅 CPU 模拟 |
 | `compare` | 两个 APK/两个二进制 | 现有快照/验签对照可执行；`native_compare` 可选 |
@@ -717,14 +729,14 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 
 `variables[]` 里的 `${name}` 必须替换成真实值；`example` 只是形状示例，不是可直接使用的真实 ID。`unresolvedVariables` 非空时，`args` 还是模板；`unknownVariables` 非空说明资产/调用方变量声明不一致，先修模板。
 
-### 18 个逆向工具与组件
+### 19 个逆向工具与组件
 
-`candidateTools[]` 保留 18 个名字用于校验；dev1329-1 全部已注册，`available` 应为 true。名字存在仍不等于组件已装：
+`candidateTools[]` 保留 18 个名字用于校验；dev1330-1 全部已注册，`available` 应为 true。名字存在仍不等于组件已装：
 
 - 静态/构建：`apk_decode_project`（apktool）、`apk_build_project`（apktool + apk-resources）、`apk_install_framework`（apktool）。
 - 原生：`native_analyze`、`native_functions`、`native_function_detail`、`native_xrefs`、`native_compare`（radare2）；`native_decompile`（radare2 + r2ghidra，r2ghidra 按需安装）。
 - 指纹/规则/模拟：`artifact_fingerprint`（内置启发式，不是 APKiD）、`yara_scan`（yara）、`native_emulate`（unicorn，`codeHex` 不是 path）。
-- 动态：`frida_status`、`frida_processes`、`frida_eval`（frida 组件 + 外部 Server/Gadget）。
+- 动态：`frida_status`、`frida_processes`、`frida_eval`（免Root Gadget集成，frida/frida-gadget组件）。
 - 指南：`reverse_guide`、`reverse_capabilities`、`reverse_plan` 只规划/说明，不执行。
 
 组件检查统一用 `apk_component_status` 的 **`{}`**，不要传 `component` 字段。安装用 `apk_component_install`，enum 为 8 个 ID。若用户在本任务里已经授权安装/下载，不要重复询问同一授权；仍要记录组件、来源和结果。
@@ -738,7 +750,7 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 4. **r2ghidra 需另行安装**：`native_decompile` 前必须查组件；缺插件时不能伪造伪代码。
 5. **不是 APKiD**：`artifact_fingerprint` 是内置启发式，`fullApkid=false`；未命中不能证明无壳/无框架。
 6. **不是 Android 运行时**：`native_emulate` 只模拟 `codeHex` 原始指令，不提供完整 ELF/JNI/binder/系统调用环境。
-7. **Frida 需外部条件**：不自动 root/启动服务/提权；只能分析已授权设备，应用 UID 不能任意附加其他应用。
+7. **Frida免Root条件**：须安装打开集成后的APK，传endpoint/token；重签不能直接覆盖不同证书应用，不支持Split/sharedUserId。
 8. **签名两条线**：`apk_read_signature` 是元数据，`apk_verify` 是密码学检查；二者都不保证安装或业务行为。
 9. **没有自动重放**：后台任务重启后 `INTERRUPTED`，没有 `resume`；没有 `waitMillis`；结果只在 `hasMore=true` 时继续分页。
 10. **任务登记不代表安装/授权**：`jobId` 只是排队；组件安装看 `apk_component_status` 和安装任务终态，权限看用户明确授权。

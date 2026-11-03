@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "guideVersion": "dev1329-1",
+  "guideVersion": "dev1330-1",
   "guideAsset": "AIjs-Reverse-Guide.md",
-  "notes": "单一机读来源。dev1329-1 的 18 个逆向工具均已注册；candidateTools 保留为工具清单并用于计划校验。组件是否存在、是否可执行、是否有外部 Frida 服务必须另行检查；工具注册/任务登记都不等于组件已安装。",
+  "notes": "dev1330免Root Gadget工作流：组件显式安装，APK集成不自动安装应用；输出需重新签名。",
   "candidateTools": [
     "reverse_guide",
     "reverse_capabilities",
@@ -21,7 +21,8 @@
     "native_emulate",
     "frida_status",
     "frida_processes",
-    "frida_eval"
+    "frida_eval",
+    "apk_inject_gadget"
   ],
   "workflows": [
     {
@@ -1008,8 +1009,8 @@
     {
       "goal": "dynamic",
       "id": "dynamic-frida",
-      "title": "Frida 动态观察",
-      "summary": "frida_status/frida_processes/frida_eval 已注册；需 frida 组件和外部 Server/Gadget，不自动 root/提权，durationMs≤10000。",
+      "title": "免Root Gadget APK集成与动态观察",
+      "summary": "给完整单APK集成Gadget并重新签名，安装打开后用endpoint/token连接；无需Root/Server。",
       "read": [
         "dynamic",
         "components",
@@ -1018,22 +1019,40 @@
       ],
       "variables": [
         {
+          "name": "apkPath",
+          "required": true,
+          "example": "target.apk",
+          "description": "工具目录内原始完整单APK"
+        },
+        {
+          "name": "outPath",
+          "required": true,
+          "example": "target-gadget.apk",
+          "description": "新的输出APK，保留原APK"
+        },
+        {
           "name": "endpoint",
           "required": true,
           "example": "127.0.0.1:27042",
-          "description": "frida-server/Gadget 的 host:port；默认 127.0.0.1:27042。"
+          "description": "集成结果实际返回的endpoint"
+        },
+        {
+          "name": "token",
+          "required": true,
+          "example": "apk_inject_gadget返回的token",
+          "description": "使用实际返回令牌"
         },
         {
           "name": "pid",
           "required": true,
-          "example": "12345",
-          "description": "frida_eval 的目标 PID 整数；只对已确认且有权测试的进程使用。"
+          "example": "frida_processes返回的整数PID",
+          "description": "替换为JSON整数"
         },
         {
           "name": "fridaScript",
           "required": true,
-          "example": "Java.perform(function(){ ... })",
-          "description": "Frida JavaScript 脚本字符串（≤64 KiB），不是文件路径。"
+          "example": "send({platform:Process.platform,arch:Process.arch});",
+          "description": "脚本字符串≤64KiB。Java.perform需打包frida-java-bridge"
         },
         {
           "name": "fridaInstallJobId",
@@ -1051,12 +1070,23 @@
       "requiredComponents": [
         {
           "id": "frida",
-          "purpose": "Frida 客户端组件；另需可访问的 frida-server/Gadget，同 ABI，目标授权。",
+          "purpose": "免Root Gadget客户端；传相同endpoint/token",
           "required": true,
           "checkTool": "apk_component_status",
           "installTool": "apk_component_install",
           "installArgs": {
             "component": "frida"
+          },
+          "installArgumentSupported": true
+        },
+        {
+          "id": "frida-gadget",
+          "purpose": "官方Gadget四架构库，仅复制入APK，不在宿主加载",
+          "required": true,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "frida-gadget"
           },
           "installArgumentSupported": true
         }
@@ -1066,7 +1096,7 @@
           "id": "toolkit-status",
           "tool": "toolkit_status",
           "args": {},
-          "purpose": "先确认当前后端能力；工具注册不代表 Frida 服务已运行。"
+          "purpose": "确认当前后端；免Root流程不需要启动Server"
         },
         {
           "id": "component-status",
@@ -1109,14 +1139,44 @@
           "purpose": "按 nextOffset 分页，只在 hasMore=true 时继续。"
         },
         {
+          "id": "install-gadget",
+          "tool": "apk_component_install",
+          "args": {
+            "component": "frida-gadget",
+            "background": true,
+            "timeoutSeconds": 900
+          },
+          "required": false,
+          "when": "frida-gadget未安装时",
+          "purpose": "安装后轮询自己的jobId并读取结果，成功后继续"
+        },
+        {
+          "id": "inject-gadget",
+          "tool": "apk_inject_gadget",
+          "args": {
+            "path": "${apkPath}",
+            "outPath": "${outPath}",
+            "port": 27042,
+            "background": true,
+            "timeoutSeconds": 300
+          },
+          "purpose": "轮询job并读完整结果，获取endpoint/token；修改副本并重签，尚未安装"
+        },
+        {
+          "id": "install-and-open",
+          "required": true,
+          "purpose": "手动安装输出APK并打开；重签证书与原应用不同不能直接覆盖。保留原数据后自行安排安装，不自动卸载。应用正常启动，Gadget只在默认进程加载。"
+        },
+        {
           "id": "frida-status",
           "tool": "frida_status",
           "args": {
             "endpoint": "${endpoint}",
             "background": true,
-            "timeoutSeconds": 60
+            "timeoutSeconds": 60,
+            "token": "${token}"
           },
-          "purpose": "检查 endpoint 连接、版本和权限；需要外部 Server/Gadget，工具不会自动启动或提权。"
+          "purpose": "使用集成结果endpoint/token确认已打开的Gadget可连接"
         },
         {
           "id": "frida-processes",
@@ -1124,9 +1184,10 @@
           "args": {
             "endpoint": "${endpoint}",
             "background": true,
-            "timeoutSeconds": 60
+            "timeoutSeconds": 60,
+            "token": "${token}"
           },
-          "purpose": "列出 endpoint 可见进程（最多 500）；应用 UID 不能任意附加其他应用。"
+          "purpose": "获取Gadget自身实际PID，不能猜PID"
         },
         {
           "id": "frida-eval",
@@ -1137,7 +1198,8 @@
             "script": "${fridaScript}",
             "durationMs": 5000,
             "background": true,
-            "timeoutSeconds": 120
+            "timeoutSeconds": 120,
+            "token": "${token}"
           },
           "purpose": "对已确认 PID 有界执行脚本 ≤10 秒，返回消息后卸载/分离；停止任务会杀掉本次客户端进程组。"
         },
@@ -1165,10 +1227,11 @@
         }
       ],
       "limitations": [
-        "工具已注册但必须有可访问的 frida-server/Gadget；不会自动 root、自动启动服务或自动注入。",
-        "只能分析已授权设备/应用；应用 UID 不能任意附加其他应用。",
-        "durationMs 最大 10000；动态结果受时序、反调试、JIT 和多线程影响，必须保留原始日志。",
-        "任务登记/进程列表命中不等于已附加成功，最终以 frida_eval 的 job 结果为准。"
+        "仅支持完整单APK，不支持Split或sharedUserId；重签可能影响原应用证书校验/签名权限。",
+        "自动加载只覆盖应用默认进程；不覆盖Application.attachBaseContext阶段或其他进程。",
+        "输出APK需要Android21+；Java API需额外打包frida-java-bridge；不提供Root/Server部署。",
+        "默认只监听127.0.0.1，端口冲突时选择新port重新生成；不会连接错误目标。",
+        "客户端脚本有界执行，任务结束会卸载脚本；最终以job结果为准。"
       ]
     },
     {

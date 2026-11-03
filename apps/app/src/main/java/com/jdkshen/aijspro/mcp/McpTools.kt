@@ -166,7 +166,7 @@ internal class McpTools(private val context: Context, private val event: (String
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
             "逆向任务首次连接：reverse_guide({topic:index}) → reverse_capabilities({}) → reverse_plan({goal:inspect|decode|rebuild|native|dynamic|fingerprint|emulate|compare})。指南与步骤也可通过 resources/list/read、prompts/list/get 发现；URI aijs://reverse/guide、aijs://reverse/workflows。",
-            "逆向组件按需安装，工具注册不代表已安装；apk_component_status查询后显式apk_component_install。后台返回jobId后apk_job_status到终态，再apk_job_result按nextOffset读完；失败保留error.code，不要把排队/启动当成功。Frida需要另外可访问的Server/Gadget及目标附加权限。",
+            "逆向组件按需安装，工具注册不代表已安装；apk_component_status查询后显式apk_component_install。后台返回jobId后apk_job_status到终态，再apk_job_result按nextOffset读完；失败保留error.code，不要把排队/启动当成功。免Root Frida先apk_inject_gadget生成重签APK，安装打开后用返回的endpoint/token连接；无需Root/Server。",
             "",
             "通用规则：",
             "- JSON 的布尔/数字用原生类型（true / 100，不要字符串 \"true\" / \"100\"）。",

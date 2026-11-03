@@ -16,7 +16,7 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
     private val reverse by lazy { AndroidReverseRuntime(context,root,::component) }
     companion object {
         val COMPONENTS=linkedMapOf("jadx" to "jadx.dex.jar","apk-resources" to "bin/aapt2","apktool" to "apktool.dex.jar",
-            "radare2" to "bin/radare2","r2ghidra" to "lib/core_ghidra.so","yara" to "bin/aijs-yara","unicorn" to "bin/aijs-unicorn","frida" to "bin/aijs-frida")
+            "radare2" to "bin/radare2","r2ghidra" to "lib/core_ghidra.so","yara" to "bin/aijs-yara","unicorn" to "bin/aijs-unicorn","frida" to "bin/aijs-frida","frida-gadget" to "gadget/arm64-v8a/libfrida-gadget.so")
         fun terminalStatus(context:Context):JsonObject=AndroidToolkitRuntime(context,context.filesDir).capabilities()
         fun wrapTerminal(context:Context,command:String):String {
             if(!ToolchainRuntime.canExecuteDownloaded(context))return command
@@ -32,11 +32,14 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
     override fun capabilities():JsonObject=ToolkitIo.json("components" to COMPONENTS.keys.map{id->
         val status=runCatching{JsonParser().parse(store(id).status().toString()).asJsonObject}.getOrElse{ToolkitIo.json("error" to it.message,"installed" to false)}
         val active=runCatching{store(id).activeDirectory()}.getOrNull()
-        val javaComponent=id in setOf("jadx","apktool");val executable=File(active?:home,COMPONENTS.getValue(id))
-        status.addProperty("id",id);status.addProperty("available",Build.VERSION.SDK_INT>=26&&active!=null&&executable.isFile&&(javaComponent||ToolchainRuntime.canExecuteDownloaded(context)))
-        status.addProperty("verified",false);status.addProperty("verifiedThisRequest",false);status.addProperty("backend",if(javaComponent)"isolated-app-process" else "isolated-native-process")
-        status.addProperty("requiresExecutableDownloadPolicy",!javaComponent)
-        status.add("externalRequirements",ToolkitIo.json("fridaServerOrGadget" to (id=="frida"),"matchingRadareAbi" to (id=="r2ghidra")))
+        val javaComponent=id in setOf("jadx","apktool");val dataComponent=id=="frida-gadget";val executable=File(active?:home,COMPONENTS.getValue(id))
+        val protocolReady=id!="frida"||active!=null&&File(active,"gadget-token-support.txt").isFile
+        status.addProperty("needsUpdate",active!=null&&!protocolReady)
+        if(id=="frida")status.addProperty("tokenAuthenticationSupported",protocolReady)
+        status.addProperty("id",id);status.addProperty("available",Build.VERSION.SDK_INT>=26&&active!=null&&executable.isFile&&protocolReady&&(javaComponent||dataComponent||ToolchainRuntime.canExecuteDownloaded(context)))
+        status.addProperty("verified",false);status.addProperty("verifiedThisRequest",false);status.addProperty("backend",if(dataComponent)"apk-payload-only" else if(javaComponent)"isolated-app-process" else "isolated-native-process")
+        status.addProperty("requiresExecutableDownloadPolicy",!javaComponent&&!dataComponent)
+        status.add("externalRequirements",ToolkitIo.json("runningGadgetApp" to (id=="frida"),"requiresRoot" to false,"matchingRadareAbi" to (id=="r2ghidra")))
         status.addProperty("manifestUrl",defaultManifest(id));status.addProperty("installTool","apk_component_install");status
     })
     private fun defaultManifest(id:String)="http://192.168.10.7:8080/components/$id-arm64-v1.json"

@@ -146,7 +146,7 @@ internal class McpApkToolkit(
         "apk_decompile_method" -> "可选JADX精确方法Java阅读；默认后台返回jobId，需原始dex_method定位符，重载完整签名匹配。"
         "android_resources_compile" -> "可选Android AAPT2把res/Manifest按指定宿主编译为project-res.apk及sidecar；默认后台jobId，组件显式安装。"
         "apk_component_status" -> "只读查看JADX/资源编译组件安装与可用状态；不下载不运行编译器。"
-        "apk_component_install" -> "显式下载并校验可选jadx/apk-resources组件；默认后台jobId，manifestUrl可指定发布清单。"
+        "apk_component_install" -> "显式下载并校验可选APK/逆向组件（含免Root frida-gadget）；默认后台jobId，manifestUrl可指定发布清单。"
         "apk_component_remove" -> "卸载指定可选APK组件，保留源工程和其他组件。"
         "apk_job_start" -> "后台运行指定APK分析/编译操作，立即返回jobId；任务有超时，失败不自动重放。"
         "apk_job_list" -> "读取当前工具目录的后台任务和状态。"
@@ -628,6 +628,7 @@ internal class McpApkToolkit(
                 val bytes = raw(workspace, session, entry)
                 when { ToolkitApkTargets.isDex(entry) -> ToolkitDex(bytes).classes.forEach { it.methods.forEach { method -> method.implementation?.instructions?.count() } }
                     entry == "resources.arsc" -> ToolkitResources(bytes).entries()
+                    ToolkitGadget.isConfiguration(entry,bytes) -> Unit
                     entry.endsWith(".so") -> ToolkitElf(bytes)
                     entry == "AndroidManifest.xml" -> {
                         val text = if(ToolkitResources.isBinaryXml(bytes)) ToolkitResources.decodeXml(bytes, optionalResources(workspace, session)) else ToolkitIo.text(bytes)

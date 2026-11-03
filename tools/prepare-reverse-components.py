@@ -13,7 +13,17 @@ def emit(args,component,payload,source,executables,license_name):
     }
     for name,url in license_urls.get(component,[]):payload['licenses/'+name]=cached(url)
     payload['SOURCE-NOTICE.txt']=(source+'\nOptional component; not embedded in AI.js Pro.\nLicense: '+license_name+'\nVersions and upstream SHA256 are recorded in upstream-lock.json.\n').encode()
-    with contextlib.redirect_stdout(io.StringIO()):package(args.out,component,payload,source,executables)
+    with contextlib.redirect_stdout(io.StringIO()):
+        if component=='frida':
+            # An installed version is immutable. Token support must upgrade v1, never overwrite it.
+            import tempfile
+            with tempfile.TemporaryDirectory() as temporary:
+                staging=Path(temporary);package(staging,component,payload,source,executables)
+                meta=json.loads((staging/'frida-arm64-v1.json').read_text(encoding='utf8'))
+                meta['version']='v2-token';meta['url']='frida-arm64-v2-token.zip'
+                shutil.copyfile(staging/'frida-arm64-v1.zip',args.out/meta['url'])
+                (args.out/'frida-arm64-v1.json').write_text(json.dumps(meta,indent=2)+'\n',encoding='utf8')
+        else:package(args.out,component,payload,source,executables)
     manifest=args.out/(component+'-arm64-v1.json');meta=json.loads(manifest.read_text(encoding='utf8'));meta['license']=license_name
     manifest.write_text(json.dumps(meta,ensure_ascii=False,indent=2)+'\n',encoding='utf8')
     print(json.dumps(meta,ensure_ascii=False),flush=True)
@@ -138,7 +148,7 @@ def frida(args):
     subprocess.run([str(Path(args.ndk)/'toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-strip.exe'),'--strip-unneeded',str(binary)],check=True)
     url='https://github.com/frida/frida/releases/download/17.25.2/frida-core-devkit-17.25.2-android-arm64.tar.xz'
     archive=WORK/'prototypes/frida-core.tar.xz';assert archive.is_file()
-    payload={'bin/aijs-frida':binary.read_bytes(),'source/frida_runner.c':runner.read_bytes(),'source/frida_runner.o':obj.read_bytes(),'source/BUILD.md':(BASE/'tools/reverse-native/README.md').read_bytes(),
+    payload={'bin/aijs-frida':binary.read_bytes(),'gadget-token-support.txt':b'v2-token\n','source/frida_runner.c':runner.read_bytes(),'source/frida_runner.o':obj.read_bytes(),'source/BUILD.md':(BASE/'tools/reverse-native/README.md').read_bytes(),
         'LICENSE-frida.txt':cached('https://raw.githubusercontent.com/frida/frida/17.25.2/COPYING'),
         'upstream-lock.json':json.dumps({'version':'17.25.2','sdkUrl':url,'sdkSha256':hashlib.sha256(archive.read_bytes()).hexdigest(),'runnerSha256':hashlib.sha256(runner.read_bytes()).hexdigest()},indent=2).encode()}
     emit(args,'frida',payload,url,['bin/aijs-frida'],'LGPL-2.1-or-later and bundled GLib/json-glib licenses; relink object/source included')
@@ -156,9 +166,30 @@ def r2ghidra(args):
     payload['licenses/GPL-3.0.txt']=cached('https://raw.githubusercontent.com/spdx/license-list-data/main/text/GPL-3.0-only.txt')
     payload['licenses/Ghidra-Apache-2.0.txt']=cached('https://raw.githubusercontent.com/iBotPeaches/Apktool/v3.0.3/LICENSE.md')
     emit(args,'r2ghidra',payload,'https://github.com/radareorg/r2ghidra/releases/tag/6.2.4 (ABI 152); upstream-lock.json records pinned sources and build',[],'LGPL-3.0, Apache-2.0 Ghidra, LLVM libc++ and dependency licenses')
+
+def gadget(args):
+    # GitHub release asset digests, pinned to the same version as our client.
+    pins={
+        'armeabi-v7a':('arm','7825e2949268f4a23d38f8aaa3690e3659fd5c730e8062d4913ea0b308b933e1'),
+        'arm64-v8a':('arm64','8c527f7844932ef0b66d99b38cc7191380e52907ca43c82f2acb6b7801945798'),
+        'x86':('x86','bae97edf0bef867e550a1cb84775edb3461c0bf170138f587a5a668b69d5f2f6'),
+        'x86_64':('x86_64','2924dd5ac38b33065223ac747712ee5c83a41d1a8a7fbbc3b292e8600e826a27'),
+    }
+    payload={};lock={'version':'17.25.2','artifacts':{}}
+    for abi,(arch,sha) in pins.items():
+        url=f'https://github.com/frida/frida/releases/download/17.25.2/frida-gadget-17.25.2-android-{arch}.so.xz'
+        data=lzma.decompress(cached(url,sha))
+        assert data.startswith(b'\x7fELF') and len(data)<64*1024*1024
+        payload[f'gadget/{abi}/libfrida-gadget.so']=data
+        lock['artifacts'][abi]={'url':url,'xzSha256':sha,'elfSha256':hashlib.sha256(data).hexdigest(),'size':len(data)}
+        print('Gadget',abi,len(data),flush=True)
+    payload['upstream-lock.json']=json.dumps(lock,indent=2).encode()
+    payload['LICENSE-frida.txt']=cached('https://raw.githubusercontent.com/frida/frida/17.25.2/COPYING')
+    payload['README.txt']=b'Official Frida Gadget 17.25.2 shared libraries, not Frida Server. APK payload only. No root required.\nSource and build instructions: https://github.com/frida/frida/tree/17.25.2 and https://frida.re/docs/gadget/\nThese unmodified libraries are LGPL-2.1-or-later; replacement binaries can be supplied via a custom component manifest.\n'
+    emit(args,'frida-gadget',payload,'https://github.com/frida/frida/releases/tag/17.25.2',[],'LGPL-2.1-or-later (unmodified official Gadget libraries; pinned corresponding source at upstream tag)')
 if __name__=='__main__':
-    p=argparse.ArgumentParser();p.add_argument('component',choices=['radare2','unicorn','yara','apktool','frida','r2ghidra'])
+    p=argparse.ArgumentParser();p.add_argument('component',choices=['radare2','unicorn','yara','apktool','frida','r2ghidra','frida-gadget'])
     p.add_argument('--out',type=Path,default=BASE/'.artifacts/updates/components')
     p.add_argument('--ndk',default='C:/Android/ndk-r26d');p.add_argument('--jdk',default='C:/Program Files/Microsoft/jdk-17.0.19.10-hotspot')
     p.add_argument('--d8',default='C:/Users/18101/.gradle/caches/modules-2/files-2.1/com.android.tools/r8/8.5.35/6b41e4ac5e238c953246d07c006585aecc16c546/r8-8.5.35.jar')
-    a=p.parse_args();({'apktool':apktool,'frida':frida,'r2ghidra':r2ghidra}.get(a.component,native))(a)
+    a=p.parse_args();({'apktool':apktool,'frida':frida,'r2ghidra':r2ghidra,'frida-gadget':gadget}.get(a.component,native))(a)

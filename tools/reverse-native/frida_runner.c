@@ -33,6 +33,7 @@ typedef struct
   gchar *operation;
   gchar *endpoint;
   gchar *script;
+  gchar *token;
   guint pid;
   gboolean has_pid;
   guint duration_ms;
@@ -411,6 +412,7 @@ parse_request (const gchar *path,
   if (!read_member_string (object, "operation", TRUE, &request->operation, error) ||
       !read_member_string (object, "endpoint", FALSE, &request->endpoint, error) ||
       !read_member_string (object, "script", FALSE, &request->script, error) ||
+      !read_member_string (object, "token", FALSE, &request->token, error) ||
       !read_member_uint (object, "pid", FALSE, &pid_present, &request->pid, error) ||
       !read_member_uint (object, "durationMs", FALSE, &duration_present, &value, error))
   {
@@ -486,6 +488,7 @@ request_clear (Request *request)
 {
   g_free (request->operation);
   g_free (request->endpoint);
+  g_free (request->token);
   g_free (request->script);
 }
 
@@ -899,8 +902,12 @@ open_remote (Request *request,
   if (manager == NULL)
     return set_error (error, "cannot create Frida device manager");
 
+  FridaRemoteDeviceOptions *options = frida_remote_device_options_new ();
+  if (request->token != NULL)
+    frida_remote_device_options_set_token (options, request->token);
   device = frida_device_manager_add_remote_device_sync (manager,
-      request->endpoint, NULL, cancellable, &local_error);
+      request->endpoint, options, cancellable, &local_error);
+  frida_unref (options);
   if (device == NULL)
   {
     set_error (error, "connect %s: %s", request->endpoint, local_error->message);

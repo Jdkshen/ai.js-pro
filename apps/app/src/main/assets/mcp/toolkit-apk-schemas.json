@@ -1571,7 +1571,8 @@
           "r2ghidra",
           "yara",
           "unicorn",
-          "frida"
+          "frida",
+          "frida-gadget"
         ]
       },
       "manifestUrl": {
@@ -1604,7 +1605,8 @@
           "r2ghidra",
           "yara",
           "unicorn",
-          "frida"
+          "frida",
+          "frida-gadget"
         ]
       }
     },

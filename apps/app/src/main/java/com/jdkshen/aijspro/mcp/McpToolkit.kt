@@ -30,9 +30,9 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
         name=="reverse_capabilities"->{ToolkitReverseTools.validate(name,args);ToolkitIo.ok(ToolkitIo.json("schemaVersion" to 1,"root" to root.canonicalPath,
             "runtime" to (runtime?.capabilities()?:ToolkitIo.json("available" to false)),"tools" to ToolkitReverseTools.names,"dependencies" to ToolkitReverseTools.dependencies,
             "discovery" to ToolkitIo.json("guide" to "reverse_guide","plan" to "reverse_plan","resources" to listOf("aijs://reverse/guide","aijs://reverse/workflows")),
-            "fullApkid" to false,"fullGhidraDesktop" to false,"automaticPrivilegeEscalation" to false,"verifiedThisRequest" to false,
+            "fullApkid" to false,"fullGhidraDesktop" to false,"rootlessGadgetInjection" to true,"rootServerManaged" to false,"automaticPrivilegeEscalation" to false,"verifiedThisRequest" to false,
             "limits" to ToolkitIo.json("nativeInputBytes" to ToolkitIo.MAX_ENTRY,"apkInputBytes" to ToolkitIo.MAX_APK,"processLogBytes" to 4194304,"timeoutSecondsMax" to 300,"concurrentWorkers" to 2,"maxQueuedAndRunning" to 4),
-            "nextActions" to listOf("检查runtime.components[].available；缺组件显式apk_component_install","后台任务返回jobId，轮询apk_job_status到终态，再apk_job_result按nextOffset读完","Frida另需可访问服务及目标附加权限；工具已注册不表示这些条件已满足")))}
+            "nextActions" to listOf("检查runtime.components[].available；缺组件显式apk_component_install","后台任务返回jobId，轮询apk_job_status到终态，再apk_job_result按nextOffset读完","免Root动态分析先apk_inject_gadget生成APK，安装打开后用返回endpoint/token连接；不需要Root/Server")))}
         name in ToolkitReverseTools.operations->{ToolkitReverseTools.validate(name,args)
             if(args.tBool("background",true))ToolkitIo.ok(jobs.start(ToolkitIo.json("operation" to name,"arguments" to args,"timeoutSeconds" to args.tInt("timeoutSeconds",120,1,300))))else executeOperation(name,args)}
         name=="apk_job_start"->ToolkitIo.ok(jobs.start(args))

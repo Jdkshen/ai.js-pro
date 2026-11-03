@@ -21,6 +21,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         ToolkitReverseTools.validate(name,args)
         val temp=File(context.cacheDir,"reverse-${ToolkitIo.fresh()}").apply{require(mkdir())}
         try{return when(name){
+            "apk_inject_gadget"->injectGadget(args,temp)
             "apk_decode_project","apk_build_project","apk_install_framework"->apktool(name,args,temp)
             "artifact_fingerprint"->ToolkitFingerprint.inspect(file(args,limit=ToolkitIo.MAX_APK))
             "yara_scan"->{val c=native("yara");val target=stage(file(args),temp,"target.bin");val rules=stage(file(args,"rulesPath",1024*1024),temp,"rules.yar")
@@ -63,6 +64,10 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val c=native("frida");val endpoint=args.tString("endpoint","127.0.0.1:27042")
         require(endpoint.matches(Regex("[A-Za-z0-9_.-]{1,253}:[0-9]{1,5}"))&&endpoint.substringAfterLast(':').toInt() in 1..65535){"endpoint 必须为host:port"}
         val request=ToolkitIo.json("operation" to name.removePrefix("frida_"),"endpoint" to endpoint,"timeoutMs" to 12000)
+        val token=args.tString("token","")
+        require(token.isEmpty()||token.matches(Regex("[A-Za-z0-9_-]{16,128}"))){"token 必须是16..128位字母数字、横线或下划线"}
+        if(token.isNotEmpty()&&!File(c,"gadget-token-support.txt").isFile)throw ToolkitException("COMPONENT_UPDATE_REQUIRED","请调用apk_component_install更新frida客户端至支持Gadget令牌的版本","component")
+        if(token.isNotEmpty())request.addProperty("token",token)
         if(name=="frida_eval") { val script=args.tString("script");require(script.toByteArray(Charsets.UTF_8).size<=65536){"Frida脚本超过64KiB"}
             request.addProperty("pid",args.tInt("pid",0,1,Int.MAX_VALUE));request.addProperty("script",script);request.addProperty("durationMs",args.tInt("durationMs",1000,1,10000)) }
         val input=File(temp,"request.json").apply{writeText(request.toString(),Charsets.UTF_8)}
@@ -72,6 +77,35 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 addProperty("scriptErrorCount",errors);addProperty("scriptSucceeded",errors==0)
                 if(errors>0)throw ToolkitException("FRIDA_SCRIPT_ERROR",toString().take(12000),"script")
             }
+        }
+    }
+    private fun injectGadget(args:JsonObject,temp:File):JsonObject {
+        val destination=ToolkitIo.resolve(root,args.tString("outPath"))
+        require(!destination.exists()&&destination.parentFile?.isDirectory==true){"outPath 必须为父目录存在的新文件"}
+        val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk")
+        val unsigned=File(temp,"gadget-unsigned.apk")
+        val info=ToolkitGadget.prepare(input,unsigned,temp,component("frida-gadget"),args.tInt("port",27042,1024,65535),
+            android.os.Build.SUPPORTED_ABIS.firstOrNull()?:"unknown")
+        ToolkitArchiveAlignment.align(unsigned)
+        val signed=File(temp,"gadget-signed.apk")
+        val signer=AutoSigningIdentity.signer(temp,"MCP免Root Gadget集成")
+        require(signer is KeyStoreApkSigner){"当前签名身份不支持归档签名"}
+        signer.signAlignedArchive(unsigned,signed)
+        val verification=ToolkitApkVerifier.inspect(signed,null,null)
+        require(verification.getAsJsonObject("signature").tBool("verified")){"Gadget APK验签失败"}
+        require(signed.length()<=ToolkitIo.MAX_APK){"输出APK超过512MiB"}
+        ToolkitIo.withFileLocks(listOf(destination)) {
+            require(!destination.exists()){"outPath 已存在，请使用新文件名"}
+            ToolkitIo.atomic(destination){signed.copyTo(it,true)}
+        }
+        return info.apply {
+            addProperty("path",destination.path);addProperty("size",destination.length());addProperty("sha256",ToolkitIo.sha(destination))
+            addProperty("signed",true);addProperty("originalSignaturePreserved",false);addProperty("installed",false)
+            add("verification",verification)
+            add("nextActions",ToolkitIo.json("install" to "安装输出APK；重签与原应用证书不同时不能直接覆盖，保留原数据再自行安排安装",
+                "launch" to "手动打开输出应用；Gadget只在应用默认进程中加载，不阻塞界面",
+                "check" to ToolkitIo.json("tool" to "frida_status","args" to ToolkitIo.json("endpoint" to tString("endpoint"),"token" to tString("token"))),
+                "processes" to "frida_processes传相同endpoint/token，再用实际返回pid调用frida_eval；Java API需要打包frida-java-bridge"))
         }
     }
     private fun radare(name:String,args:JsonObject,temp:File):JsonObject {

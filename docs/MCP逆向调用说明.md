@@ -24,4 +24,17 @@
 
 手机里打开「文件与 APK 工具 → 逆向调用指南」，可以选择章节、继续分页、复制正文；主题跟随 App。
 
-工具依赖按需下载，主 APK 不嵌入整套逆向引擎。Frida 另需可连接的 Server/Gadget 与目标附加权限；内置指纹不是完整 APKiD；r2ghidra 为独立 C++ 伪代码组件，不需要桌面 Ghidra。具体兼容边界以完整指南和实际调用结果为准。
+工具依赖按需下载，主 APK 不嵌入整套逆向引擎。Frida 使用免 Root Gadget：`reverse_plan({"goal":"dynamic"})` 返回完整集成步骤，`apk_inject_gadget` 生成重签APK，安装打开后用返回的 endpoint/token 连接；无需 Root/Server；内置指纹不是完整 APKiD；r2ghidra 为独立 C++ 伪代码组件，不需要桌面 Ghidra。具体兼容边界以完整指南和实际调用结果为准。
+
+
+免 Root 集成最短调用（dev-1330+）：
+
+```json
+{"name":"apk_component_install","arguments":{"component":"frida-gadget"}}
+{"name":"apk_component_install","arguments":{"component":"frida"}}
+{"name":"apk_inject_gadget","arguments":{"path":"target.apk","outPath":"target-gadget.apk","port":27042}}
+```
+
+每步先读完后台任务结果。安装并打开输出应用，再把实际 `endpoint/token` 传给 `frida_status`、`frida_processes`、`frida_eval`。旧客户端的 `needsUpdate=true` 时，重新调用 `apk_component_install(component=frida)`，会安装 `v2-token`，不用删除旧版本。
+
+输出重新签名，不自动安装或卸载；证书不同不能直接覆盖原应用，先保留原数据再安排安装。仅完整单APK，Split/sharedUserId不支持；加载覆盖默认进程，Java.perform需要打包frida-java-bridge。Gadget组件包含四架构库、独立下载，主包不内嵌。

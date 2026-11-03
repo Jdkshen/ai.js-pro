@@ -18,11 +18,12 @@ internal object ToolkitReverseTools {
         "native_xrefs" to "radare2 查询到指定 address 的引用；offset/limit 分页，需 radare2。间接调用可能缺失，后台 jobId。",
         "native_compare" to "比较两个二进制 path/otherPath 的有界字节变化，附 radare2 元数据。返回变化范围与截断标记；不把相同大小当成语义相同。后台 jobId。",
         "artifact_fingerprint" to "读取 path 的 SHA256、格式和 APK 库/壳/框架线索。内置启发式指纹，明确证据与置信度；不是完整 APKiD，不执行目标。后台 jobId。",
+        "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。返回endpoint/token，打开输出应用后用frida_status/processes/eval连接。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
         "yara_scan" to "使用 yara 组件按 rulesPath 扫描 path；规则≤1MiB，输入≤64MiB，扫描≤30秒，禁用 include。返回规则命中/偏移及截断；不是自动恶意性结论。后台 jobId。",
         "native_emulate" to "Unicorn 隔离模拟 codeHex 原始机器码，可选 dataHex 与 registers；arm64/arm/thumb/x86/x86_64。代码≤64KiB、数据≤4096B、指令≤100000、时间≤1000ms，不提供完整 Android/ELF/JNI 环境。后台 jobId。",
-        "frida_status" to "检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需可访问的 Frida Server/Gadget，不自动提权或启动服务。后台 jobId。",
-        "frida_processes" to "列出指定 Frida Server/Gadget endpoint 可见的进程（最多500），需 frida 组件和已运行服务。应用UID不能任意附加其他应用。后台 jobId。",
-        "frida_eval" to "对 endpoint 的 pid 附加并有界执行 Frida script，durationMs≤10000，返回消息后卸载脚本/分离。需目标授权、可访问 Server/Gadget；停止任务杀掉本次客户端进程组。后台 jobId。"
+        "frida_status" to "检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。后台 jobId。",
+        "frida_processes" to "列出指定免Root Gadget endpoint 可见的进程（最多500），需 frida 组件和已打开的Gadget应用，token取apk_inject_gadget结果。应用UID不能任意附加其他应用。后台 jobId。",
+        "frida_eval" to "对 endpoint 的 pid 附加并有界执行 Frida script，durationMs≤10000，返回消息后卸载脚本/分离。需可访问Gadget，传相同endpoint/token；Java.perform需另行打包frida-java-bridge；停止任务杀掉本次客户端进程组。后台 jobId。"
     )
     val names = descriptions.keys.toList()
     val guideNames = setOf("reverse_guide", "reverse_plan")
@@ -30,7 +31,7 @@ internal object ToolkitReverseTools {
     val dependencies = mapOf(
         "apk_decode_project" to listOf("apktool"), "apk_build_project" to listOf("apktool", "apk-resources"),
         "apk_install_framework" to listOf("apktool"), "native_decompile" to listOf("radare2", "r2ghidra"),
-        "yara_scan" to listOf("yara"), "native_emulate" to listOf("unicorn")
+        "yara_scan" to listOf("yara"), "native_emulate" to listOf("unicorn"), "apk_inject_gadget" to listOf("frida-gadget")
     ) + names.filter { it.startsWith("native_") && it !in setOf("native_decompile", "native_emulate") }.associateWith { listOf("radare2") } +
         names.filter { it.startsWith("frida_") }.associateWith { listOf("frida") }
     private fun str(description:String="")=ToolkitIo.json("type" to "string", "description" to description)
@@ -47,13 +48,14 @@ internal object ToolkitReverseTools {
             "apk_decode_project"->{path();path("outDir");field("decodeResources",ToolkitIo.json("type" to "boolean","default" to true))}
             "apk_build_project"->{path("projectDir");path("outPath");field("sign",ToolkitIo.json("type" to "boolean","default" to false))}
             "apk_install_framework"->{path();field("tag",str())}
+            "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))}
             "artifact_fingerprint","native_analyze"->path()
             "native_functions"->{path();page()}
             "native_function_detail","native_decompile","native_xrefs"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true);if(name=="native_xrefs")page()}
             "native_compare"->{path();path("otherPath");page()}
             "yara_scan"->{path();path("rulesPath");field("scanTimeoutSeconds",num(1,30,10));field("includeOffsets",ToolkitIo.json("type" to "boolean","default" to true))}
             "native_emulate"->{field("architecture",ToolkitIo.json("type" to "string","enum" to listOf("arm64","arm","thumb","x86","x86_64")),true);field("codeHex",str(),true);field("dataHex",str());field("registers",ToolkitIo.json("type" to "object","additionalProperties" to str("0x十六进制寄存器值")));field("timeoutMs",num(1,1000,100));field("instructionLimit",num(1,100000,10000))}
-            "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE,1),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}}
+            "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE,1),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}}
             else->error("未知逆向工具")
         }
         if(name in operations){field("background",ToolkitIo.json("type" to "boolean","default" to true));field("timeoutSeconds",num(1,300,120))}
@@ -61,7 +63,7 @@ internal object ToolkitReverseTools {
     }
     fun definitions()=JsonArray().apply{names.forEach{name->add(ToolkitIo.json("name" to name,"description" to descriptions.getValue(name),
         "category" to "reverse","categoryTitle" to "逆向分析","inputSchema" to schema(name),
-        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","frida_eval")),"openWorldHint" to name.startsWith("frida_")),
+        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","apk_inject_gadget","frida_eval")),"openWorldHint" to name.startsWith("frida_")),
         "_meta" to ToolkitIo.json("aijs" to ToolkitIo.json("guideTool" to "reverse_guide","dependencies" to (dependencies[name]?:emptyList<String>()),"backgroundDefault" to (name in operations),
             "resultTools" to if(name in operations)listOf("apk_job_status","apk_job_result","apk_job_cancel")else emptyList<String>()))))}}
     fun validate(name:String,args:JsonObject){
