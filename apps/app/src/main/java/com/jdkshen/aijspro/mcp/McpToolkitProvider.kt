@@ -15,10 +15,9 @@ import java.util.concurrent.TimeUnit
 
 /** Isolated :tools process: parsers/compilers cannot take down the main or script process. */
 class McpToolkitProvider : ContentProvider() {
-    private var toolkit: McpToolkit? = null
-    private var selectedRoot = ""
+    private val toolkits = LinkedHashMap<String,McpToolkit>()
     override fun onCreate() = true
-    @Synchronized override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
+    override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
         check(Binder.getCallingUid() == Process.myUid()) { "仅本应用可调用工具进程" }
         val context = requireNotNull(context)
         val key = ToolkitIo.id(requireNotNull(arg))
@@ -29,19 +28,20 @@ class McpToolkitProvider : ContentProvider() {
         val root = File(input.tString("root")).canonicalFile
         require(root.isDirectory) { "工具操作目录不存在" }
         val payload: JsonObject = try {
-            if (toolkit == null || selectedRoot != root.path) {
-                val schemas = context.assets.open("mcp/toolkit-apk-schemas.json").bufferedReader().use { JsonParser().parse(it).asJsonObject }
-                val store = File(File(context.filesDir, "apk-toolkit"), ToolkitIo.version(root.path.toByteArray()).take(16))
-                toolkit = McpToolkit(root, store, schemas, { archive, output ->
-                    val signer = AutoSigningIdentity.signer(output.parentFile, "APK工具")
-                    check(signer is com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner) { "签名身份不支持归档签名" }
-                    signer.signAlignedArchive(archive, output)
-                }, { machine, address, source, instructionMode -> assemble(machine, address, source, instructionMode) })
-                selectedRoot = root.path
-            }
+            val toolkit = synchronized(toolkits) { toolkits[root.path] ?: run {
+                require(toolkits.size<8) { "已打开8个工具目录，请重启工具进程后切换目录" }
+                val schemas=context.assets.open("mcp/toolkit-apk-schemas.json").bufferedReader().use{JsonParser().parse(it).asJsonObject}
+                val store=File(File(context.filesDir,"apk-toolkit"),ToolkitIo.version(root.path.toByteArray()).take(16))
+                McpToolkit(root,store,schemas,{archive,output->
+                    val signer=AutoSigningIdentity.signer(output.parentFile,"APK工具")
+                    check(signer is com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner){"签名身份不支持归档签名"}
+                    signer.signAlignedArchive(archive,output)
+                },{machine,address,source,instructionMode->assemble(machine,address,source,instructionMode)},AndroidToolkitRuntime(context,root))
+                    .also{toolkits[root.path]=it}
+            } }
             when(method) {
-                "definitions" -> ToolkitIo.json("tools" to toolkit!!.definitions())
-                "call" -> toolkit!!.call(input.tString("name"), input.getAsJsonObject("arguments") ?: JsonObject())
+                "definitions" -> ToolkitIo.json("tools" to toolkit.definitions())
+                "call" -> toolkit.call(input.tString("name"), input.getAsJsonObject("arguments") ?: JsonObject())
                 else -> throw IllegalArgumentException("工具进程操作无效")
             }
         } catch (failure: Exception) {

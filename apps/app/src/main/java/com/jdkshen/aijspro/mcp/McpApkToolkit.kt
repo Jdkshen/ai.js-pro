@@ -11,9 +11,11 @@ internal class McpApkToolkit(
     private val schemas: JsonObject,
     private val signer: ((File, File) -> Unit)? = null,
     private val assembler: ((Int, Long, String, String) -> ByteArray)? = null,
+    private val runtime: ToolkitRuntime? = null,
 ) {
-    private val pages = LinkedHashMap<String, Page>()
-    private var currentWorkspace: String? = null
+    private val pages = java.util.concurrent.ConcurrentHashMap<String, Page>()
+    private val workspaceLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
+    @Volatile private var currentWorkspace: String? = null
     private data class Page(val workspace: String, val session: String, val revision: String, val items: List<JsonObject>, var offset: Int,
                             val kind: String, val metadata: JsonObject, val truncated: Boolean, val limitMax: Int = 200, val at: Long = System.currentTimeMillis())
     private val gson = Gson()
@@ -22,9 +24,21 @@ internal class McpApkToolkit(
         schemas.entrySet().forEach { (name, schema) -> add(ToolkitIo.json("name" to name, "category" to "toolkit", "categoryTitle" to "文件与APK工具",
             "description" to description(name), "inputSchema" to schema)) }
     }
-    @Synchronized fun call(name: String, args: JsonObject): JsonObject {
+    fun call(name: String, args: JsonObject): JsonObject {
+        val key=args.tString("workspaceId","").ifEmpty { if(name=="apk_continue") pages[args.tString("nextCursor","")]?.workspace?:"catalog" else "catalog" }
+        val lock=workspaceLocks.getOrPut(key){java.util.concurrent.locks.ReentrantLock()}
+        lock.lockInterruptibly()
+        try { return dispatch(name,args) } finally { lock.unlock() }
+    }
+    private fun dispatch(name: String, args: JsonObject): JsonObject {
+        ToolkitIo.ensureActive()
         return when (name) {
             "apk_workspace_open" -> ToolkitIo.ok(open(args))
+            "artifact_open" -> ToolkitIo.ok(openArtifact(args))
+            "apk_verify" -> {
+                val file=if(args.has("workspaceId"))snapshot(args.tString("workspaceId")) else ToolkitIo.resolve(root,args.tString("path"))
+                ToolkitIo.ok(ToolkitApkVerifier.inspect(file,args.get("minSdk")?.asInt,args.get("maxSdk")?.asInt))
+            }
             "apk_workspace_list" -> ToolkitIo.ok(ToolkitIo.json("items" to workspaces().filter { !it.tBool("temporary") }))
             "apk_list_available_apks" -> listAvailable(args)
             "apk_workspace_delete" -> {
@@ -41,6 +55,14 @@ internal class McpApkToolkit(
                 if (session.isNotEmpty()) sessionDir(workspace, session)
                 when (name) {
                     "apk_session_create" -> ToolkitIo.ok(createSession(workspace))
+                    "apk_session_diff" -> page(workspace,session,ToolkitApkSessions.diff(snapshot(workspace),sessionDir(workspace,requiredSession(session))),args.tInt("limit",50,1,200))
+                    "apk_session_checkpoint" -> ToolkitIo.ok(ToolkitApkSessions.checkpoint(sessionDir(workspace,requiredSession(session)),args))
+                    "apk_session_checkpoints" -> ToolkitIo.ok(ToolkitApkSessions.checkpoints(sessionDir(workspace,requiredSession(session))))
+                    "apk_session_rollback" -> ToolkitIo.ok(ToolkitApkSessions.rollback(sessionDir(workspace,requiredSession(session)),args))
+                    "artifact_export" -> ToolkitIo.ok(exportArtifact(workspace,session,args))
+                    "apk_set_members" -> page(workspace,session,setMembers(workspace),args.tInt("limit",50,1,200))
+                    "apk_set_open_member" -> ToolkitIo.ok(openSetMember(workspace,args))
+                    "apk_decompile_class", "apk_decompile_method" -> ToolkitIo.ok(decompile(workspace,session,args))
                     "apk_list" -> list(workspace, session, args)
                     "apk_search" -> search(workspace, session, args)
                     "apk_read_text" -> {
@@ -55,6 +77,8 @@ internal class McpApkToolkit(
                         val (entry, dex) = dexFor(workspace, session, args.tString("locator"))
                         page(workspace, session, dex.outline(args.tString("locator")).map { it.apply { addProperty("dexEntry", entry) } }, args.tInt("limit", 200, 1, 1000), limitMax = 1000)
                     }
+                    "apk_dex_search_members", "apk_dex_call_graph", "apk_dex_hierarchy" ->
+                        ToolkitIo.ok(ToolkitDexNavigation(dexes(workspace,session).toList()).call(name,args))
                     "apk_dex_xref" -> {
                         val locator = args.tString("locator"); val limit = args.tInt("limit", 50, 1, 200)
                         val items = ArrayList<JsonObject>()
@@ -114,6 +138,29 @@ internal class McpApkToolkit(
         }
     }
     private fun description(name: String): String = when(name) {
+        "apk_verify" -> "只读检查真实APK：密码学验签、普通Stored4B/原生库ZIP16KB、ELF LOAD段及Manifest。返回独立检查证据，不保证安装/业务行为。"
+        "apk_dex_search_members" -> "按方法名/描述符/字符串/引用搜索，返回精确方法locator、dexEntry和行/指令锚点；有预算，truncated表示需要缩小查询。"
+        "apk_dex_call_graph" -> "跨DEX向内/向外调用图，限定深度/节点/边；dexEntry消歧，动态和反射目标明确报告不完整。"
+        "apk_dex_hierarchy" -> "查看类继承、接口实现与方法覆盖关系，使用原始descriptor定位符，跨DEX同名类需dexEntry。"
+        "apk_decompile_class" -> "可选JADX类Java阅读；默认后台返回jobId，用apk_job_status/result读回。不保证反编译源码可重新构建。"
+        "apk_decompile_method" -> "可选JADX精确方法Java阅读；默认后台返回jobId，需原始dex_method定位符，重载完整签名匹配。"
+        "android_resources_compile" -> "可选Android AAPT2把res/Manifest按指定宿主编译为project-res.apk及sidecar；默认后台jobId，组件显式安装。"
+        "apk_component_status" -> "只读查看JADX/资源编译组件安装与可用状态；不下载不运行编译器。"
+        "apk_component_install" -> "显式下载并校验可选jadx/apk-resources组件；默认后台jobId，manifestUrl可指定发布清单。"
+        "apk_component_remove" -> "卸载指定可选APK组件，保留源工程和其他组件。"
+        "apk_job_start" -> "后台运行指定APK分析/编译操作，立即返回jobId；任务有超时，失败不自动重放。"
+        "apk_job_list" -> "读取当前工具目录的后台任务和状态。"
+        "apk_job_status" -> "读取后台任务状态/阶段；CANCELLING表示正在等待实际worker结束。"
+        "apk_job_result" -> "分块读取后台任务最终JSON结果，offset以返回nextOffset继续。"
+        "apk_job_cancel" -> "请求取消指定后台任务；直到worker真正结束才报告CANCELLED，已提交操作可能完成。"
+        "apk_session_diff" -> "预览会话相对原快照的新增/修改/删除、摘要和小文本；不覆盖源文件。"
+        "apk_session_checkpoint" -> "保存编辑会话检查点，复制变更条目以支持后续回退；最多8个、总量512MiB。"
+        "apk_session_checkpoints" -> "列出会话检查点及其revision。"
+        "apk_session_rollback" -> "按检查点回退会话，必须提供当前expectedRevision；不覆盖原APK，返回新revision。"
+        "artifact_open" -> "直接打开APK、独立DEX/SO/ELF或APKS/XAPK/APKM。独立文件使用明确标记的分析容器；分包先选择成员。"
+        "artifact_export" -> "导出编辑后的独立DEX/ELF文件，不把分析容器伪装成可安装APK。"
+        "apk_set_members" -> "列出分包归档APK成员、大小和base候选；不承诺自动合并或安装。"
+        "apk_set_open_member" -> "选中分包成员创建独立只读APK快照，保留容器来源；可继续原APK工具链。"
         "apk_workspace_open" -> "创建 APK 只读快照。path 在工具目录内；temporary=true 为一次性工作区。后续修改先 apk_session_create。"
         "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。"
         "apk_native_disassemble", "apk_native_xref", "apk_native_analyze_control_flow" -> "有界直接指令分析：原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），否则回退 AArch64 常见指令子集；未知指令明确标出，间接引用与完整数据流不作成功保证。"
@@ -158,6 +205,74 @@ internal class McpApkToolkit(
                 "schemes" to signature.get("schemes"), "certificateCount" to signature.getAsJsonArray("certificates").size()))
             File(folder, "workspace.json").writeText(gson.toJson(info)); currentWorkspace = id; return info
         } catch (error: Exception) { safeRemove(folder, store); throw error }
+    }
+    private fun openArtifact(args:JsonObject):JsonObject {
+        val source=ToolkitIo.resolve(root,args.tString("path"));require(source.isFile&&source.length()<=ToolkitIo.MAX_APK)
+        val suffix=source.extension.lowercase()
+        if(suffix=="apk")return open(args)
+        require(suffix in setOf("dex","so","elf","apks","xapk","apkm")){"支持APK、DEX、ELF/SO及APKS/XAPK/APKM"}
+        require(workspaces().size<16&&workspaces().sumOf{it.get("size").asLong}+source.length()<=1024L*1024*1024){"工作区数量或总量超过限制"}
+        val type=if(suffix in setOf("apks","xapk","apkm"))"apk-set" else if(suffix=="dex")"dex" else "elf"
+        val id=ToolkitIo.fresh();val dir=directory(id);require(dir.mkdir())
+        try{
+            val hash=ToolkitIo.sha(source);val original=File(dir,"original.bin")
+            source.inputStream().use{input->original.outputStream().use{copyBounded(input,it,ToolkitIo.MAX_APK)}}
+            require(ToolkitIo.sha(original)==hash){"读取期间源文件已改变"}
+            val target=File(dir,"base.apk")
+            if(type=="apk-set")require(original.renameTo(target)){"无法保留分包快照"} else {
+                val bytes=original.inputStream().use{ToolkitIo.read(it)}
+                if(type=="dex")ToolkitDex(bytes) else ToolkitElf(bytes)
+                ZipOutputStream(target.outputStream()).use{zip->zip.putNextEntry(ZipEntry(if(type=="dex")"classes.dex" else "lib/standalone.so"));zip.write(bytes);zip.closeEntry()};original.delete()
+            }
+            val info=ToolkitIo.json("workspaceId" to id,"artifactType" to type,"syntheticContainer" to (type!="apk-set"),
+                "sourcePath" to source.path,"sha256" to hash,"analysisSha256" to ToolkitIo.sha(target),"size" to target.length(),"sourceSize" to source.length(),"createdAt" to System.currentTimeMillis(),
+                "temporary" to args.tBool("temporary",true),"path" to "aijs://workspace/$id")
+            File(dir,"workspace.json").writeText(info.toString(),Charsets.UTF_8)
+            if(type=="apk-set")info.addProperty("memberCount",setMembers(id).size)
+            currentWorkspace=id;return info
+        }catch(e:Exception){safeRemove(dir,store);throw e}
+    }
+    private fun setMembers(workspace:String):List<JsonObject>{
+        require(workspace(workspace).tString("artifactType","")=="apk-set"){"不是分包工作区"}
+        return ZipFile(snapshot(workspace)).use{zip->
+            val result=ArrayList<JsonObject>();val names=HashSet<String>()
+            zip.entries().asSequence().filter{!it.isDirectory&&it.name.endsWith(".apk",true)}.forEach{entry->
+                ToolkitIo.entry(entry.name);require(names.add(entry.name)&&result.size<256){"分包含重复成员或超过256个"}
+                require(entry.size in 0..ToolkitIo.MAX_APK){"分包成员过大"}
+                result.add(ToolkitIo.json("member" to entry.name,"size" to entry.size,"compressedSize" to entry.compressedSize,"crc" to entry.crc,
+                    "baseCandidate" to (File(entry.name).name.lowercase() in setOf("base.apk","base-master.apk")),"requiresGroupValidation" to true))
+            };require(result.isNotEmpty()){"归档没有APK成员"};result
+        }
+    }
+    private fun openSetMember(workspace:String,args:JsonObject):JsonObject{
+        val member=args.tString("member");require(setMembers(workspace).any{it.tString("member")==member}){"分包成员不存在"}
+        // A private child snapshot retains explicit provenance; no extract-to-user-directory side effect.
+        val temp=File(directory(workspace),"member-${ToolkitIo.fresh()}.apk")
+        try{
+            ZipFile(snapshot(workspace)).use{zip->zip.getInputStream(zip.getEntry(member)).use{input->temp.outputStream().use{copyBounded(input,it,ToolkitIo.MAX_APK)}}}
+            val visible=File(root,".aijs-member-${ToolkitIo.fresh()}.apk")
+            try{temp.inputStream().use{input->visible.outputStream().use{copyBounded(input,it,ToolkitIo.MAX_APK)}}
+                val info=open(ToolkitIo.json("path" to visible.path,"temporary" to true))
+                info.addProperty("containerWorkspaceId",workspace);info.addProperty("containerMember",member);info.addProperty("sourcePath",workspace(workspace).tString("sourcePath")+"!"+member)
+                ToolkitIo.atomic(File(directory(info.tString("workspaceId")),"workspace.json")){it.writeText(info.toString(),Charsets.UTF_8)};return info
+            }finally{visible.delete()}
+        }finally{temp.delete()}
+    }
+    private fun exportArtifact(workspace:String,session:String,args:JsonObject):JsonObject{
+        val type=workspace(workspace).tString("artifactType","");require(type in setOf("dex","elf")){"仅独立DEX/ELF使用artifact_export"}
+        val entry=if(type=="dex")"classes.dex" else "lib/standalone.so";val bytes=raw(workspace,session,entry)
+        if(type=="dex")ToolkitDex(bytes)else ToolkitElf(bytes)
+        val output=ToolkitIo.resolve(root,args.tString("path"));require(output.path!=workspace(workspace).tString("sourcePath")){"不能覆盖源文件"}
+        require(!output.exists()||args.tBool("overwrite")){"输出已存在"};ToolkitIo.atomic(output){it.writeBytes(bytes)}
+        return ToolkitIo.json("path" to output.path,"sha256" to ToolkitIo.sha(output),"sourceUnchanged" to true,"artifactType" to type)
+    }
+    private fun decompile(workspace:String,session:String,args:JsonObject):JsonObject{
+        val backend=runtime?:throw ToolkitException("COMPONENT_UNAVAILABLE","反编译组件后端未接入")
+        val locator=args.tString("locator");val (_,dex)=dexFor(workspace,session,locator,args.tString("dexEntry",""));dex.find(locator)
+        val input=if(session.isEmpty())snapshot(workspace)else File(sessionDir(workspace,session),"decompile-${ToolkitIo.fresh()}.apk")
+        try{if(session.isNotEmpty())writeUnsigned(workspace,session,entries(workspace,session),input)
+            return backend.decompile(input,locator,args).apply{addProperty("revision",revision(workspace,session))}
+        }finally{if(session.isNotEmpty())input.delete()}
     }
     private fun listAvailable(args: JsonObject): JsonObject {
         val prefix = args.tString("prefix", ""); var visited = 0; var truncated = false; val items = ArrayList<JsonObject>()
@@ -241,8 +356,8 @@ internal class McpApkToolkit(
     private fun resourceTable(workspace: String, session: String): ToolkitResources = ToolkitResources(raw(workspace, session, "resources.arsc"))
     private fun optionalResources(workspace: String, session: String): ToolkitResources? = if (entries(workspace, session).contains("resources.arsc")) resourceTable(workspace, session) else null
     private fun dexes(workspace: String, session: String): Sequence<Pair<String,ToolkitDex>> = entries(workspace, session).asSequence().filter { ToolkitApkTargets.isDex(it) }.map { it to ToolkitDex(raw(workspace, session, it)) }
-    private fun dexFor(workspace: String, session: String, locator: String): Pair<String,ToolkitDex> {
-        val found = dexes(workspace, session).filter { (_, dex) -> dex.classes.any { it.type == dex.type(locator) } }.toList()
+    private fun dexFor(workspace: String, session: String, locator: String, requestedDex:String=""): Pair<String,ToolkitDex> {
+        val found = dexes(workspace, session).filter { (entry, _) -> requestedDex.isEmpty() || requestedDex==entry }.filter { (_, dex) -> dex.classes.any { it.type == dex.type(locator) } }.toList()
         require(found.size == 1) { if(found.isEmpty()) "DEX 类不存在" else "多个 DEX 含同名类，暂不支持此定位符" }; return found.single()
     }
     private fun entryLocator(locator: String): String {
@@ -501,7 +616,7 @@ internal class McpApkToolkit(
             fun failure(entry: String, code: String, message: String?) {
                 failures.add(ToolkitIo.json("locator" to "zip_entry:$entry", "errorCode" to code, "message" to message, "error" to message))
             }
-            if("AndroidManifest.xml" !in names) failure("AndroidManifest.xml", "MANIFEST_MISSING", "缺少 Manifest")
+            if(workspace(workspace).tString("artifactType","apk")=="apk" && "AndroidManifest.xml" !in names) failure("AndroidManifest.xml", "MANIFEST_MISSING", "缺少 Manifest")
             base.filter { (ToolkitApkTargets.isDex(it) || it == "resources.arsc") && it !in names }.forEach {
                 failure(it, "RESERVED_ENTRY_MISSING", "编辑会话移除了保留条目，请撤销此变更")
             }
@@ -537,6 +652,7 @@ internal class McpApkToolkit(
             "note" to "所有语义编辑先编译再原子保存；结构检查不保证应用业务行为、安装性或原签名兼容")
     }
     private fun build(workspace: String, session: String, args: JsonObject): JsonObject {
+        require(workspace(workspace).tString("artifactType","apk")=="apk") { "此工作区不是APK；独立文件使用artifact_export，分包请先选择成员" }
         val checked = check(workspace, session, true); require(checked.getAsJsonArray("failures").size() == 0) { "会话检查失败：${checked.get("failures")}" }
         val signing = args.tBool("sign", false)
         val requested = args.tString("outputName", "")
@@ -546,6 +662,7 @@ internal class McpApkToolkit(
         require(output != File(workspace(workspace).tString("sourcePath"))) { "不能覆盖源 APK" }
         require(!output.exists() || output.isFile && args.tBool("overwrite")) { "输出已存在或不是普通文件，需 overwrite=true" }
         val names = entries(workspace, session).filterNot { it.startsWith("META-INF/", true) && (it.endsWith(".SF", true) || it.endsWith(".RSA", true) || it.endsWith(".DSA", true) || it.endsWith(".EC", true) || it.equals("META-INF/MANIFEST.MF", true)) }
+        var verification:JsonObject?=null
         ToolkitIo.atomic(output) { target ->
             if (!signing) writeUnsigned(workspace, session, names, target) else {
                 val callback = signer ?: error("当前环境没有 APK 签名器")
@@ -557,11 +674,15 @@ internal class McpApkToolkit(
                     require(signature.tBool("available") && signature.tBool("signaturePresent") && signature.getAsJsonArray("certificates").size() > 0) { "签名器没有生成完整可读取的证书信息：${signature.get("error")}" }
                 } finally { unsigned.delete() }
             }
+            val verified=ToolkitApkVerifier.inspect(target)
+            require(verified.getAsJsonObject("checks").getAsJsonObject("zip").tString("status")=="valid") { "导出ZIP对齐或结构检查失败：${verified.get("issues")}" }
+            if(signing) require(verified.getAsJsonObject("signature").tBool("verified")) { "导出APK密码学验签失败：${verified.get("issues")}" }
+            verification=verified
             require(target.length() <= ToolkitIo.MAX_APK) { "构建结果超过 512 MiB" }; ZipFile(target).use { require(it.getEntry("AndroidManifest.xml") != null) }
         }
         val signature = ToolkitSignatures.read(output)
         val result = ToolkitIo.json("path" to output.path, "size" to output.length(), "sha256" to ToolkitIo.sha(output), "signed" to signing,
-            "signatureSummary" to signature,
+            "signatureSummary" to signature, "verification" to verification,
             "signingIdentity" to if(signing) "AI.js Pro 本机身份，替换原签名" else "unsigned", "sourceUnchanged" to true)
         listOf("changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries").forEach {
             result.add(it, checked.get(it))
@@ -581,7 +702,7 @@ internal class McpApkToolkit(
                         val crc = CRC32(); var count = 0L
                         streamEntry(workspace, session, name) { input ->
                             val buffer = ByteArray(65536)
-                            while(true) { val read = input.read(buffer); if(read < 0) break; count += read
+                            while(true) { ToolkitIo.ensureActive(); val read = input.read(buffer); if(read < 0) break; count += read
                                 require(count <= ToolkitIo.MAX_APK) { "ZIP 条目过大" }; crc.update(buffer, 0, read) }
                         }
                         entry.size = count; entry.compressedSize = count; entry.crc = crc.value
@@ -591,7 +712,7 @@ internal class McpApkToolkit(
                     val crc = CRC32()
                     streamEntry(workspace, session, name) { input ->
                         val buffer = ByteArray(65536)
-                        while(true) { val read = input.read(buffer); if(read < 0) break; total += read
+                        while(true) { ToolkitIo.ensureActive(); val read = input.read(buffer); if(read < 0) break; total += read
                             require(total <= ToolkitIo.MAX_APK) { "展开后内容超过512MiB" }; crc.update(buffer, 0, read); zip.write(buffer, 0, read) }
                     }
                     require(name in changed || original == null || original.crc == crc.value) { "源条目 CRC 不符：$name" }

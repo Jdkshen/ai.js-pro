@@ -32,7 +32,8 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
             }
             return true
         }
-        fun add(item: JsonObject, text: String, scope: String, matchKind: String) {
+        fun add(item: JsonObject, text: String, scope: String, matchKind: String,
+                anchors: (() -> ToolkitDexAnchors.Index)? = null) {
             if(!available()) return
             scanned++
             val matcher = ToolkitRegex.matcher(pattern, text)
@@ -41,6 +42,18 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
             val identity = item.tString("locator") + "|" + scope + "|" + matchKind + "|" +
                 (item.get("variant")?.asString ?: "") + "|" + (item.get("nativeLocation")?.toString() ?: "")
             val at = matcher.start(); val end = matcher.end()
+            val anchorIndex = if(scope == "smali" && anchors != null) {
+                try { anchors?.invoke() } catch(failure: Exception) {
+                    partial = true
+                    skipped.add(ToolkitIo.json("scope" to "smali", "locator" to item.tString("locator"),
+                        "message" to (failure.message ?: failure.javaClass.simpleName)))
+                    null
+                }
+            } else null
+            val anchor = anchorIndex?.at(at)
+            val anchorLine = anchorIndex?.lineOf(at) ?: -1
+            val anchorLineRange = anchorIndex?.lineRange(at, end)
+            val codeUnitOffset = anchor?.codeUnitByLine?.get(anchorLine)
             val copy = item.deepCopy()
             if(copy.get("value")?.isJsonPrimitive == true && copy.getAsJsonPrimitive("value").isString && copy.get("value").asString.length > 1000) {
                 val full = copy.get("value").asString
@@ -48,6 +61,8 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
                 copy.addProperty("valueTruncated", true)
             }
             copy.addProperty("searchScope", scope)
+            if (!copy.has("kind")) copy.addProperty("kind", matchKind)
+            copy.addProperty("matchKind", matchKind)
             val hit = copy.deepCopy().apply { remove("locator"); addProperty("kind", matchKind); addProperty("matchKind", matchKind) }
             val windowStart = if(snippet == 0) 0 else (at - snippet / 2).coerceAtLeast(0).let { if(it > 0 && it < text.length && Character.isLowSurrogate(text[it])) it - 1 else it }
             val windowEnd = if(snippet == 0) windowStart else text.offsetByCodePoints(windowStart,
@@ -62,6 +77,25 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
                     "textStartOffset" to windowStart, "textTruncated" to (windowStart > 0 || displayEnd < text.length), "start" to at, "end" to end)
             } else null
             if(span != null) { hit.add("matchOffsets", span); copy.add("matchOffsets", span); copy.addProperty("matchOffset", at) }
+            if(anchor != null && anchorLineRange != null) {
+                val memberDex = item.tString("dexEntry")
+                val memberRange = ToolkitIo.json("start" to anchor.lineStart + 1, "end" to anchor.lineEnd + 1)
+                val matchRange = ToolkitIo.json("start" to anchorLineRange.first, "end" to anchorLineRange.second)
+                for(target in listOf(copy, hit)) {
+                    target.addProperty("memberLocator", anchor.locator)
+                    target.addProperty("memberDexEntry", memberDex)
+                    target.addProperty("memberUniqueLocator", "dex_entry:$memberDex!${anchor.locator}")
+                    target.add("memberLineRange", memberRange.deepCopy())
+                    target.add("lineRange", matchRange.deepCopy())
+                    target.addProperty("lineStart", anchorLineRange.first)
+                    target.addProperty("lineEnd", anchorLineRange.second)
+                    target.addProperty("anchorKind", if(codeUnitOffset != null) "instruction" else "method")
+                    codeUnitOffset?.let {
+                        target.addProperty("codeUnitOffset", it)
+                        target.addProperty("instructionLine", anchorLine + 1)
+                    }
+                }
+            }
             val existing = delivered[identity]
             if(matchKind == "string_literal") {
                 val value = ToolkitIo.json("locator" to item.get("memberLocator"), "text" to copy.get("value"), "matchOffsets" to span)
@@ -128,11 +162,17 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
             val ownerPrefix = ToolkitDex.ownerPrefix(prefix)
             for((dexPath, dex) in dexes()) {
                 if(!available()) break
-                if(target in listOf("overview", "dex_names", "smali")) for(type in dex.classes) {
+                val classes = if(target == "smali") ToolkitDexSupport.classes(dex) else dex.classes
+                if(target in listOf("overview", "dex_names", "smali")) for(type in classes) {
                     if(!available()) break
                     if(!type.type.startsWith(ownerPrefix)) continue
                     val base = ToolkitIo.json("locator" to "dex_class:${type.type}", "dexEntry" to dexPath)
-                    if(target == "smali") add(base, dex.renderClass(type), "smali", "smali_text") else {
+                    if(target == "smali") {
+                        val source = ToolkitDexSupport.renderClass(dex, type)
+                        add(base, source, "smali", "smali_text") {
+                            ToolkitDexAnchors.index(source, type) { dex.methodId(it) }
+                        }
+                    } else {
                         add(base, type.type, "dex_names", "class_name")
                         add(base, type.type.removePrefix("L").removeSuffix(";").replace('/', '.'), "dex_names", "class_name")
                         add(base, type.type.substringAfterLast('/').removeSuffix(";"), "dex_names", "class_name")

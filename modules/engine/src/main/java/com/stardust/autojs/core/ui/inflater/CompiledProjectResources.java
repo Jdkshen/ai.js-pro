@@ -23,7 +23,7 @@ import java.util.zip.ZipFile;
  *
  * <p><b>为什么是 PC 编译</b>：Google 只发布 x86_64 的 aapt2（linux/windows/osx），
  * <b>没有 arm64/Android 版本</b>（dl.google.com 上 {@code *-linux-arm64.jar} / {@code *-android.jar} 全是 404），
- * 设备上跑不了 aapt2；Android 10+ 也禁止从 app data 目录 exec。所以工程 {@code res/} 在电脑上编好，
+ * 当前可选组件也可提供 Android AAPT2，需满足目标 SDK 的执行策略。工程 {@code res/} 可在电脑或受控手机组件中编译，
  * 产物推到设备后由这里挂进宿主进程。
  *
  * <p><b>怎么挂</b>：新建一个 {@link AssetManager}，先 {@code addAssetPath(app.apk)} 再叠上资源包，
@@ -157,8 +157,14 @@ public class CompiledProjectResources {
                 }
                 try (InputStream input = zip.getInputStream(table)) { resourcePackage = ResourceTablePackage.read(input); }
             }
-            if (!Sidecar.read(archive).matchesAppApk(host)) {
-                throw new IllegalArgumentException("资源包与宿主资源表不匹配，请重新编译：" + archive);
+            Sidecar sidecar = Sidecar.read(archive);
+            if (!sidecar.matchesAppApk(host)) {
+                String expected = sidecar.mAppResourcesSha256 == null ? "legacy-size:" + sidecar.mAppApkSize : sidecar.mAppResourcesSha256;
+                String actual;
+                try { actual = hostResourcesSha256(host); } catch (Exception error) { actual = "unavailable:" + error.getMessage(); }
+                throw new IllegalArgumentException("资源包与宿主资源表不匹配，请重新编译：" + archive
+                        + "；资源包要求=" + expected + "；当前宿主=" + actual
+                        + "。可用 android_resources_compile 按本机宿主生成资源；不要手改摘要。");
             }
         }
         AssetManager assets = newAssetManager();

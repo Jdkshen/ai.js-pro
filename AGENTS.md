@@ -1,5 +1,7 @@
 # AGENTS.md
 
+> **2026-11-03 已发布 LAN dev-1328**：[实现、验收与边界](docs/reports/2026-11-03_MCP编译逆向增强与Node资源恢复.md)。新增23项独立MCP工具（151公开入口）：真实验签/ZIP对齐、方法级DEX导航、可选JADX/AAPT2、后台取消与会话回退、独立DEX/SO/分包读取。修复chess-auto资源摘要不匹配的本机重编/恢复页和源目录映射。1246本地回归、MI8完整项目入口/三页/错误摘要→一键修复→重开、同名DEX选择及签名导出通过；PC/手机完整LAN下载摘要一致。APK144281420B/SHA7068ee94…；Downloads有APK和新工程ZIP。原ZIP保留。Android17原机/独立APK/长时对弈未验，K40未动、未push。
+
 > **2026-11-03 APK 编译/逆向 MCP 增强评估（未改产品）**：[评估与任务草案](docs/reports/2026-11-03_APK编译逆向MCP增强评估.md)。源码+手机128工具清单核对，DP只读复核已完成。电脑调用生产归档对齐函数并经独立zipalign复现普通Stored Manifest/assets未4字节对齐；P0待修，签名元数据也仍非密码学验签。建议补方法级搜索/出向调用、可选JADX/AAPT2、独立DEX/SO、异步任务/会话回退；Java/Gradle源码工具链仅备选，未恢复安装。LAN仍1327，本轮没有发布/改APK/操作手机界面。
 
 > **2026-11-03 已发布 LAN dev-1327**：[Node Widget 入口与象棋编译资源修复](docs/reports/2026-11-03_NodeWidget入口与象棋编译资源修复.md)。修同一行 `"ui"; "nodejs";` 回落 Rhino，以及 staging 丢 `build/project-res.apk`/sidecar；Engine623+App629全过，MI8四Widget真实入口/交互和象棋UI三页通过，无ERROR。137.42MiB，仅增184B，SHA `b03e1638…`，沿用现有LAN签名原包发布；Downloads含修复ZIP与APK，原ZIP保留。内置独立模板未刷新/独立APK未验；K40未动、未push。

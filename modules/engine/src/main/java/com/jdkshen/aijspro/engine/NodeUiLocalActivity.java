@@ -40,13 +40,18 @@ public class NodeUiLocalActivity extends AppCompatActivity {
         String directory = getIntent().getStringExtra("projectDir");
         com.stardust.autojs.core.ui.inflater.ScriptResourceContext scriptContext =
                 com.stardust.autojs.core.ui.inflater.ScriptResourceContext.find(getIntent().getStringExtra("javaClassOwner"));
-        ProjectResourceBundle bundle = ProjectResourceBundle.load(scriptContext == null ? getApplicationContext() : scriptContext,
-                new java.io.File(directory));
+        String inlineLayout = getIntent().getStringExtra("layoutXml");
+        boolean hostOnly = getIntent().getBooleanExtra("hostResourcesOnly", false)
+                && inlineLayout != null && !inlineLayout.trim().isEmpty();
+        // A recovery screen can use only host widgets while a stale project table is being rebuilt.
+        // Compiled layouts still take the normal strict resource validation path.
+        ProjectResourceBundle bundle = hostOnly ? null : ProjectResourceBundle.load(
+                scriptContext == null ? getApplicationContext() : scriptContext, new java.io.File(directory));
         // B→C 联动：inline inflater 也要能展开 <include>，把本会话工程资源表注入 NodeUiHost。
-        NodeUiHost.setSessionResources(bundle.getResources());
-        if (bundle.isCompiled()) projectResources = bundle.getCompiled().getResources();
+        NodeUiHost.setSessionResources(bundle == null ? null : bundle.getResources());
+        if (bundle != null && bundle.isCompiled()) projectResources = bundle.getCompiled().getResources();
         runtimeClasses = Node24GeneratedClasses.loader(getIntent().getStringExtra("javaClassOwner"), super.getClassLoader());
-        int projectTheme = bundle.isCompiled() ? bundle.idOf("style", "MainTheme") : 0;
+        int projectTheme = bundle != null && bundle.isCompiled() ? bundle.idOf("style", "MainTheme") : 0;
         if (projectResources != null) {
             // Activity.attach may already have created a Theme with the old AssetManager.
             // A theme for the merged table must be created by that table, not reused.
@@ -66,7 +71,7 @@ public class NodeUiLocalActivity extends AppCompatActivity {
                 root = NodeUiHost.inflateInlineLayout(this, xml, runtimeClasses);
             } else {
                 int layoutId = getIntent().getIntExtra("layoutId", 0);
-                if (!bundle.isCompiled()) {
+                if (bundle == null || !bundle.isCompiled()) {
                     throw new IllegalStateException("原生 Java UI 需要 build/project-res.apk；先用 tools/build-project-res.ps1 编译工程资源");
                 }
                 root = getLayoutInflater().inflate(layoutId, null);

@@ -61,6 +61,30 @@ internal object McpToolkitCatalog {
         "zip_extract",
         "zip_create",
         "zip_update",
+    ) + listOf(
+        "apk_verify",
+        "apk_dex_search_members",
+        "apk_dex_call_graph",
+        "apk_dex_hierarchy",
+        "apk_decompile_class",
+        "apk_decompile_method",
+        "android_resources_compile",
+        "apk_component_status",
+        "apk_component_install",
+        "apk_component_remove",
+        "apk_job_start",
+        "apk_job_list",
+        "apk_job_status",
+        "apk_job_result",
+        "apk_job_cancel",
+        "apk_session_diff",
+        "apk_session_checkpoint",
+        "apk_session_checkpoints",
+        "apk_session_rollback",
+        "artifact_open",
+        "artifact_export",
+        "apk_set_members",
+        "apk_set_open_member"
     )
-    val aliases = names.filter { it != "toolkit_status" }.associateBy { "mt_" + it }
+    val aliases = names.take(58).filter { it != "toolkit_status" }.associateBy { "mt_" + it }
 }

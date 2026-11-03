@@ -2661,7 +2661,7 @@
                 throw new TypeError('ui.setMainActivity 需要一个 Activity 子类');
             }
             // Advanced projects may call androidContext.loadResources() directly, without ui.loadAndroidResources().
-            if (!resourceCompiled) {
+            if (!resourceCompiled && !(options && options.hostResourcesOnly)) {
                 try { resourceCompiled = hostCall({op: 'resourceState'}).compiled === true; }
                 catch (_) { /* Older hosts still support ui.loadAndroidResources(). */ }
                 if (resourceCompiled && typeof globalThis.__ajsEnableJavaCallbacks === 'function') realUiMode = true;
@@ -2708,7 +2708,11 @@
                     + '（get layoutId() 返回 ui.R.layout.xxx，或 get layoutXml() 返回 XML 字符串）');
             }
             if (!resourceCompiled && !layoutXml) warnLegacyPath(null);
+            if (options && options.hostResourcesOnly && !layoutXml) {
+                throw new Error('hostResourcesOnly 仅支持不引用工程资源的 layoutXml');
+            }
             const request = {op: 'show', className: Ctor.name || 'MainActivity'};
+            if (options && options.hostResourcesOnly) request.hostResourcesOnly = true;
             if (options && options.flags != null) {
                 request.flags = Number(options.flags) || 0;
             }

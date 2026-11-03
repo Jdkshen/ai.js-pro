@@ -54,7 +54,7 @@ internal class McpAndroidTerminal(private val context: Context) {
         // The ordinary app terminal still owns its own process group. RishRuntime only injects
         // function definitions/environment into this app-UID shell so `rish`/`i` work without
         // requiring an executable file in PATH.
-        val wrapped = ToolchainRuntime.wrapCommand(context, RishRuntime.wrapCommand(context, command))
+        val wrapped = AndroidToolkitRuntime.wrapTerminal(context, ToolchainRuntime.wrapCommand(context, RishRuntime.wrapCommand(context, command)))
         val wrapper = "umask 077; printf '%s' \"\$\$\" > ${quote(marker.path)}; exec /system/bin/sh -c ${quote(wrapped)}"
         val builder = ProcessBuilder("/system/bin/setsid", "-w", "/system/bin/sh", "-c", wrapper)
             .directory(directory).redirectErrorStream(true)
@@ -115,6 +115,8 @@ internal class McpAndroidTerminal(private val context: Context) {
             if (terminated.compareAndSet(false, true)) runCatching { process.destroy() }
         }
     }
+
+    fun apkCompilerComponents(): JsonObject = AndroidToolkitRuntime.terminalStatus(context)
 
     fun compilerComponents(): JsonObject =
         com.google.gson.JsonParser().parse(ToolchainRuntime.status(context).toString()).asJsonObject

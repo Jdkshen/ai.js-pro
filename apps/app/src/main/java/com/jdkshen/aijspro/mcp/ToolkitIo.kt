@@ -19,10 +19,11 @@ internal object ToolkitIo {
     }
     fun ok(data: JsonElement, actions: JsonArray = JsonArray()) = json(
         "ok" to true, "data" to data, "error" to null, "nextActions" to actions)
+    fun ensureActive() { if(Thread.currentThread().isInterrupted) throw InterruptedIOException("操作已取消") }
     fun sha(file: File): String = file.inputStream().use { input ->
         val digest = MessageDigest.getInstance("SHA-256")
         val buffer = ByteArray(65536)
-        while (true) { val size = input.read(buffer); if (size < 0) break; digest.update(buffer, 0, size) }
+        while (true) { ensureActive(); val size = input.read(buffer); if (size < 0) break; digest.update(buffer, 0, size) }
         hex(digest.digest()).lowercase()
     }
     fun version(bytes: ByteArray) = hex(MessageDigest.getInstance("SHA-256").digest(bytes)).lowercase()
@@ -34,7 +35,7 @@ internal object ToolkitIo {
     fun read(input: InputStream, max: Int = MAX_ENTRY): ByteArray = input.use {
         val out = ByteArrayOutputStream(); val buffer = ByteArray(65536)
         while (true) {
-            val size = it.read(buffer); if (size < 0) break
+            ensureActive(); val size = it.read(buffer); if (size < 0) break
             require(out.size().toLong() + size <= max) { "内容超过本次处理上限 $max 字节" }
             out.write(buffer, 0, size)
         }; out.toByteArray()
@@ -62,12 +63,27 @@ internal object ToolkitIo {
         require(value.matches(Regex("[0-9a-f]{8}-[0-9a-f-]{27}"))) { "工作区或会话 ID 无效" }; return value
     }
     fun fresh() = UUID.randomUUID().toString()
-    fun atomic(file: File, writer: (File) -> Unit) {
+    private class FileLock { val lock=java.util.concurrent.locks.ReentrantLock();var users=0 }
+    private val fileLocks=HashMap<String,FileLock>()
+    fun <T> withFileLocks(files:List<File>, action:()->T):T {
+        val held=ArrayList<Pair<String,FileLock>>()
+        fun releaseRef(key:String,ref:FileLock){synchronized(fileLocks){ref.users--;if(ref.users==0)fileLocks.remove(key)}}
+        try {
+            files.map{it.canonicalPath}.distinct().sorted().forEach{key->
+                val ref=synchronized(fileLocks){fileLocks.getOrPut(key){FileLock()}.also{it.users++}}
+                try{ref.lock.lockInterruptibly()}catch(e:InterruptedException){releaseRef(key,ref);throw e}
+                held.add(key to ref)
+            }
+            return action()
+        }finally{held.asReversed().forEach{(key,ref)->ref.lock.unlock();releaseRef(key,ref)}}
+    }
+    fun atomic(file: File, writer: (File) -> Unit) = withFileLocks(listOf(file)) { atomicUnlocked(file,writer) }
+    private fun atomicUnlocked(file: File, writer: (File) -> Unit) {
         require(file.parentFile?.isDirectory == true) { "目标父目录不存在" }
         val temp = File.createTempFile(".aijs-tool-", ".tmp", file.parentFile)
         val backup = File(file.parentFile, ".aijs-old-${fresh()}")
         try {
-            writer(temp)
+            ensureActive(); writer(temp); ensureActive()
             if (file.exists()) require(file.renameTo(backup)) { "无法保留原文件" }
             if (!temp.renameTo(file)) {
                 if (backup.exists()) backup.renameTo(file)

@@ -3,7 +3,14 @@ package com.jdkshen.aijspro.mcp
 import java.io.*
 import java.util.zip.*
 
-/** ZIP alignment only; ELF LOAD alignment still belongs to the input native libraries. */
+/**
+ * Zipalign-compatible ZIP alignment only; ELF LOAD alignment still belongs to the input native libraries.
+ *
+ * Every non-directory STORED entry is aligned to 4 bytes. STORED native libraries (`.so`) use 16 KiB.
+ * DEFLATE entries keep their compression method. [forceStored] only preserves the legacy target set
+ * (native libraries and resources.arsc); it does not recompress arbitrary assets. Padding a compressed
+ * entry would not make its data directly loadable, so a compressed `.so` stays DEFLATE unless forced.
+ */
 internal object ToolkitArchiveAlignment {
     @JvmStatic @JvmOverloads fun align(file: File, forceStored: Boolean = false) {
         ToolkitIo.atomic(file) { target ->
@@ -13,9 +20,21 @@ internal object ToolkitArchiveAlignment {
                     source.entries().asSequence().forEach { original ->
                         val entry = ZipEntry(original.name)
                         if(original.time >= 0) entry.time = original.time
-                        val required = when { original.name.endsWith(".so") -> 16384; original.name == "resources.arsc" -> 4; else -> 1 }
-                        val stored = original.method == ZipEntry.STORED || forceStored && required > 1
-                        val alignment = if(stored && !original.isDirectory) required else 1
+                        val directory = original.isDirectory
+                        // Zip64 extra fields change the local header length after our padding calculation.
+                        // APK entries are far below this limit; reject explicitly instead of misaligning.
+                        if (!directory && (original.size < 0L || original.compressedSize < 0L ||
+                                original.size >= 0xffffffffL || original.compressedSize >= 0xffffffffL)) {
+                            throw IllegalArgumentException("不支持 ZIP64 或大小未知的条目：${original.name}")
+                        }
+                        val native = !directory && original.name.endsWith(".so", ignoreCase = true)
+                        val required = if(directory) 1 else if(native) 16384 else 4
+                        // Preserve the legacy forceStored target set: STORED native libraries and
+                        // resources.arsc. Other DEFLATE entries stay DEFLATE (and are not padded).
+                        val forceable = native || (!directory && original.name == "resources.arsc")
+                        val stored = if(directory) original.method == ZipEntry.STORED
+                            else original.method == ZipEntry.STORED || (forceStored && forceable)
+                        val alignment = if(stored && !directory) required else 1
                         entry.method = if(stored) ZipEntry.STORED else ZipEntry.DEFLATED
                         if(stored) {
                             entry.method = ZipEntry.STORED; entry.size = original.size; entry.compressedSize = original.size; entry.crc = original.crc

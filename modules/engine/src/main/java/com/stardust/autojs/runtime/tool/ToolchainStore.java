@@ -101,11 +101,19 @@ public final class ToolchainStore {
      */
     private static final Map<String, Object> JVM_LOCKS = new HashMap<>();
 
+    private final String componentId;
     private final File root;
     private final Path rootPath;
     private final Object monitor;
 
-    public ToolchainStore(File root) {
+    public ToolchainStore(File root) { this(root, COMPONENT_ID); }
+
+    /** Reuse the same verified/atomic store for explicitly installed optional APK components. */
+    public ToolchainStore(File root, String componentId) {
+        if (componentId == null || !componentId.matches("[a-z][a-z0-9-]{0,39}")) {
+            throw new IllegalArgumentException("component id 无效");
+        }
+        this.componentId = componentId;
         if (root == null) {
             throw new IllegalArgumentException("toolchain root 不能为空");
         }
@@ -323,8 +331,8 @@ public final class ToolchainStore {
     private JSONObject emptyStatus() throws JSONException {
         JSONObject result = new JSONObject();
         result.put("schemaVersion", SCHEMA_VERSION);
-        result.put("id", COMPONENT_ID);
-        result.put("component", COMPONENT_ID);
+        result.put("id", componentId);
+        result.put("component", componentId);
         result.put("root", root.getPath());
         result.put("installed", false);
         result.put("active", false);
@@ -346,7 +354,7 @@ public final class ToolchainStore {
         if (!json.optBoolean("installed", true)) {
             return null;
         }
-        if (!COMPONENT_ID.equals(json.optString("id", ""))) {
+        if (!componentId.equals(json.optString("id", ""))) {
             throw new IOException("active.json 的组件标识不是 cpp");
         }
 
@@ -490,7 +498,7 @@ public final class ToolchainStore {
                     } catch (Exception notOwnedOrInvalid) {
                         continue;
                     }
-                    if (COMPONENT_ID.equals(metadata.optString("id", ""))
+                    if (componentId.equals(metadata.optString("id", ""))
                             && name.equals(metadata.optString("version", ""))) {
                         safeDeleteTree(child, rootPath);
                         removedVersions.add(name);
@@ -551,7 +559,7 @@ public final class ToolchainStore {
             replaced = true;
             JSONObject written = readJsonFile(activePath, MAX_ACTIVE_BYTES, "active.json");
             String expectedDirectory = VERSIONS_DIR + "/" + expectedVersion;
-            if (!COMPONENT_ID.equals(written.optString("id", ""))
+            if (!componentId.equals(written.optString("id", ""))
                     || !expectedVersion.equals(written.optString("version", ""))
                     || !expectedDirectory.equals(written.optString("directory", ""))) {
                 throw new IOException("active.json 写入后校验失败");
@@ -626,8 +634,8 @@ public final class ToolchainStore {
         if (schemaVersion != SCHEMA_VERSION) {
             throw new IllegalArgumentException("manifest.schemaVersion 必须是 1");
         }
-        if (!COMPONENT_ID.equals(requiredString(json, "id"))) {
-            throw new IllegalArgumentException("manifest.id 必须是 cpp");
+        if (!componentId.equals(requiredString(json, "id"))) {
+            throw new IllegalArgumentException("manifest.id 必须是 " + componentId);
         }
 
         String version;
@@ -723,6 +731,7 @@ public final class ToolchainStore {
                 byte[] buffer = new byte[64 * 1024];
                 int read;
                 while ((read = input.read(buffer)) != -1) {
+                ensureActive();
                     total += read;
                     if (total > manifest.size || total > MAX_ARCHIVE_BYTES) {
                         throw new IOException("下载的 archive 超过 manifest.size 或 512MiB 上限");
@@ -842,6 +851,7 @@ public final class ToolchainStore {
                 new BufferedInputStream(Files.newInputStream(archive)))) {
             ZipEntry entry;
             while ((entry = zip.getNextEntry()) != null) {
+                ensureActive();
                 entryCount++;
                 if (entryCount > MAX_ENTRY_COUNT) {
                     throw new IOException("archive 条目数超过 50000 上限");
@@ -1062,10 +1072,12 @@ public final class ToolchainStore {
     // Metadata
     // ------------------------------------------------------------------
 
+    private static void ensureActive() throws java.io.InterruptedIOException { if(Thread.currentThread().isInterrupted()) throw new java.io.InterruptedIOException("组件操作已取消"); }
+
     private JSONObject buildMetadata(ParsedManifest manifest) throws JSONException {
         JSONObject metadata = new JSONObject();
         metadata.put("schemaVersion", SCHEMA_VERSION);
-        metadata.put("id", COMPONENT_ID);
+        metadata.put("id", componentId);
         metadata.put("version", manifest.version);
         metadata.put("abi", manifest.abi);
         metadata.put("minSdk", manifest.minSdk);
@@ -1101,7 +1113,7 @@ public final class ToolchainStore {
             if (requiredLong(actual, "schemaVersion", 1L, SCHEMA_VERSION) != SCHEMA_VERSION) {
                 return false;
             }
-            if (!COMPONENT_ID.equals(requiredString(actual, "id"))
+            if (!requiredString(expected, "id").equals(requiredString(actual, "id"))
                     || !requiredString(actual, "version").equals(requiredString(expected, "version"))
                     || !requiredString(actual, "abi").equals(requiredString(expected, "abi"))
                     || !requiredString(actual, "sha256").equals(requiredString(expected, "sha256"))) {
@@ -1324,6 +1336,7 @@ public final class ToolchainStore {
         int total = 0;
         int read;
         while ((read = input.read(buffer)) != -1) {
+                ensureActive();
             total += read;
             if (total > maxBytes) {
                 throw new IOException(label + " 超过大小上限");

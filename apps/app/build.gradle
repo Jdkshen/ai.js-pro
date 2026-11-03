@@ -715,6 +715,7 @@ dependencies {
     implementation 'dev.rikka.shizuku:provider:11.0.3'
     implementation project(':apkbuilder')
     // APK tools reuse the engine's pinned DEX implementation; resources stay pure Java.
+    implementation 'com.android.tools.build:apksig:8.6.1'
     implementation 'org.smali:dexlib2:2.5.2'
     implementation 'org.smali:baksmali:2.5.2'
     implementation 'org.smali:smali:2.5.2'

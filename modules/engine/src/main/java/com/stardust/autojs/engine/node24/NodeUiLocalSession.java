@@ -163,6 +163,7 @@ public final class NodeUiLocalSession {
             intent.putExtra("projectDir", projectDir);
             intent.putExtra("layoutId", request.optInt("layoutId"));
             intent.putExtra("layoutXml", request.optString("layoutXml"));
+            intent.putExtra("hostResourcesOnly", request.optBoolean("hostResourcesOnly", false));
             intent.putExtra("token", opening.token);
             intent.putExtra("javaClassOwner", request.optString("javaClassOwner"));
             int flags = request.optInt("flags", 0);

@@ -158,6 +158,14 @@ public final class NativeProjectStaging {
         CopyStats stats = new CopyStats();
         try {
             copyProjectContents(project, target, stats);
+            // Stable source mapping lets settings and rebuilt UI resources survive staged runs.
+            try (FileOutputStream output = new FileOutputStream(new File(target, ".aijs-staging-origin.json"))) {
+                String origin = new org.json.JSONObject().put("schemaVersion", 1)
+                        .put("sourceDirectory", project.getPath()).put("stagedDirectory", target.getPath()).toString();
+                output.write(origin.getBytes(StandardCharsets.UTF_8));
+            } catch (org.json.JSONException error) {
+                throw new IOException("无法记录项目源目录", error);
+            }
         } catch (IOException error) {
             deleteRecursively(target);
             throw error;

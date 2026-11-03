@@ -269,3 +269,6 @@
 -keep class com.jdkshen.aijspro.mcp.ToolkitNative { *; }
 -keep class com.jdkshen.aijspro.flutterpoc.PocRuntime { *; }
 -keep class com.jdkshen.aijspro.flutterpoc.scriptproc.PocScriptHost { public static *; }
+
+# Optional component CLI runs in a fresh app_process using this stable class name.
+-keep class com.jdkshen.aijspro.mcp.ToolkitComponentMain { public static void main(java.lang.String[]); }

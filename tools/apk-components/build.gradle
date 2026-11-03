@@ -1,0 +1,15 @@
+plugins { id 'base' }
+repositories { mavenCentral(); google() }
+configurations { jadxPayload }
+configurations.jadxPayload.attributes {
+    attribute(org.gradle.api.attributes.Usage.USAGE_ATTRIBUTE, objects.named(org.gradle.api.attributes.Usage, 'java-runtime'))
+    attribute(org.gradle.api.attributes.java.TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE, objects.named(org.gradle.api.attributes.java.TargetJvmEnvironment, 'android'))
+}
+dependencies {
+    jadxPayload 'io.github.skylot:jadx-core:1.5.6'
+    jadxPayload 'io.github.skylot:jadx-dex-input:1.5.6'
+}
+tasks.register('copyJadxPayload', Sync) {
+    from configurations.jadxPayload
+    into providers.gradleProperty('payloadOutput').getOrElse('../../.artifacts/apk-components/jadx-jars')
+}

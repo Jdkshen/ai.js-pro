@@ -385,3 +385,31 @@ clang main.c -O2 -o hello
 
 > 你已连接 AI.js Pro MCP。首次先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。JSON 布尔/数字用原生类型；path 用相对操作目录；run_script 的 path/file/source 三选一；要结果必须 wait:true；修改真实文件必须走 workspace_open→write→diff→request_apply；失败先看 error 再调用 get_execution/wait_execution/get_mcp_log，禁止猜字段和猜文件路径。
 
+
+## APK 深入分析与可选资源编译
+
+新增接口以 tools/list 的 schema 为准；不要继续仅靠工具名称猜参数。
+
+- `apk_verify` 用 apksig 真正验签，并分开报告 ZIP 4B/SO 16KB、ELF LOAD、Manifest/ABI。证书元数据仍由 `apk_read_signature` 读取，二者用途不同；静态报告不保证安装或业务行为。
+- `apk_dex_search_members` 直接定位方法与行/指令；`apk_dex_call_graph` 查 callers/callees/both；`apk_dex_hierarchy` 查继承/实现/覆盖。保留原始描述符 locator，跨 DEX 同名类要带 dexEntry；动态/反射与预算截断不得当作完整解析。
+- `artifact_open` 可直接开 DEX、SO/ELF 或 APK 分包容器；独立文件用 `artifact_export` 导出，不用 apk_build 冒充 APK。分包用 apk_set_members → apk_set_open_member 后继续 APK 工具。
+- 修改前可 `apk_session_checkpoint`；预览 `apk_session_diff`；回退 `apk_session_rollback` 必须给当前 expectedRevision，回退不改原 APK。
+- 大任务：apk_job_start → apk_job_status → apk_job_result（分块拼接其 content，offset=nextOffset）；apk_job_cancel 请求取消，CANCELLING 仍在等待真实 worker 结束，已提交操作可能完成。进程重启后不自动重放写入任务。
+- 主 APK 不包含 JADX/AAPT2 负载。apk_component_status 只查询；apk_component_install 显式下载 jadx/apk-resources，manifestUrl 可指定清单。当前默认组件在局域网更新服务器的 components/ 下；不在该局域网时需给可访问的清单地址。
+- `apk_decompile_class/method` 使用可选 JADX，Java 仅供分析，不能承诺任意反编译代码能原样重建。offset/maxChars 分页，保留方法锚点。
+- `android_resources_compile` 输入项目目录，自动读 project.json 的 androidResources，默认针对本机实际宿主 sourceDir 编译，原子写 project-res.apk 与 sidecar。自定义 hostApk 只能使用工具目录中的 APK。主机版本或资源变动后重编，不要手改 sidecar 摘要。
+- component_install、decompile、resources_compile 默认返回后台 jobId；确需同步时 background=false。首次生成组件的安装不代表本轮编译探测通过，能力表会标明 verified=false。
+
+示例（以下为 tools/call 的 arguments）：
+
+```json
+{"projectDir":"chess-auto/node-port"}
+```
+
+上例调用 android_resources_compile；收到 jobId 后调用 apk_job_status，结束再调用 apk_job_result。
+
+```json
+{"workspaceId":"<返回的工作区ID>","locator":"dex_method:Ldemo/Main;->start()V","direction":"callees","maxDepth":2,"maxNodes":100,"maxEdges":300}
+```
+
+上例调用 apk_dex_call_graph。先从列表/搜索得到真实 locator，不照抄示例中的类名。

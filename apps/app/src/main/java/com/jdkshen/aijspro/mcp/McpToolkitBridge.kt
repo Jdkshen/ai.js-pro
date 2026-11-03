@@ -9,6 +9,9 @@ import java.io.IOException
 /** Small file-backed IPC avoids Binder's transaction limit for code and ZIP pages. */
 object McpToolkitBridge {
     @JvmStatic fun call(context: Context, root: File, name: String, args: JsonObject): JsonObject = request(context, root, "call", name, args)
+    /** Stable script boundary; callers need not reflect on Gson's shrinkable implementation classes. */
+    @JvmStatic fun callJson(context: Context, root: File, name: String, arguments: String): String =
+        call(context, root, name, JsonParser().parse(arguments).asJsonObject).toString()
     internal fun definitions(context: Context, root: File): JsonArray {
         val schemas = context.assets.open("mcp/toolkit-apk-schemas.json").bufferedReader().use { JsonParser().parse(it).asJsonObject }
         return McpToolkit(root, File(context.cacheDir, "toolkit-catalog"), schemas).definitions()

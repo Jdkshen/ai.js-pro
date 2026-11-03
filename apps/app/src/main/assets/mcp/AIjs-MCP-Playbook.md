@@ -95,3 +95,10 @@ var plain = ScriptEncryption.INSTANCE.decryptScript(blob);
 - 探索脚本：`/storage/emulated/0/脚本/<用途>_harnessN.js`，只续号不覆盖。
 - 结果：`<项目>/recovered/`（正式交付放 `recovered/工程明文/`）；报告：`<项目>/analysis/*.md`。
 - 交付前两端 md5sum 对一遍并写进 `MANIFEST.md`；原始 APK / project.bin 只读不改。
+
+## 资源不匹配、后台任务和回退
+
+- 见“资源包与宿主资源表不匹配”时，先记录完整 expected/actual 摘要；按出问题手机的实际宿主重新编译。换 Android 版本不能替代资源表同步，也不要伪改 sidecar。可选 apk-resources 组件 + android_resources_compile 已提供本机编译入口。
+- 长编译/反编译先取 jobId，读取进度再分块取结果；不让 MCP 调用同步等待很久。CANCELLING 不是完成。
+- APK 编辑先建立 checkpoint，diff 只预览；rollback 使用当前 revision，避免覆盖别的调用刚写入的修改。
+- 分包归档的 baseCandidate 只是文件名提示，必须针对实际 Manifest/签名/ABI 确认安装组合；选择成员分析不等于整组合并成功。
