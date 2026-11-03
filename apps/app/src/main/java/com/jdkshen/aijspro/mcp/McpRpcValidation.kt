@@ -18,7 +18,8 @@ internal data class McpToolCall(
  * It is stateless so one request can never observe another request's shape state.
  */
 internal object McpRpcValidation {
-    private val supportedMethods = setOf("initialize", "ping", "tools/list", "tools/call")
+    private val supportedMethods = setOf("initialize", "ping", "tools/list", "tools/call",
+        "resources/list","resources/templates/list","resources/read","prompts/list","prompts/get")
 
     fun isSupportedMethod(method: String): Boolean = method in supportedMethods
 

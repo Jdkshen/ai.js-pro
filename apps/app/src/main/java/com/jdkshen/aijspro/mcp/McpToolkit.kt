@@ -5,7 +5,8 @@ import java.io.File
 
 /** A reusable utility class for the UI and MCP; implementation owns local files only. */
 internal class McpToolkit(private val root: File, store: File, schemas: JsonObject,
-    signer: ((File,File) -> Unit)? = null, assembler: ((Int,Long,String,String) -> ByteArray)? = null, private val runtime: ToolkitRuntime? = null) {
+    signer: ((File,File) -> Unit)? = null, assembler: ((Int,Long,String,String) -> ByteArray)? = null, private val runtime: ToolkitRuntime? = null,
+    private val guide:ToolkitReverseGuide?=null) {
     private val fileLock=Any(); private val zipLock=Any()
     private val files = McpFileToolkit(root)
     private val zip = McpZipToolkit(root)
@@ -14,15 +15,26 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
     fun definitions() = JsonArray().apply {
         add(ToolkitIo.json("name" to "toolkit_status", "description" to "查看本机文件、ZIP、APK、DEX、资源与ELF工具及真实能力限制；全部独立于 MT。操作目录沿用 MCP 设置。",
             "category" to "toolkit", "categoryTitle" to "文件与APK工具", "inputSchema" to ToolkitIo.json("type" to "object", "additionalProperties" to false, "properties" to JsonObject())))
-        val definitions = files.definitions().toList() + zip.definitions().toList() + apk.definitions().toList()
+        val definitions = files.definitions().toList() + zip.definitions().toList() + apk.definitions().toList() + ToolkitReverseTools.definitions().toList()
         McpToolkitCatalog.names.drop(1).forEach { name -> add(definitions.single { it.asJsonObject.tString("name") == name }) }
     }
     private fun executeOperation(name:String,args:JsonObject):JsonObject=when(name){
         "apk_component_install"->ToolkitIo.ok(requireNotNull(runtime){"组件后端不可用"}.install(args))
         "android_resources_compile"->ToolkitIo.ok(requireNotNull(runtime){"资源编译后端不可用"}.compileResources(args))
+        in ToolkitReverseTools.operations->ToolkitIo.ok(requireNotNull(runtime){"逆向组件后端不可用"}.reverse(name,args))
         else->apk.call(name,args)
     }
     fun call(name: String, args: JsonObject): JsonObject = when {
+        name=="reverse_guide"->ToolkitIo.ok(requireNotNull(guide){"当前没有指南资源"}.read(args))
+        name=="reverse_plan"->ToolkitIo.ok(requireNotNull(guide){"当前没有工作流资源"}.plan(args))
+        name=="reverse_capabilities"->{ToolkitReverseTools.validate(name,args);ToolkitIo.ok(ToolkitIo.json("schemaVersion" to 1,"root" to root.canonicalPath,
+            "runtime" to (runtime?.capabilities()?:ToolkitIo.json("available" to false)),"tools" to ToolkitReverseTools.names,"dependencies" to ToolkitReverseTools.dependencies,
+            "discovery" to ToolkitIo.json("guide" to "reverse_guide","plan" to "reverse_plan","resources" to listOf("aijs://reverse/guide","aijs://reverse/workflows")),
+            "fullApkid" to false,"fullGhidraDesktop" to false,"automaticPrivilegeEscalation" to false,"verifiedThisRequest" to false,
+            "limits" to ToolkitIo.json("nativeInputBytes" to ToolkitIo.MAX_ENTRY,"apkInputBytes" to ToolkitIo.MAX_APK,"processLogBytes" to 4194304,"timeoutSecondsMax" to 300,"concurrentWorkers" to 2,"maxQueuedAndRunning" to 4),
+            "nextActions" to listOf("检查runtime.components[].available；缺组件显式apk_component_install","后台任务返回jobId，轮询apk_job_status到终态，再apk_job_result按nextOffset读完","Frida另需可访问服务及目标附加权限；工具已注册不表示这些条件已满足")))}
+        name in ToolkitReverseTools.operations->{ToolkitReverseTools.validate(name,args)
+            if(args.tBool("background",true))ToolkitIo.ok(jobs.start(ToolkitIo.json("operation" to name,"arguments" to args,"timeoutSeconds" to args.tInt("timeoutSeconds",120,1,300))))else executeOperation(name,args)}
         name=="apk_job_start"->ToolkitIo.ok(jobs.start(args))
         name=="apk_job_list"->ToolkitIo.ok(jobs.list())
         name=="apk_job_status"->ToolkitIo.ok(jobs.status(args))

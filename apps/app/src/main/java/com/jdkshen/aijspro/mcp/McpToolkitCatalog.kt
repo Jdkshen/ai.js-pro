@@ -85,6 +85,6 @@ internal object McpToolkitCatalog {
         "artifact_export",
         "apk_set_members",
         "apk_set_open_member"
-    )
+    ) + ToolkitReverseTools.names
     val aliases = names.take(58).filter { it != "toolkit_status" }.associateBy { "mt_" + it }
 }

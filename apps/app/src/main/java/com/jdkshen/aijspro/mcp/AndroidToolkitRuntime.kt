@@ -13,7 +13,10 @@ import java.util.zip.ZipFile
 /** Components run in owned child processes, never load decompiler classes into the host. */
 internal class AndroidToolkitRuntime(private val context:Context, private val root:File):ToolkitRuntime {
     private val home=File(context.noBackupFilesDir,"apk-components")
+    private val reverse by lazy { AndroidReverseRuntime(context,root,::component) }
     companion object {
+        val COMPONENTS=linkedMapOf("jadx" to "jadx.dex.jar","apk-resources" to "bin/aapt2","apktool" to "apktool.dex.jar",
+            "radare2" to "bin/radare2","r2ghidra" to "lib/core_ghidra.so","yara" to "bin/aijs-yara","unicorn" to "bin/aijs-unicorn","frida" to "bin/aijs-frida")
         fun terminalStatus(context:Context):JsonObject=AndroidToolkitRuntime(context,context.filesDir).capabilities()
         fun wrapTerminal(context:Context,command:String):String {
             if(!ToolchainRuntime.canExecuteDownloaded(context))return command
@@ -25,13 +28,15 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
         }
     }
 
-    private fun store(id:String):ToolchainStore { require(id in setOf("jadx","apk-resources")){"未知APK组件"};return ToolchainStore(File(home,id),id) }
-    override fun capabilities():JsonObject=ToolkitIo.json("components" to listOf("jadx","apk-resources").map{id->
+    private fun store(id:String):ToolchainStore { require(id in COMPONENTS){"未知APK组件"};return ToolchainStore(File(home,id),id) }
+    override fun capabilities():JsonObject=ToolkitIo.json("components" to COMPONENTS.keys.map{id->
         val status=runCatching{JsonParser().parse(store(id).status().toString()).asJsonObject}.getOrElse{ToolkitIo.json("error" to it.message,"installed" to false)}
         val active=runCatching{store(id).activeDirectory()}.getOrNull()
-        val executable=if(id=="jadx")File(active?:home,"jadx.dex.jar") else File(active?:home,"bin/aapt2")
-        status.addProperty("id",id);status.addProperty("available",Build.VERSION.SDK_INT>=26&&active!=null&&executable.isFile&&(id=="jadx"||ToolchainRuntime.canExecuteDownloaded(context)))
-        status.addProperty("verified",false);status.addProperty("backend",if(id=="jadx")"isolated-app-process" else "android-aapt2")
+        val javaComponent=id in setOf("jadx","apktool");val executable=File(active?:home,COMPONENTS.getValue(id))
+        status.addProperty("id",id);status.addProperty("available",Build.VERSION.SDK_INT>=26&&active!=null&&executable.isFile&&(javaComponent||ToolchainRuntime.canExecuteDownloaded(context)))
+        status.addProperty("verified",false);status.addProperty("verifiedThisRequest",false);status.addProperty("backend",if(javaComponent)"isolated-app-process" else "isolated-native-process")
+        status.addProperty("requiresExecutableDownloadPolicy",!javaComponent)
+        status.add("externalRequirements",ToolkitIo.json("fridaServerOrGadget" to (id=="frida"),"matchingRadareAbi" to (id=="r2ghidra")))
         status.addProperty("manifestUrl",defaultManifest(id));status.addProperty("installTool","apk_component_install");status
     })
     private fun defaultManifest(id:String)="http://192.168.10.7:8080/components/$id-arm64-v1.json"
@@ -40,10 +45,11 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
         val id=args.tString("component");val url=URL(args.tString("manifestUrl",defaultManifest(id)))
         val progress=ByteArrayOutputStream();val abi=Build.SUPPORTED_ABIS.firstOrNull()?:"unknown"
         val result=store(id).install(url,abi,Build.VERSION.SDK_INT,PrintStream(progress,true,"UTF-8"))
-        if(id=="jadx")store(id).activeDirectory()?.let{File(it,"jadx.dex.jar").setWritable(false,false)}
-        return JsonParser().parse(result.toString()).asJsonObject.apply{addProperty("log",progress.toString("UTF-8").takeLast(8000))}
+        if(id in setOf("jadx","apktool"))store(id).activeDirectory()?.let{File(it,COMPONENTS.getValue(id)).setWritable(false,false)}
+        return JsonParser().parse(result.toString()).asJsonObject.apply{addProperty("log",progress.toString("UTF-8").replace("cpp",id).takeLast(8000))}
     }
     override fun remove(args:JsonObject):JsonObject=JsonParser().parse(store(args.tString("component")).remove().toString()).asJsonObject
+    override fun reverse(name:String,args:JsonObject)=reverse.call(name,args)
     private fun component(id:String):File=store(id).activeDirectory()?:throw ToolkitException("COMPONENT_NOT_INSTALLED","请先调用apk_component_install安装${id}组件","component")
     override fun compileResources(args:JsonObject):JsonObject{
         require(Build.VERSION.SDK_INT>=26){"资源编译组件需要Android8或更高"}
@@ -134,18 +140,8 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
         return ToolkitIo.hex(digest.digest()).lowercase()
     }
     private fun run(command:List<String>,directory:File,env:Map<String,String>,timeout:Int):String{
-        ToolkitIo.ensureActive();val log=File(directory,"process-${ToolkitIo.fresh()}.log")
-        val process=ProcessBuilder(command).directory(directory).redirectErrorStream(true).redirectOutput(log).apply{environment().putAll(env)}.start()
-        try{
-            val end=System.nanoTime()+TimeUnit.SECONDS.toNanos(timeout.toLong())
-            while(!process.waitFor(100,TimeUnit.MILLISECONDS)){ToolkitIo.ensureActive();require(System.nanoTime()<end){"组件执行超时"};require(log.length()<=4L*1024*1024){"组件日志超过4MiB"}}
-            require(log.length()<=4L*1024*1024){"组件日志超过4MiB"}
-            val text=log.readText(Charsets.UTF_8);require(process.exitValue()==0){"组件执行失败：${text.takeLast(12000)}"};return text
-        }finally{
-            val interrupted=Thread.interrupted()
-            try{if(process.isAlive){process.destroy();try{if(!process.waitFor(500,TimeUnit.MILLISECONDS))process.destroyForcibly()}catch(e:InterruptedException){process.destroyForcibly();Thread.currentThread().interrupt()}}}
-            finally{log.delete();if(interrupted)Thread.currentThread().interrupt()}
-        }
+        val result=ToolkitProcess.run(context,command,directory,env,timeout)
+        require(result.exitCode==0){"组件执行失败：${result.text.takeLast(12000)}"};return result.text
     }
 }
 

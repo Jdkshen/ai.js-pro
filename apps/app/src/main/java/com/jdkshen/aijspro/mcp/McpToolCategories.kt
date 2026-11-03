@@ -19,12 +19,14 @@ internal object McpToolCategories {
         McpToolCategory("overlay", "悬浮窗", "Node/脚本悬浮窗查询与关闭", 7),
         McpToolCategory("asset", "示例与帮助", "API 文档检索、内置示例与使用说明", 8),
         McpToolCategory("toolkit", "文件与APK工具", "本地文件、ZIP、APK会话、DEX、资源与ELF", 9),
+        McpToolCategory("reverse", "逆向分析", "工具指南、完整解包回编译、SO、YARA、Unicorn与Frida", 10),
     )
 
     private val byId = all.associateBy { it.id }
 
     private val toolToCategory: Map<String, String> = buildMap {
         McpToolkitCatalog.names.forEach { put(it, "toolkit") }
+        ToolkitReverseTools.names.forEach { put(it,"reverse") }
         listOf(
             "get_status", "read_apk_logs", "get_mcp_log",
         ).forEach { put(it, "status") }

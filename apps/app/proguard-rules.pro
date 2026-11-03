@@ -272,3 +272,4 @@
 
 # Optional component CLI runs in a fresh app_process using this stable class name.
 -keep class com.jdkshen.aijspro.mcp.ToolkitComponentMain { public static void main(java.lang.String[]); }
+-keep class com.jdkshen.aijspro.mcp.ToolkitCliMain { public static void main(java.lang.String[]); }

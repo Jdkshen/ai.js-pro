@@ -1565,7 +1565,13 @@
         "type": "string",
         "enum": [
           "jadx",
-          "apk-resources"
+          "apk-resources",
+          "apktool",
+          "radare2",
+          "r2ghidra",
+          "yara",
+          "unicorn",
+          "frida"
         ]
       },
       "manifestUrl": {
@@ -1592,7 +1598,13 @@
         "type": "string",
         "enum": [
           "jadx",
-          "apk-resources"
+          "apk-resources",
+          "apktool",
+          "radare2",
+          "r2ghidra",
+          "yara",
+          "unicorn",
+          "frida"
         ]
       }
     },

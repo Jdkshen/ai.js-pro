@@ -36,7 +36,9 @@ class McpToolkitProvider : ContentProvider() {
                     val signer=AutoSigningIdentity.signer(output.parentFile,"APK工具")
                     check(signer is com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner){"签名身份不支持归档签名"}
                     signer.signAlignedArchive(archive,output)
-                },{machine,address,source,instructionMode->assemble(machine,address,source,instructionMode)},AndroidToolkitRuntime(context,root))
+                },{machine,address,source,instructionMode->assemble(machine,address,source,instructionMode)},AndroidToolkitRuntime(context,root),
+                    ToolkitReverseGuide(context.assets.open("mcp/AIjs-Reverse-Guide.md").bufferedReader(Charsets.UTF_8).use{it.readText()},
+                        context.assets.open("mcp/reverse-workflows.json").bufferedReader(Charsets.UTF_8).use{JsonParser().parse(it).asJsonObject},McpToolCatalog.names.toSet()))
                     .also{toolkits[root.path]=it}
             } }
             when(method) {

@@ -438,7 +438,7 @@ class McpHttpServer(
   -H "Accept: application/json, text/event-stream" \
   -H "MCP-Protocol-Version: 2025-06-18" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"browser","version":"1.0"}}}'</pre>
-<p style="margin:12px 0 0;color:#57606A;">认证：本机（127.0.0.1）访问免除 Bearer 校验；局域网访问需携带 <code>Authorization: Bearer &lt;token&gt;</code>。</p>
+<p style="margin:12px 0 0;color:#57606A;">连接配置可保留 <code>Authorization: Bearer &lt;token&gt;</code> 兼容客户端；当前局域网模式不校验令牌。逆向调用先读取 <code>reverse_guide</code>，再查 <code>reverse_capabilities</code> 和 <code>reverse_plan</code>。</p>
 </div>
 </div>
 </body></html>"""

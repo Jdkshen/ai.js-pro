@@ -2,6 +2,8 @@
 
 本说明对应本项目的 Rhino / QuickJS / Node.js 三引擎和当前公开工具。先调用 list_engines 确认可用引擎。
 
+逆向 APK / DEX / SO：先 `reverse_guide({"topic":"index"})` → `reverse_capabilities({})` → `reverse_plan({"goal":"inspect"})`。独立教程、完整工具参数示例、组件安装、后台任务及错误处理已内置；不用从历史聊天找说明。标准 MCP 客户端还可通过 `resources/list/read` 读取 `aijs://reverse/guide`、`aijs://reverse/workflows`，通过 `prompts/list/get` 取得工作流提示模板。手机「文件与 APK 工具」也可打开同源调用指南。
+
 ## 工具分类
 
 tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 开头；get_status 的 toolCategories 返回各类数量。分类只用于导航，不改变工具名、参数和权限。
@@ -17,6 +19,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 悬浮窗 | list_overlays、close_overlays |
 | 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
 | 文件与 APK 工具 | toolkit_status、file_*、zip_*、apk_*（工作区/会话/列表/读取/编辑/搜索/DEX/Smali/资源/ELF/打包/签名元数据；签名元数据不是密码学验签） |
+| 逆向分析 | reverse_guide/capabilities/plan、Apktool 工程解包/回编译、native_*、yara_scan、native_emulate、frida_*；按需组件状态以 apk_component_status 为准 |
 
 ## 快速开始（AI 客户端必读）
 

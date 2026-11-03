@@ -59,6 +59,10 @@ internal class McpTools(private val context: Context, private val event: (String
     private val apiDocs = McpApiDocs {
         context.assets.open("docs/api-reference-data.js").bufferedReader(Charsets.UTF_8).use { it.readText() }
     }
+    private val reverseMarkdown by lazy { context.assets.open("mcp/AIjs-Reverse-Guide.md").bufferedReader(Charsets.UTF_8).use{it.readText()} }
+    private val reverseWorkflows by lazy { context.assets.open("mcp/reverse-workflows.json").bufferedReader(Charsets.UTF_8).use{com.google.gson.JsonParser().parse(it).asJsonObject} }
+    private val reverseGuide by lazy { ToolkitReverseGuide(reverseMarkdown,reverseWorkflows,McpToolCatalog.names.toSet()) }
+    private val knowledge by lazy { ToolkitKnowledge(reverseMarkdown,reverseWorkflows) }
 
     private class RunRecord(val id: String, val path: String, val createdAt: Long) {
         @Volatile var status = "QUEUED"
@@ -102,6 +106,11 @@ internal class McpTools(private val context: Context, private val event: (String
                     eventName = invocation.requestedName
                     call(invocation)
                 }
+                "resources/list"->knowledge.resourcesList(McpRpcValidation.optionalParams(params)?:JsonObject())
+                "resources/templates/list"->knowledge.resourceTemplatesList(McpRpcValidation.optionalParams(params)?:JsonObject())
+                "resources/read"->knowledge.resourcesRead(McpRpcValidation.optionalParams(params)?:JsonObject())
+                "prompts/list"->knowledge.promptsList(McpRpcValidation.optionalParams(params)?:JsonObject())
+                "prompts/get"->knowledge.promptsGet(McpRpcValidation.optionalParams(params)?:JsonObject())
                 else -> error("unreachable supported method")
             }
             event("$eventName · ${if (result.get("isError")?.asBoolean == true) "失败" else "成功"}")
@@ -152,10 +161,12 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun initialize(params: JsonObject?) = JsonObject().apply {
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
-        add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) }) })
-        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.8.0") })
+        add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) });add("resources",JsonObject());add("prompts",JsonObject()) })
+        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.9.0") })
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
+            "逆向任务首次连接：reverse_guide({topic:index}) → reverse_capabilities({}) → reverse_plan({goal:inspect|decode|rebuild|native|dynamic|fingerprint|emulate|compare})。指南与步骤也可通过 resources/list/read、prompts/list/get 发现；URI aijs://reverse/guide、aijs://reverse/workflows。",
+            "逆向组件按需安装，工具注册不代表已安装；apk_component_status查询后显式apk_component_install。后台返回jobId后apk_job_status到终态，再apk_job_result按nextOffset读完；失败保留error.code，不要把排队/启动当成功。Frida需要另外可访问的Server/Gadget及目标附加权限。",
             "",
             "通用规则：",
             "- JSON 的布尔/数字用原生类型（true / 100，不要字符串 \"true\" / \"100\"）。",
@@ -167,7 +178,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "- 文件与APK工具全部由 AI.js Pro 自己实现，不需要 MT。先 toolkit_status；文件/ZIP用 file_*/zip_*，APK先 apk_list_available_apks → apk_workspace_open → apk_session_create。读取后用返回的 locator/targetVersion 修改，apk_session_check 后再 apk_build；有 nextCursor 用 apk_continue，修改后重查。签名读取是元数据，不是密码学验签。旧 mt_* 名称仅为本地兼容别名；多架构汇编按需安装终端 C/C++ 组件，能力与限制见 toolkit_status 和本指南。",
             "- 读取控件/截图需无障碍服务；capture_screen 缩小后坐标按 sourceWidth/scale 换算。",
             "- 手机终端：terminal_exec（backend 默认 app，可选 shizuku）→ terminal_read(offset=nextOffset) → terminal_write/terminal_stop；shell_rish 是 Shizuku 后端的异步兼容入口，同样返回 jobId，不阻塞等待。app 为普通应用 UID，shizuku 需服务已运行并授权且不回退；两者共用同一任务表。先 get_build_tools 确认工具链，非 PTY。",
-            "- 冷进程：换 .so / 做对照实验前先 stop_all_scripts；脚本进程会复用，已 dlopen 的库和 isAvailable() 结果会粘住。",
+            "- 冷进程：换 .so / 做对照实验前先停止自己拥有的执行；全部停止需用户任务范围包含其他运行任务。脚本进程会复用，已 dlopen 的库和 isAvailable() 结果会粘住；不要在其他任务运行时擅自重启整个应用。",
             "- terminal 大输出：按 terminal_read(offset=上次 nextOffset, maxChars≤65536) 轮询到 running=false 且 nextOffset==outputEnd；二进制/特殊后缀文件用 base64 分块写入，workspace 只收部分文本类型。",
             "- 借目标 App 的解密/校验函数时优先选无状态自包含入口；长度/字节序等关键数字先实测再信旧文档；两次结果不同先怀疑进程复用与 native 全局状态。更多实战要点与坑表见 learn_autojs_skill 末尾「MCP 实战要点」。",
             "",
@@ -261,6 +272,8 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun call(invocation: McpToolCall): JsonObject {
         val name = invocation.canonicalName
         val args = invocation.arguments
+        if(name=="reverse_guide")return toolJson(ToolkitIo.ok(reverseGuide.read(args)))
+        if(name=="reverse_plan")return toolJson(ToolkitIo.ok(reverseGuide.plan(args)))
         if (name in McpToolkitCatalog.names) {
             val result = McpToolkitBridge.call(context, root, name, args)
             return toolJson(result).apply { if (result.get("ok")?.asBoolean == false) addProperty("isError", true) }

@@ -39,7 +39,10 @@ internal class ToolkitJobs(private val folder: File, private val execute: (Strin
                 job.state = if (job.cancelled.get() || failure is InterruptedIOException || failure is InterruptedException) "CANCELLED" else "FAILED"
                 job.reason = job.reason.ifEmpty { failure.message ?: failure.javaClass.simpleName }
                 Thread.interrupted()
-                writeResult(job, ToolkitIo.json("ok" to false, "error" to ToolkitIo.json("code" to job.state, "message" to job.reason)))
+                val typed=failure as? ToolkitException
+                val code=if(job.state=="CANCELLED")"CANCELLED" else typed?.code?:if(failure is IllegalArgumentException)"INVALID_ARGUMENT" else "TOOL_FAILED"
+                writeResult(job, ToolkitIo.json("ok" to false,"data" to null, "error" to ToolkitIo.json("code" to code, "message" to job.reason,"argument" to typed?.argument,"retrySameArguments" to false),
+                    "nextActions" to if(code=="COMPONENT_NOT_INSTALLED")listOf(ToolkitIo.json("tool" to "apk_component_status"),ToolkitIo.json("tool" to "apk_component_install","hint" to "使用错误message中的组件id，先核对平台/ABI"))else emptyList<Any>()))
             } finally {
                 Thread.interrupted()
                 synchronized(job) { job.finished = System.currentTimeMillis(); job.thread = null
@@ -56,7 +59,10 @@ internal class ToolkitJobs(private val folder: File, private val execute: (Strin
         val file=File(folder,j.id+".result.json"); require(file.length()<=24L*1024*1024) { "任务结果超过读取预算" }
         val offset=args.tInt("offset",0,0,24*1024*1024); val max=args.tInt("maxChars",16384,1,200000)
         val text=file.readText(Charsets.UTF_8); require(offset<=text.length) { "结果偏移超出范围" }
-        val end=minOf(text.length,offset+max)
+        require(offset==0||offset==text.length||!Character.isLowSurrogate(text[offset])||!Character.isHighSurrogate(text[offset-1])){"结果offset不能切开UTF-16代理对，请使用nextOffset"}
+        var end=minOf(text.length,offset+max)
+        if(end in (offset+1) until text.length&&Character.isHighSurrogate(text[end-1])&&Character.isLowSurrogate(text[end]))end--
+        require(end>offset||offset==text.length){"maxChars太小，不能容纳当前Unicode字符，请至少使用2"}
         return ToolkitIo.json("jobId" to j.id,"state" to j.state,"content" to text.substring(offset,end),"nextOffset" to end,"hasMore" to (end<text.length),"totalChars" to text.length)
     }
     private fun find(args:JsonObject)=jobs[ToolkitIo.id(args.tString("jobId"))] ?: error("任务不存在")
@@ -87,6 +93,6 @@ internal class ToolkitJobs(private val folder: File, private val execute: (Strin
         private val WORKERS=Executors.newFixedThreadPool(2){r->Thread(r,"apk-tool-job").apply{isDaemon=true}}
         private val TIMER=Executors.newSingleThreadScheduledExecutor{r->Thread(r,"apk-job-deadline").apply{isDaemon=true}}
         val OPERATIONS=setOf("apk_search","apk_build","apk_verify","apk_dex_call_graph","apk_dex_search_members","apk_dex_hierarchy",
-            "apk_decompile_class","apk_decompile_method","android_resources_compile","apk_component_install","artifact_open","artifact_export")
+            "apk_decompile_class","apk_decompile_method","android_resources_compile","apk_component_install","artifact_open","artifact_export") + ToolkitReverseTools.operations
     }
 }

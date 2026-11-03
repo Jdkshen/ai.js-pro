@@ -1,0 +1,171 @@
+package com.jdkshen.aijspro.mcp
+
+import android.content.Context
+import com.google.gson.*
+import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity
+import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner
+import com.stardust.autojs.runtime.tool.ToolchainRuntime
+import java.io.File
+import java.util.zip.ZipFile
+import com.google.gson.stream.JsonReader
+
+/** Typed reverse operations. Target bytes are staged; optional engines run in owned child VMs. */
+internal class AndroidReverseRuntime(private val context:Context,private val root:File,private val component:(String)->File) {
+    private fun file(args:JsonObject,key:String="path",limit:Long=ToolkitIo.MAX_ENTRY.toLong()):File=
+        ToolkitIo.resolve(root,args.tString(key)).also{require(it.isFile&&it.length()<=limit){"$key 文件不存在或超过${limit}字节"}}
+    private fun native(id:String):File {
+        if(!ToolchainRuntime.canExecuteDownloaded(context))throw ToolkitException("EXECUTION_POLICY","当前Android策略不允许执行下载的原生组件","component")
+        return component(id)
+    }
+    fun call(name:String,args:JsonObject):JsonObject {
+        ToolkitReverseTools.validate(name,args)
+        val temp=File(context.cacheDir,"reverse-${ToolkitIo.fresh()}").apply{require(mkdir())}
+        try{return when(name){
+            "apk_decode_project","apk_build_project","apk_install_framework"->apktool(name,args,temp)
+            "artifact_fingerprint"->ToolkitFingerprint.inspect(file(args,limit=ToolkitIo.MAX_APK))
+            "yara_scan"->{val c=native("yara");val target=stage(file(args),temp,"target.bin");val rules=stage(file(args,"rulesPath",1024*1024),temp,"rules.yar")
+                runner(listOf(File(c,"bin/aijs-yara").path,rules.path,target.path,args.tInt("scanTimeoutSeconds",10,1,30).toString(),if(args.tBool("includeOffsets",true))"1" else "0"),temp,c,args)}
+            "native_emulate"->emulate(args,temp)
+            "frida_status","frida_processes","frida_eval"->frida(name,args,temp)
+            else->radare(name,args,temp)
+        }}finally{temp.deleteRecursively()}
+    }
+    private fun stage(source:File,temp:File,name:String):File {
+        val before=ToolkitIo.sha(source);val target=File(temp,name)
+        source.inputStream().use{input->target.outputStream().use{out->val buffer=ByteArray(65536);var total=0L
+            while(true){ToolkitIo.ensureActive();val n=input.read(buffer);if(n<0)break;total+=n;require(total<=ToolkitIo.MAX_APK){"输入超过512MiB"};out.write(buffer,0,n)}}}
+        require(ToolkitIo.sha(target)==before&&ToolkitIo.sha(source)==before){"分析输入在复制时发生变化"};return target
+    }
+    private fun execute(command:List<String>,temp:File,env:Map<String,String>,args:JsonObject,watchedFiles:List<File> = emptyList())=
+        ToolkitProcess.run(context,command,temp,env,args.tInt("timeoutSeconds",120,1,300),watchedFiles)
+    private fun env(c:File)=mapOf("LD_LIBRARY_PATH" to File(c,"lib").path,"HOME" to context.filesDir.path,"R2_PREFIX" to c.path,
+        "R2_LIBR_PLUGINS" to File(c,"lib/radare2").path,"R2_NOPLUGINS" to "1","R2_RCFILE" to "/dev/null")
+    private fun runner(command:List<String>,temp:File,c:File,args:JsonObject):JsonObject {
+        val response=execute(command,temp,env(c),args)
+        val result=runCatching{JsonParser().parse(response.text).asJsonObject}.getOrElse{
+            throw ToolkitException("COMPONENT_FAILED","组件未返回JSON（exit=${response.exitCode}）：${response.text.takeLast(4000)}")}
+        result.addProperty("exitCode",response.exitCode)
+        if(response.exitCode!=0||result.get("ok")?.asBoolean==false)throw ToolkitException("COMPONENT_FAILED",result.toString().take(12000))
+        return result
+    }
+    private fun emulate(args:JsonObject,temp:File):JsonObject {
+        val c=native("unicorn");val code=ToolkitIo.unhex(args.tString("codeHex"));require(code.isNotEmpty()&&code.size<=65536){"代码必须为1..65536字节"}
+        val data=ToolkitIo.unhex(args.tString("dataHex",""));require(data.size<=4096){"初始数据超过4096字节"}
+        val codeFile=File(temp,"code.bin").apply{writeBytes(code)};val dataFile=File(temp,"data.bin").apply{writeBytes(data)}
+        val command=mutableListOf(File(c,"bin/aijs-unicorn").path,args.tString("architecture"),codeFile.path,dataFile.path,args.tInt("timeoutMs",100,1,1000).toString(),args.tInt("instructionLimit",10000,1,100000).toString())
+        args.getAsJsonObject("registers")?.entrySet()?.let{values->require(values.size<=64){"寄存器太多"};values.forEach{(key,value)->
+            require(key.matches(Regex("[A-Za-z][A-Za-z0-9]{0,7}"))&&value.isJsonPrimitive&&value.asJsonPrimitive.isString){"寄存器格式无效"}
+            command+="${key.uppercase()}=${ToolkitReverseTools.address(value.asString)}"
+        }}
+        return runner(command,temp,c,args).apply{addProperty("backend","unicorn");addProperty("fullAndroidEnvironment",false)}
+    }
+    private fun frida(name:String,args:JsonObject,temp:File):JsonObject {
+        val c=native("frida");val endpoint=args.tString("endpoint","127.0.0.1:27042")
+        require(endpoint.matches(Regex("[A-Za-z0-9_.-]{1,253}:[0-9]{1,5}"))&&endpoint.substringAfterLast(':').toInt() in 1..65535){"endpoint 必须为host:port"}
+        val request=ToolkitIo.json("operation" to name.removePrefix("frida_"),"endpoint" to endpoint,"timeoutMs" to 12000)
+        if(name=="frida_eval") { val script=args.tString("script");require(script.toByteArray(Charsets.UTF_8).size<=65536){"Frida脚本超过64KiB"}
+            request.addProperty("pid",args.tInt("pid",0,1,Int.MAX_VALUE));request.addProperty("script",script);request.addProperty("durationMs",args.tInt("durationMs",1000,1,10000)) }
+        val input=File(temp,"request.json").apply{writeText(request.toString(),Charsets.UTF_8)}
+        return runner(listOf(File(c,"bin/aijs-frida").path,input.path),temp,c,args).apply{
+            if(name=="frida_eval"){
+                val errors=getAsJsonArray("messages")?.count{it.isJsonObject&&it.asJsonObject.tString("type","")=="error"}?:0
+                addProperty("scriptErrorCount",errors);addProperty("scriptSucceeded",errors==0)
+                if(errors>0)throw ToolkitException("FRIDA_SCRIPT_ERROR",toString().take(12000),"script")
+            }
+        }
+    }
+    private fun radare(name:String,args:JsonObject,temp:File):JsonObject {
+        val c=native("radare2");val input=stage(file(args),temp,"target.bin")
+        fun query(command:String):JsonElement {
+            val result=execute(listOf(File(c,"bin/radare2").path,"-N","-2","-q","-e","scr.color=0","-e","scr.interactive=false","-c",command+";q",input.path),temp,env(c),args)
+            if(result.exitCode!=0)throw ToolkitException("COMPONENT_FAILED","radare2 exit=${result.exitCode}: ${result.text.takeLast(4000)}")
+            return runCatching{JsonParser().parse(result.text.trim())}.getOrElse{throw ToolkitException("COMPONENT_INVALID_RESULT","radare2 没有返回有效JSON：${result.text.takeLast(2000)}")}
+        }
+        fun paged(command:String):JsonObject {
+            val data=File(temp,"radare-page.json")
+            val result=execute(listOf(File(c,"bin/radare2").path,"-N","-2","-q","-e","scr.color=0","-e","scr.interactive=false","-c","aaa;$command >${data.path};q",input.path),temp,env(c),args,listOf(data))
+            require(result.exitCode==0&&data.isFile&&data.length()<=64L*1024*1024){"radare2没有返回有界结果"}
+            val offset=args.tInt("offset",0,0,1000000);val limit=args.tInt("limit",50,1,200);val items=JsonArray();var total=0
+            JsonReader(data.reader(Charsets.UTF_8)).use{reader->reader.beginArray();while(reader.hasNext()){
+                ToolkitIo.ensureActive();require(total<1000000){"radare2项目数量超过100万"}
+                if(total in offset until offset+limit)items.add(JsonParser().parse(reader))else reader.skipValue();total++
+            };reader.endArray()}
+            require(offset<=total){"offset 超出结果范围"};val end=minOf(total,offset+limit)
+            return ToolkitIo.json("items" to items,"offset" to offset,"nextOffset" to end,"hasMore" to (end<total),"total" to total,"backend" to "radare2","resultBudgetBytes" to 67108864)
+        }
+        val sourceHash=ToolkitIo.sha(input)
+        return when(name){
+            "native_analyze"->ToolkitIo.json("backend" to "radare2","sha256" to sourceHash,"info" to query("ij"),"executesTarget" to false)
+            "native_functions"->paged("aflj").apply{addProperty("sha256",sourceHash);addProperty("heuristic",true)}
+            "native_xrefs"->paged("axtj ${ToolkitReverseTools.address(args.tString("address"))}").apply{addProperty("sha256",sourceHash);addProperty("indirectReferencesComplete",false)}
+            "native_function_detail"->ToolkitIo.json("sha256" to sourceHash,"function" to query("aaa;s ${ToolkitReverseTools.address(args.tString("address"))};pdfj"),"backend" to "radare2")
+            "native_decompile"->{
+                val plugin=native("r2ghidra");val library=File(plugin,"lib/core_ghidra.so");require(library.isFile){"r2ghidra组件缺少插件"}
+                // Only this pinned component is explicitly loaded; user r2rc and plugin directories stay disabled.
+                val pluginEnv=env(c)+mapOf("SLEIGHHOME" to File(plugin,"share/r2ghidra").path,
+                    "LD_LIBRARY_PATH" to File(plugin,"lib").path+File.pathSeparator+File(c,"lib").path)
+                val address=ToolkitReverseTools.address(args.tString("address"))
+                val result=execute(listOf(File(c,"bin/radare2").path,"-N","-2","-q","-e","scr.color=0","-c","L ${library.path};aaa;s $address;pdgj;q",input.path),temp,pluginEnv,args)
+                val parsed=runCatching{JsonParser().parse(result.text.trim())}.getOrNull()
+                require(result.exitCode==0&&parsed!=null&&parsed.isJsonObject&&parsed.asJsonObject.get("code")?.asString?.isNotBlank()==true){"r2ghidra没有返回伪代码：${result.text.takeLast(4000)}"}
+                ToolkitIo.json("backend" to "r2ghidra","sha256" to sourceHash,"result" to parsed,"rebuildGuaranteed" to false)
+            }
+            "native_compare"->{val other=stage(file(args,"otherPath"),temp,"other.bin");ToolkitBinaryCompare.compare(input,other,args).apply{add("info",query("ij"));addProperty("backend","radare2+bounded-byte-diff")}}
+            else->error("未知逆向操作：$name")
+        }
+    }
+    private fun page(items:JsonArray,args:JsonObject):JsonObject {
+        val offset=args.tInt("offset",0,0,1000000);val limit=args.tInt("limit",50,1,200);require(offset<=items.size()){"offset 超出结果范围"}
+        val end=minOf(items.size(),offset+limit)
+        return ToolkitIo.json("items" to JsonArray().apply{for(i in offset until end)add(items[i])},"offset" to offset,"nextOffset" to end,"hasMore" to (end<items.size()),"total" to items.size(),"backend" to "radare2")
+    }
+    private fun apktool(name:String,args:JsonObject,temp:File):JsonObject {
+        val c=component("apktool");val payload=File(c,"apktool.dex.jar");require(payload.isFile){"Apktool组件不完整"}
+        val framework=File(context.noBackupFilesDir,"apk-frameworks").apply{mkdirs()}
+        val command=mutableListOf("/system/bin/app_process","-Djava.io.tmpdir=${temp.path}","-Duser.home=${temp.path}","/system/bin","--nice-name=aijs-apktool",ToolkitCliMain::class.java.name,"brut.apktool.Main")
+        var output:File?=null;var projectTarget:File?=null
+        when(name){
+            "apk_decode_project"->{val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk");validateArchive(input)
+                projectTarget=ToolkitIo.resolve(root,args.tString("outDir"));require(!projectTarget.exists()&&projectTarget.parentFile?.isDirectory==true){"outDir 必须是父目录存在的新目录"}
+                output=File(temp,"decoded");command+=listOf("d",input.path,"-o",output.path,"-p",framework.path,"-j","1")
+                if(!args.tBool("decodeResources",true))command+="-r"
+            }
+            "apk_build_project"->{val project=ToolkitIo.resolve(root,args.tString("projectDir"));require(project.isDirectory&&File(project,"apktool.yml").isFile){"projectDir 不是Apktool解包工程"}
+                val copied=File(temp,"project").apply{mkdir()};ToolkitReverseFiles.copyTree(project,copied)
+                val aapt=native("apk-resources");val wrapper=File(temp,"aapt2").apply{
+                    writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${McpAndroidTerminal.quote(File(aapt,"lib").path)} exec ${McpAndroidTerminal.quote(File(aapt,"bin/aapt2").path)} \"\$@\"\n",Charsets.UTF_8);require(setExecutable(true,true))}
+                output=File(temp,"unsigned.apk");command+=listOf("b",copied.path,"--aapt",wrapper.path,"--no-crunch","-p",framework.path,"-o",output.path,"-j","1")
+            }
+            "apk_install_framework"->{val input=stage(file(args,limit=ToolkitIo.MAX_ENTRY.toLong()),temp,"framework.apk");validateArchive(input)
+                command+=listOf("if",input.path,"-p",framework.path)
+                val tag=args.tString("tag","");if(tag.isNotEmpty()){require(tag.matches(Regex("[A-Za-z0-9_.-]{1,64}"))){"tag 无效"};command+=listOf("-t",tag)}
+            }
+        }
+        // Do not put Termux libz/libc++ ahead of ART system libraries. Only the aapt child gets LD_LIBRARY_PATH.
+        val result=execute(command,temp,mapOf("CLASSPATH" to payload.path+File.pathSeparator+context.applicationInfo.sourceDir,"LD_LIBRARY_PATH" to ""),args)
+        if(result.exitCode!=0)throw ToolkitException("APKTOOL_FAILED","Apktool exit=${result.exitCode}: ${result.text.takeLast(12000)}")
+        if(name=="apk_install_framework")return ToolkitIo.json("installed" to true,"scope" to "apktool-private-framework-cache","diagnostics" to result.text.takeLast(12000))
+        if(name=="apk_decode_project") {
+            require(output!!.isDirectory&&File(output,"apktool.yml").isFile){"解包没有生成有效工程"}
+            ToolkitReverseFiles.publishTree(output,projectTarget!!)
+            return ToolkitIo.json("path" to projectTarget.path,"backend" to "apktool","decoded" to true,"diagnostics" to result.text.takeLast(12000),"rebuildGuaranteed" to false)
+        }
+        require(output!!.isFile){"回编译没有生成APK"};validateArchive(output)
+        ToolkitArchiveAlignment.align(output)
+        var verification:JsonObject?=null
+        if(args.tBool("sign")){val signed=File(temp,"signed.apk");val signer=AutoSigningIdentity.signer(temp,"MCP Apktool回编译")
+            require(signer is KeyStoreApkSigner){"当前签名身份不支持归档签名"};signer.signAlignedArchive(output,signed);output=signed
+            verification=ToolkitApkVerifier.inspect(output,null,null)
+            require(verification.getAsJsonObject("signature").tBool("verified")){"回编译APK验签失败"}
+        }
+        val destination=ToolkitIo.resolve(root,args.tString("outPath"))
+        ToolkitIo.withFileLocks(listOf(destination)){require(!destination.exists()){"outPath 已存在，请使用新文件名"};ToolkitIo.atomic(destination){output.copyTo(it,true)}}
+        return ToolkitIo.json("path" to destination.path,"sha256" to ToolkitIo.sha(destination),"size" to destination.length(),"signed" to args.tBool("sign"),"verification" to verification,"backend" to "apktool","diagnostics" to result.text.takeLast(12000))
+    }
+    private fun validateArchive(file:File) {
+        ZipFile(file).use{zip->var total=0L;var count=0;val names=HashSet<String>()
+            zip.entries().asSequence().forEach{entry->ToolkitIo.ensureActive();ToolkitIo.entry(entry.name);require(names.add(entry.name)&&++count<=30000){"APK条目重复或过多"}
+                require(entry.size in 0..ToolkitIo.MAX_APK){"APK条目大小无效"};total+=entry.size;require(total<=ToolkitIo.MAX_APK){"APK展开超过512MiB"}}
+        }
+    }
+}

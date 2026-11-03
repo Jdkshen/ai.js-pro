@@ -1,0 +1,751 @@
+<!-- section:id=overview -->
+# AI.js Pro 逆向 MCP 自发现指南
+
+> 适用基线：**dev1329-1**。本机公开 MCP 入口 **169 个**（**160 个规范名 + 9 个兼容别名**）。其中 18 个逆向工具已全部注册：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`。
+>
+> 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida 还需要外部 Server/Gadget、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。
+
+## 这份指南解决什么问题
+
+新 AI 最常犯的错误是先猜一个工具名，再把不存在的调用写进流程。这里把三件事分开：
+
+1. **教程**：从 APK/ELF/运行时证据走到结论，并明确哪些结论不能下。
+2. **机读计划**：`goal` 对应固定工作流，逐 step 给出工具、参数、变量、组件和缺失状态。
+3. **真实执行**：由已注册的 `apk_*`、`file_*`、`zip_*`、`native_*`、`frida_*` 等工具完成；计划本身不执行、不下载、不注入。
+
+```text
+reverse_guide(topic=index)      # 章节、工作流、18 个逆向工具状态
+reverse_guide(topic=<section>)  # 按 section id 读正文，可分页
+reverse_plan(goal=<goal>)       # 取机读 steps；组件和工具状态明确
+按 plan 执行可用步骤             # 计划本身不执行
+```
+
+## 本版真实边界（dev1329-1）
+
+- **18 个逆向工具已注册**，但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
+- 可选组件共 8 个：`jadx`、`apk-resources`、`apktool`、`radare2`、`r2ghidra`、`yara`、`unicorn`、`frida`。`apk_component_install/remove` 的 `component` 枚举就是这 8 个。
+- **Apktool 3.0.3** 已在本机真机通过 decode → edit → rebuild：使用私有 `app_process` + AAPT2 wrapper，不把 apktool 类加载进主进程。但**任意 APK 不保证**可解包/回编译，失败必须报原始 stderr。
+- **radare2** 的 `native_*` 工具直接读手机路径，不读 APK 快照 locator；要从快照分析 so，先用 `apk_copy_entry(direction=workspace_to_local)` 导出。
+- **r2ghidra** 是可选伪代码后端，当前构建仍待完成；只能通过 `apk_component_status` 确认，不能声称已安装，也不能把 `native_decompile` 当作必然可用。
+- **Frida** 工具已注册，但必须已有可访问的 frida-server/Gadget；工具不会自动 root、自动启动服务或自动提权。
+- **Unicorn** 只模拟 `codeHex` 原始机器码，不是 Android/ELF/JNI 运行时；不接受 so 路径。
+- `artifact_fingerprint` 是内置启发式指纹，**不是完整 APKiD**，不能宣称做了 APKiD 检测或给出 APKiD 规则结论。
+- `apk_component_status` 只接受 `{}`，**没有** `component` 字段；逐个组件看返回的 `data.components[]`。
+- 所有逆向操作默认 `background=true`，返回 `jobId`；必须 `apk_job_status` 到终态，再 `apk_job_result` 分页。**任务登记不代表组件已安装，也不代表授权已取得。**
+
+## 阅读约定
+
+> 本文所有 `${...}` 和 `<...>` 都是占位符，复制前必须替换。`reverse_plan` 给每个变量 `placeholder` 和 `replaceBeforeUse=true`；把 `${WORKSPACE_ID}` 原样发给工具不是默认值，而是错误参数。
+
+- 参数名、必填项、枚举以 `tools/list` 的 `inputSchema` 为准；本文例子按当前 schema 写全必填字段。
+- `POST /mcp` 的 JSON-RPC 请求体只是传输外壳；真正参数在 `params.arguments`。
+- 页面、结果、游标都以返回的 `nextOffset` / `nextCursor` 为准，不自己算偏移。
+- 真实 token、cookie、密钥、设备路径中的个人信息不得写进提示词、日志或本文件；只引用设置页里的占位符。
+
+<!-- section:id=quickstart -->
+## 90 秒：从零到可复核的只读证据
+
+### 0. 传输外壳
+
+端点固定为 `http://<手机IP>:<端口>/mcp`。请求头至少包含：
+
+```http
+POST /mcp HTTP/1.1
+Host: 192.168.10.7:8080
+Content-Type: application/json
+Accept: application/json, text/event-stream
+MCP-Protocol-Version: 2025-03-26
+Authorization: Bearer <LAN_TOKEN>
+```
+
+`<LAN_TOKEN>` 从 App 的 MCP 设置页读取，**不要把真实 token 嵌进本文、脚本或对话**。当前构建在可信局域网内即使不带 `Authorization` 也可能接受请求，但不要把它当作可依赖的鉴权保证；客户端配置里仍使用同一个 LAN token。`Accept` 同时列出 `application/json` 和 `text/event-stream` 以兼容 Streamable HTTP 客户端；本服务没有 SSE，`GET /mcp` 带 `Accept: text/event-stream` 会返回 405，改用 `POST` JSON-only。
+
+### 1. 看指南索引与计划
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"reverse_guide","arguments":{"topic":"index"}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reverse_plan","arguments":{"goal":"inspect"}}}
+```
+
+`reverse_guide` 的 `data` 含 `guideVersion`、`guideSha256`、`sections[]`、`sectionIds[]`、`workflows[]`、`candidateTools[]`、`content`、`offset`、`nextOffset`、`hasMore`、`truncated`。`reverse_plan` 的 `data` 是计划：`planOnly=true`、`executed=false`。
+
+### 2. 找 APK、开快照、建会话
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"apk_list_available_apks","arguments":{"prefix":"","limit":50}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"apk_workspace_open","arguments":{"path":"${APK_PATH}","temporary":true}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"apk_session_create","arguments":{"workspaceId":"${WORKSPACE_ID}"}}}
+```
+
+记下 `workspaceId`、`sha256`、`editSessionId`、`revision`。`apk_workspace_open` 是复制 + 哈希，源 APK 不会被后续编辑改动。
+
+### 3. 组件状态、独立检查与搜索
+
+```json
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"apk_component_status","arguments":{}}}
+```
+
+**`apk_component_status` 的输入是空对象 `{}`**。返回 `data.components[]`，逐项看 `id`、`installed`、`available`、`verified`、`backend`、`externalRequirements`。接口没有 `component` 字段；不要传 `{"component":"jadx"}`，它不会按组件过滤，应以返回数组中的 `id` 为准。
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"apk_verify","arguments":{"workspaceId":"${WORKSPACE_ID}"}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"apk_search","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","target":"overview","query":"${QUERY}","queryType":"literal","caseSensitive":false,"matchMode":"contains","prefix":"","includeMatchOffsets":false,"limit":50,"snippetMaxChars":200}}}
+```
+
+`apk_search` 的 `overview` 覆盖 ZIP 路径、AXML 文本、资源名/值和 DEX 类/字段/方法/字符串。命中太多时先缩小 `prefix` 或改用 `target=dex_strings`/`native_symbols`，不要用灾难性正则硬扫。
+
+### 4. 签名证据不要混用
+
+```json
+{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"apk_read_signature","arguments":{"workspaceId":"${WORKSPACE_ID}"}}}
+```
+
+`apk_read_signature` 只读 V1/V2/V3/V3.1 证书和方案元数据，`verified` 始终为 `false`；它不等于 `apk_verify`。`apk_verify` 才做密码学验签和 ZIP/ELF 结构检查，但仍不证明安装成功或业务行为。
+
+<!-- section:id=rpc -->
+## JSON-RPC 与工具参数：只发真实存在的调用
+
+MCP 走 `POST /mcp`，方法固定为 `initialize`、`tools/list`、`tools/call`、`resources/*`、`prompts/*`；客户端会话管理由客户端负责。下面的 `name`/`arguments` 才是工具契约。
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+```
+
+```json
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"reverse_capabilities","arguments":{}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"apk_workspace_open","arguments":{"path":"${APK_PATH}","temporary":true}}}
+```
+
+成功时工具结果通常是 `{ok:true,data:{...},nextActions:[...]}`；失败时是 `{ok:false,data:null,error:{code,message,argument,recoverable,retrySameArguments},nextActions:[...]}`。不要把 HTTP 200 当成工具成功，必须看 `ok` 和 `error`。`reverse_guide`/`reverse_plan` 也走这个包装，核心字段在 `data` 内，字段名不变。
+
+### 调用前检查清单
+
+1. `tools/list` 有这个名字吗？没有就停止；`reverse_plan.unsupportedTools` 应已列出。
+2. 必填参数齐全吗？例如 `apk_native_disassemble` 需要 `addressKind`、`address`、`instructionMode`、`stopAtSymbolBoundary`、`maxBytes`、`maxInstructions`，少一个就是 `INVALID_ARGUMENT`。
+3. 是否在正确的 `workspaceId`/`editSessionId` 上？两个快照的 ID 不能交换。
+4. 组件是否需要先 `apk_component_status` → `apk_component_install` → 任务终态？
+5. 是否触发了分页/预算？有 `nextCursor`/`nextOffset` 就按它继续，不要重发同一请求。
+
+### 读指南
+
+```json
+{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"reverse_guide","arguments":{"topic":"${SECTION_ID}","offset":0,"maxChars":6000}}}
+```
+
+`topic` 只接受：
+
+- `index`：动态索引（章节、工作流、工具状态），可分页。
+- `quickstart`、`rpc`、`workspace`、`jobs`、`components`、`dex`、`native`、`rebuild`、`dynamic`、`fingerprint`、`compare`、`errors`、`workflows`、`limitations`。
+- `all`：全文。
+- 其它值报错并列出合法 `sectionIds`。
+
+`offset` 是 UTF-16 字符偏移，必须来自 `nextOffset`；`maxChars` 默认 6000、最大 24000。页尾不会切开 UTF-16 代理对；如果预算落在代理对中间，可能少 1 个码元，按 `nextOffset` 继续。**全文不保证一页读完**：`topic=all` 默认只返回前 6000 字符，必须继续分页。
+
+### 读计划
+
+```json
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"reverse_plan","arguments":{"goal":"native"}}}
+```
+
+`goal` 只接受 `inspect`、`decode`、`rebuild`、`native`、`dynamic`、`fingerprint`、`emulate`、`compare`。返回的 `steps[].args` 仍是模板，`${...}` 必须替换。`readiness=blocked` 表示有必填工具/组件未注册；`ready_with_component_check` 表示工具都在，但必须先查组件。
+
+<!-- section:id=workspace -->
+## 工作区、不可变快照与版本号
+
+### 快照不是编辑
+
+`apk_workspace_open` 把源 APK 复制到工具存储并计算 `sha256`；后续 `apk_session_create` 建写时复制会话。`apk_edit_text`、`apk_patch_bytes`、`apk_resource_edit`、`apk_native_patch_*` 都只写会话，不改快照，更不改源文件。
+
+```json
+{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"apk_workspace_open","arguments":{"path":"${APK_PATH}","temporary":false}}}
+```
+
+- `path` 必须在工具目录内；`aijs://current-apk` 只在已有 APK 上下文时可用；已保存工作区用 `aijs://workspace/<workspaceId>` 且 `temporary=false`。
+- 单包上限 512 MiB，快照总量 1 GiB，最多 16 个快照；超限先 `apk_workspace_delete` 或换临时工作区。
+- 返回的 `sha256` 是快照身份；跨版本比较必须记录它，不能只看文件名。
+
+### 会话、revision 与 targetVersion
+
+`apk_session_create` 返回 `editSessionId` 和 `revision`。每次写入都会改变会话 `revision`；分页游标绑定 revision，编辑后旧游标会报“内容已变更或游标已过期”。单工作区最多 8 个会话，单会话最多 2000 条变更/512 MiB。
+
+读取类工具返回 `targetVersion`（文件/内容版本）。修改时原样传回：
+
+```json
+{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"apk_edit_text","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"${LOCATOR}","targetVersion":"${TARGET_VERSION}","edits":[{"mode":"replace_match","matchText":"${UNIQUE_OLD_TEXT}","writeText":"${NEW_TEXT}"}]}}}
+```
+
+看到“内容已改变”就重新读取并拿新 `targetVersion`，不要重试旧参数。新建目标可以用 `targetVersion="missing"` 加**单个** `write_target` 编辑。
+
+### 从快照导出条目
+
+radare2 系列 `native_*` 工具直接读手机路径，不读 APK 快照 locator。要从快照拿 so，必须显式导出：
+
+```json
+{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"apk_copy_entry","arguments":{"direction":"workspace_to_local","workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"zip_entry:lib/arm64-v8a/libnative.so","localPath":"${LOCAL_SO_PATH}","overwrite":false}}}
+```
+
+- `locator` 必须是 **`zip_entry:`** 前缀；`entry:lib/...` 不是当前 schema 的格式。
+- `editSessionId` 是 schema 必填项，即使 `direction=workspace_to_local` 也要传。
+- `localPath` 必须在工具目录内，且默认 `overwrite=false`：目标已存在会失败，换新文件名或显式覆盖。
+- 导出成功返回实际 `localPath`，后续 `native_analyze`/`native_functions`/`native_decompile` 等把这个路径作为 `path`。
+
+### 检查点与回滚
+
+```json
+{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"apk_session_checkpoint","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","label":"before-patch","expectedRevision":"${REVISION}"}}}
+```
+
+- `apk_session_checkpoints` 列出检查点和各自 revision；最多 8 个检查点。
+- 回滚必须带当前 `expectedRevision`，返回新 revision；不要拿旧 revision 重试。
+- 检查点只保存变更条目，不是完整 APK 备份；源快照始终独立。
+
+### 构建与签名
+
+```json
+{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"apk_build","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","outputName":"target_mcp_signed.apk","overwrite":false,"sign":true}}}
+```
+
+- `apk_build` 会再跑一次结构检查；失败不导出。
+- `outputName` 是文件名或工具目录内绝对路径，不能覆盖源 APK；已存在时必须 `overwrite=true`。
+- `sign=true` 使用本机 AI.js Pro 身份重签并移除原签名，不能保留原作者证书；`sign=false` 导出未签名包，通常不能直接覆盖安装。
+- 返回 `sourceUnchanged=true`、输出 `sha256`、`verification`、`signatureSummary`。仍要用 `apk_verify` 对实际输出路径独立复核。
+- `apk_read_signature` 的元数据不是验签；`apk_verify` 的密码学结论也不等于安装/业务行为通过。
+
+<!-- section:id=jobs -->
+## 后台任务：完整状态、分页与取消
+
+### 哪些调用会进后台
+
+- **所有逆向操作默认后台**：`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`artifact_fingerprint`、`yara_scan`、`native_*`、`frida_*` 的 `background` 默认都是 `true`，立即返回 `jobId`。
+- 既有 APK 工具中，`apk_component_install`、`apk_decompile_class`、`apk_decompile_method`、`android_resources_compile` 也默认后台；`apk_job_start` 只接受它声明的 operation。
+- **登记任务不等于组件已安装**：`apk_job_start`/默认后台只负责排队；缺组件、缺权限或平台禁止执行会在 worker 里失败。先 `apk_component_status`，再安装，再启动依赖组件的任务。
+
+```json
+{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"native_analyze","arguments":{"path":"${LOCAL_SO_PATH}","background":true,"timeoutSeconds":180}}}
+```
+
+### 状态机（以返回为准）
+
+| state | 含义 | 终态 |
+|---|---|---|
+| `QUEUED` | 已入队 | 否 |
+| `RUNNING` | worker 正在执行 | 否 |
+| `CANCELLING` | 已请求取消，等待 worker 真正结束 | 否 |
+| `SUCCEEDED` | 完成并保留结果 | 是 |
+| `FAILED` | 失败；`reason` 有信息 | 是 |
+| `CANCELLED` | 已取消并结束 | 是 |
+| `INTERRUPTED` | 工具进程重启，任务未自动重放 | 是 |
+
+`progress.percent` 只在结束时为 100，过程中不要拿它推断剩余时间。`resultAvailable=true` 才可读结果。`CANCELLING` 不是完成，必须继续轮询。
+
+```json
+{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"apk_job_status","arguments":{"jobId":"${JOB_ID}"}}}
+```
+
+轮询接口没有 `waitMillis`，不要发明长轮询参数。任务最多排队 4 个、2 个 worker，`timeoutSeconds` 1..300（逆向操作；既有组件安装/decompile 可到 1800），超时会进入取消流程。
+
+### 结果分页
+
+```json
+{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"apk_job_result","arguments":{"jobId":"${JOB_ID}","offset":0,"maxChars":16000}}}
+```
+
+返回 `content`、`nextOffset`、`hasMore`、`totalChars`。下一页把 `offset` 设为上次 `nextOffset`，不要按行号或字节数自己算。结果文件上限 24 MiB，`maxChars` 上限 200000。
+
+**终止条件只有一个：`hasMore=false`。** 不要写成 `while (hasMore || nextOffset)`，也不要在 `hasMore=false` 后继续读；`nextOffset` 只是下一页位置，不是“还有内容”的独立信号。
+
+```text
+offset = 0
+do:
+  r = apk_job_result(jobId, offset, maxChars)
+  offset = r.nextOffset
+while r.hasMore == true
+```
+
+### 取消
+
+```json
+{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"apk_job_cancel","arguments":{"jobId":"${JOB_ID}"}}}
+```
+
+取消只是请求：调用后继续 `apk_job_status`，直到 `CANCELLED`/`FAILED`/`INTERRUPTED`。已提交的写操作可能在取消前完成；取消不是回滚。工具进程重启后任务是 `INTERRUPTED`，没有 `resume`，需要重新评估后再显式启动新任务。
+
+### 任务读不到
+
+`apk_job_status` 报“任务不存在”时，先 `apk_job_list` 对账；不要拿旧 `jobId` 猜。`apk_job_result` 报“任务尚无结果”时先读状态，不要连续重试结果接口。
+
+<!-- section:id=components -->
+## 组件：先查、再装、再用
+
+### 先查再装
+
+```json
+{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"apk_component_status","arguments":{}}}
+```
+
+只接受 `{}`。返回 `data.components[]`，每项含 `id`、`installed`、`available`、`verified`、`backend`、`requiresExecutableDownloadPolicy`、`externalRequirements`、`manifestUrl`。`available=false` 不等于“没下载”：可能是 Android 版本低于 8、ABI 不匹配、下载执行策略不允许、组件文件不完整或外部服务未就绪。
+
+### 当前 8 个组件
+
+`apk_component_install` 和 `apk_component_remove` 的 `component` 枚举只有：
+
+```text
+jadx, apk-resources, apktool, radare2, r2ghidra, yara, unicorn, frida
+```
+
+| 组件 | 用途 | 额外条件 |
+|---|---|---|
+| `jadx` | Java 类/方法阅读 | Android 8+，隔离 app_process |
+| `apk-resources` | AAPT2 资源编译 / apktool 的 AAPT2 wrapper | Android 8+，可执行下载策略 |
+| `apktool` | 完整工程 decode/build/framework | Android 8+，私有 app_process；产物不保证任意 APK 成功 |
+| `radare2` | native_analyze/functions/detail/xrefs/compare | 可执行下载策略 |
+| `r2ghidra` | native_decompile 伪代码 | **build pending**；需匹配 radare2 ABI |
+| `yara` | yara_scan | 可执行下载策略；规则 ≤1 MiB |
+| `unicorn` | native_emulate | 可执行下载策略；仅 CPU 模拟 |
+| `frida` | frida_status/processes/eval | 需外部 frida-server/Gadget，同 ABI，可访问 endpoint |
+
+```json
+{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"apk_component_install","arguments":{"component":"radare2","background":true,"timeoutSeconds":900}}}
+```
+
+- 默认后台返回 `jobId`；按 `jobs` 章节轮询到 `SUCCEEDED`，再重试原操作一次。
+- 组件安装会下载、校验、展开；需要用户明确同意。**同一任务里用户已经授权过安装/下载时，不要重复走一遍权限询问**；沿用该授权，仍要记录安装了哪个组件、哪个 URL/版本。
+- `r2ghidra` 提供 Android arm64 的独立 C++ 插件和 SLEIGH 数据（不需要桌面 Ghidra）；安装完成仍需以真实调用结果为准；`native_decompile` 返回缺插件错误时，报告组件缺口，不要伪造伪代码。
+- `apk_component_remove` 可移除单个组件，保留源工程和另一个组件。
+
+### 组件缺失的错误处理
+
+`apk_decompile_class`/`apk_decompile_method` 缺 JADX 时报 `COMPONENT_NOT_INSTALLED`；`android_resources_compile` 缺 `apk-resources`、apktool 缺 `apktool`、radare2 缺 `radare2`、yara/unicorn/frida 缺对应组件时同理。正确顺序：
+
+1. `apk_component_status` 确认缺哪个；
+2. `apk_component_install(component=<id>, background=true)`；
+3. 轮询 `apk_job_status` 到 `SUCCEEDED`；
+4. 再重试原操作一次。
+
+不要在组件还没装好时循环重试原操作。**任务已登记/已排队不是“组件已安装”**；只认 `apk_component_status` 的明确字段和安装任务的成功终态。
+
+<!-- section:id=dex -->
+## DEX：先定位，再读 Java；不要拿阅读产物当源码
+
+### 定位符
+
+- 类：`dex_class:Lcom/example/Foo;`
+- 方法：`dex_method:Lcom/example/Foo;->bar(I)V`，描述符完整，重载不能省略参数。
+- 同名类跨 DEX：加 `dexEntry`，或用返回的 `uniqueLocator`/`dex_entry:<entry>!dex_method:...`。
+- 普通条目：`zip_entry:path/in/apk`；AXML：`axml:AndroidManifest.xml`；资源：`resource:...`。
+- locator 来自 `apk_dex_search_members`、`apk_dex_read_class_outline`、`apk_list` 或搜索结果，不要手写猜的描述符。
+
+### 精确搜索
+
+```json
+{"jsonrpc":"2.0","id":40,"method":"tools/call","params":{"name":"apk_dex_search_members","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","query":"${SYMBOL_QUERY}","queryType":"literal","matchMode":"contains","caseSensitive":false,"scope":"all","prefix":"","limit":100,"snippetMaxChars":200,"includeMatchOffsets":true}}}
+```
+
+`scope` 可用 `method`、`name`、`descriptor`、`string`、`reference`、`all`。结果有预算和截断标记，`truncated=true` 时缩小查询，不要假设“没有更多”。
+
+### 类大纲与调用图
+
+```json
+{"jsonrpc":"2.0","id":41,"method":"tools/call","params":{"name":"apk_dex_read_class_outline","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"${CLASS_LOCATOR}","limit":200}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"apk_dex_call_graph","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"${METHOD_LOCATOR}","direction":"both","methodResolution":"dispatch","maxDepth":3,"maxNodes":300,"maxEdges":1000,"includePotential":true,"includeExternal":false}}}
+```
+
+调用图只覆盖静态可解析边；反射、动态代理、字符串拼接类名和运行时注册会缺失。
+
+### Java 阅读流程
+
+```json
+{"jsonrpc":"2.0","id":43,"method":"tools/call","params":{"name":"apk_decompile_class","arguments":{"workspaceId":"${WORKSPACE_ID}","locator":"${CLASS_LOCATOR}","background":true,"timeoutSeconds":180,"maxChars":16000}}}
+```
+
+按 `jobs` 章节轮询 `apk_job_status`，用 `apk_job_result(offset=nextOffset)` 读取，只在 `hasMore=true` 时继续。
+
+**Java 伪代码不等于源码。** JADX 输出是反编译器的可读近似：可能丢泛型/注解/注释，可能把 `switch`、内联、合成类还原得和原工程不同，也可能根本不能编译。它不能直接喂给 `apk_build`；`apk_build` 只做 ZIP/条目/结构检查和重签，不做 Java 源码编译。需要修改时用 Smali/DEX 定位符 + `apk_edit_text`，并用 `apk_session_check` 验证；能通过检查也不等于原业务语义。
+
+### Apktool 工程路线
+
+`apk_decode_project` 可以直接把 APK 解成 Manifest/XML/Smali 工程；这是独立于 JADX 的路线：
+
+```json
+{"jsonrpc":"2.0","id":44,"method":"tools/call","params":{"name":"apk_decode_project","arguments":{"path":"${APK_PATH}","outDir":"${OUT_DIR}","decodeResources":true,"background":true,"timeoutSeconds":300}}}
+```
+
+`outDir` 必须是父目录存在的新目录；工具不会覆盖源 APK/目录。解码成功返回 `path`、`backend=apktool`、`rebuildGuaranteed=false`。**真机 3.0.3 已通过 decode/edit/rebuild 样例，但任意 APK 不保证成功**；资源或 Manifest 异常时要保留原始诊断并停止，不要假称已完整反编译。
+
+<!-- section:id=native -->
+## 原生 ELF：Capstone 静态路径与 radare2 路径分开
+
+### 两条路径
+
+- **既有 `apk_native_*`**：用 `workspaceId` + `editSessionId` + `locator=zip_entry:...`，直接读 APK 快照（Capstone）。
+- **radare2 系列 `native_*`**：只接受手机文件 `path`，不接 `workspaceId`/`locator`。先从快照导出 so，再传 `localPath`。
+- **`native_emulate`**：只接受 `codeHex` 原始机器码，不接 `path`/`locator`；详见 `emulate` 章节。
+
+### 从快照导出 so（新 native 工具的前置）
+
+```json
+{"jsonrpc":"2.0","id":50,"method":"tools/call","params":{"name":"apk_copy_entry","arguments":{"direction":"workspace_to_local","workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"zip_entry:lib/arm64-v8a/libnative.so","localPath":"${LOCAL_SO_PATH}","overwrite":false}}}
+```
+
+`locator` 必须是 `zip_entry:`，不要写 `entry:`；`editSessionId` 必填；`localPath` 在工具目录内且默认不能已存在。导出后再用 `path=${LOCAL_SO_PATH}` 调用新工具。
+
+### 既有 Capstone 检查
+
+```json
+{"jsonrpc":"2.0","id":51,"method":"tools/call","params":{"name":"apk_native_inspect","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"zip_entry:lib/arm64-v8a/libnative.so"}}}
+```
+
+`inspect` 返回位数、架构、段/节、导入、`disassembler` 和 `instructionCoverage`。so 可能按 ABI 分包；先确认路径存在，别把 `arm64-v8a` 的地址拿到 `armeabi-v7a` 上用。
+
+### 地址模式不要混
+
+- `addressKind=virtual`：ELF 虚拟地址，来自符号、反汇编目标或 `apk_native_inspect`。
+- `addressKind=file_offset`：文件偏移，工具会映射到已加载段；不能把文件偏移当虚拟地址。
+- 先 `apk_native_map_address` 确认 `isLoaded`、`hasFileBytes`、`executable`、`virtualAddress`、`fileOffset` 和所在段。
+
+```json
+{"jsonrpc":"2.0","id":52,"method":"tools/call","params":{"name":"apk_native_map_address","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"zip_entry:lib/arm64-v8a/libnative.so","addressKind":"virtual","address":"${ADDRESS_HEX}"}}}
+```
+
+### ARM32 Thumb 规则
+
+ELF 符号 `st_value` 最低位是 **T-bit**：`1` 表示 Thumb，实际指令地址最低位不参与取指。`apk_native_disassemble` 的 `instructionMode=auto` 会按 T-bit 推断 Thumb，并在解码前对齐；也可显式传 `thumb`。不要把带 T-bit 的符号地址当文件偏移；记录证据时写清原始符号值和最终用于解码的地址。AArch64 固定 4 字节对齐；`maxBytes`/`maxInstructions` 只做上界，不保证按函数边界停。
+
+### 反汇编与 xref（Capstone）
+
+```json
+{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"apk_native_disassemble","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"zip_entry:lib/arm64-v8a/libnative.so","addressKind":"virtual","address":"${ADDRESS_HEX}","instructionMode":"auto","stopAtSymbolBoundary":false,"maxBytes":256,"maxInstructions":80}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":54,"method":"tools/call","params":{"name":"apk_native_xref","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"zip_entry:lib/arm64-v8a/libnative.so","addressKind":"virtual","address":"${ADDRESS_HEX}","instructionMode":"auto","scanKind":"code","referenceKinds":["call","jump","data","unknown"],"maxScanBytes":67108864,"limit":50}}}
+```
+
+Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回退有界 AArch64 常见指令子集。`xref` 只覆盖直接静态引用和可静态解析的重定位槽；间接跳转、JNI 动态注册、数据流和完整调用图不保证。
+
+### 新 radare2 工具（直接 path）
+
+| 工具 | 必填参数 | 说明 |
+|---|---|---|
+| `native_analyze` | `path` | ELF/二进制元数据，不执行目标 |
+| `native_functions` | `path` | 函数列表，`offset`/`limit` 分页，`limit≤200` |
+| `native_function_detail` | `path`、`address` | `address` 是十进制或 `0x` 字符串，不是表达式 |
+| `native_decompile` | `path`、`address` | 需要 radare2 + r2ghidra；伪代码不是源码 |
+| `native_xrefs` | `path`、`address` | 到该地址的引用，`offset`/`limit` 分页 |
+| `native_compare` | `path`、`otherPath` | 有界字节差异 + radare2 元数据，不是语义等价 |
+
+```json
+{"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"native_analyze","arguments":{"path":"${LOCAL_SO_PATH}","background":true,"timeoutSeconds":180}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":56,"method":"tools/call","params":{"name":"native_decompile","arguments":{"path":"${LOCAL_SO_PATH}","address":"0x12340","background":true,"timeoutSeconds":180}}}
+```
+
+`native_decompile` 的 `address` 必须是字符串（十进制或 `0x`），不要传数字/表达式。r2ghidra **为按需安装组件（6.2.4 / ABI152）**：先 `apk_component_status` 确认 `r2ghidra.installed/available`，缺插件时如实报 `COMPONENT_NOT_INSTALLED`/`COMPONENT_FAILED`，不要声称生成了伪代码。
+
+### native_emulate 不是 ELF 加载器
+
+`native_emulate` 只接受 `codeHex`（1..65536 字节的十六进制机器码），不是 `path`，也不是 so 文件。可选 `dataHex`（≤4096 字节）、`registers`、`timeoutMs`（≤1000）、`instructionLimit`（≤100000）。架构为 `arm64`、`arm`、`thumb`、`x86`、`x86_64`。
+
+```json
+{"jsonrpc":"2.0","id":57,"method":"tools/call","params":{"name":"native_emulate","arguments":{"architecture":"arm64","codeHex":"${CODE_HEX}","dataHex":"","timeoutMs":100,"instructionLimit":10000,"background":true,"timeoutSeconds":60}}}
+```
+
+它不是 Android 运行时：JNI、binder、系统调用、TLS、反调试、真实内存布局和并发都可能不同；模拟成功只说明“在这组受限输入/内存模型下走到某个状态”。
+
+<!-- section:id=rebuild -->
+## 重建：会话编辑与 Apktool 工程两条路线
+
+### 路线 A：会话编辑 + apk_build
+
+1. `apk_workspace_open` → `apk_session_create`；
+2. 读取目标拿 `targetVersion`；
+3. `apk_session_checkpoint`；
+4. `apk_edit_text` / `apk_patch_bytes` / `apk_resource_edit` / `apk_native_patch_*`；
+5. `apk_session_check(runBuildChecks=true)`；
+6. `apk_session_diff` 复核；
+7. `apk_build(sign=...)`；
+8. `apk_verify(path=<实际输出>)`。
+
+```json
+{"jsonrpc":"2.0","id":60,"method":"tools/call","params":{"name":"apk_edit_text","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"${LOCATOR}","targetVersion":"${TARGET_VERSION}","edits":[{"mode":"replace_match","matchText":"${UNIQUE_OLD_TEXT}","writeText":"${NEW_TEXT}"}]}}}
+```
+
+- 一次最多 200 条编辑，基于同一份不可变原文；`matchText` 必须唯一。
+- DEX/AXML 会走编译，失败不会留下半截修改；普通文本最大 10 MiB。
+- AXML 写入/编辑拒绝 DOCTYPE/ENTITY；资源读写用 `apk_resource_read`/`apk_resource_edit`/`apk_resource_add`，不要拿普通 `zip_entry:` 去改 `resources.arsc`。
+- 保留条目（`classes*.dex`、`resources.arsc`、Manifest 等）不能走普通删除/字节补丁；用 DEX/资源专用工具。
+
+### 路线 B：Apktool 工程 decode/build
+
+```json
+{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"apk_decode_project","arguments":{"path":"${APK_PATH}","outDir":"${PROJECT_DIR}","decodeResources":true,"background":true,"timeoutSeconds":300}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"apk_build_project","arguments":{"projectDir":"${PROJECT_DIR}","outPath":"${BUILT_PROJECT_APK}","sign":true,"background":true,"timeoutSeconds":300}}}
+```
+
+- `apk_decode_project`：`outDir` 必须是父目录存在的新目录；返回 `rebuildGuaranteed=false`。
+- `apk_build_project`：`projectDir` 必须有 `apktool.yml`；`outPath` 必须是不存在的新文件；需要 `apktool` + `apk-resources`。默认 `sign=false`，`sign=true` 使用本应用签名并验签，不保留旧签名。
+- 真机 **Apktool 3.0.3** 已通过样例 decode → edit → rebuild，使用私有 `app_process` 和 AAPT2 wrapper（只给 AAPT2 子进程设置 `LD_LIBRARY_PATH`，不污染 ART 系统库）。这不是“任意 APK 都能成功”的保证；失败时保留 stderr 和组件版本。
+- `apk_install_framework` 把厂商 framework APK 装进 Apktool 私有缓存，不装进 Android 系统；`tag` 只允许字母数字点下划线横线。
+
+```json
+{"jsonrpc":"2.0","id":63,"method":"tools/call","params":{"name":"apk_install_framework","arguments":{"path":"${FRAMEWORK_APK}","tag":"vendor","background":true,"timeoutSeconds":180}}}
+```
+
+### 不能下的结论
+
+- `valid=true` 只说明结构检查通过；不证明业务行为、安装成功率、反调试或商店合规。
+- `apk_build` 只做 ZIP/条目/结构检查和重签，不做 Java 源码编译；不要用 `apk_build` 冒充工程构建。
+- `apk_build_project` 成功也不保证目标 App 能启动或业务正常；必须记录构建日志、输出 SHA-256 和独立 `apk_verify` 结果。
+
+<!-- section:id=dynamic -->
+## 动态观察：Frida 已注册，但仍需外部 Server/Gadget
+
+### 现状
+
+`frida_status`、`frida_processes`、`frida_eval` **已注册**，但只是客户端工具：必须有可访问的 frida-server 或 Gadget，且与目标进程 ABI 匹配。工具不会自动 root、自动启动 frida-server、自动注入 Gadget 或绕过系统限制。Frida 组件也需显式安装。
+
+### 合理顺序
+
+1. `apk_component_status` 确认 `frida` 已安装/可用；
+2. `frida_status` 确认 endpoint 连接、版本和权限；
+3. `frida_processes` 列出可见进程，不接受任意 PID 猜测；
+4. `frida_eval` 只对已确认目标运行已审阅脚本，记录脚本哈希、设备、应用版本和时间。
+
+```json
+{"jsonrpc":"2.0","id":70,"method":"tools/call","params":{"name":"frida_status","arguments":{"endpoint":"127.0.0.1:27042","background":true,"timeoutSeconds":60}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"frida_eval","arguments":{"endpoint":"127.0.0.1:27042","pid":12345,"script":"${FRIDA_SCRIPT_JS}","durationMs":5000,"background":true,"timeoutSeconds":120}}}
+```
+
+- `endpoint` 必须是 `host:port`，默认 `127.0.0.1:27042`。
+- `frida_eval` 的 `pid` 为整数；`script` 为脚本字符串（≤64 KiB），不是文件路径；`durationMs` 1..10000。
+- 结果只在任务 `SUCCEEDED` 后通过 `apk_job_result` 读取；任务里返回的消息不是“永久 hook 已生效”。停止任务会杀掉本次客户端进程组。
+
+### 权限与证据边界
+
+- 只能分析你有权测试的设备和应用；不能连接他人设备、绕过锁屏或提取他人数据。
+- 应用 UID 不能任意附加其他应用；需要目标可调试、同签名或设备侧授权。
+- 动态结果受时序、反调试、进程重启、JIT 和多线程影响；必须保存原始日志和输入，不能只写一句“hook 成功”。
+- 静态字符串、Java 伪代码和“看起来像密钥”的常量都不是运行时证据。
+
+<!-- section:id=emulate -->
+## Unicorn 原始机器码模拟
+
+`native_emulate` 已注册，输入是 **`codeHex` 原始机器码**，不是 APK/ELF/so 路径。需要 `unicorn` 组件；它只模拟 CPU 指令，不提供完整 Android/ELF/JNI 环境。
+
+### 输入
+
+- `architecture`：`arm64`、`arm`、`thumb`、`x86`、`x86_64`。
+- `codeHex`：1..65536 字节的十六进制机器码。
+- 可选 `dataHex`（≤4096 字节）、`registers`（最多 64 个，值为十六进制字符串）。
+- `timeoutMs` 1..1000；`instructionLimit` 1..100000。
+
+```json
+{"jsonrpc":"2.0","id":75,"method":"tools/call","params":{"name":"native_emulate","arguments":{"architecture":"arm64","codeHex":"${CODE_HEX}","dataHex":"","timeoutMs":100,"instructionLimit":10000,"background":true,"timeoutSeconds":60}}}
+```
+
+### 边界
+
+- 不能把 so 路径、APK locator 或 ELF 入口地址直接传给 `native_emulate`；先准备确切字节。
+- 模拟成功只说明“在这组字节、寄存器、初始数据和上限下走到某个状态”，不是目标 App 在真机上的行为。
+- 必须记录字节来源/哈希、架构、初始寄存器、数据、超时和指令上限；不能写“已运行目标 so”。
+- `unicorn` 组件需显式安装；工具注册/任务登记都不代表组件已安装。
+
+<!-- section:id=fingerprint -->
+## 指纹与完整性：哈希、验签、规则扫描分开写
+
+### 现有可用证据
+
+```json
+{"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"artifact_fingerprint","arguments":{"path":"${ARTIFACT_PATH}","background":true,"timeoutSeconds":120}}}
+```
+
+- `artifact_fingerprint` 返回 SHA-256、格式、APK 库/壳/框架**启发式线索**和置信度；后端是 `aijs-heuristics-v1`，`fullApkid=false`。它**不是 APKiD**，没有完整 APKiD 规则/Python 运行环境，未命中不能证明无壳/无框架。
+- `file_stat` 返回类型、大小、修改时间和普通文件流式 SHA-256 `targetVersion`；缺失路径返回 `type=missing`。
+- `apk_workspace_open` 返回快照 `sha256`，适合固定“这份字节”。
+- `apk_verify` 做密码学验签、ZIP/ELF 对齐和 Manifest 结构检查；失败项看 `checks`/`issues`。
+- `apk_read_signature` 只读证书/方案元数据；`verified` 始终 false。
+- `zip_test` 做完整 CRC/HMAC 校验；未加密 ZIP 传空 `password`，加密条目才传非空密码。
+
+```json
+{"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name":"yara_scan","arguments":{"path":"${ARTIFACT_PATH}","rulesPath":"${RULES_PATH}","scanTimeoutSeconds":20,"includeOffsets":true,"background":true,"timeoutSeconds":60}}}
+```
+
+`yara_scan` 需要 `yara` 组件；规则 ≤1 MiB、输入 ≤64 MiB、扫描 ≤30 秒、禁用 include。返回命中/偏移及截断标记。**“无匹配”不等于安全，“有匹配”也要人工复核规则、上下文和误报。**
+
+### 结论写法
+
+- 指纹：`文件大小 + SHA-256 + 采集时间 + 来源`，四者一起写。
+- 签名：分开写“证书是谁/有哪些方案”和“apk_verify 是否通过”。
+- 完整性：`zip_test` 通过只说明当前 ZIP 条目 CRC/HMAC 一致；不证明 APK 未被替换、未恶意或可安装。
+- 启发式：写“`artifact_fingerprint` 命中某线索，置信度 X”，不要写“APKiD 判定”。
+
+<!-- section:id=compare -->
+## 两个版本怎么对照
+
+### 固定两份快照
+
+```json
+{"jsonrpc":"2.0","id":90,"method":"tools/call","params":{"name":"apk_workspace_open","arguments":{"path":"${APK_PATH_A}","temporary":true}}}
+```
+
+```json
+{"jsonrpc":"2.0","id":91,"method":"tools/call","params":{"name":"apk_workspace_open","arguments":{"path":"${APK_PATH_B}","temporary":true}}}
+```
+
+分别记下 `workspaceIdA`、`sha256A`、`workspaceIdB`、`sha256B`。后续所有读取/验签都要带对应 `workspaceId`，不能混用。
+
+### 对照维度
+
+1. 文件级：大小、SHA-256、签名证书/方案、APK 对齐/结构检查。
+2. Manifest/资源级：`versionCode`、`versionName`、权限、ABI、导出组件；以实际解码证据为准。
+3. DEX 级：类/方法 locator、字符串、引用；用 `apk_dex_search_members`/`apk_dex_call_graph` 分别读，不要把一个快照的 locator 套到另一个。
+4. native 级：so 条目、架构、符号、直接 xref；需要字节级比较时先导出两个文件，再用 `native_compare`：
+
+```json
+{"jsonrpc":"2.0","id":92,"method":"tools/call","params":{"name":"native_compare","arguments":{"path":"${LOCAL_BINARY_A}","otherPath":"${LOCAL_BINARY_B}","offset":0,"limit":100,"background":true,"timeoutSeconds":180}}}
+```
+
+`native_compare` 返回有界字节变化 + radare2 元数据；相同大小或相同哈希片段都不是语义等价证明。
+
+### 不能下的结论
+
+- 证书相同 ≠ 内容相同；哈希相同 ≠ 行为相同；版本号更高 ≠ 更安全。
+- 静态差异不是行为等价证明；`native_compare` 不是函数级语义 diff。
+- `apk_session_diff` 只比较同一会话相对其原快照的变更，不是两个 APK 的 diff。
+
+<!-- section:id=errors -->
+## 错误、nextActions 与预算
+
+### 先读错误信封
+
+```json
+{"ok":false,"data":null,"error":{"code":"INVALID_ARGUMENT","argument":"address","recoverable":true,"retrySameArguments":false,"message":"..."},"nextActions":[]}
+```
+
+- `error.code` 决定处理方式；`error.argument` 指出参数。
+- `retrySameArguments=false` 表示**不要原样重试**；先改参数/先补前置。
+- `nextActions` 可能给出具体下一步；为空时按 code 和本文处理，不要自己编工具名。
+- `recoverable=true` 不等于“重试就能过”；预算/缺组件/旧版本都需要先改变状态。
+
+### 常见错误与正确动作
+
+| 现象 / code | 含义 | 正确动作 |
+|---|---|---|
+| `COMPONENT_NOT_INSTALLED` | JADX/apktool/radare2/r2ghidra/yara/unicorn/frida 未装 | `apk_component_status` → `apk_component_install` → 轮询 job → 重试一次 |
+| `EXECUTION_POLICY` | 平台禁止执行下载的组件 | 报告策略限制；不要重复安装碰运气 |
+| `COMPONENT_FAILED` | 组件子进程失败 | 保留 stderr/exitCode；检查版本、ABI、输入；不要伪造结果 |
+| `REGEX_BUDGET_EXCEEDED` | 正则超时/字符预算 | 改字面量、缩小 `prefix`/`target`/`limit` |
+| `RESPONSE_TOO_LARGE` | 响应超过 24 MiB | 分页/缩小 `limit`/`maxChars`/查询范围 |
+| `INVALID_ARGUMENT` | 缺必填或类型不对 | 读 `tools/list` schema，补齐字段；不要丢参数“试试” |
+| 分页游标不存在/过期 | 超过 5 分钟或会话已改 | 重新查询第一页；不要复用旧 `nextCursor` |
+| 内容已改变 | `targetVersion` 旧了 | 重新读取拿新版本，再编辑 |
+| 任务不存在 | jobId 不属于当前工具目录/已清理 | `apk_job_list` 对账；不要猜 |
+| `INTERRUPTED` | 工具进程重启，任务未重放 | 重新评估输入后显式启动新任务；没有 `resume` |
+
+### 预算（以实际返回为准）
+
+- APK 快照：单包 512 MiB，总量 1 GiB，最多 16 个；单条目分析 64 MiB，文本 10 MiB。
+- 编辑会话：每工作区 8 个，每会话 2000 条变更/512 MiB；检查点最多 8 个。
+- 文本读取：`apk_read_text` 的 `maxChars` 上限 131072；`file_read_text` 单页 2..131072 码点。
+- 正则：每个 matcher 默认 750 ms、最多 8,000,000 次字符访问，并受总预算/取消检查限制。
+- 任务结果：24 MiB；`apk_job_result.maxChars` 1..200000；逆向任务 `timeoutSeconds` 1..300。
+- 原生输入：`native_*` 文件 ≤64 MiB；`yara_scan` 规则 ≤1 MiB、输入 ≤64 MiB、扫描 ≤30 秒。
+- `native_emulate`：代码 1..65536 字节、数据 ≤4096 字节、指令 ≤100000、时间 ≤1000 ms。
+- 分页：APK 列表/DEX 大纲 1000 项、native 列表 500 项、其余列表 200 项；以 `pagination.limitMax` 为准。
+
+超预算不是“工具坏了”。缩小范围、分页、换 target，或先停掉不必要的大任务；不要用重复调用碰运气。
+
+<!-- section:id=workflows -->
+## 机读工作流：让计划先回答“能不能做”
+
+### 八个 goal
+
+| goal | 典型输入 | 当前可执行性 |
+|---|---|---|
+| `inspect` | APK 路径、搜索词 | 现有工具可执行；`artifact_fingerprint` 可选增强 |
+| `decode` | APK、符号/类 locator | 需先确认 jadx；JADX 阅读可执行，apktool 工程 decode 可选 |
+| `rebuild` | 工作区/会话/locator/targetVersion | 会话编辑+构建可执行；apktool 工程 build 可选 |
+| `native` | APK、so 条目、地址 | Capstone 静态路径可执行；radare2 工具已注册，需组件和导出路径 |
+| `dynamic` | endpoint、PID、Frida 脚本 | 已注册；需 frida 组件 + 外部 Server/Gadget |
+| `fingerprint` | 文件/APK 路径、规则 | 现有工具 + 启发式指纹可执行；YARA 可选 |
+| `emulate` | `codeHex`、架构 | 已注册；需 unicorn 组件，仅 CPU 模拟 |
+| `compare` | 两个 APK/两个二进制 | 现有快照/验签对照可执行；`native_compare` 可选 |
+
+`reverse_plan` 不执行任何步骤。它把 `reverse-workflows.json` 展开为：
+
+- `steps[]`：`tool`、`args` 模板、`required`、`available`、`supported`、`status`、`unresolvedVariables`；
+- `requiredComponents[]`：`checkTool`/`installTool`/`installArgumentSupported`/`status`，`checkedByPlan=false`；
+- `variables[]`：`placeholder`、`replaceBeforeUse=true`、示例、必填；
+- `limitations[]`、`readiness`、`unsupportedTools`、`unsupportedSteps`、`unknownVariables`；
+- `toolReferences[]`：每个工具引用及其 `available`/`usedBy`。
+
+### 怎么读计划结果
+
+- `readiness=ready`：必填工具都在；可选组件仍可能未装，按步骤检查。
+- `readiness=ready_with_component_check`：必填工具/组件检查路径都在，但计划没有实际检查；先 `apk_component_status`。
+- `readiness=blocked`：有必填工具或组件未注册；不要执行，也不要找相似工具替代。
+- `supported=false` + `required=false`：候选步骤缺失，只是可选增强。
+- `supported=false` + `required=true`：计划阻塞，必须等集成或换已支持路线。
+
+### 变量和占位符
+
+`variables[]` 里的 `${name}` 必须替换成真实值；`example` 只是形状示例，不是可直接使用的真实 ID。`unresolvedVariables` 非空时，`args` 还是模板；`unknownVariables` 非空说明资产/调用方变量声明不一致，先修模板。
+
+### 18 个逆向工具与组件
+
+`candidateTools[]` 保留 18 个名字用于校验；dev1329-1 全部已注册，`available` 应为 true。名字存在仍不等于组件已装：
+
+- 静态/构建：`apk_decode_project`（apktool）、`apk_build_project`（apktool + apk-resources）、`apk_install_framework`（apktool）。
+- 原生：`native_analyze`、`native_functions`、`native_function_detail`、`native_xrefs`、`native_compare`（radare2）；`native_decompile`（radare2 + r2ghidra，r2ghidra 按需安装）。
+- 指纹/规则/模拟：`artifact_fingerprint`（内置启发式，不是 APKiD）、`yara_scan`（yara）、`native_emulate`（unicorn，`codeHex` 不是 path）。
+- 动态：`frida_status`、`frida_processes`、`frida_eval`（frida 组件 + 外部 Server/Gadget）。
+- 指南：`reverse_guide`、`reverse_capabilities`、`reverse_plan` 只规划/说明，不执行。
+
+组件检查统一用 `apk_component_status` 的 **`{}`**，不要传 `component` 字段。安装用 `apk_component_install`，enum 为 8 个 ID。若用户在本任务里已经授权安装/下载，不要重复询问同一授权；仍要记录组件、来源和结果。
+
+<!-- section:id=limitations -->
+## 全局限制与不可声称的结论
+
+1. **注册不是可用**：18 个工具已注册，但组件、平台执行策略、外部 Frida 服务、输入预算都可能让调用失败。
+2. **静态为主**：`apk_native_*`、radare2 和 artifact 工具不执行目标代码；Frida/Unicorn 是独立的有界动态/模拟路径。
+3. **Apktool 不是万能**：真机 3.0.3 样例 decode/edit/rebuild 通过，但任意 APK 不保证；失败要保留原始诊断，不能声称“完整反编译成功”。
+4. **r2ghidra 需另行安装**：`native_decompile` 前必须查组件；缺插件时不能伪造伪代码。
+5. **不是 APKiD**：`artifact_fingerprint` 是内置启发式，`fullApkid=false`；未命中不能证明无壳/无框架。
+6. **不是 Android 运行时**：`native_emulate` 只模拟 `codeHex` 原始指令，不提供完整 ELF/JNI/binder/系统调用环境。
+7. **Frida 需外部条件**：不自动 root/启动服务/提权；只能分析已授权设备，应用 UID 不能任意附加其他应用。
+8. **签名两条线**：`apk_read_signature` 是元数据，`apk_verify` 是密码学检查；二者都不保证安装或业务行为。
+9. **没有自动重放**：后台任务重启后 `INTERRUPTED`，没有 `resume`；没有 `waitMillis`；结果只在 `hasMore=true` 时继续分页。
+10. **任务登记不代表安装/授权**：`jobId` 只是排队；组件安装看 `apk_component_status` 和安装任务终态，权限看用户明确授权。
+
+如果下一步需要的工具不在 `tools/list`，正确动作是：记录缺口、用 `reverse_plan` 标 unsupported、继续用已支持工具收集证据；不是编一个相似名字，也不是把静态阅读结果写成动态结论。
+
+
+### 本轮 Android 兼容验收
+
+Apktool 3.0.3 通过独立 ART 子进程运行，九宫格 PNG 使用 Android Bitmap 解码，避免 ImageIO/AWT 缺类；标准黑色伸缩与内容边框的解包、资源修改、Smali/资源回编译与签名已验证。当前不恢复 npLb/npOl 红色光学边框，PNG 辅助色彩信息和原始压缩也可能改变，不能承诺任意 APK 原样回编译。Frida 17.25.2 在自建 Gadget 上验证连接、枚举、原生函数结果42、脚本错误、消息截断和取消后重连；Unicorn 2.1.4 五种架构及指令预算已验证。r2ghidra 6.2.4 已带完整上游补丁并验证伪代码输出。以上是真机样本证据，不能替代目标设备或目标 APK 的实际验收。

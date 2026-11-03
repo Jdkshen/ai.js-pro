@@ -1,0 +1,1620 @@
+{
+  "schemaVersion": 1,
+  "guideVersion": "dev1329-1",
+  "guideAsset": "AIjs-Reverse-Guide.md",
+  "notes": "单一机读来源。dev1329-1 的 18 个逆向工具均已注册；candidateTools 保留为工具清单并用于计划校验。组件是否存在、是否可执行、是否有外部 Frida 服务必须另行检查；工具注册/任务登记都不等于组件已安装。",
+  "candidateTools": [
+    "reverse_guide",
+    "reverse_capabilities",
+    "reverse_plan",
+    "apk_decode_project",
+    "apk_build_project",
+    "apk_install_framework",
+    "native_analyze",
+    "native_functions",
+    "native_function_detail",
+    "native_decompile",
+    "native_xrefs",
+    "native_compare",
+    "artifact_fingerprint",
+    "yara_scan",
+    "native_emulate",
+    "frida_status",
+    "frida_processes",
+    "frida_eval"
+  ],
+  "workflows": [
+    {
+      "goal": "inspect",
+      "id": "inspect-apk",
+      "title": "只读盘点 APK 与入口",
+      "summary": "建立不可变快照、编辑会话和基线证据；不做修改，不执行目标代码。",
+      "read": [
+        "overview",
+        "quickstart",
+        "rpc",
+        "workspace",
+        "fingerprint",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "apkPath",
+          "required": true,
+          "example": "target.apk",
+          "description": "工具目录（root）内的 APK 相对或绝对路径；不能是电脑路径。"
+        },
+        {
+          "name": "workspaceId",
+          "required": true,
+          "example": "apk_workspace_open 返回的 workspaceId",
+          "description": "不可变快照 ID。"
+        },
+        {
+          "name": "editSessionId",
+          "required": true,
+          "example": "apk_session_create 返回的 editSessionId",
+          "description": "写时复制会话 ID。"
+        },
+        {
+          "name": "query",
+          "required": true,
+          "example": "login",
+          "description": "overview 搜索词；先用字面量，确认范围后再改正则。"
+        }
+      ],
+      "requiredComponents": [],
+      "steps": [
+        {
+          "id": "status",
+          "tool": "toolkit_status",
+          "args": {},
+          "purpose": "查看工具目录、可选组件和后端限制；不要从旧文档猜能力。"
+        },
+        {
+          "id": "component-status",
+          "tool": "apk_component_status",
+          "args": {},
+          "purpose": "只传空对象；返回 components[]，逐项看 installed/available/verified，不传 component 字段。"
+        },
+        {
+          "id": "open",
+          "tool": "apk_workspace_open",
+          "args": {
+            "path": "${apkPath}",
+            "temporary": true
+          },
+          "purpose": "复制并哈希为只读快照；源 APK 不变。返回 workspaceId 与 sha256。"
+        },
+        {
+          "id": "session",
+          "tool": "apk_session_create",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "purpose": "创建写时复制编辑会话；后续读取也用它固定会话视图。返回 editSessionId 与 revision。"
+        },
+        {
+          "id": "verify",
+          "tool": "apk_verify",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "purpose": "检查签名密码学有效性、ZIP/ELF 对齐与 Manifest 结构；这是独立检查证据，不保证可安装或业务行为。"
+        },
+        {
+          "id": "overview-search",
+          "tool": "apk_search",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "target": "overview",
+            "query": "${query}",
+            "queryType": "literal",
+            "caseSensitive": false,
+            "matchMode": "contains",
+            "prefix": "",
+            "includeMatchOffsets": false,
+            "limit": 50,
+            "snippetMaxChars": 200
+          },
+          "purpose": "一次覆盖 ZIP 路径、AXML、资源名/值、DEX 类/成员/字符串；结果有预算和命中上限。"
+        },
+        {
+          "id": "dex-classes",
+          "tool": "apk_list",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "view": "dex_classes",
+            "prefix": "",
+            "limit": 100
+          },
+          "purpose": "列出类定位符。若返回 nextCursor，用 apk_continue 续页；不能把两页拼成同一 revision 的视图。"
+        },
+        {
+          "id": "signature-metadata",
+          "tool": "apk_read_signature",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "purpose": "读取 V1/V2/V3/V3.1 证书与方案元数据；verified 始终为 false，不等于 apk_verify 的密码学验签。"
+        },
+        {
+          "id": "fingerprint",
+          "tool": "artifact_fingerprint",
+          "args": {
+            "path": "${apkPath}",
+            "background": true,
+            "timeoutSeconds": 120
+          },
+          "required": false,
+          "purpose": "可选：SHA-256、格式和 APK 库/壳/框架启发式线索。不是完整 APKiD，不执行目标；命中要写置信度。"
+        }
+      ],
+      "limitations": [
+        "全部为静态读取；不会启动目标 APK，也不会加载目标 so。",
+        "签名元数据不是验签；只有 apk_verify 的 checks.signature.verified 是密码学结论。",
+        "apk_search 的 overview 受命中/字符/时间预算限制；超预算时缩小 prefix 或 target，而不是重复相同调用。",
+        "artifact_fingerprint 是内置启发式，不是 APKiD；未命中不能证明无壳/无框架。"
+      ]
+    },
+    {
+      "goal": "decode",
+      "id": "decode-code",
+      "title": "DEX 定位与 Java 阅读，可选 Apktool 工程",
+      "summary": "先搜精确 locator，再用可选 JADX 组件后台阅读类或方法；需要完整工程时另走 apktool decode，但 Java 产物仍不是可重编源码。",
+      "read": [
+        "dex",
+        "jobs",
+        "components",
+        "workspace",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "apkPath",
+          "required": true,
+          "example": "target.apk",
+          "description": "工具目录内 APK 路径。"
+        },
+        {
+          "name": "workspaceId",
+          "required": true,
+          "example": "apk_workspace_open 返回的 workspaceId",
+          "description": "不可变快照 ID。"
+        },
+        {
+          "name": "editSessionId",
+          "required": true,
+          "example": "apk_session_create 返回的 editSessionId",
+          "description": "写时复制会话 ID。"
+        },
+        {
+          "name": "symbolQuery",
+          "required": true,
+          "example": "decrypt",
+          "description": "方法名/描述符/字符串/引用搜索词。"
+        },
+        {
+          "name": "classLocator",
+          "required": true,
+          "example": "dex_class:Lcom/example/Foo;",
+          "description": "从 apk_dex_search_members 或 apk_list 返回的精确 locator；同名类要多带 dexEntry。"
+        },
+        {
+          "name": "installJobId",
+          "required": false,
+          "example": "安装任务返回的 jobId",
+          "description": "仅当 jadx 未安装并启动了 apk_component_install 后台任务时使用。"
+        },
+        {
+          "name": "decompileJobId",
+          "required": true,
+          "example": "反编译任务返回的 jobId",
+          "description": "apk_decompile_class background=true 返回的 jobId。"
+        },
+        {
+          "name": "decodeOutDir",
+          "required": false,
+          "example": "decoded-target",
+          "description": "可选 apktool 工程输出目录；必须是父目录存在的新目录。"
+        }
+      ],
+      "requiredComponents": [
+        {
+          "id": "jadx",
+          "purpose": "按类/方法阅读 Java；不负责重编。",
+          "required": true,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "jadx"
+          },
+          "installArgumentSupported": true
+        },
+        {
+          "id": "apktool",
+          "purpose": "可选：完整工程解码；需 apktool 组件，任意 APK 不保证成功。",
+          "required": false,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "apktool"
+          },
+          "installArgumentSupported": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "component-status",
+          "tool": "apk_component_status",
+          "args": {},
+          "purpose": "只传空对象；先看 jadx 的 installed/available，missing 与 SDK/ABI 执行策略不允许是不同问题。"
+        },
+        {
+          "id": "install-jadx",
+          "tool": "apk_component_install",
+          "args": {
+            "component": "jadx",
+            "background": true,
+            "timeoutSeconds": 900
+          },
+          "required": false,
+          "when": "仅当 jadx available=false 且用户同意/已授权下载组件",
+          "purpose": "显式下载并校验组件；默认返回 jobId，不是同步完成。任务登记不代表已安装。"
+        },
+        {
+          "id": "install-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${installJobId}"
+          },
+          "required": false,
+          "when": "install-jadx 返回 jobId 后",
+          "loop": {
+            "repeatUntilStates": [
+              "SUCCEEDED",
+              "FAILED",
+              "CANCELLED",
+              "INTERRUPTED"
+            ],
+            "note": "重复本步骤轮询；接口没有 waitMillis。CANCELLING 不是终态。"
+          },
+          "purpose": "等待安装真正结束；只有 SUCCEEDED 才继续。"
+        },
+        {
+          "id": "install-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${installJobId}",
+            "offset": 0,
+            "maxChars": 8192
+          },
+          "required": false,
+          "when": "安装终态需要日志/结果时",
+          "whenStates": [
+            "SUCCEEDED",
+            "FAILED"
+          ],
+          "purpose": "分块读取安装结果；offset 用上次 nextOffset，只在 hasMore=true 时继续。"
+        },
+        {
+          "id": "open",
+          "tool": "apk_workspace_open",
+          "args": {
+            "path": "${apkPath}",
+            "temporary": true
+          },
+          "purpose": "建立不可变只读快照。"
+        },
+        {
+          "id": "session",
+          "tool": "apk_session_create",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "purpose": "创建会话以固定读取视图和 revision。"
+        },
+        {
+          "id": "member-search",
+          "tool": "apk_dex_search_members",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "query": "${symbolQuery}",
+            "queryType": "literal",
+            "matchMode": "contains",
+            "caseSensitive": false,
+            "scope": "all",
+            "prefix": "",
+            "limit": 100,
+            "snippetMaxChars": 200,
+            "includeMatchOffsets": true
+          },
+          "purpose": "拿精确 dex_method/dex_class locator、dexEntry 和行/指令锚点；先字面量，必要时才用 Java 正则。"
+        },
+        {
+          "id": "outline",
+          "tool": "apk_dex_read_class_outline",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "${classLocator}",
+            "limit": 200
+          },
+          "purpose": "读取类方法大纲，确认重载和描述符；有 nextCursor 用 apk_continue。"
+        },
+        {
+          "id": "decompile",
+          "tool": "apk_decompile_class",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "locator": "${classLocator}",
+            "background": true,
+            "timeoutSeconds": 180,
+            "maxChars": 16000
+          },
+          "purpose": "后台启动 JADX 阅读；立即拿 jobId，不在 MCP 调用里等待。"
+        },
+        {
+          "id": "decompile-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${decompileJobId}"
+          },
+          "loop": {
+            "repeatUntilStates": [
+              "SUCCEEDED",
+              "FAILED",
+              "CANCELLED",
+              "INTERRUPTED"
+            ],
+            "note": "重复本步骤轮询；没有 waitMillis。"
+          },
+          "purpose": "读取 QUEUED/RUNNING/CANCELLING 等状态，直到终态。"
+        },
+        {
+          "id": "decompile-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${decompileJobId}",
+            "offset": 0,
+            "maxChars": 16000
+          },
+          "loop": {
+            "repeatUntil": "hasMore=false",
+            "nextOffsetField": "nextOffset",
+            "note": "只在 hasMore=true 时继续读；不要重新执行反编译。"
+          },
+          "purpose": "分块读取最终 JSON；Java 文本只在返回的 content/结果字段里。"
+        },
+        {
+          "id": "decode-project",
+          "tool": "apk_decode_project",
+          "args": {
+            "path": "${apkPath}",
+            "outDir": "${decodeOutDir}",
+            "decodeResources": true,
+            "background": true,
+            "timeoutSeconds": 300
+          },
+          "required": false,
+          "when": "需要完整 apktool 工程且 apktool 组件已确认可用时",
+          "purpose": "可选：Apktool 3.0.3 解包为 Manifest/XML/Smali 工程；outDir 必须是新目录，rebuildGuaranteed=false。"
+        }
+      ],
+      "limitations": [
+        "JADX 输出是可读的 Java 近似结果，不是原作者源码；泛型、注释、内联和重构信息可能丢失，不能保证编译。",
+        "apk_build 不接受 Java 源码，也不做 Java->DEX 重编；要修改代码请用 DEX/Smali 定位符和 apk_edit_text。",
+        "apk_decode_project 需要 apktool 组件；真机 3.0.3 样例通过不保证任意 APK 可解包/回编译。",
+        "反射、动态加载、字符串解密和运行时生成代码不在静态 DEX 阅读范围内。"
+      ]
+    },
+    {
+      "goal": "rebuild",
+      "id": "rebuild-apk",
+      "title": "会话编辑与 Apktool 工程重构建",
+      "summary": "在写时复制会话里改条目，检查后导出新 APK；需要工程级 decode/build 时走 apktool 私有 app_process + AAPT2 wrapper，但任意 APK 不保证。",
+      "read": [
+        "rebuild",
+        "workspace",
+        "jobs",
+        "components",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "apkPath",
+          "required": true,
+          "example": "target.apk",
+          "description": "工具目录内 APK 路径；apktool decode 的输入。"
+        },
+        {
+          "name": "workspaceId",
+          "required": true,
+          "example": "apk_workspace_open 返回的 workspaceId",
+          "description": "不可变快照 ID。"
+        },
+        {
+          "name": "editSessionId",
+          "required": true,
+          "example": "apk_session_create 返回的 editSessionId",
+          "description": "写时复制会话 ID。"
+        },
+        {
+          "name": "revision",
+          "required": true,
+          "example": "apk_session_create 返回的 revision",
+          "description": "当前会话版本；检查点/回滚用它做并发保护。"
+        },
+        {
+          "name": "locator",
+          "required": true,
+          "example": "dex_class:Lcom/example/Foo;",
+          "description": "要编辑的 zip_entry:/dex_class:/dex_method:/axml:/resource: 定位符。"
+        },
+        {
+          "name": "targetVersion",
+          "required": true,
+          "example": "读取结果里的 targetVersion",
+          "description": "防止旧读覆盖；看到内容已改变必须重新读取。"
+        },
+        {
+          "name": "matchText",
+          "required": true,
+          "example": "const/4 v0, 0x0",
+          "description": "必须在不可变原文中唯一匹配；不能拿截断预览做匹配。"
+        },
+        {
+          "name": "writeText",
+          "required": true,
+          "example": "const/4 v0, 0x1",
+          "description": "替换文本；DEX/AXML 会走编译检查。"
+        },
+        {
+          "name": "checkpointLabel",
+          "required": true,
+          "example": "before-login-patch",
+          "description": "检查点标签，便于回滚。"
+        },
+        {
+          "name": "checkpointId",
+          "required": false,
+          "example": "apk_session_checkpoint 返回的 checkpointId",
+          "description": "需要回滚时使用。"
+        },
+        {
+          "name": "newRevision",
+          "required": false,
+          "example": "当前会话 revision",
+          "description": "回滚必须提供当前 expectedRevision，不能沿用旧值。"
+        },
+        {
+          "name": "outputName",
+          "required": true,
+          "example": "target_mcp_signed.apk",
+          "description": "文件名或工具目录内绝对路径；不能覆盖源 APK，已存在需 overwrite=true。"
+        },
+        {
+          "name": "builtApkPath",
+          "required": true,
+          "example": "apk_build 返回的 path",
+          "description": "构建输出的实际路径；用它独立验证，不要只信构建调用返回。"
+        },
+        {
+          "name": "projectDir",
+          "required": false,
+          "example": "decoded-target",
+          "description": "apktool 解包工程目录，必须包含 apktool.yml。"
+        },
+        {
+          "name": "builtProjectApk",
+          "required": false,
+          "example": "target_project_signed.apk",
+          "description": "apk_build_project 的新输出路径；不能已存在。"
+        },
+        {
+          "name": "frameworkApk",
+          "required": false,
+          "example": "vendor-framework.apk",
+          "description": "可选：安装到 Apktool 私有缓存的原厂 framework APK。"
+        },
+        {
+          "name": "frameworkTag",
+          "required": false,
+          "example": "vendor",
+          "description": "可选 framework tag，仅字母数字点下划线横线。"
+        }
+      ],
+      "requiredComponents": [
+        {
+          "id": "apk-resources",
+          "purpose": "可选：apk_build_project 的 AAPT2 后端。",
+          "required": false,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "apk-resources"
+          },
+          "installArgumentSupported": true
+        },
+        {
+          "id": "apktool",
+          "purpose": "可选：工程 decode/build/framework；任意 APK 不保证成功。",
+          "required": false,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "apktool"
+          },
+          "installArgumentSupported": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "open",
+          "tool": "apk_workspace_open",
+          "args": {
+            "path": "${apkPath}",
+            "temporary": true
+          },
+          "purpose": "建立会话编辑用快照。"
+        },
+        {
+          "id": "session",
+          "tool": "apk_session_create",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "purpose": "创建写时复制会话。"
+        },
+        {
+          "id": "precheck",
+          "tool": "apk_session_check",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "runBuildChecks": true
+          },
+          "purpose": "先建立基线；检查失败先修，不要继续构建。"
+        },
+        {
+          "id": "checkpoint",
+          "tool": "apk_session_checkpoint",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "label": "${checkpointLabel}",
+            "expectedRevision": "${revision}"
+          },
+          "purpose": "在编辑前保存检查点；最多 8 个，总量 512 MiB。"
+        },
+        {
+          "id": "edit",
+          "tool": "apk_edit_text",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "${locator}",
+            "targetVersion": "${targetVersion}",
+            "edits": [
+              {
+                "mode": "replace_match",
+                "matchText": "${matchText}",
+                "writeText": "${writeText}"
+              }
+            ]
+          },
+          "purpose": "基于不可变原文做最多 200 条编辑；匹配必须唯一。DEX/AXML 由工具编译，不要手写二进制。"
+        },
+        {
+          "id": "postcheck",
+          "tool": "apk_session_check",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "runBuildChecks": true
+          },
+          "purpose": "读取 valid/failures；结构检查通过也不保证业务行为或可安装。"
+        },
+        {
+          "id": "diff",
+          "tool": "apk_session_diff",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "limit": 100
+          },
+          "required": false,
+          "purpose": "预览新增/修改/删除，确认没有误改保留条目。"
+        },
+        {
+          "id": "build",
+          "tool": "apk_build",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "outputName": "${outputName}",
+            "overwrite": false,
+            "sign": true
+          },
+          "purpose": "重新检查后导出；sign=true 用本机 AI.js Pro 身份重签并移除原签名。源 APK 不变。"
+        },
+        {
+          "id": "verify-output",
+          "tool": "apk_verify",
+          "args": {
+            "path": "${builtApkPath}"
+          },
+          "purpose": "对实际输出文件独立检查签名、ZIP/ELF 对齐和 Manifest；不保证安装/业务行为。"
+        },
+        {
+          "id": "rollback",
+          "tool": "apk_session_rollback",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "checkpointId": "${checkpointId}",
+            "expectedRevision": "${newRevision}"
+          },
+          "required": false,
+          "when": "仅当检查/构建失败且需要回到检查点",
+          "purpose": "用当前 revision 回滚会话；不覆盖源 APK，返回新 revision。"
+        },
+        {
+          "id": "decode-project",
+          "tool": "apk_decode_project",
+          "args": {
+            "path": "${apkPath}",
+            "outDir": "${projectDir}",
+            "decodeResources": true,
+            "background": true,
+            "timeoutSeconds": 300
+          },
+          "required": false,
+          "when": "需要 apktool 工程且 apktool 组件已确认可用时",
+          "purpose": "可选：Apktool 3.0.3 解码到新工程目录；不会覆盖源 APK。"
+        },
+        {
+          "id": "build-project",
+          "tool": "apk_build_project",
+          "args": {
+            "projectDir": "${projectDir}",
+            "outPath": "${builtProjectApk}",
+            "sign": true,
+            "background": true,
+            "timeoutSeconds": 300
+          },
+          "required": false,
+          "when": "工程已 decode 且 apktool + apk-resources 已确认可用时",
+          "purpose": "可选：回编译到新路径；默认不签名，sign=true 使用本应用身份并验签，不保留旧签名。"
+        },
+        {
+          "id": "install-framework",
+          "tool": "apk_install_framework",
+          "args": {
+            "path": "${frameworkApk}",
+            "tag": "${frameworkTag}",
+            "background": true,
+            "timeoutSeconds": 180
+          },
+          "required": false,
+          "when": "仅有厂商 framework 需要的 APK",
+          "purpose": "可选：安装到 Apktool 私有 framework 缓存，不进 Android 系统。"
+        }
+      ],
+      "limitations": [
+        "apk_build 只做 ZIP/条目/结构检查和重签，不做 Java 源码编译或完整 apktool 工程构建。",
+        "apk_build_project 使用私有 app_process + AAPT2 wrapper；真机 Apktool 3.0.3 样例通过，但任意 APK 不保证 decode/build 成功。",
+        "sign=true 会替换原签名，不能沿用原作者证书；未签名输出不能直接覆盖安装原包。",
+        "apk_session_check 的 valid 只代表结构检查结果；不证明运行时行为、安装兼容或商店合规。"
+      ]
+    },
+    {
+      "goal": "native",
+      "id": "native-static",
+      "title": "ELF/so 静态分析：Capstone 与 radare2",
+      "summary": "既有 apk_native_* 用快照 + locator；radare2 系列 native_* 直接读手机 path，native_emulate 只读 codeHex。先从快照导出 so，再用 radare2；r2ghidra 可选且按需安装。",
+      "read": [
+        "native",
+        "workspace",
+        "jobs",
+        "components",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "apkPath",
+          "required": true,
+          "example": "target.apk",
+          "description": "工具目录内 APK 路径。"
+        },
+        {
+          "name": "workspaceId",
+          "required": true,
+          "example": "apk_workspace_open 返回的 workspaceId",
+          "description": "APK 快照 ID。"
+        },
+        {
+          "name": "editSessionId",
+          "required": true,
+          "example": "apk_session_create 返回的 editSessionId",
+          "description": "apk_copy_entry 与既有 native schema 都要求显式会话字段。"
+        },
+        {
+          "name": "soEntry",
+          "required": true,
+          "example": "lib/arm64-v8a/libnative.so",
+          "description": "ZIP 内 so 路径；locator 写 zip_entry:${soEntry}。"
+        },
+        {
+          "name": "localSoPath",
+          "required": true,
+          "example": "analysis/libnative.so",
+          "description": "apk_copy_entry 导出的手机路径；必须是工具目录内新文件。"
+        },
+        {
+          "name": "symbolPrefix",
+          "required": true,
+          "example": "Java_",
+          "description": "符号名前缀；空字符串表示全部。"
+        },
+        {
+          "name": "addressHex",
+          "required": true,
+          "example": "0x12340",
+          "description": "虚拟地址或文件偏移的十六进制字符串；ARM Thumb 符号地址可能带 T-bit。"
+        },
+        {
+          "name": "nativeJobId",
+          "required": false,
+          "example": "native_analyze 返回的 jobId",
+          "description": "后台 native 任务的 jobId；用状态/结果步骤读取。"
+        }
+      ],
+      "requiredComponents": [
+        {
+          "id": "radare2",
+          "purpose": "native_analyze/native_functions/native_function_detail/native_xrefs/native_compare 的后端。",
+          "required": false,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "radare2"
+          },
+          "installArgumentSupported": true
+        },
+        {
+          "id": "r2ghidra",
+          "purpose": "native_decompile 的伪代码插件；按需安装，必须检查，不能声称已安装。",
+          "required": false,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "r2ghidra"
+          },
+          "installArgumentSupported": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "open",
+          "tool": "apk_workspace_open",
+          "args": {
+            "path": "${apkPath}",
+            "temporary": true
+          },
+          "purpose": "建立 APK 快照。"
+        },
+        {
+          "id": "session",
+          "tool": "apk_session_create",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "purpose": "创建编辑会话；apk_copy_entry 需要显式 editSessionId。"
+        },
+        {
+          "id": "export-so",
+          "tool": "apk_copy_entry",
+          "args": {
+            "direction": "workspace_to_local",
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "zip_entry:${soEntry}",
+            "localPath": "${localSoPath}",
+            "overwrite": false
+          },
+          "purpose": "把快照里的 so 导出为手机路径；locator 必须是 zip_entry:，不是 entry:；默认不覆盖已有文件。"
+        },
+        {
+          "id": "component-status",
+          "tool": "apk_component_status",
+          "args": {},
+          "purpose": "只传空对象；检查 radare2 与 r2ghidra 的 installed/available。r2ghidra 按需安装，不能默认可用。"
+        },
+        {
+          "id": "inspect",
+          "tool": "apk_native_inspect",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "zip_entry:${soEntry}"
+          },
+          "purpose": "读取 ELF 位数/架构/段/节/导入和 disassembler 能力；先看这里再选地址。"
+        },
+        {
+          "id": "symbols",
+          "tool": "apk_native_list_items",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "zip_entry:${soEntry}",
+            "itemKind": "symbols",
+            "namePrefix": "${symbolPrefix}",
+            "demangle": true,
+            "limit": 100
+          },
+          "purpose": "列出符号和地址；有 nextCursor 用 apk_continue，上限以 pagination.limitMax 为准。"
+        },
+        {
+          "id": "map",
+          "tool": "apk_native_map_address",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "zip_entry:${soEntry}",
+            "addressKind": "virtual",
+            "address": "${addressHex}"
+          },
+          "purpose": "确认地址是否属于已加载可执行段、对应文件偏移和符号；拒绝非法地址。"
+        },
+        {
+          "id": "disassemble",
+          "tool": "apk_native_disassemble",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "zip_entry:${soEntry}",
+            "addressKind": "virtual",
+            "address": "${addressHex}",
+            "instructionMode": "auto",
+            "stopAtSymbolBoundary": false,
+            "maxBytes": 256,
+            "maxInstructions": 80
+          },
+          "purpose": "有界直接反汇编；unknown/decoded=false 的字节不要猜成指令。"
+        },
+        {
+          "id": "xref",
+          "tool": "apk_native_xref",
+          "args": {
+            "workspaceId": "${workspaceId}",
+            "editSessionId": "${editSessionId}",
+            "locator": "zip_entry:${soEntry}",
+            "addressKind": "virtual",
+            "address": "${addressHex}",
+            "instructionMode": "auto",
+            "scanKind": "code",
+            "referenceKinds": [
+              "call",
+              "jump",
+              "data",
+              "unknown"
+            ],
+            "maxScanBytes": 67108864,
+            "limit": 50
+          },
+          "purpose": "只覆盖直接静态引用和可解析重定位槽；间接调用、数据流和完整调用图不保证。"
+        },
+        {
+          "id": "analyze",
+          "tool": "native_analyze",
+          "args": {
+            "path": "${localSoPath}",
+            "background": true,
+            "timeoutSeconds": 180
+          },
+          "required": false,
+          "when": "radare2 已确认可用",
+          "purpose": "radare2 读取 ELF/二进制元数据；不会执行目标代码。"
+        },
+        {
+          "id": "functions",
+          "tool": "native_functions",
+          "args": {
+            "path": "${localSoPath}",
+            "offset": 0,
+            "limit": 100,
+            "background": true,
+            "timeoutSeconds": 180
+          },
+          "required": false,
+          "when": "radare2 已确认可用",
+          "purpose": "radare2 函数列表，offset/limit 分页；启发式结果不保证覆盖全部函数。"
+        },
+        {
+          "id": "function-detail",
+          "tool": "native_function_detail",
+          "args": {
+            "path": "${localSoPath}",
+            "address": "${addressHex}",
+            "background": true,
+            "timeoutSeconds": 180
+          },
+          "required": false,
+          "when": "已确认目标函数地址",
+          "purpose": "返回指定地址函数的反汇编与基本块信息；address 是十进制或 0x 字符串。"
+        },
+        {
+          "id": "decompile",
+          "tool": "native_decompile",
+          "args": {
+            "path": "${localSoPath}",
+            "address": "${addressHex}",
+            "background": true,
+            "timeoutSeconds": 180
+          },
+          "required": false,
+          "when": "radare2 + r2ghidra 均已确认 installed/available",
+          "purpose": "r2ghidra 伪代码；按需安装，缺组件时明确报错，不能伪造结果。"
+        },
+        {
+          "id": "xrefs",
+          "tool": "native_xrefs",
+          "args": {
+            "path": "${localSoPath}",
+            "address": "${addressHex}",
+            "offset": 0,
+            "limit": 50,
+            "background": true,
+            "timeoutSeconds": 180
+          },
+          "required": false,
+          "when": "radare2 已确认可用",
+          "purpose": "radare2 查询到指定地址的引用；间接调用可能缺失。"
+        },
+        {
+          "id": "job-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${nativeJobId}"
+          },
+          "required": false,
+          "when": "任一 native 后台任务返回 jobId 后",
+          "purpose": "轮询到 SUCCEEDED/FAILED/CANCELLED/INTERRUPTED；CANCELLING 不是终态。"
+        },
+        {
+          "id": "job-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${nativeJobId}",
+            "offset": 0,
+            "maxChars": 16000
+          },
+          "required": false,
+          "when": "native 任务 SUCCEEDED 后",
+          "purpose": "按 nextOffset 分页，只在 hasMore=true 时继续。"
+        }
+      ],
+      "limitations": [
+        "apk_native_* 是静态快照读取；radare2 系列 native_* 直接读手机 path，必须先用 apk_copy_entry 导出，不要混用 locator/workspaceId 参数；native_emulate 只读 codeHex，不是 path。",
+        "radare2 组件和执行策略必须另行确认；r2ghidra 按需安装，native_decompile 不是默认可用。",
+        "Capstone 不可用时只回退有界 AArch64 常见指令子集；xref 只有直接引用，间接跳转/JNI 动态注册可能缺失。",
+        "静态阅读不加载/执行目标 so；Unicorn 是独立的原始指令模拟，不是 ELF 加载器。"
+      ]
+    },
+    {
+      "goal": "dynamic",
+      "id": "dynamic-frida",
+      "title": "Frida 动态观察",
+      "summary": "frida_status/frida_processes/frida_eval 已注册；需 frida 组件和外部 Server/Gadget，不自动 root/提权，durationMs≤10000。",
+      "read": [
+        "dynamic",
+        "components",
+        "jobs",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "endpoint",
+          "required": true,
+          "example": "127.0.0.1:27042",
+          "description": "frida-server/Gadget 的 host:port；默认 127.0.0.1:27042。"
+        },
+        {
+          "name": "pid",
+          "required": true,
+          "example": "12345",
+          "description": "frida_eval 的目标 PID 整数；只对已确认且有权测试的进程使用。"
+        },
+        {
+          "name": "fridaScript",
+          "required": true,
+          "example": "Java.perform(function(){ ... })",
+          "description": "Frida JavaScript 脚本字符串（≤64 KiB），不是文件路径。"
+        },
+        {
+          "name": "fridaInstallJobId",
+          "required": false,
+          "example": "安装任务返回的 jobId",
+          "description": "frida 组件安装任务。"
+        },
+        {
+          "name": "fridaJobId",
+          "required": false,
+          "example": "frida_eval 返回的 jobId",
+          "description": "动态任务；终态后读结果。"
+        }
+      ],
+      "requiredComponents": [
+        {
+          "id": "frida",
+          "purpose": "Frida 客户端组件；另需可访问的 frida-server/Gadget，同 ABI，目标授权。",
+          "required": true,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "frida"
+          },
+          "installArgumentSupported": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "toolkit-status",
+          "tool": "toolkit_status",
+          "args": {},
+          "purpose": "先确认当前后端能力；工具注册不代表 Frida 服务已运行。"
+        },
+        {
+          "id": "component-status",
+          "tool": "apk_component_status",
+          "args": {},
+          "purpose": "只传空对象；查 frida 组件的 installed/available 和 externalRequirements。"
+        },
+        {
+          "id": "install-frida",
+          "tool": "apk_component_install",
+          "args": {
+            "component": "frida",
+            "background": true,
+            "timeoutSeconds": 900
+          },
+          "required": false,
+          "when": "frida available=false 且用户已授权下载",
+          "purpose": "显式安装 Frida 客户端；返回 jobId，任务登记不代表已安装。"
+        },
+        {
+          "id": "install-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${fridaInstallJobId}"
+          },
+          "required": false,
+          "when": "install-frida 返回 jobId 后",
+          "purpose": "轮询到终态；CANCELLING 不是终态。"
+        },
+        {
+          "id": "install-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${fridaInstallJobId}",
+            "offset": 0,
+            "maxChars": 8192
+          },
+          "required": false,
+          "when": "安装终态需要日志时",
+          "purpose": "按 nextOffset 分页，只在 hasMore=true 时继续。"
+        },
+        {
+          "id": "frida-status",
+          "tool": "frida_status",
+          "args": {
+            "endpoint": "${endpoint}",
+            "background": true,
+            "timeoutSeconds": 60
+          },
+          "purpose": "检查 endpoint 连接、版本和权限；需要外部 Server/Gadget，工具不会自动启动或提权。"
+        },
+        {
+          "id": "frida-processes",
+          "tool": "frida_processes",
+          "args": {
+            "endpoint": "${endpoint}",
+            "background": true,
+            "timeoutSeconds": 60
+          },
+          "purpose": "列出 endpoint 可见进程（最多 500）；应用 UID 不能任意附加其他应用。"
+        },
+        {
+          "id": "frida-eval",
+          "tool": "frida_eval",
+          "args": {
+            "endpoint": "${endpoint}",
+            "pid": "${pid}",
+            "script": "${fridaScript}",
+            "durationMs": 5000,
+            "background": true,
+            "timeoutSeconds": 120
+          },
+          "purpose": "对已确认 PID 有界执行脚本 ≤10 秒，返回消息后卸载/分离；停止任务会杀掉本次客户端进程组。"
+        },
+        {
+          "id": "job-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${fridaJobId}"
+          },
+          "required": false,
+          "when": "frida_status/processes/eval 返回 jobId 后",
+          "purpose": "轮询到终态；不要把 RUNNING 当结果。"
+        },
+        {
+          "id": "job-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${fridaJobId}",
+            "offset": 0,
+            "maxChars": 16000
+          },
+          "required": false,
+          "when": "frida 任务 SUCCEEDED 后",
+          "purpose": "按 nextOffset 分页，只在 hasMore=true 时继续；返回消息不等于永久 hook。"
+        }
+      ],
+      "limitations": [
+        "工具已注册但必须有可访问的 frida-server/Gadget；不会自动 root、自动启动服务或自动注入。",
+        "只能分析已授权设备/应用；应用 UID 不能任意附加其他应用。",
+        "durationMs 最大 10000；动态结果受时序、反调试、JIT 和多线程影响，必须保留原始日志。",
+        "任务登记/进程列表命中不等于已附加成功，最终以 frida_eval 的 job 结果为准。"
+      ]
+    },
+    {
+      "goal": "fingerprint",
+      "id": "fingerprint-artifact",
+      "title": "产物指纹、完整性与规则证据",
+      "summary": "file_stat/apk_verify 固定字节与签名证据；artifact_fingerprint 提供启发式线索（不是 APKiD），yara_scan 可选但需组件和规则。",
+      "read": [
+        "fingerprint",
+        "workspace",
+        "jobs",
+        "components",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "artifactPath",
+          "required": true,
+          "example": "target.apk",
+          "description": "工具目录内文件路径；APK/ELF/ZIP 均可用于 artifact_fingerprint。"
+        },
+        {
+          "name": "workspaceId",
+          "required": false,
+          "example": "apk_workspace_open 返回的 workspaceId",
+          "description": "APK 快照 ID；仅 APK 路线需要，非 APK 可省略。"
+        },
+        {
+          "name": "rulesPath",
+          "required": true,
+          "example": "rules/target.yar",
+          "description": "YARA 规则文件，≤1 MiB，禁用 include。"
+        },
+        {
+          "name": "fingerprintJobId",
+          "required": false,
+          "example": "artifact_fingerprint 返回的 jobId",
+          "description": "后台指纹/扫描任务。"
+        }
+      ],
+      "requiredComponents": [
+        {
+          "id": "yara",
+          "purpose": "可选：yara_scan 规则扫描；需 yara 组件。",
+          "required": false,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "yara"
+          },
+          "installArgumentSupported": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "stat",
+          "tool": "file_stat",
+          "args": {
+            "path": "${artifactPath}"
+          },
+          "purpose": "读取类型/大小/修改时间；普通文件返回流式 SHA-256 targetVersion。哈希只代表字节身份。"
+        },
+        {
+          "id": "open",
+          "tool": "apk_workspace_open",
+          "args": {
+            "path": "${artifactPath}",
+            "temporary": true
+          },
+          "required": false,
+          "when": "目标是 APK 且需要快照/验签时",
+          "purpose": "为 APK 建立不可变快照并得到 workspaceId/sha256；非 APK 跳过。"
+        },
+        {
+          "id": "verify",
+          "tool": "apk_verify",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "required": false,
+          "when": "已有 APK 快照",
+          "purpose": "密码学验签 + ZIP/ELF 对齐 + Manifest 检查；失败项看 checks/issues。"
+        },
+        {
+          "id": "signature-metadata",
+          "tool": "apk_read_signature",
+          "args": {
+            "workspaceId": "${workspaceId}"
+          },
+          "required": false,
+          "when": "已有 APK 快照",
+          "purpose": "读取证书/方案元数据；verified=false，不要写成“验签通过”。"
+        },
+        {
+          "id": "zip-integrity",
+          "tool": "zip_test",
+          "args": {
+            "path": "${artifactPath}",
+            "password": ""
+          },
+          "required": false,
+          "when": "目标是 ZIP/APK 时",
+          "purpose": "完整 CRC/HMAC 校验 ZIP 条目；加密条目才需要非空密码。"
+        },
+        {
+          "id": "artifact-fingerprint",
+          "tool": "artifact_fingerprint",
+          "args": {
+            "path": "${artifactPath}",
+            "background": true,
+            "timeoutSeconds": 120
+          },
+          "purpose": "SHA-256、格式和 APK 库/壳/框架启发式线索；后端 aijs-heuristics-v1，fullApkid=false。"
+        },
+        {
+          "id": "component-status",
+          "tool": "apk_component_status",
+          "args": {},
+          "required": false,
+          "when": "需要 yara_scan 时",
+          "purpose": "只传空对象；确认 yara 组件 installed/available。"
+        },
+        {
+          "id": "yara",
+          "tool": "yara_scan",
+          "args": {
+            "path": "${artifactPath}",
+            "rulesPath": "${rulesPath}",
+            "scanTimeoutSeconds": 20,
+            "includeOffsets": true,
+            "background": true,
+            "timeoutSeconds": 60
+          },
+          "required": false,
+          "when": "yara 组件已确认可用且有规则",
+          "purpose": "有界规则扫描；无匹配不等于安全，有匹配也要人工复核。"
+        },
+        {
+          "id": "job-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${fingerprintJobId}"
+          },
+          "required": false,
+          "when": "artifact_fingerprint/yara_scan 返回 jobId 后",
+          "purpose": "轮询到终态。"
+        },
+        {
+          "id": "job-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${fingerprintJobId}",
+            "offset": 0,
+            "maxChars": 16000
+          },
+          "required": false,
+          "when": "任务 SUCCEEDED 后",
+          "purpose": "按 nextOffset 分页，只在 hasMore=true 时继续。"
+        }
+      ],
+      "limitations": [
+        "SHA-256 是字节身份，不是安全结论；必须同时记录文件大小、来源和采集时间。",
+        "artifact_fingerprint 是内置启发式，不是完整 APKiD；未命中不能证明无壳/无框架。",
+        "YARA 需单独安装组件；无匹配不等于无风险，有匹配也要人工复核规则与上下文。",
+        "签名元数据不是密码学验签；apk_verify 也不证明运行时行为或商店合规。"
+      ]
+    },
+    {
+      "goal": "emulate",
+      "id": "emulate-native",
+      "title": "Unicorn 原始机器码模拟",
+      "summary": "native_emulate 已注册，但只接受 codeHex 原始指令，不接受 so/ELF 路径；需 unicorn 组件，不是 Android 运行时。",
+      "read": [
+        "emulate",
+        "native",
+        "components",
+        "jobs",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "codeHex",
+          "required": true,
+          "example": "1f2003d5c0035fd6",
+          "description": "要模拟的十六进制机器码（1..65536 字节）；不是 ELF/so 路径。"
+        },
+        {
+          "name": "emulateJobId",
+          "required": false,
+          "example": "native_emulate 返回的 jobId",
+          "description": "模拟任务。"
+        }
+      ],
+      "requiredComponents": [
+        {
+          "id": "unicorn",
+          "purpose": "native_emulate 的 CPU 模拟后端；只模拟原始指令，不加载 ELF。",
+          "required": true,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "unicorn"
+          },
+          "installArgumentSupported": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "component-status",
+          "tool": "apk_component_status",
+          "args": {},
+          "purpose": "只传空对象；确认 unicorn 的 installed/available。"
+        },
+        {
+          "id": "emulate",
+          "tool": "native_emulate",
+          "args": {
+            "architecture": "arm64",
+            "codeHex": "${codeHex}",
+            "dataHex": "",
+            "timeoutMs": 100,
+            "instructionLimit": 10000,
+            "background": true,
+            "timeoutSeconds": 60
+          },
+          "purpose": "有界 CPU 模拟；codeHex 是原始机器码，不是 path；结果明确 fullAndroidEnvironment=false。"
+        },
+        {
+          "id": "job-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${emulateJobId}"
+          },
+          "required": false,
+          "when": "native_emulate 返回 jobId 后",
+          "purpose": "轮询到终态；CANCELLING 不是终态。"
+        },
+        {
+          "id": "job-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${emulateJobId}",
+            "offset": 0,
+            "maxChars": 16000
+          },
+          "required": false,
+          "when": "模拟任务 SUCCEEDED 后",
+          "purpose": "按 nextOffset 分页，只在 hasMore=true 时继续。"
+        }
+      ],
+      "limitations": [
+        "native_emulate 只接受 codeHex，不接受 APK/ELF/so 路径；需要先由用户/其他工具准备精确机器码字节。",
+        "CPU 模拟不是 Android 运行时：JNI、binder、系统调用、TLS、反调试和真实内存布局可能不同。",
+        "必须记录入口字节、架构、初始寄存器/数据、超时和指令上限；不能写“已运行目标 so”。",
+        "unicorn 组件需显式安装；工具注册不代表组件可用。"
+      ]
+    },
+    {
+      "goal": "compare",
+      "id": "compare-artifacts",
+      "title": "两个版本的证据对照",
+      "summary": "分别建立快照和验签证据，再按哈希、签名、成员和静态特征对照；native_compare 已注册但只做有界字节差异，不是语义等价。",
+      "read": [
+        "compare",
+        "fingerprint",
+        "workspace",
+        "native",
+        "components",
+        "errors"
+      ],
+      "variables": [
+        {
+          "name": "apkPathA",
+          "required": true,
+          "example": "old.apk",
+          "description": "基线 APK 路径。"
+        },
+        {
+          "name": "apkPathB",
+          "required": true,
+          "example": "new.apk",
+          "description": "对照 APK 路径。"
+        },
+        {
+          "name": "workspaceIdA",
+          "required": true,
+          "example": "A 的 workspaceId",
+          "description": "基线快照 ID。"
+        },
+        {
+          "name": "workspaceIdB",
+          "required": true,
+          "example": "B 的 workspaceId",
+          "description": "对照快照 ID。"
+        },
+        {
+          "name": "localBinaryA",
+          "required": false,
+          "example": "analysis/a.bin",
+          "description": "可选：从 A 导出的文件，用于 native_compare。"
+        },
+        {
+          "name": "localBinaryB",
+          "required": false,
+          "example": "analysis/b.bin",
+          "description": "可选：从 B 导出的文件，用于 native_compare。"
+        },
+        {
+          "name": "compareJobId",
+          "required": false,
+          "example": "native_compare 返回的 jobId",
+          "description": "比较任务。"
+        }
+      ],
+      "requiredComponents": [
+        {
+          "id": "radare2",
+          "purpose": "可选：native_compare 的 radare2 元数据后端。",
+          "required": false,
+          "checkTool": "apk_component_status",
+          "installTool": "apk_component_install",
+          "installArgs": {
+            "component": "radare2"
+          },
+          "installArgumentSupported": true
+        }
+      ],
+      "steps": [
+        {
+          "id": "stat-a",
+          "tool": "file_stat",
+          "args": {
+            "path": "${apkPathA}"
+          },
+          "purpose": "记录 A 的大小/SHA-256/时间；先固定字节身份。"
+        },
+        {
+          "id": "stat-b",
+          "tool": "file_stat",
+          "args": {
+            "path": "${apkPathB}"
+          },
+          "purpose": "记录 B 的大小/SHA-256/时间。"
+        },
+        {
+          "id": "open-a",
+          "tool": "apk_workspace_open",
+          "args": {
+            "path": "${apkPathA}",
+            "temporary": true
+          },
+          "purpose": "建立 A 的不可变快照。"
+        },
+        {
+          "id": "open-b",
+          "tool": "apk_workspace_open",
+          "args": {
+            "path": "${apkPathB}",
+            "temporary": true
+          },
+          "purpose": "建立 B 的不可变快照；不要覆盖 A 的工作区。"
+        },
+        {
+          "id": "verify-a",
+          "tool": "apk_verify",
+          "args": {
+            "workspaceId": "${workspaceIdA}"
+          },
+          "purpose": "A 的签名/结构独立证据。"
+        },
+        {
+          "id": "verify-b",
+          "tool": "apk_verify",
+          "args": {
+            "workspaceId": "${workspaceIdB}"
+          },
+          "purpose": "B 的签名/结构独立证据。"
+        },
+        {
+          "id": "signature-a",
+          "tool": "apk_read_signature",
+          "args": {
+            "workspaceId": "${workspaceIdA}"
+          },
+          "purpose": "A 的证书/方案元数据，仅用于对照，不是验签。"
+        },
+        {
+          "id": "signature-b",
+          "tool": "apk_read_signature",
+          "args": {
+            "workspaceId": "${workspaceIdB}"
+          },
+          "purpose": "B 的证书/方案元数据，仅用于对照。"
+        },
+        {
+          "id": "component-status",
+          "tool": "apk_component_status",
+          "args": {},
+          "required": false,
+          "when": "需要 native_compare 时",
+          "purpose": "只传空对象；确认 radare2 可用。"
+        },
+        {
+          "id": "native-compare",
+          "tool": "native_compare",
+          "args": {
+            "path": "${localBinaryA}",
+            "otherPath": "${localBinaryB}",
+            "offset": 0,
+            "limit": 100,
+            "background": true,
+            "timeoutSeconds": 180
+          },
+          "required": false,
+          "when": "两个本地二进制已准备且 radare2 可用",
+          "purpose": "有界字节变化 + radare2 元数据；不是函数级语义比较。"
+        },
+        {
+          "id": "job-status",
+          "tool": "apk_job_status",
+          "args": {
+            "jobId": "${compareJobId}"
+          },
+          "required": false,
+          "when": "native_compare 返回 jobId 后",
+          "purpose": "轮询到终态。"
+        },
+        {
+          "id": "job-result",
+          "tool": "apk_job_result",
+          "args": {
+            "jobId": "${compareJobId}",
+            "offset": 0,
+            "maxChars": 16000
+          },
+          "required": false,
+          "when": "任务 SUCCEEDED 后",
+          "purpose": "按 nextOffset 分页，只在 hasMore=true 时继续。"
+        }
+      ],
+      "limitations": [
+        "两个快照必须绑定各自的 sha256；不能拿 A 的读取结果去改 B。",
+        "签名证书相同不代表内容相同；内容哈希相同也不代表运行时行为相同。",
+        "native_compare 只做有界字节差异和 radare2 元数据，不是语义等价或函数级 diff。",
+        "跨版本比较要同时记录 versionCode/versionName、ABI、渠道和采集设备。"
+      ]
+    }
+  ]
+}

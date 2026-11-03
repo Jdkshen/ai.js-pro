@@ -10,4 +10,5 @@ internal interface ToolkitRuntime {
     fun remove(args: JsonObject): JsonObject
     fun compileResources(args: JsonObject): JsonObject
     fun decompile(input: File, locator: String, args: JsonObject): JsonObject
+    fun reverse(name: String, args: JsonObject): JsonObject = throw ToolkitException("BACKEND_UNAVAILABLE", "当前没有Android逆向组件后端")
 }
