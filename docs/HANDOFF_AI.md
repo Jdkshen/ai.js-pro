@@ -1,5 +1,7 @@
 # AI 接手总纲（AI_HANDOFF）
 
+> **2026-11-05 已发布 LAN dev-1339**（当前更新源）：MCP 连续三批改进——[P1/P2 全部落地](reports/2026-11-04_MCP逆向能力优化第三阶段（P1P2）.md)、[用户侧体验反馈第一批](reports/2026-11-04_MCP用户体验反馈第一批（UX1-5）.md)、[三个 bug 修复](reports/2026-11-04_MCP实测三个bug修复（dev-1337）.md)、[改进第二批](reports/2026-11-05_MCP改进第二批（自动证据_路由字段_会话持久化）.md)。公开入口 **206**（197+9）、MCP **500 单测**全过；R8/16KB/平台阴影/Retrofit 通过；LAN `update.json` = dev-1339（137.91 MiB，SHA `509e39ed…`），MI8 已装。能力要点：终端后端路由（`autoRoute` 只读白名单 + 结构化 routedFrom/To）、常驻 r2 会话 `native_session_*`（project 复用 + 跨进程索引）、Frida SELinux 诊断与 Gadget script 模式、`/proc/net/tcp` 自动证据、shell 能力清单/失败分类、node 文件脚本命令、crash buffer 语义、`apk_session_release` 与配额回收、`evidence_export`/`binary_transform`。未做：Frida 持久 attach、sameUid 自动判定、旧内存会话反推、大库 aaa 预算推断。K40 未动、未 push。
+
 > **2026-11-04 已发布 LAN dev-1330**：[MCP免Root Gadget集成](reports/2026-11-04_MCP免RootGadget集成.md)。新增apk_inject_gadget，四ABI组件按需下载，二进制Manifest/独立DEX加载器、原资源保留、重签验签、本机令牌与客户端v2升级；不需要Root/Server。170入口（161+9）、toolkit100、650 App回归和MI8普通UID安装/附加/原生42/重开/拒绝/取消通过。主包137.70MiB，仅增约18KiB，SHA43c50a05…；PC/MI8完整LAN下载与实装摘要一致。真实16KiB页、Android17及其他ABI设备未验，K40未动、无push。
 
 
