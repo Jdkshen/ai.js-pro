@@ -158,6 +158,94 @@ class McpAppToolsTest {
         assertTrue(McpAppTools.filterApps(apps, "不存在的应用", includeSystem = true).isEmpty())
     }
 
+    @Test fun queryNormalizationUsesNfcFullWidthCaseAndWhitespaceFolding() {
+        assertEquals("abc def", McpAppTools.normalizeQuery("  ＡＢＣ　　ＤＥＦ  "))
+        assertEquals("café", McpAppTools.normalizeQuery("Cafe\u0301"))
+        assertEquals("微信 聊天", McpAppTools.normalizeQuery(" 微信 \u3000 聊天 "))
+        assertEquals("firefox", McpAppTools.normalizeQuery("ＦＩＲＥＦＯＸ"))
+        assertEquals("", McpAppTools.normalizeQuery("   \u3000  "))
+        assertEquals("", McpAppTools.normalizeQuery(null))
+    }
+
+    @Test fun appFilterReportsMatchedByAndNormalizedQuery() {
+        val apps = listOf(
+            app("com.tencent.mm", "微信"),
+            app("org.mozilla.firefox", "Firefox"),
+            app("com.example.music", "音乐"),
+        )
+        val withSpaces = apps + app("com.example.wechat", "微信 聊天")
+        fun hit(query: String): McpAppTools.AppSummary =
+            McpAppTools.filterApps(apps, query, includeSystem = true).single()
+        assertEquals("package", hit("com.tencent.mm").matchedBy)
+        assertEquals("label", hit("微信").matchedBy)
+        assertEquals("label", hit("ＦＩＲＥＦＯＸ").matchedBy)
+        assertEquals("labelContains", hit("fire").matchedBy)
+        assertEquals("package", hit("tencent").matchedBy)
+        assertEquals("label", McpAppTools.filterApps(withSpaces, "微信 聊天", includeSystem = true).single().matchedBy)
+        assertEquals("package", hit("com tencent").matchedBy)
+        assertTrue(McpAppTools.filterApps(withSpaces, "微信 支付", includeSystem = true).isEmpty())
+        assertEquals("微信 聊天", McpAppTools.searchApps(withSpaces, "  微信   聊天 ").normalizedQuery)
+    }
+
+    @Test fun appFilterMatchesPackageAndLabelConsistently() {
+        val apps = listOf(
+            app("com.example.alpha", "Alpha"),
+            app("com.example.beta", "Beta"),
+        )
+        val byPackage = McpAppTools.filterApps(apps, "com.example.alpha", includeSystem = true)
+        val byLabel = McpAppTools.filterApps(apps, "alpha", includeSystem = true)
+        assertEquals(listOf("com.example.alpha"), byPackage.map { it.packageName })
+        assertEquals(listOf("com.example.alpha"), byLabel.map { it.packageName })
+        assertEquals("package", byPackage.single().matchedBy)
+        assertEquals("label", byLabel.single().matchedBy)
+    }
+
+    @Test fun filterBeforePaginationKeepsFilteredTotal() {
+        val apps = (1..5).map { app("com.example.app$it", "Filtered $it") } +
+            app("com.example.other", "Other")
+        val search = McpAppTools.searchApps(apps, "filtered", includeSystem = true)
+        assertEquals(5, search.items.size)
+        assertEquals(6, search.scanTotal)
+        assertEquals("filtered", search.normalizedQuery)
+        val first = McpAppTools.paginateApps(search.items, 0, 2)
+        assertEquals(5, first.total)
+        assertEquals(2, first.items.size)
+        assertEquals(0, first.offset)
+        assertEquals(2, first.limit)
+        assertEquals(2, first.nextOffset)
+        assertTrue(first.hasMore)
+        val second = McpAppTools.paginateApps(search.items, first.nextOffset, 2)
+        assertEquals(2, second.items.size)
+        assertEquals(4, second.nextOffset)
+        assertTrue(second.hasMore)
+        val third = McpAppTools.paginateApps(search.items, second.nextOffset, 2)
+        assertEquals(1, third.items.size)
+        assertEquals(5, third.nextOffset)
+        assertFalse(third.hasMore)
+        assertEquals((1..5).map { "com.example.app$it" }.sorted(), (first.items + second.items + third.items).map { it.packageName }.sorted())
+    }
+
+    @Test fun packageVisibilityStateDistinguishesLimitedAndFullScans() {
+        assertFalse(McpAppTools.visibilityState(29, queryAllPackagesGranted = false).limited)
+        assertEquals("all_installed", McpAppTools.visibilityState(29, false).scanScope)
+        assertFalse(McpAppTools.visibilityState(30, queryAllPackagesGranted = true).limited)
+        assertEquals("all_installed", McpAppTools.visibilityState(30, true).scanScope)
+        val limited = McpAppTools.visibilityState(30, queryAllPackagesGranted = false)
+        assertTrue(limited.limited)
+        assertEquals("visible_to_app", limited.scanScope)
+        assertTrue(limited.note.contains("QUERY_ALL_PACKAGES"))
+        assertTrue(limited.note.contains("Android 11+"))
+    }
+
+    @Test fun appSummaryJsonIncludesMatchedByWhenPresent() {
+        val json = McpAppTools.appSummaryJson(
+            app("com.example.app", "示例").copy(matchedBy = "label"),
+        )
+        assertEquals("label", json.get("matchedBy").asString)
+        val unset = McpAppTools.appSummaryJson(app("com.example.app", "示例"))
+        assertTrue(unset.get("matchedBy").isJsonNull)
+    }
+
     @Test fun appFilterExcludesSystemAppsWhenRequested() {
         val apps = listOf(
             app("com.tencent.mm", "微信"),

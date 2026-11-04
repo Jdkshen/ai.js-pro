@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.mcp
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
@@ -18,6 +19,7 @@ import com.stardust.util.IntentUtil
 import java.io.File
 import java.net.URI
 import java.net.URISyntaxException
+import java.text.Normalizer
 import java.util.Locale
 
 /**
@@ -42,6 +44,8 @@ internal object McpAppTools {
     private const val MAX_QUERY_CHARS = 128
     private const val MAX_URL_CHARS = 4096
     private const val MAX_PACKAGE_NAME_CHARS = 255
+    /** 查询归一化的空白折叠：包含常见 Unicode 空格（NFKC 后 U+3000 通常已变 ASCII 空格）。 */
+    private val QUERY_WHITESPACE = Regex("""[\s\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000]+""")
 
     /** Android 包名：至少一段，段间用 '.' 分隔，每段以字母开头（允许字母/数字/下划线）。 */
     private val packageNamePattern = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)*$")
@@ -55,6 +59,8 @@ internal object McpAppTools {
         val isSystem: Boolean,
         val enabled: Boolean,
         val targetSdk: Int,
+        /** 命中方式：package | label | labelContains；未过滤列表为 null。 */
+        val matchedBy: String? = null,
     )
 
     data class AppPage(
@@ -63,37 +69,63 @@ internal object McpAppTools {
         val nextOffset: Int,
         val total: Int,
         val hasMore: Boolean,
+        /** 实际生效 limit（1..MAX_LIST_LIMIT）；兼容旧调用方新增字段。 */
+        val limit: Int = 0,
+    )
+
+    /** 应用查询/归一化结果；纯 JVM 可测。 */
+    data class AppSearchResult(
+        val items: List<AppSummary>,
+        val normalizedQuery: String,
+        val scanTotal: Int,
+    )
+
+    /** Android 11+ 包可见性状态；packageList 会随结果返回。 */
+    data class VisibilityState(
+        val limited: Boolean,
+        val scanScope: String,
+        val note: String,
     )
 
     // ------------------------------------------------------------------
     // MCP 工具入口（args 即 tools/call 的 arguments；不需要 root）
     // ------------------------------------------------------------------
 
-    /** app_list：列出已安装应用（label/version/isSystem/enabled），支持 query 过滤与分页。 */
+    /** app_list：列出已安装应用（label/version/isSystem/enabled），支持归一化 query 过滤与分页。 */
     fun packageList(context: Context, args: JsonObject): JsonObject = runTool("app_list") {
-        val query = args.stringOrNull("query")?.trim()?.takeIf { it.isNotEmpty() }
-        if (query != null && query.length > MAX_QUERY_CHARS) {
-            throw IllegalArgumentException("query 过长（上限 $MAX_QUERY_CHARS 字符）")
+        val rawQuery = args.stringOrNull("query")?.trim()?.takeIf { it.isNotEmpty() }
+        if (rawQuery != null && rawQuery.length > MAX_QUERY_CHARS) {
+            throw IllegalArgumentException("query 过长（上限 " + MAX_QUERY_CHARS + " 字符）")
         }
         val includeSystem = args.booleanOr("includeSystem", true)
-        val all = loadInstalledApps(context.packageManager)
-        val page = paginateApps(
-            filterApps(all, query, includeSystem),
-            args.intOr("offset", 0),
-            args.intOr("limit", DEFAULT_LIST_LIMIT),
-        )
+        val pm = context.packageManager
+        val all = loadInstalledApps(pm)
+        val search = searchApps(all, rawQuery, includeSystem)
+        val page = paginateApps(search.items, args.intOr("offset", 0), args.intOr("limit", DEFAULT_LIST_LIMIT))
+        val queryAllGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+            pm.checkPermission(Manifest.permission.QUERY_ALL_PACKAGES, context.packageName) ==
+            PackageManager.PERMISSION_GRANTED
+        val visibility = visibilityState(Build.VERSION.SDK_INT, queryAllGranted)
         JsonObject().apply {
             addProperty("success", true)
             add("items", JsonArray().apply { page.items.forEach { add(appSummaryJson(it)) } })
             addProperty("count", page.items.size)
             addProperty("total", page.total)
+            addProperty("filteredTotal", page.total)
+            addProperty("scanTotal", all.size)
             addProperty("offset", page.offset)
+            addProperty("limit", page.limit)
             addProperty("nextOffset", page.nextOffset)
             addProperty("hasMore", page.hasMore)
             addProperty("includeSystem", includeSystem)
             addProperty("requiresRoot", false)
-            query?.let { addProperty("query", it) }
-            if (page.total == 0 && query != null && !includeSystem) {
+            addProperty("visibilityLimited", visibility.limited)
+            addProperty("scanScope", visibility.scanScope)
+            addProperty("scanNote", visibility.note)
+            addProperty("queryAllPackagesGranted", queryAllGranted)
+            addProperty("normalizedQuery", search.normalizedQuery)
+            rawQuery?.let { addProperty("query", it) }
+            if (page.total == 0 && rawQuery != null && !includeSystem) {
                 addProperty("hint", "没有匹配的第三方应用；如需搜索系统应用，请加 includeSystem=true")
             }
         }
@@ -364,18 +396,84 @@ internal object McpAppTools {
         return canonical
     }
 
-    /** 按 query（包名或 label，忽略大小写）与系统应用开关过滤，并按 label（忽略大小写）+ 包名排序。 */
-    fun filterApps(all: List<AppSummary>, query: String?, includeSystem: Boolean = true): List<AppSummary> {
-        val needle = query?.trim().orEmpty()
-        return all.asSequence()
+    /**
+     * 归一化查询串：Unicode NFC、NFKC 全/半角统一、忽略大小写、空白折叠。
+     * 返回空串表示“无查询”（查询只有空白也算无查询）。
+     */
+    fun normalizeQuery(raw: String?): String {
+        val value = raw ?: return ""
+        val compatibility = Normalizer.normalize(value, Normalizer.Form.NFKC)
+        return Normalizer.normalize(compatibility, Normalizer.Form.NFC)
+            .lowercase(Locale.ROOT)
+            .replace(QUERY_WHITESPACE, " ")
+            .trim()
+    }
+
+    /**
+     * 包可见性说明（纯 JVM，可单测）：Android 11+ 且未授予 QUERY_ALL_PACKAGES 时，
+     * PackageManager 只返回当前应用可见的子集；此时 visibilityLimited=true。
+     */
+    fun visibilityState(sdk: Int, queryAllPackagesGranted: Boolean): VisibilityState {
+        val limited = sdk >= 30 && !queryAllPackagesGranted
+        return if (limited) VisibilityState(
+            limited = true,
+            scanScope = "visible_to_app",
+            note = "Android 11+ 包可见性限制：当前应用只看到可见应用子集，列表不是完整安装集；" +
+                "如需完整列表，请在 manifest 声明并获准 QUERY_ALL_PACKAGES（或为需要的应用增加 <queries>）",
+        ) else VisibilityState(
+            limited = false,
+            scanScope = "all_installed",
+            note = if (sdk >= 30) "Android 11+ 且已获准 QUERY_ALL_PACKAGES：列表为本机已安装应用（仍可能受系统分身/工作资料策略影响）"
+            else "Android 11 以下无包过滤可见性限制：列表为本机已安装应用（可能受工作资料/分身策略影响）",
+        )
+    }
+
+    /**
+     * 先过滤后分页的核心查询：归一化 query 后对 **原始全量列表** 过滤，
+     * 每个命中项带 matchedBy（package/label/labelContains）。
+     * 不在这里分页，避免“先截断再过滤”的漏查/误报。
+     */
+    fun searchApps(all: List<AppSummary>, query: String?, includeSystem: Boolean = true): AppSearchResult {
+        val normalized = normalizeQuery(query)
+        val matched = all.asSequence()
             .filter { includeSystem || !it.isSystem }
-            .filter {
-                needle.isEmpty() ||
-                    it.packageName.contains(needle, ignoreCase = true) ||
-                    it.label.contains(needle, ignoreCase = true)
+            .mapNotNull { app ->
+                // 无查询（null/空白）表示“列出全部”，不是“没有命中”；matchedBy 保持 null。
+                if (normalized.isEmpty()) return@mapNotNull app.copy(matchedBy = null)
+                val kind = matchedBy(app, normalized) ?: return@mapNotNull null
+                app.copy(matchedBy = kind)
             }
             .sortedWith(compareBy<AppSummary> { it.label.lowercase(Locale.ROOT) }.thenBy { it.packageName })
             .toList()
+        return AppSearchResult(matched, normalized, all.size)
+    }
+
+    /** 兼容旧调用：返回带 matchedBy 的过滤排序结果（不再做分页）。 */
+    fun filterApps(all: List<AppSummary>, query: String?, includeSystem: Boolean = true): List<AppSummary> =
+        searchApps(all, query, includeSystem).items
+
+    private fun matchedBy(app: AppSummary, normalizedQuery: String): String? {
+        if (normalizedQuery.isEmpty()) return null
+        val packageName = normalizeQuery(app.packageName)
+        val label = normalizeQuery(app.label)
+        return when {
+            packageName == normalizedQuery -> "package"
+            label == normalizedQuery -> "label"
+            containsNormalized(label, normalizedQuery) -> "labelContains"
+            containsNormalized(packageName, normalizedQuery) -> "package"
+            else -> null
+        }
+    }
+
+    /**
+     * 完整包含；若 query 是空格分隔的多段（如 "微信 聊天"/"com tencent"），
+     * 则要求所有段都出现在**同一个字段**里，避免跨字段拼凑误命中。
+     */
+    private fun containsNormalized(text: String, normalizedQuery: String): Boolean {
+        if (text.contains(normalizedQuery)) return true
+        if (!normalizedQuery.contains(' ')) return false
+        val tokens = normalizedQuery.split(' ').filter { it.isNotEmpty() }
+        return tokens.isNotEmpty() && tokens.all { text.contains(it) }
     }
 
     /** 分页：offset 负数归 0、越界钳到总数；limit 钳到 1..MAX_LIST_LIMIT。 */
@@ -383,7 +481,7 @@ internal object McpAppTools {
         val safeOffset = offset.coerceAtLeast(0).coerceAtMost(all.size)
         val safeLimit = limit.coerceIn(1, MAX_LIST_LIMIT)
         val end = (safeOffset + safeLimit).coerceAtMost(all.size)
-        return AppPage(all.subList(safeOffset, end), safeOffset, end, all.size, end < all.size)
+        return AppPage(all.subList(safeOffset, end), safeOffset, end, all.size, end < all.size, safeLimit)
     }
 
     /** AppSummary → MCP 返回 JSON（稳定字段名，纯 JVM 可测）。 */
@@ -395,6 +493,7 @@ internal object McpAppTools {
         addProperty("isSystem", app.isSystem)
         addProperty("enabled", app.enabled)
         addProperty("targetSdk", app.targetSdk)
+        if (app.matchedBy != null) addProperty("matchedBy", app.matchedBy) else add("matchedBy", com.google.gson.JsonNull.INSTANCE)
     }
 
     // ------------------------------------------------------------------

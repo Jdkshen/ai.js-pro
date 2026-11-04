@@ -51,6 +51,11 @@ class ToolkitApkVerifierTest {
         assertEquals("config.arm64_v8a", manifest.get("split").asString)
         assertEquals(listOf("arm64-v8a"), manifest.getAsJsonArray("abis").map { it.asString })
         assertEquals("range_overlap", manifest.getAsJsonObject("compatibility").get("sdkRange").asString)
+        // §4.1：完整解码成功时必须自报来源，且不算“回退”。
+        assertEquals("arscLib", manifest.get("parseSource").asString)
+        assertTrue(manifest.get("fullXmlDecoded").asBoolean)
+        val primaryError = manifest.get("primaryDecoderError")
+        assertTrue(primaryError == null || primaryError.isJsonNull)
 
         val native = report.getAsJsonObject("native")
         assertEquals("valid", native.get("status").asString)

@@ -540,7 +540,14 @@ internal object ToolkitApkVerifier {
         var previewMinSdk: String? = null,
         var abis: List<String> = emptyList(),
         var extractNativeLibs: Boolean? = null,
-        var compileSdkVersion: String? = null
+        var compileSdkVersion: String? = null,
+        // §4.1：基础字段解析与完整资源解码必须分开报告，见 parseSource/fullXmlDecoded。
+        var parseSource: String? = null,
+        var fullXmlDecoded: Boolean = false,
+        var primaryDecoderError: String? = null,
+        var failureKind: String? = null,
+        var liteElementCount: Int? = null,
+        var liteAttributeCount: Int? = null
     )
 
     private fun inspectManifest(file: File, zip: ZipSection, minSdk: Int?, maxSdk: Int?): Section {
@@ -562,6 +569,7 @@ internal object ToolkitApkVerifier {
             issues.add(issue("manifest", "MANIFEST_DUPLICATE", "error",
                 "存在多个 AndroidManifest.xml 条目", "count" to manifests.size))
         }
+        var manifestBytes: ByteArray? = null
         try {
             val bytes = ZipFile(file).use { source ->
                 val entry = source.getEntry("AndroidManifest.xml")
@@ -569,7 +577,8 @@ internal object ToolkitApkVerifier {
                 if (entry.size > ToolkitIo.MAX_ENTRY.toLong()) throw IOException("Manifest 超过 64 MiB 预算")
                 ToolkitIo.read(source.getInputStream(entry), ToolkitIo.MAX_ENTRY)
             }
-            info.binaryXml = ToolkitResources.isBinaryXml(bytes)
+            manifestBytes = bytes
+            info.binaryXml = ToolkitResources.isBinaryXml(bytes) || ToolkitAxmlLite.looksBinaryXml(bytes)
             val text = if (info.binaryXml) ToolkitResources.decodeXml(bytes, null) else ToolkitIo.text(bytes)
             if (text.length > MAX_MANIFEST_TEXT) throw IllegalArgumentException("Manifest 文本超过 4 MiB 预算")
             ToolkitResources.safeXml(text)
@@ -604,11 +613,57 @@ internal object ToolkitApkVerifier {
             }
             val application = root.childElementList.firstOrNull { it.name == "application" }
             info.extractNativeLibs = parseBoolean(application?.let { attribute(it, "extractNativeLibs") })
+            info.parseSource = "arscLib"
+            info.fullXmlDecoded = true
         } catch (failure: Exception) {
-            issues.add(issue("manifest", "MANIFEST_UNREADABLE", "error",
-                failure.message ?: "Manifest 无法解析"))
+            // §4.1：完整资源解码失败时先退到独立 AXML 解析取回基础字段，并原样保留失败原因；
+            // 不能把「解码器失败」说成「目标清单损坏」，也不能用回退结果冒充完整 XML。
+            info.primaryDecoderError = failure.message ?: failure.javaClass.name
+            info.failureKind = manifestFailureKind(info.primaryDecoderError.orEmpty())
+            val bytes = manifestBytes
+            val facts = if (bytes != null && info.binaryXml) ToolkitAxmlLite.parseManifest(bytes) else null
+            if (facts != null) {
+                applyLiteFacts(facts, info)
+                info.parseSource = "independent-axml"
+                info.fullXmlDecoded = false
+                issues.add(issue("manifest", "MANIFEST_PRIMARY_DECODER_FALLBACK", "warning",
+                    "完整 XML 解码失败（${info.failureKind}），已用独立 AXML 解析取回基础字段；" +
+                        "资源引用与组件级 XML 仍不可用",
+                    "failureKind" to info.failureKind, "primaryError" to info.primaryDecoderError))
+                if (info.packageName == null) {
+                    issues.add(issue("manifest", "MANIFEST_PACKAGE_MISSING", "error", "Manifest 缺少 package"))
+                }
+            } else {
+                issues.add(issue("manifest", "MANIFEST_UNREADABLE", "error",
+                    info.primaryDecoderError ?: "Manifest 无法解析",
+                    "failureKind" to info.failureKind))
+            }
         }
         return manifestSection(info, issues, minSdk, maxSdk)
+    }
+
+    /** 把 AXML 解码失败分类，避免把「资源上下文缺失」当成「目标清单损坏」。 */
+    private fun manifestFailureKind(message: String): String = when {
+        message.contains("without package", ignoreCase = true) -> "resource_context_missing"
+        message.contains("axml", ignoreCase = true) || message.contains("binary xml", ignoreCase = true) ->
+            "unsupported_binary_xml"
+        message.contains("format", ignoreCase = true) -> "unsupported_format"
+        else -> "decoder_error"
+    }
+
+    private fun applyLiteFacts(facts: ToolkitAxmlLite.ManifestFacts, info: ManifestInfo) {
+        info.packageName = facts.packageName?.takeIf { it.isNotBlank() }
+        info.split = facts.split?.takeIf { it.isNotBlank() }
+        info.versionCode = facts.versionCode
+        info.versionName = facts.versionName?.takeIf { it.isNotBlank() }
+        info.compileSdkVersion = facts.compileSdkVersion?.takeIf { it.isNotBlank() }
+        info.minSdk = facts.minSdk
+        info.targetSdk = facts.targetSdk
+        info.maxSdk = facts.maxSdk
+        info.previewMinSdk = null // 兜底解析按整数取，无法判断预览代号语义
+        info.extractNativeLibs = facts.extractNativeLibs
+        info.liteElementCount = facts.elementCount
+        info.liteAttributeCount = facts.attributeCount
     }
 
     private fun manifestSection(info: ManifestInfo, issues: List<JsonObject>,
@@ -660,6 +715,12 @@ internal object ToolkitApkVerifier {
             "abis" to info.abis,
             "extractNativeLibs" to info.extractNativeLibs,
             "compileSdkVersion" to info.compileSdkVersion,
+            "parseSource" to info.parseSource,
+            "fullXmlDecoded" to info.fullXmlDecoded,
+            "primaryDecoderError" to info.primaryDecoderError,
+            "failureKind" to info.failureKind,
+            "liteElementCount" to info.liteElementCount,
+            "liteAttributeCount" to info.liteAttributeCount,
             "compatibility" to compatibility
         )
         return Section(status, json, compatibilityIssues)

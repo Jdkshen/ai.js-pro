@@ -36,7 +36,7 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
         name in ToolkitReverseTools.operations->{ToolkitReverseTools.validate(name,args)
             if(args.tBool("background",true))ToolkitIo.ok(jobs.start(ToolkitIo.json("operation" to name,"arguments" to args,"timeoutSeconds" to args.tInt("timeoutSeconds",120,1,300))))else executeOperation(name,args)}
         name=="apk_job_start"->ToolkitIo.ok(jobs.start(args))
-        name=="apk_job_list"->ToolkitIo.ok(jobs.list())
+        name=="apk_job_list"->ToolkitIo.ok(jobs.list(args))
         name=="apk_job_status"->ToolkitIo.ok(jobs.status(args))
         name=="apk_job_result"->ToolkitIo.ok(jobs.result(args))
         name=="apk_job_cancel"->ToolkitIo.ok(jobs.cancel(args))
