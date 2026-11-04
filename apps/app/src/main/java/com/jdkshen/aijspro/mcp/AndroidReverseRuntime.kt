@@ -11,6 +11,12 @@ import com.google.gson.stream.JsonReader
 
 /** Typed reverse operations. Target bytes are staged; optional engines run in owned child VMs. */
 internal class AndroidReverseRuntime(private val context:Context,private val root:File,private val component:(String)->File) {
+    /** §10：有界观测会话（内存态；真实 attach 仍走 frida_eval，本类只负责登记/分页/清理）。 */
+    private val fridaSessions = ToolkitFridaSession()
+    /** §7：有状态 native 分析会话（状态落盘在 noBackupFilesDir，不启动 r2 进程）。 */
+    private val nativeAnalysis = ToolkitNativeAnalysis(File(context.noBackupFilesDir,"native-analysis"))
+    private fun optionalString(args:JsonObject,key:String):String?=
+        args.get(key)?.takeIf{it.isJsonPrimitive&&it.asJsonPrimitive.isString}?.asString
     private fun file(args:JsonObject,key:String="path",limit:Long=ToolkitIo.MAX_ENTRY.toLong()):File=
         ToolkitIo.resolve(root,args.tString(key)).also{require(it.isFile&&it.length()<=limit){"$key 文件不存在或超过${limit}字节"}}
     private fun native(id:String):File {
@@ -28,6 +34,22 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 runner(listOf(File(c,"bin/aijs-yara").path,rules.path,target.path,args.tInt("scanTimeoutSeconds",10,1,30).toString(),if(args.tBool("includeOffsets",true))"1" else "0"),temp,c,args)}
             "native_emulate"->emulate(args,temp)
             "frida_status","frida_processes","frida_eval"->frida(name,args,temp)
+            "frida_session_open","frida_session_read","frida_session_close","frida_session_list"->fridaSession(name,args)
+            "native_analysis_open"->nativeAnalysis.open(args.tString("path"),args.tString("sha256"),optionalString(args,"abi"),optionalString(args,"sessionId"))
+            "native_analysis_status"->nativeAnalysis.status(args.tString("sessionId"))
+            "native_analysis_define_function"->nativeAnalysis.defineFunction(args.tString("sessionId"),args.tString("address"),
+                if(args.has("size"))args.tInt("size",0,0,16*1024*1024)else null,optionalString(args,"name"))
+            "native_analysis_set_type"->nativeAnalysis.setType(args.tString("sessionId"),args.tString("target"),args.tString("type"))
+            "native_analysis_set_noreturn"->nativeAnalysis.setNoreturn(args.tString("sessionId"),args.tString("address"),args.tBool("noreturn",true))
+            "native_analysis_overlay"->nativeAnalysis.overlay(args.tString("sessionId"),args.tString("address"),args.tString("hexBytes"),optionalString(args,"note"))
+            "native_analysis_save"->nativeAnalysis.save(args.tString("sessionId"))
+            "native_analysis_close"->nativeAnalysis.close(args.tString("sessionId"))
+            "native_analysis_list"->nativeAnalysis.list()
+            "native_analysis_r2_commands"->{
+                val sessionId=args.tString("sessionId")
+                ToolkitIo.json("sessionId" to sessionId,"commands" to nativeAnalysis.r2Commands(sessionId),
+                    "executed" to false,"analysisOnly" to true)
+            }
             else->radare(name,args,temp)
         }}finally{temp.deleteRecursively()}
     }
@@ -76,6 +98,11 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 val errors=getAsJsonArray("messages")?.count{it.isJsonObject&&it.asJsonObject.tString("type","")=="error"}?:0
                 addProperty("scriptErrorCount",errors);addProperty("scriptSucceeded",errors==0)
                 if(errors>0)throw ToolkitException("FRIDA_SCRIPT_ERROR",toString().take(12000),"script")
+            }
+            if(name=="frida_status"){
+                // §10：native 客户端可用 ≠ Java.perform 可用；java-bridge 必须单独报告。
+                val bridgePresent=runCatching{component("frida-java-bridge").let{it.isDirectory||it.isFile}}.getOrDefault(false)
+                add("javaBridge",fridaSessions.javaBridgeStatus(bridgePresent,null))
             }
         }
     }
@@ -131,7 +158,12 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         return when(name){
             "native_analyze"->ToolkitIo.json("backend" to "radare2","sha256" to sourceHash,"info" to query("ij"),"executesTarget" to false)
             "native_functions"->paged("aflj").apply{addProperty("sha256",sourceHash);addProperty("heuristic",true)}
-            "native_xrefs"->paged("axtj ${ToolkitReverseTools.address(args.tString("address"))}").apply{addProperty("sha256",sourceHash);addProperty("indirectReferencesComplete",false)}
+            "native_xrefs"->{
+                val page=paged("axtj ${ToolkitReverseTools.address(args.tString("address"))}").apply{
+                    addProperty("sha256",sourceHash);addProperty("indirectReferencesComplete",false)}
+                if(args.tBool("includeEvidence",true))attachXrefEvidence(page,args)
+                page
+            }
             "native_function_detail"->ToolkitIo.json("sha256" to sourceHash,"function" to query("aaa;s ${ToolkitReverseTools.address(args.tString("address"))};pdfj"),"backend" to "radare2")
             "native_decompile"->{
                 val plugin=native("r2ghidra");val library=File(plugin,"lib/core_ghidra.so");require(library.isFile){"r2ghidra组件缺少插件"}
@@ -142,7 +174,27 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 val result=execute(listOf(File(c,"bin/radare2").path,"-N","-2","-q","-e","scr.color=0","-c","L ${library.path};aaa;s $address;pdgj;q",input.path),temp,pluginEnv,args)
                 val parsed=runCatching{JsonParser().parse(result.text.trim())}.getOrNull()
                 require(result.exitCode==0&&parsed!=null&&parsed.isJsonObject&&parsed.asJsonObject.get("code")?.asString?.isNotBlank()==true){"r2ghidra没有返回伪代码：${result.text.takeLast(4000)}"}
-                ToolkitIo.json("backend" to "r2ghidra","sha256" to sourceHash,"result" to parsed,"rebuildGuaranteed" to false)
+                // §8：默认剔除注解（伪 C 只有几 KB，注解后可能上百 KB），并把函数边界来源与证据分级一起返回。
+                val parsedObject=parsed.asJsonObject
+                val detectedSize=parsedObject.get("size")?.takeIf{it.isJsonPrimitive}?.asInt
+                val projection=ToolkitDecompileView.project(
+                    ToolkitDecompileView.RawDecompile(
+                        code=parsedObject.get("code")?.takeIf{it.isJsonPrimitive}?.asString?:"",
+                        annotations=annotationStrings(parsedObject),
+                        warnings=stringList(parsedObject,"warnings"),
+                        coverage=parsedObject.get("coverage")?.takeIf{it.isJsonPrimitive}?.asString,
+                        functionAddress=address,
+                        detectedSize=detectedSize),
+                    includeAnnotations=args.tBool("includeAnnotations",false),
+                    maxCodeChars=args.tInt("maxCodeChars",ToolkitDecompileView.DEFAULT_MAX_CODE_CHARS,1024,ToolkitDecompileView.MAX_CODE_CHARS_LIMIT))
+                val boundary=ToolkitDecompileView.boundary(
+                    forceFunction=args.tBool("forceFunction",false),
+                    forcedSize=args.get("functionSize")?.takeIf{it.isJsonPrimitive}?.asInt,
+                    cfgSize=null,
+                    symbolRange=null,
+                    detectedSize=detectedSize)
+                ToolkitIo.json("backend" to "r2ghidra","sha256" to sourceHash,"rebuildGuaranteed" to false,
+                    "result" to projection,"boundary" to boundary)
             }
             "native_compare"->{val other=stage(file(args,"otherPath"),temp,"other.bin");ToolkitBinaryCompare.compare(input,other,args).apply{add("info",query("ij"));addProperty("backend","radare2+bounded-byte-diff")}}
             else->error("未知逆向操作：$name")
@@ -195,6 +247,68 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val destination=ToolkitIo.resolve(root,args.tString("outPath"))
         ToolkitIo.withFileLocks(listOf(destination)){require(!destination.exists()){"outPath 已存在，请使用新文件名"};ToolkitIo.atomic(destination){output.copyTo(it,true)}}
         return ToolkitIo.json("path" to destination.path,"sha256" to ToolkitIo.sha(destination),"size" to destination.length(),"signed" to args.tBool("sign"),"verification" to verification,"backend" to "apktool","diagnostics" to result.text.takeLast(12000))
+    }
+    /**
+     * §10 会话工具：只做内存态登记、分页与清理，不冒充完成真实 attach。
+     * endpoint/token 在响应里是掩码；真实值只用于注入口（当前版本由调用方用 frida_eval 执行）。
+     */
+    private fun fridaSession(name:String,args:JsonObject):JsonObject = when(name){
+        "frida_session_open"->{
+            val target=ToolkitFridaSession.Target(
+                packageName=args.tString("packageName"),
+                pid=args.get("pid")?.takeIf{!it.isJsonNull}?.asInt,
+                endpoint=args.tString("endpoint","127.0.0.1:27042"),
+                token=args.tString("token","").ifEmpty{null})
+            val componentAvailable=runCatching{component("frida").isDirectory}.getOrDefault(false)
+            val opened=fridaSessions.open(target,args.tString("script"))
+            opened.addProperty("componentAvailable",componentAvailable)
+            opened.addProperty("attached",false)
+            opened.addProperty("attachSupported",false)
+            opened.addProperty("attachNote","本版本 open 只登记会话与消息通道，不建立持久 attach；要真实执行请用 frida_eval，或等待后续持久会话实现")
+            opened
+        }
+        "frida_session_read"->fridaSessions.read(args.tString("sessionId"),args.tInt("offset",0,0,1000000),args.tInt("limit",50,1,500))
+        "frida_session_close"->fridaSessions.stop(args.tString("sessionId"))
+        "frida_session_list"->fridaSessions.list()
+        else->error("未知 Frida 会话操作：$name")
+    }
+    /** r2ghidra 的 annotations 可能是字符串数组或对象数组；两种都要能读成可读字符串。 */
+    private fun annotationStrings(obj:JsonObject):List<String>{
+        val array=obj.getAsJsonArray("annotations")?:return emptyList()
+        return array.mapNotNull{element->
+            if(element!=null&&element.isJsonPrimitive)element.asString
+            else element?.takeIf{it.isJsonObject}?.asJsonObject?.let{item->
+                val parts=ArrayList<String>()
+                item.get("type")?.takeIf{it.isJsonPrimitive}?.asString?.let{parts.add(it)}
+                item.get("start")?.takeIf{it.isJsonPrimitive}?.asString?.let{parts.add(it)}
+                item.get("text")?.takeIf{it.isJsonPrimitive}?.asString?.let{parts.add(it)}
+                parts.joinToString("@").ifEmpty{null}}
+        }
+    }
+    private fun stringList(obj:JsonObject,key:String):List<String>{
+        val array=obj.getAsJsonArray(key)?:return emptyList()
+        return array.mapNotNull{element->element?.takeIf{it.isJsonPrimitive}?.asString}
+    }
+    /** §8：给每条交叉引用标注证据类型，并汇总；明确「没有直接引用 ≠ 没有调用者」。 */
+    private fun attachXrefEvidence(page:JsonObject,args:JsonObject):JsonObject{
+        val counts=LinkedHashMap<String,Int>()
+        page.getAsJsonArray("items")?.forEach{element->
+            if(element==null||!element.isJsonObject)return@forEach
+            val item=element.asJsonObject
+            val rawKind=item.get("type")?.takeIf{it.isJsonPrimitive}?.asString
+                ?:item.get("opcode")?.takeIf{it.isJsonPrimitive}?.asString?:""
+            val kind=ToolkitDecompileView.classifyXref(rawKind)
+            item.addProperty("evidenceKind",kind)
+            item.add("evidence",ToolkitDecompileView.xrefEvidence(rawKind,
+                hasRelocation=item.has("refsize")||item.has("reloc"),
+                staticallyResolvable=item.has("from"),
+                dynamicCovered=args.tBool("dynamicCovered",false)))
+            counts[kind]=(counts[kind]?:0)+1
+        }
+        page.add("evidenceKinds",JsonObject().apply{counts.forEach{(kind,count)->addProperty(kind,count)}})
+        page.addProperty("callerAbsenceConclusive",false)
+        page.addProperty("callerCoverageNote","没有直接引用不等于没有调用者：未覆盖的间接/动态调用可能仍存在")
+        return page
     }
     private fun validateArchive(file:File) {
         ZipFile(file).use{zip->var total=0L;var count=0;val names=HashSet<String>()

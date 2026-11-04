@@ -35,6 +35,7 @@ internal class McpApkToolkit(
         return when (name) {
             "apk_workspace_open" -> ToolkitIo.ok(open(args))
             "artifact_open" -> ToolkitIo.ok(openArtifact(args))
+            in ToolkitExtraTools.names -> ToolkitIo.ok(ToolkitExtraTools.call(root, name, args))
             "apk_verify" -> {
                 val file=if(args.has("workspaceId"))snapshot(args.tString("workspaceId")) else ToolkitIo.resolve(root,args.tString("path"))
                 ToolkitIo.ok(ToolkitApkVerifier.inspect(file,args.get("minSdk")?.asInt,args.get("maxSdk")?.asInt))

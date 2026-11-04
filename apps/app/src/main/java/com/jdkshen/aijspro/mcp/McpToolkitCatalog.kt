@@ -92,7 +92,10 @@ internal object McpToolkitCatalog {
         "apk_workspace_gc",
         // P0-B：文件发现（非标准扩展名）与路径访问诊断（§5.1/§5.2）。
         "file_discover_apk",
-        "file_access_diagnose"
+        "file_access_diagnose",
+        // §11/§12：可验证二进制变换与统一证据导出。
+        "binary_transform",
+        "evidence_export"
     )
     val aliases = names.take(58).filter { it != "toolkit_status" }.associateBy { "mt_" + it }
 }

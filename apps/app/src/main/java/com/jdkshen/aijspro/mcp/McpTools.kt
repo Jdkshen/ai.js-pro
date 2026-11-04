@@ -255,6 +255,12 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("ui_scroll", "按 up/down/left/right 执行滑动手势滚动", McpToolSchema.uiScrollSchema()))
             add(tool("search_api_docs", "搜索 App 同源离线 API 文档，不启动脚本；query 可省略以浏览目录，engine=all/rhino/quickjs/nodejs（兼容 node/node24），category 精确匹配返回的 categories，kind=all/guide/legacy。offset 默认 0，limit 默认 10/最大 20；返回 id、摘要、来源、引擎标注和 indexSha256；再用 read_api_doc 读说明与示例。文档不是运行验证", McpToolSchema.searchApiDocsSchema()))
             add(tool("read_api_doc", "读取文档 id 的 Markdown、sectionTitles/sections 目录及 examples 代码数组；section 可按目录只读参数/返回值/权限等，includeExamples 默认 true，完整页才返回原文代码和 language；分段时 examplesOmittedReason=paged_content。建议带 indexSha256 防旧 ID 错配；offset/nextOffset 为 UTF-16 字符，maxChars 默认16000、128..32000；不执行示例", McpToolSchema.readApiDocSchema()))
+            add(tool("app_exit_info", "一次性读取目标应用的进程/日志证据并分类退出原因（java 异常/native 崩溃/主动 exit/SIGKILL/系统回收/启动失败/无法判断）；不建立会话，不改系统设置", objSchema("packageName", "pid", "withLogs", required = arrayOf("packageName"))))
+            add(tool("app_trace_start", "建立应用启动/日志/退出 trace 会话（TTL 10 分钟，最多 4 个）；普通应用 UID 只能看到有限日志，证据不足会返回 unknown", objSchema("packageName", "reason", "withLogs", required = arrayOf("packageName"))))
+            add(tool("app_trace_read", "分页读取 trace 日志与退出分类；会话过期/不存在时明确报错", objSchema("traceSessionId", "offset", "limit", required = arrayOf("traceSessionId"))))
+            add(tool("app_trace_stop", "停止 trace 会话并返回真实清理计数", objSchema("traceSessionId", required = arrayOf("traceSessionId"))))
+            add(tool("app_trace_list", "列出未过期的 trace 会话及其上限/TTL"))
+            add(tool("app_launch_trace", "先建立 trace 再启动应用；启动失败也保留 traceSessionId 便于诊断", McpToolSchema.appLaunchSchema()))
             McpToolkitBridge.definitions(context, root).forEach { add(it) }
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
@@ -404,6 +410,7 @@ internal class McpTools(private val context: Context, private val event: (String
             })
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url", "apk_install", "apk_uninstall" ->
                 toolJson(McpAppTools.handle(context, name, args) ?: throw McpInvalidParamsException("未知工具：$name"))
+            in McpAppTraceTools.names -> toolJson(McpAppTraceTools.call(context, name, args))
             else -> McpAppTools.handle(context, name, args)?.let { toolJson(it) }
                 ?: throw McpInvalidParamsException("未知工具：$name")
         }

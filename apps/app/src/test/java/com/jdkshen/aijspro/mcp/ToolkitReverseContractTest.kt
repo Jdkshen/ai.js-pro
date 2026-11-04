@@ -36,7 +36,7 @@ class ToolkitReverseContractTest {
     }
     @Test fun everyNewToolHasTypedSchemaDependenciesAndBackgroundContract(){
         val definitions=ToolkitReverseTools.definitions().map{it.asJsonObject}
-        assertEquals(19,definitions.size)
+        assertEquals(33,definitions.size)
         assertEquals(ToolkitReverseTools.names,definitions.map{it.tString("name")})
         definitions.forEach{definition->val name=definition.tString("name");assertTrue(name in McpToolCatalog.canonicalNames)
             assertFalse(definition.getAsJsonObject("inputSchema").tBool("additionalProperties",true))

@@ -63,7 +63,14 @@ internal object McpToolCatalog {
         "ui_wait",
         "ui_scroll",
         "search_api_docs",
-        "read_api_doc"
+        "read_api_doc",
+        // §9 应用启动/日志/退出原因关联采集
+        "app_exit_info",
+        "app_trace_start",
+        "app_trace_read",
+        "app_trace_stop",
+        "app_trace_list",
+        "app_launch_trace"
     ) + McpToolkitCatalog.names
 
     /**

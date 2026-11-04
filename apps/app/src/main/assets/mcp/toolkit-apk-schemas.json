@@ -1839,6 +1839,109 @@
       "member"
     ]
   },
+  "binary_transform": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "type": "string",
+        "description": "工具目录内的输入文件（≤64 MiB）。"
+      },
+      "op": {
+        "type": "string",
+        "enum": ["xor", "bswap", "index_permute", "aes_decrypt", "inflate", "pointer_table_restore"],
+        "description": "变换类型；统一记录参数来源、输出哈希与验证断言。"
+      },
+      "rangeStart": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "rangeEnd": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "params": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "description": "keyHex/ivHex/mode/width/permutation/baseAddress/lowAddress/highAddress/expectMagic/expectCrc32/minLength/maxLength；密钥只回显长度与哈希前缀。"
+      },
+      "analysisOnly": {
+        "type": "boolean",
+        "default": true,
+        "description": "默认 true：结果只是分析副本，不得流入构建产物。"
+      },
+      "paramsSource": {
+        "type": "string"
+      },
+      "outPath": {
+        "type": "string",
+        "description": "可选；不传则只返回证据与输出哈希，不落盘。"
+      }
+    },
+    "required": ["path", "op"]
+  },
+  "evidence_export": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "outPath": {
+        "type": "string",
+        "description": "新归档路径（父目录需存在）。"
+      },
+      "path": {
+        "type": "string",
+        "description": "可选；收集该目录下的文件一起打包。"
+      },
+      "identity": {
+        "type": "object"
+      },
+      "overlay": {
+        "type": "object"
+      },
+      "editDiff": {
+        "type": "object"
+      },
+      "tools": {
+        "type": "object"
+      },
+      "reports": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "commands": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "claims": {
+        "type": "array",
+        "items": {
+          "type": "object"
+        },
+        "description": "[{claim, level}]；level 取 documented/static_inferred/static_confirmed/runtime_confirmed/post_change_verified。"
+      },
+      "debugKeyIncluded": {
+        "type": "boolean",
+        "default": false
+      },
+      "redactSensitive": {
+        "type": "boolean",
+        "default": true
+      },
+      "maxEntries": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 4096,
+        "default": 512
+      }
+    },
+    "required": ["outPath"]
+  },
   "apk_workspace_inventory": {
     "type": "object",
     "additionalProperties": false,

@@ -35,6 +35,10 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
             "nextActions" to listOf("检查runtime.components[].available；缺组件显式apk_component_install","后台任务返回jobId，轮询apk_job_status到终态，再apk_job_result按nextOffset读完","免Root动态分析先apk_inject_gadget生成APK，安装打开后用返回endpoint/token连接；不需要Root/Server")))}
         name in ToolkitReverseTools.operations->{ToolkitReverseTools.validate(name,args)
             if(args.tBool("background",true))ToolkitIo.ok(jobs.start(ToolkitIo.json("operation" to name,"arguments" to args,"timeoutSeconds" to args.tInt("timeoutSeconds",120,1,300))))else executeOperation(name,args)}
+        // 同步类逆向工具（Frida 观测会话、native 分析会话）：无子进程、无后台 job，必须走 runtime，
+        // 否则会落到 APK 工具的 workspaceId 分支而报「缺少 workspaceId」。
+        name in ToolkitReverseTools.names->{ToolkitReverseTools.validate(name,args)
+            ToolkitIo.ok(requireNotNull(runtime){"逆向组件后端不可用"}.reverse(name,args))}
         name=="apk_job_start"->ToolkitIo.ok(jobs.start(args))
         name=="apk_job_list"->ToolkitIo.ok(jobs.list(args))
         name=="apk_job_status"->ToolkitIo.ok(jobs.status(args))

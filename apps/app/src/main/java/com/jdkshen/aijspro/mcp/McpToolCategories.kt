@@ -48,6 +48,7 @@ internal object McpToolCategories {
             "ui_find", "ui_click", "ui_long_click", "ui_node_action", "ui_input", "ui_swipe", "ui_global", "ui_wait", "ui_scroll",
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url",
             "apk_install", "apk_uninstall",
+            "app_exit_info", "app_trace_start", "app_trace_read", "app_trace_stop", "app_trace_list", "app_launch_trace",
         ).forEach { put(it, "device") }
         listOf(
             "terminal_exec", "terminal_read", "terminal_write", "terminal_stop", "terminal_list",

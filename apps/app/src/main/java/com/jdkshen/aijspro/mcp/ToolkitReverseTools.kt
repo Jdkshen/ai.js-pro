@@ -23,11 +23,31 @@ internal object ToolkitReverseTools {
         "native_emulate" to "Unicorn 隔离模拟 codeHex 原始机器码，可选 dataHex 与 registers；arm64/arm/thumb/x86/x86_64。代码≤64KiB、数据≤4096B、指令≤100000、时间≤1000ms，不提供完整 Android/ELF/JNI 环境。后台 jobId。",
         "frida_status" to "检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。后台 jobId。",
         "frida_processes" to "列出指定免Root Gadget endpoint 可见的进程（最多500），需 frida 组件和已打开的Gadget应用，token取apk_inject_gadget结果。应用UID不能任意附加其他应用。后台 jobId。",
-        "frida_eval" to "对 endpoint 的 pid 附加并有界执行 Frida script，durationMs≤10000，返回消息后卸载脚本/分离。需可访问Gadget，传相同endpoint/token；Java.perform需另行打包frida-java-bridge；停止任务杀掉本次客户端进程组。后台 jobId。"
+        "frida_eval" to "对 endpoint 的 pid 附加并有界执行 Frida script，durationMs≤10000，返回消息后卸载脚本/分离。需可访问Gadget，传相同endpoint/token；Java.perform需另行打包frida-java-bridge；停止任务杀掉本次客户端进程组。后台 jobId。",
+        "frida_session_open" to "开启有界 Frida 观测会话（内存态，TTL/消息上限）：绑定目标 packageName/pid 与 endpoint，脚本只记录长度与哈希，endpoint/token 回显掩码。本版本不实现持久 attach（attached=false 会如实标注），真实执行仍走 frida_eval；进程退出会话即丢失，需重新 open。",
+        "frida_session_read" to "按 offset/limit 分页读取会话消息（seq/时间戳/截断标记）。会话过期或不存在时明确报错，不静默返回空列表。",
+        "frida_session_close" to "显式停止会话并返回真实清理计数（releasedMessages/releasedSessions）；不存在或已过期返回 state=not_found/expired，不抛异常。",
+        "frida_session_list" to "列出当前进程内的观测会话（TTL、上限、重复策略）；过期会话在此真实清理。",
+        "native_analysis_open" to "按输入文件 SHA-256 打开/复用 native 分析上下文（有状态、可持久化）。源文件哈希变化会让旧地址与旧状态失效（ANALYSIS_STALE_INPUT）；不启动任何进程，r2 命令只生成不执行。",
+        "native_analysis_status" to "返回分析会话的计数与限制（functions/types/noreturns/overlays/TTL/状态文件路径）。",
+        "native_analysis_define_function" to "补充函数起点/长度/名称（用户指定边界优先，不把符号范围当成完整函数）。",
+        "native_analysis_set_type" to "补充目标（函数/变量）参数、返回值或结构体类型。",
+        "native_analysis_set_noreturn" to "标记终止函数（noreturn）；只影响分析命令生成，不改输入文件。",
+        "native_analysis_overlay" to "登记仅用于分析的数据/重定位覆盖层（analysisOnly=true，明确不得流入构建产物）。",
+        "native_analysis_save" to "把分析会话状态保存到磁盘（原子写）。",
+        "native_analysis_close" to "关闭并释放分析会话；返回真实清理计数。",
+        "native_analysis_list" to "列出分析会话（含 stale/计数/覆盖层字节与上限）。",
+        "native_analysis_r2_commands" to "生成可核对的分析命令文本（af/afn/tl 等），executed=false：本工具只给命令，不执行。"
     )
     val names = descriptions.keys.toList()
     val guideNames = setOf("reverse_guide", "reverse_plan")
-    val operations = names.toSet() - guideNames - "reverse_capabilities"
+    /** 会话类工具是内存态、同步返回，不做后台 job（否则 read/close 会拿不到同一进程内的会话）。 */
+    val sessionTools = setOf("frida_session_open", "frida_session_read", "frida_session_close", "frida_session_list")
+    /** native 分析会话同样是同步的内存/文件态接口，不做后台 job。 */
+    val analysisTools = setOf("native_analysis_open","native_analysis_status","native_analysis_define_function",
+        "native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay",
+        "native_analysis_save","native_analysis_close","native_analysis_list","native_analysis_r2_commands")
+    val operations = names.toSet() - guideNames - "reverse_capabilities" - sessionTools - analysisTools
     val dependencies = mapOf(
         "apk_decode_project" to listOf("apktool"), "apk_build_project" to listOf("apktool", "apk-resources"),
         "apk_install_framework" to listOf("apktool"), "native_decompile" to listOf("radare2", "r2ghidra"),
@@ -51,11 +71,30 @@ internal object ToolkitReverseTools {
             "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))}
             "artifact_fingerprint","native_analyze"->path()
             "native_functions"->{path();page()}
-            "native_function_detail","native_decompile","native_xrefs"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true);if(name=="native_xrefs")page()}
+            "native_function_detail"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)}
+            "native_decompile"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)
+                field("includeAnnotations",ToolkitIo.json("type" to "boolean","default" to false))
+                field("maxCodeChars",num(1024,1048576,131072))
+                field("forceFunction",ToolkitIo.json("type" to "boolean","default" to false))
+                field("functionSize",num(1,16777216,1))}
+            "native_xrefs"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true);page()
+                field("includeEvidence",ToolkitIo.json("type" to "boolean","default" to true))
+                field("dynamicCovered",ToolkitIo.json("type" to "boolean","default" to false))}
             "native_compare"->{path();path("otherPath");page()}
             "yara_scan"->{path();path("rulesPath");field("scanTimeoutSeconds",num(1,30,10));field("includeOffsets",ToolkitIo.json("type" to "boolean","default" to true))}
             "native_emulate"->{field("architecture",ToolkitIo.json("type" to "string","enum" to listOf("arm64","arm","thumb","x86","x86_64")),true);field("codeHex",str(),true);field("dataHex",str());field("registers",ToolkitIo.json("type" to "object","additionalProperties" to str("0x十六进制寄存器值")));field("timeoutMs",num(1,1000,100));field("instructionLimit",num(1,100000,10000))}
             "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE,1),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}}
+            "frida_session_open"->{field("packageName",str("目标包名"),true);field("pid",num(1,Int.MAX_VALUE,1));field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str());field("script",str("Frida JavaScript ≤64KiB"),true)}
+            "frida_session_read"->{field("sessionId",str(),true);field("offset",num(0,1000000,0));field("limit",num(1,500,50))}
+            "frida_session_close"->field("sessionId",str(),true)
+            "frida_session_list"->Unit
+            "native_analysis_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("abi",str());field("sessionId",str())}
+            "native_analysis_list"->Unit
+            "native_analysis_status","native_analysis_save","native_analysis_close","native_analysis_r2_commands"->field("sessionId",str(),true)
+            "native_analysis_define_function"->{field("sessionId",str(),true);field("address",str(),true);field("size",num(0,16777216,0));field("name",str())}
+            "native_analysis_set_type"->{field("sessionId",str(),true);field("target",str(),true);field("type",str(),true)}
+            "native_analysis_set_noreturn"->{field("sessionId",str(),true);field("address",str(),true);field("noreturn",ToolkitIo.json("type" to "boolean","default" to true))}
+            "native_analysis_overlay"->{field("sessionId",str(),true);field("address",str(),true);field("hexBytes",str(),true);field("note",str())}
             else->error("未知逆向工具")
         }
         if(name in operations){field("background",ToolkitIo.json("type" to "boolean","default" to true));field("timeoutSeconds",num(1,300,120))}
@@ -63,7 +102,7 @@ internal object ToolkitReverseTools {
     }
     fun definitions()=JsonArray().apply{names.forEach{name->add(ToolkitIo.json("name" to name,"description" to descriptions.getValue(name),
         "category" to "reverse","categoryTitle" to "逆向分析","inputSchema" to schema(name),
-        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","apk_inject_gadget","frida_eval")),"openWorldHint" to name.startsWith("frida_")),
+        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","apk_inject_gadget","frida_eval","frida_session_open","frida_session_close","native_analysis_open","native_analysis_define_function","native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay","native_analysis_save","native_analysis_close")),"openWorldHint" to name.startsWith("frida_")),
         "_meta" to ToolkitIo.json("aijs" to ToolkitIo.json("guideTool" to "reverse_guide","dependencies" to (dependencies[name]?:emptyList<String>()),"backgroundDefault" to (name in operations),
             "resultTools" to if(name in operations)listOf("apk_job_status","apk_job_result","apk_job_cancel")else emptyList<String>()))))}}
     fun validate(name:String,args:JsonObject){
