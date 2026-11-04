@@ -40,6 +40,8 @@ internal class McpApkToolkit(
                 ToolkitIo.ok(ToolkitApkVerifier.inspect(file,args.get("minSdk")?.asInt,args.get("maxSdk")?.asInt))
             }
             "apk_workspace_list" -> ToolkitIo.ok(ToolkitIo.json("items" to workspaces().filter { !it.tBool("temporary") }))
+            "apk_workspace_inventory" -> ToolkitIo.ok(workspaceInventory(args))
+            "apk_workspace_gc" -> ToolkitIo.ok(workspaceGc(args))
             "apk_list_available_apks" -> listAvailable(args)
             "apk_workspace_delete" -> {
                 val workspace = workspace(args.tString("workspaceId")); val id = workspace.tString("workspaceId")
@@ -162,11 +164,52 @@ internal class McpApkToolkit(
         "apk_set_members" -> "列出分包归档APK成员、大小和base候选；不承诺自动合并或安装。"
         "apk_set_open_member" -> "选中分包成员创建独立只读APK快照，保留容器来源；可继续原APK工具链。"
         "apk_workspace_open" -> "创建 APK 只读快照。path 在工具目录内；temporary=true 为一次性工作区。后续修改先 apk_session_create。"
+        "apk_workspace_inventory" -> "解释 APK 工作区配额占用：列出保存/临时/过期/dangling 工作区、实际字节、owner/clientId/sessionId、活动引用、orphanDirs 与 danglingEntries；配额 16，统计范围见 quotaScope。"
+        "apk_workspace_gc" -> "受控清理过期临时 APK 工作区：默认 dryRun=true 只预览；支持 protectedIds/minAgeMinutes/owner/clientId 过滤，保存/活动引用/编辑会话/未知所有权默认全部保护；orphan/dangling 永不自动删除。"
         "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。"
         "apk_native_disassemble", "apk_native_xref", "apk_native_analyze_control_flow" -> "有界直接指令分析：原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），否则回退 AArch64 常见指令子集；未知指令明确标出，间接引用与完整数据流不作成功保证。"
         "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64、ARM/Thumb、x86/x86-64 指令，expectedHex 防旧数据。常见指令可直接处理，一般汇编可通过可选 C/C++ 组件完成。"
         else -> "AI.js Pro 本地 APK 工具：${name.removePrefix("apk_").replace('_', ' ')}；使用 tools/list 参数定义，locator 来自列表/搜索，不依赖 MT。"
     }
+    /** task-250：当前进程内可用于 GC 保护的活动引用。 */
+    private fun activeWorkspaceReferences(): ToolkitWorkspaceInventory.ActiveReferences {
+        val refs = HashMap<String, Int>()
+        pages.values.forEach { page ->
+            if (page.workspace.isNotEmpty()) refs[page.workspace] = (refs[page.workspace] ?: 0) + 1
+        }
+        return ToolkitWorkspaceInventory.ActiveReferences(
+            currentWorkspaceId = currentWorkspace,
+            pageReferences = refs,
+        )
+    }
+
+    /** task-250：工作区清单（不修改磁盘）。 */
+    private fun workspaceInventory(args: JsonObject): JsonObject =
+        ToolkitWorkspaceInventory(store).inventory(args, activeWorkspaceReferences())
+
+    /** task-250：受控 GC；dryRun=false 时删除计划内目录并清理进程内 page/current 引用。 */
+    private fun workspaceGc(args: JsonObject): JsonObject {
+        val result = ToolkitWorkspaceInventory(store).gc(args, activeWorkspaceReferences())
+        val deleted = result.getAsJsonArray("deletedIds") ?: JsonArray()
+        if (deleted.size() > 0) {
+            val ids = deleted.map { it.asString }.toSet()
+            pages.entries.removeAll { it.value.workspace in ids }
+            val current = currentWorkspace
+            if (current != null && current in ids) currentWorkspace = null
+            ids.forEach { workspaceLocks.remove(it) }
+        }
+        return result
+    }
+
+    private fun addClientMetadata(args: JsonObject, info: JsonObject) {
+        listOf("owner", "clientId", "sessionId").forEach { key ->
+            if (args.has(key)) {
+                val value = args.tString(key, "")
+                if (value.isNotEmpty()) info.addProperty(key, value)
+            }
+        }
+    }
+
     private fun directory(id: String) = File(store, ToolkitIo.id(id))
     private fun snapshot(id: String): File = File(directory(id), "base.apk").also { require(it.isFile) { "APK 工作区不存在" } }
     private fun workspace(id: String): JsonObject = JsonParser().parse(File(directory(id), "workspace.json").readText()).asJsonObject
@@ -186,9 +229,13 @@ internal class McpApkToolkit(
         val source = ToolkitIo.resolve(root, path); require(source.isFile && source.name.endsWith(".apk", true) && source.length() <= ToolkitIo.MAX_APK) { "需要工具目录内不超过 512 MiB 的 APK" }
         val hash = ToolkitIo.sha(source)
         if (!temporary) workspaces().firstOrNull { !it.tBool("temporary") && it.tString("sourcePath") == source.path && it.tString("sha256") == hash }?.let { currentWorkspace = it.tString("workspaceId"); return it }
-        require(workspaces().size < 16) { "最多保留 16 个 APK 工作区，请删除不需要的临时工作区" }
+        val workspaceCount = workspaces().size
+        val quotaHint = "；先调用 apk_workspace_inventory 查看占用，再用 apk_workspace_gc（dryRun=true）预览清理"
+        require(workspaceCount < 16) { "最多保留 16 个 APK 工作区，当前 " + workspaceCount + " 个" + quotaHint }
         val existingSize = workspaces().sumOf { it.get("size").asLong }
-        require(existingSize + source.length() <= 1024L * 1024 * 1024) { "APK 快照总量超过 1 GiB" }
+        require(existingSize + source.length() <= 1024L * 1024 * 1024) {
+            "APK 快照总量超过 1 GiB（当前 " + existingSize + " 字节，新增 " + source.length() + " 字节）" + quotaHint
+        }
         val id = ToolkitIo.fresh(); val folder = directory(id); require(folder.mkdir())
         try {
             val copy = File(folder, "base.apk"); source.inputStream().use { input -> copy.outputStream().use { output -> copyBounded(input, output, ToolkitIo.MAX_APK) } }
@@ -200,6 +247,7 @@ internal class McpApkToolkit(
             }
             val info = ToolkitIo.json("workspaceId" to id, "path" to "aijs://workspace/$id", "sourcePath" to source.path,
                 "temporary" to temporary, "sha256" to hash, "size" to copy.length(), "createdAt" to System.currentTimeMillis())
+            addClientMetadata(args, info)
             val signature = ToolkitSignatures.read(copy)
             info.add("signatureSummary", ToolkitIo.json("available" to signature.get("available"), "signaturePresent" to signature.get("signaturePresent"),
                 "schemes" to signature.get("schemes"), "certificateCount" to signature.getAsJsonArray("certificates").size()))
@@ -211,7 +259,13 @@ internal class McpApkToolkit(
         val suffix=source.extension.lowercase()
         if(suffix=="apk")return open(args)
         require(suffix in setOf("dex","so","elf","apks","xapk","apkm")){"支持APK、DEX、ELF/SO及APKS/XAPK/APKM"}
-        require(workspaces().size<16&&workspaces().sumOf{it.get("size").asLong}+source.length()<=1024L*1024*1024){"工作区数量或总量超过限制"}
+        val workspaceCount = workspaces().size
+        val existingSize = workspaces().sumOf { it.get("size").asLong }
+        val quotaHint = "；先调用 apk_workspace_inventory 查看占用，再用 apk_workspace_gc（dryRun=true）预览清理"
+        require(workspaceCount < 16) { "最多保留 16 个 APK 工作区，当前 " + workspaceCount + " 个" + quotaHint }
+        require(existingSize + source.length() <= 1024L * 1024 * 1024) {
+            "APK 快照总量超过 1 GiB（当前 " + existingSize + " 字节，新增 " + source.length() + " 字节）" + quotaHint
+        }
         val type=if(suffix in setOf("apks","xapk","apkm"))"apk-set" else if(suffix=="dex")"dex" else "elf"
         val id=ToolkitIo.fresh();val dir=directory(id);require(dir.mkdir())
         try{
@@ -227,6 +281,7 @@ internal class McpApkToolkit(
             val info=ToolkitIo.json("workspaceId" to id,"artifactType" to type,"syntheticContainer" to (type!="apk-set"),
                 "sourcePath" to source.path,"sha256" to hash,"analysisSha256" to ToolkitIo.sha(target),"size" to target.length(),"sourceSize" to source.length(),"createdAt" to System.currentTimeMillis(),
                 "temporary" to args.tBool("temporary",true),"path" to "aijs://workspace/$id")
+            addClientMetadata(args, info)
             File(dir,"workspace.json").writeText(info.toString(),Charsets.UTF_8)
             if(type=="apk-set")info.addProperty("memberCount",setMembers(id).size)
             currentWorkspace=id;return info

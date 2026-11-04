@@ -65,6 +65,8 @@ internal class McpFileToolkit(private val root: File) {
             "file_append_bytes",
             "file_append_text",
             "file_search_text",
+            "file_discover_apk",
+            "file_access_diagnose",
         )
 
         private const val MAX_SAFE_INTEGER = 9007199254740991L
@@ -516,6 +518,44 @@ internal class McpFileToolkit(private val root: File) {
                 ),
             )
 
+            add(
+                "file_discover_apk", "发现 APK 候选（不依赖扩展名）",
+                "按 ZIP 魔数 + APK 内部结构（AndroidManifest.xml，可选 resources.arsc / classes*.dex）发现候选，" +
+                    "扩展名只作加分项：.apk.1、.bak、无扩展名、临时缓存名都能命中。扫描有深度/条目/探测数/字节/时间预算，" +
+                    "结果显式返回 truncated/skipped/stopReason，部分结果不能当成全部未找到。path 可为目录（扫描）或单个文件（只探测该文件）。",
+                schema(
+                    listOf("path", "recursive"),
+                    props(
+                        "path" to stringField("绝对/相对 root 的目录，或单个文件路径；空字符串表示 root。"),
+                        "recursive" to boolField("目录扫描时是否递归子目录。", true),
+                        "maxDepth" to intField("递归最大深度，0..32。", 0, 32, 8),
+                        "maxEntries" to intField("最多访问的文件/目录条目数。", 1, 200000, 20000),
+                        "maxProbes" to intField("最多探测的文件数。", 1, 20000, 2000),
+                        "maxBytes" to intField("扫描总读取字节预算（只读文件头/中央目录）。", 64, 536870912, 67108864),
+                        "maxMillis" to intField("扫描墙钟时间预算（毫秒）。", 50, 30000, 5000),
+                        "limit" to intField("最多返回候选数。", 1, 500, 50),
+                        "includeZipsWithoutManifest" to boolField("是否把结构完整但缺少 AndroidManifest.xml 的 ZIP 也列为候选（低置信）。", false),
+                        "allowOutsideRoot" to boolField("允许只读扫描 MCP 允许目录之外的路径（不会写入、不会切换身份）。", false),
+                    ),
+                ),
+            )
+
+            add(
+                "file_access_diagnose", "诊断路径访问（app 与 shizuku 身份）",
+                "解释「app UID 得到 ENOENT，Shizuku shell 却能看到」这类问题：返回实际 uid、显式 backend、原始 errno、" +
+                    "是否在允许根内、scoped storage 可能性、shizuku 是否可用及本轮是否真的执行过检查。" +
+                    "backend 必须显式指定 app 或 shizuku（不静默切换身份）；无法区分不存在/不可见时返回 UNCERTAIN 与 uncertainty，不编造结论。" +
+                    "诊断只读；目标在允许目录之外时只报告状态，不会因此获得写权限。",
+                schema(
+                    listOf("path", "backend"),
+                    props(
+                        "path" to stringField("要诊断的路径（绝对路径或相对 root；允许目录之外也可只读诊断）。"),
+                        "backend" to stringField("显式选择检查身份：app=普通应用 UID；shizuku=Shizuku 授权身份。", enumValues = listOf("app", "shizuku")),
+                        "compareWithShizuku" to boolField("backend=app 时是否额外用 shizuku 身份做只读对比（用于区分不存在/不可见）；默认 false。", false),
+                    ),
+                ),
+            )
+
             return array
         }
     }
@@ -557,7 +597,9 @@ internal class McpFileToolkit(private val root: File) {
             "file_append_bytes" -> appendBytes(args)
             "file_append_text" -> appendText(args)
             "file_search_text" -> searchText(args)
-            else -> throw IllegalArgumentException("未知的文件工具：$name")
+            "file_discover_apk" -> discoverApk(args)
+            "file_access_diagnose" -> accessDiagnose(args)
+            else -> throw IllegalArgumentException("未知的文件工具：" + name)
         }
         return JsonObject().apply {
             addProperty("ok", true)
@@ -601,6 +643,45 @@ internal class McpFileToolkit(private val root: File) {
             throw IllegalArgumentException("参数 $name 必须是字符串")
         }
         return value.asString
+    }
+
+    private fun JsonObject.optionalBoolean(name: String, fallback: Boolean): Boolean {
+        val value = get(name) ?: return fallback
+        if (value.isJsonNull) return fallback
+        if (!value.isJsonPrimitive || !value.asJsonPrimitive.isBoolean) {
+            throw IllegalArgumentException("参数 " + name + " 必须是布尔值")
+        }
+        return value.asBoolean
+    }
+
+    private fun JsonObject.optionalInt(name: String, fallback: Int): Int {
+        val value = get(name) ?: return fallback
+        if (value.isJsonNull) return fallback
+        if (!value.isJsonPrimitive || !value.asJsonPrimitive.isNumber) {
+            throw IllegalArgumentException("参数 " + name + " 必须是整数")
+        }
+        val number = try {
+            value.asLong
+        } catch (_: NumberFormatException) {
+            throw IllegalArgumentException("参数 " + name + " 必须是整数")
+        }
+        if (number < Int.MIN_VALUE || number > Int.MAX_VALUE) {
+            throw IllegalArgumentException("参数 " + name + " 超出整数范围")
+        }
+        return number.toInt()
+    }
+
+    private fun JsonObject.optionalLong(name: String, fallback: Long): Long {
+        val value = get(name) ?: return fallback
+        if (value.isJsonNull) return fallback
+        if (!value.isJsonPrimitive || !value.asJsonPrimitive.isNumber) {
+            throw IllegalArgumentException("参数 " + name + " 必须是整数")
+        }
+        return try {
+            value.asLong
+        } catch (_: NumberFormatException) {
+            throw IllegalArgumentException("参数 " + name + " 必须是整数")
+        }
     }
 
     private fun JsonObject.requiredBoolean(name: String): Boolean {
@@ -1613,6 +1694,9 @@ internal class McpFileToolkit(private val root: File) {
                 else -> add("targetVersion", JsonNull.INSTANCE)
             }
         }
+        if (type == "file") {
+            data.add("apkProbe", probeJsonSafe(path))
+        }
         return ToolResult(data)
     }
 
@@ -1738,6 +1822,172 @@ internal class McpFileToolkit(private val root: File) {
             addProperty("description", title)
             add("arguments", arguments)
         }
+
+    /**
+     * file_discover_apk：按结构发现候选（不依赖扩展名）。
+     * path 为文件时只探测该文件；为目录时按扫描预算递归/单层发现，结果带 truncated/skipped/stopReason。
+     */
+    private fun discoverApk(args: JsonObject): ToolResult {
+        val rawPath = args.requiredString("path")
+        val recursive = args.requiredBoolean("recursive")
+        val maxDepth = args.optionalInt("maxDepth", 8)
+        val maxEntries = args.optionalInt("maxEntries", 20000)
+        val maxProbes = args.optionalInt("maxProbes", 2000)
+        val maxBytes = args.optionalLong("maxBytes", 64L * 1024 * 1024)
+        val maxMillis = args.optionalLong("maxMillis", 5000L)
+        val limit = args.optionalInt("limit", 50)
+        val includeZips = args.optionalBoolean("includeZipsWithoutManifest", false)
+        val allowOutsideRoot = args.optionalBoolean("allowOutsideRoot", false)
+        checkRange(maxDepth.toLong(), "maxDepth", 0, 32)
+        checkRange(maxEntries.toLong(), "maxEntries", 1, 200000)
+        checkRange(maxProbes.toLong(), "maxProbes", 1, 20000)
+        checkRange(maxBytes, "maxBytes", 64, 512L * 1024 * 1024)
+        checkRange(maxMillis, "maxMillis", 50, 30000)
+        checkRange(limit.toLong(), "limit", 1, 500)
+
+        val start: File
+        var outside = false
+        if (allowOutsideRoot) {
+            val info = ToolkitPathDiagnostics.resolveRequested(rootDir, rawPath)
+            start = info.path
+            outside = !info.insideAllowedRoot
+        } else {
+            start = resolvePath(rawPath, allowEmpty = true)
+        }
+        if (!start.exists()) throw IOException("路径不存在：" + start.path)
+        val actions = JsonArray()
+        if (start.isDirectory) {
+            val limits = ToolkitDiscovery.Limits(
+                maxDepth = if (recursive) maxDepth else 0,
+                maxEntries = maxEntries,
+                maxProbes = maxProbes,
+                maxBytes = maxBytes,
+                maxMillis = maxMillis,
+                limit = limit,
+            )
+            val scan = ToolkitDiscovery.scan(start, limits, includeZips)
+            val data = ToolkitDiscovery.scanJson(scan)
+            data.addProperty("mode", "directory")
+            data.addProperty("recursive", recursive)
+            data.addProperty("outsideAllowedRoot", outside)
+            val notes = JsonArray()
+            notes.add("扩展名只作加分项；候选判定来自 ZIP 魔数与 AndroidManifest.xml 等内部结构。")
+            if (scan.truncated) {
+                notes.add("扫描被预算截断或存在跳过项：truncated=true，不能把结果当成全部未找到。")
+            }
+            if (outside) {
+                notes.add("目标在 MCP 允许目录之外：本次只读扫描，不会写入或改变权限；操作请使用终端并显式指定路径。")
+            }
+            data.add("notes", notes)
+            if (scan.candidates.isNotEmpty()) {
+                val best = scan.candidates.first()
+                actions.add(nextAction("artifact_open", "打开最可能的 APK 候选", JsonObject().apply {
+                    addProperty("path", best.path)
+                }))
+                actions.add(nextAction("file_stat", "查看候选的 APK 结构探测", JsonObject().apply {
+                    addProperty("path", best.path)
+                }))
+            }
+            if (scan.truncated) {
+                actions.add(nextAction("file_discover_apk", "扩大预算继续扫描", JsonObject().apply {
+                    addProperty("path", rawPath)
+                    addProperty("recursive", recursive)
+                    addProperty("maxDepth", maxDepth)
+                    addProperty("maxEntries", minOf(maxEntries * 2, 200000))
+                    addProperty("maxProbes", minOf(maxProbes * 2, 20000))
+                    addProperty("maxBytes", minOf(maxBytes * 2, 512L * 1024 * 1024))
+                    addProperty("maxMillis", minOf(maxMillis * 2, 30000L))
+                    addProperty("limit", minOf(limit * 2, 500))
+                    addProperty("includeZipsWithoutManifest", includeZips)
+                    addProperty("allowOutsideRoot", allowOutsideRoot)
+                }))
+            }
+            return ToolResult(data, actions)
+        }
+        if (!start.isFile) throw IllegalArgumentException("只支持普通文件或目录：" + start.path)
+        val probeBudget = minOf(ToolkitDiscovery.MAX_PROBE_BYTES, maxBytes)
+        val probe = ToolkitDiscovery.probe(start, probeBudget)
+        val data = JsonObject().apply {
+            addProperty("mode", "file")
+            addProperty("path", start.path)
+            addProperty("outsideAllowedRoot", outside)
+            addProperty("candidate", probe.candidate)
+            addProperty("truncated", probe.truncated)
+            addProperty("stopReason", probe.stopReason)
+            add("probe", ToolkitDiscovery.probeJson(probe))
+        }
+        if (probe.candidate) {
+            actions.add(nextAction("artifact_open", "打开探测到的 APK 候选", JsonObject().apply {
+                addProperty("path", start.path)
+            }))
+        }
+        return ToolResult(data, actions)
+    }
+
+    /**
+     * file_access_diagnose：把参数交给后端（AndroidToolkitRuntime 安装），这里只做参数校验与 nextActions。
+     * backend 缺失或非法时直接报错：不得静默选择另一权限身份。
+     */
+    private fun accessDiagnose(args: JsonObject): ToolResult {
+        val rawPath = args.requiredString("path")
+        val backend = args.optionalString("backend", "")
+        if (backend != ToolkitPathDiagnostics.BACKEND_APP && backend != ToolkitPathDiagnostics.BACKEND_SHIZUKU) {
+            throw IllegalArgumentException("backend 必须显式指定 app 或 shizuku（不会静默切换权限身份）")
+        }
+        val compare = args.optionalBoolean("compareWithShizuku", false)
+        val provider = ToolkitPathDiagnostics.activeProvider()
+            ?: throw ToolkitException(
+                "BACKEND_UNAVAILABLE",
+                "路径访问诊断需要 Android 工具进程后端；当前进程没有安装诊断后端",
+                "path",
+            )
+        val data = provider.invoke(rootDir, rawPath, backend, compare)
+        val actions = JsonArray()
+        val conclusionElement = data.get("conclusion")
+        val conclusion = if (conclusionElement != null && conclusionElement.isJsonPrimitive) {
+            conclusionElement.asString
+        } else {
+            ""
+        }
+        val insideElement = data.get("insideAllowedRoot")
+        val inside = if (insideElement != null && insideElement.isJsonPrimitive) {
+            insideElement.asBoolean
+        } else {
+            true
+        }
+        if (conclusion == ToolkitPathDiagnostics.INVISIBLE_TO_APP) {
+            val pathElement = data.get("path")
+            val pathText = if (pathElement != null && pathElement.isJsonPrimitive) pathElement.asString else rawPath
+            actions.add(nextAction("terminal_exec", "用 shizuku 后端查看该路径", JsonObject().apply {
+                addProperty("command", "ls -ld -- " + ToolkitPathDiagnostics.shellQuote(pathText))
+                addProperty("backend", ToolkitPathDiagnostics.BACKEND_SHIZUKU)
+            }))
+        }
+        if (conclusion == ToolkitPathDiagnostics.UNCERTAIN && !compare) {
+            actions.add(nextAction("file_access_diagnose", "加 compareWithShizuku 再检查", JsonObject().apply {
+                addProperty("path", rawPath)
+                addProperty("backend", backend)
+                addProperty("compareWithShizuku", true)
+            }))
+        }
+        if (!inside) {
+            actions.add(nextAction("file_access_diagnose", "确认允许目录边界", JsonObject().apply {
+                addProperty("path", rootDir.path)
+                addProperty("backend", ToolkitPathDiagnostics.BACKEND_APP)
+            }))
+        }
+        return ToolResult(data, actions)
+    }
+
+    /** file_stat 的附加结构探测；失败只降级为字段错误，不影响 stat 本身。 */
+    private fun probeJsonSafe(file: File): JsonObject = try {
+        ToolkitDiscovery.probeJson(ToolkitDiscovery.probe(file))
+    } catch (error: IOException) {
+        JsonObject().apply {
+            addProperty("error", error.message ?: "APK 结构探测失败")
+            addProperty("candidate", false)
+        }
+    }
 
     private fun addWarning(warnings: MutableList<String>, message: String) {
         if (warnings.size < MAX_SEARCH_WARNINGS) warnings.add(message)

@@ -1838,5 +1838,73 @@
       "workspaceId",
       "member"
     ]
+  },
+  "apk_workspace_inventory": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "expiredAfterMinutes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 525600,
+        "description": "临时工作区超过该分钟数未访问即视为 expired（默认 1440，即一天）。"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 512,
+        "description": "本页最多返回的工作区条目（默认 256），超出时 itemsTruncated=true。"
+      }
+    }
+  },
+  "apk_workspace_gc": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dryRun": {
+        "type": "boolean",
+        "description": "默认 true：只预览 wouldDeleteIds/wouldReclaimBytes，不删除任何文件；显式 false 才执行清理。"
+      },
+      "protectedIds": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 512,
+        "description": "明确保护的工作区 id；即使过期也不会被清理。"
+      },
+      "minAgeMinutes": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 525600,
+        "description": "最短保留时间（默认 60 分钟），比它新的临时工作区跳过。"
+      },
+      "expiredAfterMinutes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 525600,
+        "description": "过期判定阈值（默认 1440 分钟）。"
+      },
+      "owner": {
+        "type": "string",
+        "description": "只处理该 owner 的工作区；其它 owner 一律跳过。"
+      },
+      "clientId": {
+        "type": "string",
+        "description": "只处理该 clientId 的工作区；其它 client 一律跳过。"
+      },
+      "includeTemporary": {
+        "type": "boolean",
+        "description": "默认 false：只有显式打开才把过期的非当前临时工作区纳入候选。"
+      },
+      "includeUnknownOwner": {
+        "type": "boolean",
+        "description": "默认 false：旧记录没有 owner/clientId/sessionId 时全部保护；显式 true 才允许清理。"
+      },
+      "allowUnknownAge": {
+        "type": "boolean",
+        "description": "默认 false：无法确定创建/访问时间的工作区按“未知年龄”保护。"
+      }
+    }
   }
 }

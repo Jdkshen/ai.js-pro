@@ -35,6 +35,10 @@ import java.util.zip.ZipFile
 internal object ToolkitApkVerifier {
     private const val APKSIG_COORDINATE = "com.android.tools.build:apksig:8.6.1"
     private const val STATUS_MEANING = "valid=所有已执行检查通过（含密码学签名）；partial=至少一项失败/跳过/不支持；unavailable=文件或检查后端不可用"
+    private const val SCHEME_STATUS_MEANING =
+        "签名方案状态：valid=该方案密码学验证通过；invalid=有签名者但验证失败；" +
+            "backend_error=验证后端异常，未得出目标有效性结论；input_error=输入无法解析，未执行验证；" +
+            "not_run=该方案没有签名者或本轮未执行；unsupported=当前不支持"
     private const val MAX_EOCD_BYTES = 22 + 0xffff
     private const val MAX_CENTRAL_BYTES = 64L * 1024 * 1024
     private const val MAX_ENTRIES = 65_535
@@ -1008,6 +1012,70 @@ internal object ToolkitApkVerifier {
 
     // -------------------------------------------------------------- signature
 
+    /**
+     * apksig 后端失败的分类。
+     *
+     * `ContentInfo is not annotated with Asn1Class` 这类异常来自运行时注解被裁剪或模型类被
+     * 改写，属于**后端异常**，不能据此判定目标 APK 的签名无效（见 2026-11-04 GPT 复盘 §4.2）。
+     */
+    internal data class SignatureBackendFailure(val kind: String, val errorClass: String, val message: String) {
+        val isInputFormat: Boolean get() = kind == "input_format"
+    }
+
+    /**
+     * 反射探测 apksig 的 ASN.1 注解在 R8/混淆之后是否仍然保留。
+     *
+     * 探针自身只读，不改变验证结论；它把「后端注解是否可用」变成可复现证据，避免把后端异常
+     * 说成目标 APK 的问题。设备上如果 `asn1AnnotationsRetained=false`，应检查 proguard 规则。
+     */
+    internal fun asn1AnnotationDiagnosis(): JsonObject {
+        val annotationName = "com.android.apksig.internal.asn1.Asn1Class"
+        val modelName = "com.android.apksig.internal.pkcs7.ContentInfo"
+        var annotationPresent = false
+        var modelPresent = false
+        var modelAnnotated = false
+        var probeFailure: String? = null
+        try {
+            @Suppress("UNCHECKED_CAST")
+            val annotation = Class.forName(annotationName) as Class<out Annotation>
+            annotationPresent = true
+            val model = Class.forName(modelName)
+            modelPresent = true
+            modelAnnotated = model.getAnnotation(annotation) != null
+        } catch (failure: Throwable) {
+            probeFailure = failure.javaClass.name + ": " + (failure.message ?: "")
+        }
+        val retained = annotationPresent && modelPresent && modelAnnotated
+        return ToolkitIo.json(
+            "annotationClass" to annotationName,
+            "modelClass" to modelName,
+            "annotationClassPresent" to annotationPresent,
+            "modelClassPresent" to modelPresent,
+            "modelAnnotated" to modelAnnotated,
+            "asn1AnnotationsRetained" to retained,
+            "probeFailure" to probeFailure,
+            "note" to if (retained) {
+                "apksig ASN.1 运行时注解可见，签名后端可以解析/编码 PKCS#7 结构"
+            } else {
+                "apksig ASN.1 运行时注解不可见；后端的注解解析可能失败，" +
+                    "此时不能把异常当成目标 APK 签名无效，请检查 proguard 保留规则"
+            }
+        )
+    }
+
+    internal fun classifyBackendFailure(failure: Throwable): SignatureBackendFailure {
+        val message = failure.message ?: ""
+        val errorClass = failure.javaClass.name
+        val kind = when {
+            failure is LinkageError -> "backend_linkage"
+            message.contains("not annotated with Asn1Class") -> "apksig_asn1_annotation_missing"
+            errorClass == "com.android.apksig.apk.ApkFormatException" -> "input_format"
+            message.contains("ApkFormatException") -> "input_format"
+            else -> "backend_error"
+        }
+        return SignatureBackendFailure(kind, errorClass, message)
+    }
+
     private fun inspectSignature(file: File, minSdk: Int?, maxSdk: Int?, apkSha256: String): Section {
         val actualMin = minSdk ?: 1
         val actualMax = maxSdk ?: Int.MAX_VALUE
@@ -1019,13 +1087,18 @@ internal object ToolkitApkVerifier {
             val result = builder.build().verify()
             signatureResult(result, actualMin, actualMax, minSdk, maxSdk, apkSha256)
         } catch (failure: LinkageError) {
+            val classified = classifyBackendFailure(failure)
             issues.add(issue("signature", "SIGNATURE_VERIFIER_UNAVAILABLE", "error",
-                "apksig 后端不可用：${failure.message ?: failure.javaClass.name}"))
-            unavailableSignature(actualMin, actualMax, minSdk, maxSdk, apkSha256, issues)
+                "apksig 后端不可用（${classified.kind}）：${classified.errorClass}: ${classified.message}",
+                "failureKind" to classified.kind))
+            unavailableSignature(actualMin, actualMax, minSdk, maxSdk, apkSha256, issues, classified)
         } catch (failure: Exception) {
+            val classified = classifyBackendFailure(failure)
             issues.add(issue("signature", "SIGNATURE_VERIFICATION_ERROR", "error",
-                failure.message ?: "apksig 无法完成验证"))
-            unavailableSignature(actualMin, actualMax, minSdk, maxSdk, apkSha256, issues)
+                "apksig 未能完成验证（${classified.kind}）：${classified.errorClass}: " +
+                    (classified.message.ifEmpty { "无异常消息" }),
+                "failureKind" to classified.kind))
+            unavailableSignature(actualMin, actualMax, minSdk, maxSdk, apkSha256, issues, classified)
         }
     }
 
@@ -1078,17 +1151,24 @@ internal object ToolkitApkVerifier {
         }
         val errors = result.getAllErrors()
         val warnings = result.getWarnings()
+        val errorCodes = errors.map { it.getIssue().name }
+        fun codesFor(vararg prefixes: String): List<String> =
+            errorCodes.filter { code -> prefixes.any { code.startsWith(it) } }.distinct()
         val schemes = ToolkitIo.json(
             "V1" to schemeJson(result.isVerifiedUsingV1Scheme(), result.getV1SchemeSigners().size,
-                "V1 证书/JAR 签名"),
+                "V1 证书/JAR 签名", codesFor("JAR_SIG", "JAR_")),
             "V2" to schemeJson(result.isVerifiedUsingV2Scheme(), result.getV2SchemeSigners().size,
-                "APK Signature Scheme v2"),
+                "APK Signature Scheme v2", codesFor("V2_SIG")),
             "V3" to schemeJson(result.isVerifiedUsingV3Scheme(), result.getV3SchemeSigners().size,
-                "APK Signature Scheme v3"),
+                "APK Signature Scheme v3", codesFor("V3_SIG")),
             "V3.1" to schemeJson(result.isVerifiedUsingV31Scheme(), result.getV31SchemeSigners().size,
-                "APK Signature Scheme v3.1（rotation）"),
-            "V4" to ToolkitIo.json("verified" to result.isVerifiedUsingV4Scheme(),
-                "signerCount" to result.getV4SchemeSigners().size, "note" to "未提供 V4 sidecar")
+                "APK Signature Scheme v3.1（rotation）", codesFor("V31_SIG", "V3_1_SIG")),
+            "V4" to ToolkitIo.json(
+                "status" to if (result.isVerifiedUsingV4Scheme()) "valid" else "not_run",
+                "verified" to result.isVerifiedUsingV4Scheme(),
+                "signerCount" to result.getV4SchemeSigners().size,
+                "errorCodes" to codesFor("V4_SIG"),
+                "note" to "未提供 V4 sidecar")
         )
         val verified = result.isVerified()
         if (!verified) {
@@ -1110,29 +1190,64 @@ internal object ToolkitApkVerifier {
                 "minSdkFromArgument" to (requestedMin != null), "maxSdkFromArgument" to (requestedMax != null)),
             "apkSha256" to apkSha256,
             "apksigCoordinate" to APKSIG_COORDINATE,
+            "verdict" to if (verified) "valid" else "invalid",
+            "failureKind" to null,
+            "schemeStatusMeaning" to SCHEME_STATUS_MEANING,
+            "backendDiagnosis" to asn1AnnotationDiagnosis(),
             "coverage" to "apksig V1/V2/V3/V3.1/V4 密码学验证；V4 sidecar/source stamp 未提供",
             "notChecked" to listOf("V4 sidecar", "source stamp", "installability", "business behavior")
         )
         return Section(status, json, issues)
     }
 
-    private fun schemeJson(verified: Boolean, signerCount: Int, note: String) = ToolkitIo.json(
-        "verified" to verified, "signerCount" to signerCount, "note" to note
-    )
+    /**
+     * 单个签名方案的状态。
+     *
+     * `valid`=该方案已由 apksig 密码学验证通过；`invalid`=有签名者但验证失败；
+     * `not_run`=该方案没有签名者，本轮没有可验证的内容。
+     */
+    private fun schemeJson(verified: Boolean, signerCount: Int, note: String,
+                           errorCodes: List<String> = emptyList()): JsonObject {
+        val status = if (verified) "valid" else if (signerCount > 0) "invalid" else "not_run"
+        return ToolkitIo.json(
+            "status" to status, "verified" to verified, "signerCount" to signerCount,
+            "errorCodes" to errorCodes, "note" to note
+        )
+    }
 
     private fun unavailableSignature(actualMin: Int, actualMax: Int, requestedMin: Int?,
                                      requestedMax: Int?, apkSha256: String,
-                                     issues: List<JsonObject>): Section {
-        val schemes = ToolkitIo.json(
-            "V1" to schemeJson(false, 0, "后端不可用"),
-            "V2" to schemeJson(false, 0, "后端不可用"),
-            "V3" to schemeJson(false, 0, "后端不可用"),
-            "V3.1" to schemeJson(false, 0, "后端不可用"),
-            "V4" to schemeJson(false, 0, "后端不可用/未提供 sidecar")
+                                     issues: List<JsonObject>,
+                                     failure: SignatureBackendFailure? = null): Section {
+        // 后端异常 / 输入格式错误都不产生密码学结论：方案状态必须是 backend_error 或 not_run，
+        // 不能写成“验证失败”，否则会被误读为目标 APK 的签名问题。
+        val schemeStatus = if (failure?.isInputFormat == true) "not_run" else "backend_error"
+        val failureNote = when {
+            failure == null -> "后端不可用"
+            failure.isInputFormat -> "apksig 无法解析输入（${failure.errorClass}），未执行密码学检查"
+            else -> "后端异常（${failure.kind}），未执行密码学检查"
+        }
+        fun backendScheme(note: String) = ToolkitIo.json(
+            "status" to schemeStatus, "verified" to false, "signerCount" to 0,
+            "errorCodes" to emptyList<String>(), "note" to note
         )
+        val schemes = ToolkitIo.json(
+            "V1" to backendScheme("V1 证书/JAR 签名：$failureNote"),
+            "V2" to backendScheme("APK Signature Scheme v2：$failureNote"),
+            "V3" to backendScheme("APK Signature Scheme v3：$failureNote"),
+            "V3.1" to backendScheme("APK Signature Scheme v3.1：$failureNote"),
+            "V4" to backendScheme("V4：$failureNote（未提供 sidecar）")
+        )
+        val verdict = if (failure?.isInputFormat == true) "input_error" else "backend_error"
         val json = sectionJson("unavailable", issues,
             "verified" to false,
             "signaturePresent" to null,
+            "verdict" to verdict,
+            "failureKind" to failure?.kind,
+            "failureClass" to failure?.errorClass,
+            "failureMessage" to failure?.message,
+            "schemeStatusMeaning" to SCHEME_STATUS_MEANING,
+            "backendDiagnosis" to asn1AnnotationDiagnosis(),
             "schemes" to schemes,
             "certificates" to emptyList<Any>(),
             "errors" to emptyList<Any>(),
@@ -1141,7 +1256,7 @@ internal object ToolkitApkVerifier {
                 "minSdkFromArgument" to (requestedMin != null), "maxSdkFromArgument" to (requestedMax != null)),
             "apkSha256" to apkSha256,
             "apksigCoordinate" to APKSIG_COORDINATE,
-            "coverage" to "apksig 后端不可用；未读取证书元数据，未声称任何验证结果",
+            "coverage" to "apksig 未产生密码学结论；未读取证书元数据，未声称任何验证结果",
             "notChecked" to listOf("V1/V2/V3/V3.1/V4 signature", "installability", "business behavior")
         )
         return Section("unavailable", json, issues)

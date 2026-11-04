@@ -82,12 +82,12 @@ class McpFileToolkitTest {
     @Test
     fun definitionsExposeAllOwnToolsWithToolkitCategory() {
         val (toolkit, _) = newToolkit()
-        assertEquals(19, McpFileToolkit.names.size)
+        assertEquals(21, McpFileToolkit.names.size)
         assertTrue(McpFileToolkit.names.all { it.startsWith("file_") })
-        assertEquals(19, McpFileToolkit.names.toSet().size)
+        assertEquals(21, McpFileToolkit.names.toSet().size)
 
         val definitions = toolkit.definitions()
-        assertEquals(19, definitions.size())
+        assertEquals(21, definitions.size())
         val byName = definitions.associateBy { it.asJsonObject.get("name").asString }
         assertEquals(McpFileToolkit.names.toSet(), byName.keys)
         byName.forEach { (name, element) ->

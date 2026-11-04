@@ -85,6 +85,14 @@ internal object McpToolkitCatalog {
         "artifact_export",
         "apk_set_members",
         "apk_set_open_member"
-    ) + ToolkitReverseTools.names
+    ) + ToolkitReverseTools.names + listOf(
+        // P0：工作区配额透明度与受控 GC（docs/plans/2026-11-04 MCP 逆向能力优化建议 §3）。
+        // 追加在列表末尾，保持 names.take(58) 的 mt_* 兼容别名映射不变。
+        "apk_workspace_inventory",
+        "apk_workspace_gc",
+        // P0-B：文件发现（非标准扩展名）与路径访问诊断（§5.1/§5.2）。
+        "file_discover_apk",
+        "file_access_diagnose"
+    )
     val aliases = names.take(58).filter { it != "toolkit_status" }.associateBy { "mt_" + it }
 }

@@ -2,7 +2,12 @@ package com.jdkshen.aijspro.mcp
 
 import android.content.Context
 import android.os.Build
+import android.os.Process
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import com.google.gson.*
+import com.stardust.autojs.runtime.api.ShizukuShell
 import com.stardust.autojs.runtime.tool.ToolchainRuntime
 import com.stardust.autojs.runtime.tool.ToolchainStore
 import java.io.*
@@ -14,6 +19,148 @@ import java.util.zip.ZipFile
 internal class AndroidToolkitRuntime(private val context:Context, private val root:File):ToolkitRuntime {
     private val home=File(context.noBackupFilesDir,"apk-components")
     private val reverse by lazy { AndroidReverseRuntime(context,root,::component) }
+
+    init {
+        // file_access_diagnose（P0-B）需要真实 UID/errno 与 Shizuku 授权身份；本类持有 Context，
+        // 由它把探测实现安装到进程级注册表，McpFileToolkit 只负责参数与工具外壳。
+        ToolkitPathDiagnostics.installProvider { rootDir, requested, backend, compareWithShizuku ->
+            diagnosePaths(rootDir, requested, backend, compareWithShizuku)
+        }
+    }
+
+    /** 组装 app/shizuku 两个后端的探测结果；权限身份只在显式 backend=shizuku 时使用。 */
+    private fun diagnosePaths(
+        rootDir: File,
+        requested: String,
+        backend: String,
+        compareWithShizuku: Boolean,
+    ): JsonObject {
+        val info = ToolkitPathDiagnostics.resolveRequested(rootDir, requested)
+        var availabilityKnown = false
+        var shizukuAvailable = false
+        try {
+            availabilityKnown = true
+            shizukuAvailable = ShizukuShell.isAvailable() && ShizukuShell.hasPermission()
+        } catch (_: Throwable) {
+            availabilityKnown = false
+            shizukuAvailable = false
+        }
+        val appProbe = if (backend == ToolkitPathDiagnostics.BACKEND_APP || compareWithShizuku) {
+            probePathAsApp(info.path)
+        } else {
+            null
+        }
+        val needShizuku = backend == ToolkitPathDiagnostics.BACKEND_SHIZUKU ||
+            (backend == ToolkitPathDiagnostics.BACKEND_APP && compareWithShizuku && shizukuAvailable)
+        val shizukuProbe = if (needShizuku) probePathAsShizuku(info.path, shizukuAvailable) else null
+        return ToolkitPathDiagnostics.report(
+            root = rootDir,
+            requested = requested,
+            requestedBackend = backend,
+            compareWithShizuku = compareWithShizuku,
+            appProbe = appProbe,
+            shizukuProbe = shizukuProbe,
+            shizukuAvailable = shizukuAvailable,
+            shizukuAvailabilityKnown = availabilityKnown,
+            sdkInt = Build.VERSION.SDK_INT,
+            appPackage = context.packageName,
+        )
+    }
+
+    /** app 后端：普通应用 UID，用 android.system.Os.lstat 拿到原始 errno。 */
+    private fun probePathAsApp(path: File): ToolkitPathDiagnostics.Probe {
+        val uid = Process.myUid().toLong()
+        return try {
+            val stat = Os.lstat(path.path)
+            val mode = stat.st_mode
+            val fileType = mode and OsConstants.S_IFMT
+            val type = when (fileType) {
+                OsConstants.S_IFDIR -> "directory"
+                OsConstants.S_IFREG -> "file"
+                OsConstants.S_IFLNK -> "symbolic_link"
+                else -> "other"
+            }
+            val readable: Boolean? = try {
+                Os.access(path.path, OsConstants.R_OK)
+            } catch (_: Throwable) {
+                null
+            }
+            val writable: Boolean? = try {
+                Os.access(path.path, OsConstants.W_OK)
+            } catch (_: Throwable) {
+                null
+            }
+            ToolkitPathDiagnostics.Probe(
+                backend = ToolkitPathDiagnostics.BACKEND_APP,
+                executed = true,
+                available = true,
+                uid = uid,
+                exists = true,
+                type = type,
+                size = if (type == "file") stat.st_size else 0L,
+                modifiedTime = stat.st_mtime * 1000L,
+                readable = readable,
+                writable = writable,
+            )
+        } catch (error: ErrnoException) {
+            ToolkitPathDiagnostics.Probe(
+                backend = ToolkitPathDiagnostics.BACKEND_APP,
+                executed = true,
+                available = true,
+                uid = uid,
+                errno = error.errno,
+                errnoName = ToolkitPathDiagnostics.errnoName(error.errno),
+                message = error.message,
+                exists = false,
+            )
+        } catch (error: Throwable) {
+            ToolkitPathDiagnostics.Probe(
+                backend = ToolkitPathDiagnostics.BACKEND_APP,
+                executed = false,
+                available = true,
+                uid = uid,
+                message = error.javaClass.simpleName + ": " + (error.message ?: ""),
+                notes = listOf("app 后端探测异常，未得出访问结论"),
+            )
+        }
+    }
+
+    /** shizuku 后端：只有显式请求时才使用授权身份，启动失败不静默回退 app。 */
+    private fun probePathAsShizuku(path: File, available: Boolean): ToolkitPathDiagnostics.Probe {
+        if (!available) {
+            return ToolkitPathDiagnostics.Probe(
+                backend = ToolkitPathDiagnostics.BACKEND_SHIZUKU,
+                executed = false,
+                available = false,
+                notes = listOf("Shizuku 未运行或未授权，本轮没有执行检查；不会回退 app UID"),
+            )
+        }
+        return try {
+            val script = ToolkitPathDiagnostics.shizukuProbeScript(path.path)
+            // ShizukuShell.execute：内部 /system/bin/sh -c，带 3s 超时与 16KiB 输出上限，
+            // 超时会销毁远端进程；比手工读流更适合 MCP 同步调用。
+            val result = ShizukuShell.execute(script, 3000, 16384)
+            val parsed = ToolkitPathDiagnostics.parseShizukuProbe(result.output)
+            if (parsed.executed) {
+                parsed
+            } else {
+                parsed.copy(
+                    message = "code=" + result.code +
+                        "; stderr=" + result.error.take(400) +
+                        "; output=" + result.output.take(200),
+                )
+            }
+        } catch (error: Throwable) {
+            ToolkitPathDiagnostics.Probe(
+                backend = ToolkitPathDiagnostics.BACKEND_SHIZUKU,
+                executed = false,
+                available = true,
+                message = error.javaClass.simpleName + ": " + (error.message ?: ""),
+                notes = listOf("Shizuku 探测启动/读取失败，未得出访问结论"),
+            )
+        }
+    }
+
     companion object {
         val COMPONENTS=linkedMapOf("jadx" to "jadx.dex.jar","apk-resources" to "bin/aapt2","apktool" to "apktool.dex.jar",
             "radare2" to "bin/radare2","r2ghidra" to "lib/core_ghidra.so","yara" to "bin/aijs-yara","unicorn" to "bin/aijs-unicorn","frida" to "bin/aijs-frida","frida-gadget" to "gadget/arm64-v8a/libfrida-gadget.so")

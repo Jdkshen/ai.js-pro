@@ -67,6 +67,46 @@ class ToolkitApkVerifierTest {
     }
 
     @Test
+    fun signatureSectionSeparatesSchemeStatusFromBackendHealth() {
+        val apk = writeApk(elf(16384), aligned = true)
+        val report = ToolkitApkVerifier.inspect(apk, minSdk = 24, maxSdk = 34)
+        val signature = report.getAsJsonObject("signature")
+
+        // 未签名归档：没有签名者 → not_run；整体 verdict 仍是 invalid（apksig 未通过验证）。
+        assertEquals("invalid", signature.get("verdict").asString)
+        val schemes = signature.getAsJsonObject("schemes")
+        assertEquals("not_run", schemes.getAsJsonObject("V1").get("status").asString)
+        assertEquals("not_run", schemes.getAsJsonObject("V2").get("status").asString)
+        assertTrue(signature.get("schemeStatusMeaning").asString.contains("backend_error"))
+
+        // 后端注解探针必须给出可复现证据，而不是只说“后端不可用”。
+        val diagnosis = signature.getAsJsonObject("backendDiagnosis")
+        assertTrue(diagnosis.get("asn1AnnotationsRetained").asBoolean)
+        assertEquals("com.android.apksig.internal.asn1.Asn1Class", diagnosis.get("annotationClass").asString)
+    }
+
+    @Test
+    fun backendFailureClassificationKeepsTargetAndBackendApart() {
+        val linkage = ToolkitApkVerifier.classifyBackendFailure(NoClassDefFoundError("missing"))
+        assertEquals("backend_linkage", linkage.kind)
+        assertFalse(linkage.isInputFormat)
+
+        val annotation = ToolkitApkVerifier.classifyBackendFailure(
+            IllegalStateException("ContentInfo is not annotated with Asn1Class"))
+        assertEquals("apksig_asn1_annotation_missing", annotation.kind)
+        assertFalse(annotation.isInputFormat)
+
+        val format = ToolkitApkVerifier.classifyBackendFailure(
+            RuntimeException("com.android.apksig.apk.ApkFormatException: malformed"))
+        assertEquals("input_format", format.kind)
+        assertTrue(format.isInputFormat)
+
+        val other = ToolkitApkVerifier.classifyBackendFailure(RuntimeException("boom"))
+        assertEquals("backend_error", other.kind)
+        assertFalse(other.isInputFormat)
+    }
+
+    @Test
     fun misalignedArchiveDoesNotMakeTheElfLookRelinked() {
         val apk = writeApk(elf(16384), aligned = false)
         val report = ToolkitApkVerifier.inspect(apk)

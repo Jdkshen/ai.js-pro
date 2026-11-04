@@ -273,3 +273,16 @@
 # Optional component CLI runs in a fresh app_process using this stable class name.
 -keep class com.jdkshen.aijspro.mcp.ToolkitComponentMain { public static void main(java.lang.String[]); }
 -keep class com.jdkshen.aijspro.mcp.ToolkitCliMain { public static void main(java.lang.String[]); }
+
+# apksig 的 PKCS#7/ASN.1 模型靠运行时注解（@Asn1Class/@Asn1Field/@Asn1Tagging）驱动
+# Asn1BerParser/Asn1DerEncoder 的反射。真机上出现过
+# "ContentInfo is not annotated with Asn1Class"：一旦注解在裁剪后不可见，验签/重签后端就会
+# 抛异常——这属于**后端异常**，不是目标 APK 的签名结论（见 docs/plans/2026-11-04 复盘 §4.2）。
+# 注解属性在文件顶部已随 *Annotation* 一起保留；这里额外显式保留注解类型与被注解的模型类，
+# 避免 R8 因为「注解类型只被注解属性引用」而把它们当作不可达代码删除。
+-keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations,AnnotationDefault
+-keep,allowobfuscation class com.android.apksig.internal.asn1.** { *; }
+-keep @interface com.android.apksig.internal.asn1.Asn1Class
+-keep @interface com.android.apksig.internal.asn1.Asn1Field
+-keep @interface com.android.apksig.internal.asn1.Asn1Tagging
+-keep,allowobfuscation @com.android.apksig.internal.asn1.Asn1Class class * { *; }
