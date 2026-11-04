@@ -230,7 +230,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("call_engine_api", "在指定真实引擎调用全局或模块函数，支持 JSON args 和 Promise；回调、UI、Java 对象组合使用 run_script", McpToolSchema.callApiSchema()))
             add(tool("list_overlays", "列出各进程登记中的浮窗（pid/ownerEngineId/engine/kind/touchable/ageMs），用于诊断 stop 后是否有 View 残留"))
             add(tool("close_overlays", "关闭浮窗：指定 executionId 等同 stop_script；省略则等同 stop_all_scripts；返回剩余 overlayCount", objSchema("executionId")))
-            add(tool("terminal_exec", "在手机终端底层异步运行 shell 命令，立即返回 jobId；backend=app（默认，普通应用 UID，注入 rish/i 函数入口）或 shizuku（需 Shizuku 已运行并授权，以授权身份执行且不回退 app）。非 PTY，stdout/stderr 合并。workingDirectory 在操作目录内；命令本身可访问应用有权限的文件。env 为字符串对象，不能包含内部后端变量。timeoutSeconds 默认 300、最大 3600，到期终止进程组（shizuku 由远端 UserService 清理）；先 get_build_tools 查编译器", McpToolSchema.terminalSchema()))
+            add(tool("terminal_exec", "在手机终端底层异步运行 shell 命令，立即返回 jobId；backend=app（默认，普通应用 UID，注入 rish/i 函数入口）或 shizuku（需 Shizuku 已运行并授权，以授权身份执行且不回退 app）。非 PTY，stdout/stderr 合并。workingDirectory 在操作目录内；命令本身可访问应用有权限的文件。env 为字符串对象，不能包含内部后端变量。timeoutSeconds 默认 300、最大 3600，到期终止进程组（shizuku 由远端 UserService 清理）；先 get_build_tools 查编译器。" + ToolkitBackendRouting.capabilitySummary() + "；用错后端时输出首行会写明「该命令需要 X 后端」（autoRoute=true 时仅对只读白名单自动切换并标注 routedFrom/routedTo）", McpToolSchema.terminalSchema()))
             add(tool("terminal_read", "读取终端状态/输出；offset=上次 nextOffset（UTF-16 字符偏移），maxChars 默认 16384/最大 65536；waitMillis=0..10000 长轮询。仅保留最近 256Ki 字符，truncated=true 表示旧输出已淘汰；processActive=false 才表示清理完成（shizuku 任务需远端进程组销毁）", objSchema("jobId", "offset", "maxChars", "waitMillis", required = arrayOf("jobId"))))
             add(tool("terminal_write", "向运行中的终端排队写入 stdin；input 不自动添加换行，eof=true 关闭输入。返回 accepted 仅表示入队，写入失败见 terminal_read.inputError", objSchema("jobId", "input", "eof", required = arrayOf("jobId"))))
             add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程；不会停止三个脚本引擎。shizuku 任务调用 ShizukuShell 的 process.destroy() 由 UserService 终止远端进程组；processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
@@ -261,6 +261,10 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("app_trace_stop", "停止 trace 会话并返回真实清理计数", objSchema("traceSessionId", required = arrayOf("traceSessionId"))))
             add(tool("app_trace_list", "列出未过期的 trace 会话及其上限/TTL"))
             add(tool("app_launch_trace", "先建立 trace 再启动应用；启动失败也保留 traceSessionId 便于诊断", McpToolSchema.appLaunchSchema()))
+            add(tool("shell_capabilities", "列出手机 shell 的实测能力清单与替代写法（grep 无 \\b/\\s、cat 无 -n/-A、无 zip/jar/7z 只有 tar、python 链接可能坏、node 可用），并指向 MCP 自身的替代工具", objSchema()))
+            add(tool("shell_classify_failure", "把 shell 失败输出分类成能力缺口/后端问题/文件不存在/未知，并给出替代写法与所需后端；判断保守，未知不猜", objSchema("command", "output", required = arrayOf("command", "output"))))
+            add(tool("node_script_command", "给出「写脚本文件再运行」的推荐命令（避免 node -e 双重转义），并说明 argv[0]=node、argv[1]=脚本、argv[2] 才是参数", objSchema("scriptPath", "args", required = arrayOf("scriptPath"))))
+            add(tool("crash_buffer_semantics", "解释 logcat -b crash -c 的清理语义：只清 crash 环形缓冲、不是同步屏障、旧条目可能仍被读到；给出可核对的时间窗/PID 过滤方法", objSchema()))
             McpToolkitBridge.definitions(context, root).forEach { add(it) }
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
@@ -296,6 +300,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("overlayCount", OverlayStateReader.countAggregated(context))
                 addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
                 add("engineDiagnostics", engineDiagnostics())
+                add("rootStability", McpRootStability.observe(root.path))
                 add("toolCategories", JsonObject().apply { McpToolCategories.counts().forEach { (id, count) -> addProperty(id, count) } })
             })
             "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
@@ -411,6 +416,11 @@ internal class McpTools(private val context: Context, private val event: (String
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url", "apk_install", "apk_uninstall" ->
                 toolJson(McpAppTools.handle(context, name, args) ?: throw McpInvalidParamsException("未知工具：$name"))
             in McpAppTraceTools.names -> toolJson(McpAppTraceTools.call(context, name, args))
+            "shell_capabilities" -> toolJson(ToolkitShellCapabilities.matrix())
+            "shell_classify_failure" -> toolJson(ToolkitShellCapabilities.classifyFailure(args.string("command"), args.string("output")))
+            "node_script_command" -> toolJson(ToolkitShellCapabilities.nodeScriptCommand(args.string("scriptPath"),
+                args.getAsJsonArray("args")?.mapNotNull { element -> element?.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList()))
+            "crash_buffer_semantics" -> toolJson(ToolkitShellCapabilities.crashBufferSemantics())
             else -> McpAppTools.handle(context, name, args)?.let { toolJson(it) }
                 ?: throw McpInvalidParamsException("未知工具：$name")
         }
@@ -956,6 +966,8 @@ internal class McpTools(private val context: Context, private val event: (String
                 env[key] = value.asString
             }
         }
+        // §2.1：用错后端时不再只说 inaccessible or not found；autoRoute 需要显式开启（默认 false）。
+        if (args.booleanOr("autoRoute", false)) env[ToolkitBackendRouting.AUTO_ROUTE_ENV] = "true"
         return env
     }
     private fun parseTerminalBackend(args: JsonObject): String {

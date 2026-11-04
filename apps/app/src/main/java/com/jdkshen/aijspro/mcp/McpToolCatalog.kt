@@ -70,7 +70,12 @@ internal object McpToolCatalog {
         "app_trace_read",
         "app_trace_stop",
         "app_trace_list",
-        "app_launch_trace"
+        "app_launch_trace",
+        // §2.4/§2.5/§2.6 与 §2.1 的用户侧辅助入口
+        "shell_capabilities",
+        "shell_classify_failure",
+        "node_script_command",
+        "crash_buffer_semantics"
     ) + McpToolkitCatalog.names
 
     /**

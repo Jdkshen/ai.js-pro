@@ -13,9 +13,9 @@ internal object ToolkitReverseTools {
         "apk_install_framework" to "把工具目录内厂商 framework APK 安装到 Apktool 私有框架缓存；需 apktool。可选 tag 仅字母数字点下划线横线。不会安装到 Android 系统。后台 jobId。",
         "native_analyze" to "radare2 读取 path 的 ELF/二进制元数据。需 radare2；分析输入≤64MiB，隔离子进程，不执行目标代码。后台 jobId。",
         "native_functions" to "radare2 分析函数并按 offset/limit 分页；path 固定，limit≤200。启发式结果不保证覆盖全部函数，后台 jobId。",
-        "native_function_detail" to "radare2 返回 path 中 address 函数的 JSON 反汇编与基本块信息；address 为十进制或0x十六进制字符串。需 radare2，后台 jobId。",
+        "native_function_detail" to "radare2 返回 path 中 address 函数的 JSON 反汇编与基本块信息；raw pdfj 默认不应用重定位，adrp/add 目标地址不可见、0 命中不能当作没有目标；可选 relocsApply=true 会在 aaa 前设置 e bin.relocs.apply=true（注意：只传参数而不注入命令会导致标注与实际不符）；更强重定位语义用 native_decompile(pdg)。需 radare2，后台 jobId。",
         "native_decompile" to "r2ghidra 返回指定 address 的伪代码；需 radare2 和 r2ghidra 组件。伪代码用于分析，不保证可重编译；缺插件明确报错，后台 jobId。",
-        "native_xrefs" to "radare2 查询到指定 address 的引用；offset/limit 分页，需 radare2。间接调用可能缺失，后台 jobId。",
+        "native_xrefs" to "radare2 查询到指定 address 的引用；raw axtj 默认不解析重定位，0 条引用不能当作没有调用者；可选 relocsApply=true 先设置 e bin.relocs.apply=true；需要 pdg 或 relocs.apply=true 补 adrp/add 引用。offset/limit 分页，需 radare2，后台 jobId。",
         "native_compare" to "比较两个二进制 path/otherPath 的有界字节变化，附 radare2 元数据。返回变化范围与截断标记；不把相同大小当成语义相同。后台 jobId。",
         "artifact_fingerprint" to "读取 path 的 SHA256、格式和 APK 库/壳/框架线索。内置启发式指纹，明确证据与置信度；不是完整 APKiD，不执行目标。后台 jobId。",
         "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。返回endpoint/token，打开输出应用后用frida_status/processes/eval连接。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
@@ -37,17 +37,23 @@ internal object ToolkitReverseTools {
         "native_analysis_save" to "把分析会话状态保存到磁盘（原子写）。",
         "native_analysis_close" to "关闭并释放分析会话；返回真实清理计数。",
         "native_analysis_list" to "列出分析会话（含 stale/计数/覆盖层字节与上限）。",
-        "native_analysis_r2_commands" to "生成可核对的分析命令文本（af/afn/tl 等），executed=false：本工具只给命令，不执行。"
+        "native_analysis_r2_commands" to "生成可核对的分析命令文本（af/afn/tl 等），executed=false：本工具只给命令，不执行。",
+        "native_session_open" to "打开常驻 r2 分析会话（project 保存/加载）：一次 aaa 分析、多次查询，默认带上 e bin.relocs.apply=true（raw 反汇编才能看到 adrp/add 目标地址）。源文件哈希变化会让会话失效（SESSION_STALE_INPUT）；会话有 TTL 与数量上限。",
+        "native_session_plan" to "查看/生成该会话下一步要执行的 r2 命令（首次 aaa;Ps <project>，后续 Po <project>;<cmd>），可先核对再执行。",
+        "native_session_query" to "在已有会话上执行有界 r2 查询（复用已保存的 project，不重新 aaa）；命令长度与输出字节有界，禁止 ! shell 逃逸。",
+        "native_session_close" to "关闭会话并返回真实释放（project 文件是否删除、剩余会话数）。",
+        "native_session_list" to "列出 r2 分析会话（输入哈希、TTL、是否已初始化、project 路径）。"
     )
     val names = descriptions.keys.toList()
     val guideNames = setOf("reverse_guide", "reverse_plan")
     /** 会话类工具是内存态、同步返回，不做后台 job（否则 read/close 会拿不到同一进程内的会话）。 */
     val sessionTools = setOf("frida_session_open", "frida_session_read", "frida_session_close", "frida_session_list")
     /** native 分析会话同样是同步的内存/文件态接口，不做后台 job。 */
+    val sessionNativeTools = setOf("native_session_open","native_session_plan","native_session_query","native_session_close","native_session_list")
     val analysisTools = setOf("native_analysis_open","native_analysis_status","native_analysis_define_function",
         "native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay",
         "native_analysis_save","native_analysis_close","native_analysis_list","native_analysis_r2_commands")
-    val operations = names.toSet() - guideNames - "reverse_capabilities" - sessionTools - analysisTools
+    val operations = names.toSet() - guideNames - "reverse_capabilities" - sessionTools - analysisTools - sessionNativeTools
     val dependencies = mapOf(
         "apk_decode_project" to listOf("apktool"), "apk_build_project" to listOf("apktool", "apk-resources"),
         "apk_install_framework" to listOf("apktool"), "native_decompile" to listOf("radare2", "r2ghidra"),
@@ -71,7 +77,8 @@ internal object ToolkitReverseTools {
             "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))}
             "artifact_fingerprint","native_analyze"->path()
             "native_functions"->{path();page()}
-            "native_function_detail"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)}
+            "native_function_detail"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)
+                field("relocsApply",ToolkitIo.json("type" to "boolean","default" to false))}
             "native_decompile"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)
                 field("includeAnnotations",ToolkitIo.json("type" to "boolean","default" to false))
                 field("maxCodeChars",num(1024,1048576,131072))
@@ -79,7 +86,8 @@ internal object ToolkitReverseTools {
                 field("functionSize",num(1,16777216,1))}
             "native_xrefs"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true);page()
                 field("includeEvidence",ToolkitIo.json("type" to "boolean","default" to true))
-                field("dynamicCovered",ToolkitIo.json("type" to "boolean","default" to false))}
+                field("dynamicCovered",ToolkitIo.json("type" to "boolean","default" to false))
+                field("relocsApply",ToolkitIo.json("type" to "boolean","default" to false))}
             "native_compare"->{path();path("otherPath");page()}
             "yara_scan"->{path();path("rulesPath");field("scanTimeoutSeconds",num(1,30,10));field("includeOffsets",ToolkitIo.json("type" to "boolean","default" to true))}
             "native_emulate"->{field("architecture",ToolkitIo.json("type" to "string","enum" to listOf("arm64","arm","thumb","x86","x86_64")),true);field("codeHex",str(),true);field("dataHex",str());field("registers",ToolkitIo.json("type" to "object","additionalProperties" to str("0x十六进制寄存器值")));field("timeoutMs",num(1,1000,100));field("instructionLimit",num(1,100000,10000))}
@@ -88,6 +96,11 @@ internal object ToolkitReverseTools {
             "frida_session_read"->{field("sessionId",str(),true);field("offset",num(0,1000000,0));field("limit",num(1,500,50))}
             "frida_session_close"->field("sessionId",str(),true)
             "frida_session_list"->Unit
+            "native_session_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("relocsApply",ToolkitIo.json("type" to "boolean","default" to true))}
+            "native_session_plan"->{field("sessionId",str(),true);field("command",str("可选；给出则只生成该命令的计划"))}
+            "native_session_query"->{field("sessionId",str(),true);field("command",str("纯 r2 命令；禁止 ! 逃逸"),true);field("timeoutSeconds",num(1,300,60))}
+            "native_session_close"->field("sessionId",str(),true)
+            "native_session_list"->Unit
             "native_analysis_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("abi",str());field("sessionId",str())}
             "native_analysis_list"->Unit
             "native_analysis_status","native_analysis_save","native_analysis_close","native_analysis_r2_commands"->field("sessionId",str(),true)
@@ -102,7 +115,7 @@ internal object ToolkitReverseTools {
     }
     fun definitions()=JsonArray().apply{names.forEach{name->add(ToolkitIo.json("name" to name,"description" to descriptions.getValue(name),
         "category" to "reverse","categoryTitle" to "逆向分析","inputSchema" to schema(name),
-        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","apk_inject_gadget","frida_eval","frida_session_open","frida_session_close","native_analysis_open","native_analysis_define_function","native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay","native_analysis_save","native_analysis_close")),"openWorldHint" to name.startsWith("frida_")),
+        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","apk_inject_gadget","frida_eval","frida_session_open","frida_session_close","native_analysis_open","native_analysis_define_function","native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay","native_analysis_save","native_analysis_close","native_session_open","native_session_plan","native_session_query","native_session_close")),"openWorldHint" to name.startsWith("frida_")),
         "_meta" to ToolkitIo.json("aijs" to ToolkitIo.json("guideTool" to "reverse_guide","dependencies" to (dependencies[name]?:emptyList<String>()),"backgroundDefault" to (name in operations),
             "resultTools" to if(name in operations)listOf("apk_job_status","apk_job_result","apk_job_cancel")else emptyList<String>()))))}}
     fun validate(name:String,args:JsonObject){

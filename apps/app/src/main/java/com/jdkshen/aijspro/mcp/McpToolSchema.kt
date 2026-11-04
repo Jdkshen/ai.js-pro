@@ -17,7 +17,7 @@ internal object McpToolSchema {
 
     private fun terminalCommandSchema(includeBackend: Boolean): JsonObject {
         val names = if (includeBackend) {
-            arrayOf("command", "workingDirectory", "timeoutSeconds", "backend")
+            arrayOf("command", "workingDirectory", "timeoutSeconds", "backend", "autoRoute")
         } else {
             arrayOf("command", "workingDirectory", "timeoutSeconds")
         }
@@ -36,6 +36,11 @@ internal object McpToolSchema {
                 addProperty("description", "app = 应用 UID（默认）；shizuku = Shizuku 授权身份，不回退 app")
                 add("enum", JsonArray().apply { add("app"); add("shizuku") })
                 addProperty("default", "app")
+            }
+            if (includeBackend) fields.getAsJsonObject("autoRoute").apply {
+                addProperty("description", "默认 false：用错后端时在输出首行给出「该命令需要 X 后端」提示并保留原输出；" +
+                    "true 时仅对只读白名单（logcat -d / pm list / dumpsys 等）自动切换后端，并在首行标注 routedFrom/routedTo")
+                addProperty("default", false)
             }
         }
     }

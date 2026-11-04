@@ -15,6 +15,24 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
     private val fridaSessions = ToolkitFridaSession()
     /** §7：有状态 native 分析会话（状态落盘在 noBackupFilesDir，不启动 r2 进程）。 */
     private val nativeAnalysis = ToolkitNativeAnalysis(File(context.noBackupFilesDir,"native-analysis"))
+    /**
+     * UX-1：r2 project 会话（一次 aaa 分析 + 多次查询），执行注入到 [ToolkitProcess]。
+     * 没有 runner 时 ToolkitR2Session 会返回 executed=false，不假装跑过。
+     */
+    private val r2Sessions by lazy {
+        ToolkitR2Session(File(context.noBackupFilesDir,"r2-sessions"), runner = R2Runner { argv, extra, timeoutSeconds ->
+            val temp=File(context.cacheDir,"r2-session-"+ToolkitIo.fresh()).apply{require(mkdir())}
+            try{
+                val c=component("radare2")
+                // ToolkitR2Session 的 argv 不含可执行文件（它单独返回 executable=radare2），这里补上。
+                val command=listOf(File(c,"bin/radare2").path)+argv
+                val result=ToolkitProcess.run(context,command,temp,env(c)+extra,timeoutSeconds.coerceIn(1,300),emptyList())
+                R2RunnerResult(result.text,result.exitCode,false)
+            }catch(failure:Throwable){
+                R2RunnerResult(failure.message?:"r2 runner failed",1,false)
+            }finally{temp.deleteRecursively()}
+        })
+    }
     private fun optionalString(args:JsonObject,key:String):String?=
         args.get(key)?.takeIf{it.isJsonPrimitive&&it.asJsonPrimitive.isString}?.asString
     private fun file(args:JsonObject,key:String="path",limit:Long=ToolkitIo.MAX_ENTRY.toLong()):File=
@@ -35,6 +53,15 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "native_emulate"->emulate(args,temp)
             "frida_status","frida_processes","frida_eval"->frida(name,args,temp)
             "frida_session_open","frida_session_read","frida_session_close","frida_session_list"->fridaSession(name,args)
+            "native_session_open"->{
+                val requested=args.tString("path")
+                val resolved=runCatching{ToolkitIo.resolve(root,requested).path}.getOrDefault(requested)
+                r2Sessions.open(resolved,args.tString("sha256"),args.tBool("relocsApply",true))
+            }
+            "native_session_plan"->r2Sessions.plan(args.tString("sessionId"),optionalString(args,"command"))
+            "native_session_query"->r2Sessions.query(args.tString("sessionId"),args.tString("command"),args.tInt("timeoutSeconds",60,1,300))
+            "native_session_close"->r2Sessions.close(args.tString("sessionId"))
+            "native_session_list"->r2Sessions.list()
             "native_analysis_open"->nativeAnalysis.open(args.tString("path"),args.tString("sha256"),optionalString(args,"abi"),optionalString(args,"sessionId"))
             "native_analysis_status"->nativeAnalysis.status(args.tString("sessionId"))
             "native_analysis_define_function"->nativeAnalysis.defineFunction(args.tString("sessionId"),args.tString("address"),
@@ -159,12 +186,18 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "native_analyze"->ToolkitIo.json("backend" to "radare2","sha256" to sourceHash,"info" to query("ij"),"executesTarget" to false)
             "native_functions"->paged("aflj").apply{addProperty("sha256",sourceHash);addProperty("heuristic",true)}
             "native_xrefs"->{
-                val page=paged("axtj ${ToolkitReverseTools.address(args.tString("address"))}").apply{
+                val relocsApply=args.tBool("relocsApply",false)
+                val page=paged(relocationPrelude(args)+"axtj ${ToolkitReverseTools.address(args.tString("address"))}").apply{
                     addProperty("sha256",sourceHash);addProperty("indirectReferencesComplete",false)}
                 if(args.tBool("includeEvidence",true))attachXrefEvidence(page,args)
-                page
+                ToolkitDisasmEvidence.annotate(page,"axtj",relocsApply)
             }
-            "native_function_detail"->ToolkitIo.json("sha256" to sourceHash,"function" to query("aaa;s ${ToolkitReverseTools.address(args.tString("address"))};pdfj"),"backend" to "radare2")
+            "native_function_detail"->{
+                val relocsApply=args.tBool("relocsApply",false)
+                ToolkitDisasmEvidence.annotate(ToolkitIo.json("sha256" to sourceHash,
+                    "function" to query(relocationPrelude(args)+"aaa;s ${ToolkitReverseTools.address(args.tString("address"))};pdfj"),
+                    "backend" to "radare2"),"pdfj",relocsApply)
+            }
             "native_decompile"->{
                 val plugin=native("r2ghidra");val library=File(plugin,"lib/core_ghidra.so");require(library.isFile){"r2ghidra组件缺少插件"}
                 // Only this pinned component is explicitly loaded; user r2rc and plugin directories stay disabled.
@@ -193,8 +226,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                     cfgSize=null,
                     symbolRange=null,
                     detectedSize=detectedSize)
-                ToolkitIo.json("backend" to "r2ghidra","sha256" to sourceHash,"rebuildGuaranteed" to false,
-                    "result" to projection,"boundary" to boundary)
+                ToolkitDisasmEvidence.annotate(ToolkitIo.json("backend" to "r2ghidra","sha256" to sourceHash,
+                    "rebuildGuaranteed" to false,"result" to projection,"boundary" to boundary),"pdg",false)
             }
             "native_compare"->{val other=stage(file(args,"otherPath"),temp,"other.bin");ToolkitBinaryCompare.compare(input,other,args).apply{add("info",query("ij"));addProperty("backend","radare2+bounded-byte-diff")}}
             else->error("未知逆向操作：$name")
@@ -272,6 +305,13 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         "frida_session_list"->fridaSessions.list()
         else->error("未知 Frida 会话操作：$name")
     }
+    /**
+     * §2.3：raw 反汇编/函数 JSON/axtj 默认不解析重定位，adrp/add 目标地址不可见——
+     * 用户因此在 213 壳批扫里白跑一轮。relocsApply=true 时必须在 aaa **之前**注入配置命令。
+     */
+    private fun relocationPrelude(args:JsonObject):String=
+        if(args.tBool("relocsApply",false))ToolkitDisasmEvidence.RELOC_HARDENING_COMMAND+";" else ""
+
     /** r2ghidra 的 annotations 可能是字符串数组或对象数组；两种都要能读成可读字符串。 */
     private fun annotationStrings(obj:JsonObject):List<String>{
         val array=obj.getAsJsonArray("annotations")?:return emptyList()

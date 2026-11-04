@@ -53,6 +53,7 @@ internal object McpToolCategories {
         listOf(
             "terminal_exec", "terminal_read", "terminal_write", "terminal_stop", "terminal_list",
             "shell_rish", "get_build_tools",
+            "shell_capabilities", "shell_classify_failure", "node_script_command", "crash_buffer_semantics",
         ).forEach { put(it, "terminal") }
         listOf("list_overlays", "close_overlays").forEach { put(it, "overlay") }
         listOf("list_samples", "read_sample", "learn_autojs_skill", "search_api_docs", "read_api_doc").forEach { put(it, "asset") }

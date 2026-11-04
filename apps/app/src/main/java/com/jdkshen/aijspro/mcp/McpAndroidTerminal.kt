@@ -39,14 +39,46 @@ internal class McpAndroidTerminal(private val context: Context) {
     )
 
     fun launch(command: String, directory: File, env: Map<String, String>): McpTerminalJobs.RunningCommand {
-        val backend = env[McpTerminalJobs.INTERNAL_BACKEND_ENV] ?: McpTerminalJobs.BACKEND_APP
-        val commandEnv = env.filterKeys { it != McpTerminalJobs.INTERNAL_BACKEND_ENV }
+        val requestedBackend = env[McpTerminalJobs.INTERNAL_BACKEND_ENV] ?: McpTerminalJobs.BACKEND_APP
+        if (requestedBackend != McpTerminalJobs.BACKEND_APP && requestedBackend != McpTerminalJobs.BACKEND_SHIZUKU) {
+            throw IllegalArgumentException("未知终端后端：$requestedBackend")
+        }
+        // UX-2：该标记由 terminal_exec 的 autoRoute=true 注入（不传给子进程）。默认关闭；
+        // 只有 ToolkitBackendRouting 的只读白名单才允许自动切换。
+        val autoRoute = env[ToolkitBackendRouting.AUTO_ROUTE_ENV].equals("true", ignoreCase = true)
+        val commandEnv = env.filterKeys {
+            it != McpTerminalJobs.INTERNAL_BACKEND_ENV && it != ToolkitBackendRouting.AUTO_ROUTE_ENV
+        }
+        val routing = ToolkitBackendRouting.check(requestedBackend, command)
+        var backend = requestedBackend
+        var routingNote: String? = null
+        if (!routing.get("ok").asBoolean) {
+            val target = if (autoRoute) {
+                routing.get("autoRouteTarget")?.takeIf { !it.isJsonNull }?.asString
+            } else null
+            val requirement = routing.get("requirement").asString
+            if (target != null) {
+                backend = target
+                routingNote = "AIJS_BACKEND_ROUTING routed=true routedFrom=$requestedBackend routedTo=$target " +
+                    "requirement=$requirement autoRoute=true（只读白名单命令）"
+            } else {
+                val hint = routing.get("hint").asString
+                routingNote = "AIJS_BACKEND_ROUTING routed=false requestedBackend=$requestedBackend " +
+                    "requirement=$requirement; $hint"
+            }
+        }
+        // 保留原始命令及其原始输出：路由提示只作为前置一行写进同一 stdout/stderr 流，
+        // 不提前终止进程，因此调用方仍能读到原来的 "inaccessible or not found"。
+        val effectiveCommand = routingNote?.let { withRoutingNote(it, command) } ?: command
         return when (backend) {
-            McpTerminalJobs.BACKEND_APP -> launchApp(command, directory, commandEnv)
-            McpTerminalJobs.BACKEND_SHIZUKU -> launchShizuku(command, directory, commandEnv)
+            McpTerminalJobs.BACKEND_APP -> launchApp(effectiveCommand, directory, commandEnv)
+            McpTerminalJobs.BACKEND_SHIZUKU -> launchShizuku(effectiveCommand, directory, commandEnv)
             else -> throw IllegalArgumentException("未知终端后端：$backend")
         }
     }
+
+    private fun withRoutingNote(note: String, command: String): String =
+        "printf '%s\n' " + quote(note) + "; " + command
 
     private fun launchApp(command: String, directory: File, env: Map<String, String>): McpTerminalJobs.RunningCommand {
         check(File("/system/bin/setsid").canExecute()) { "当前系统缺少 setsid，不能创建可独立停止的终端" }
