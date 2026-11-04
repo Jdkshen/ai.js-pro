@@ -220,4 +220,128 @@ class McpTerminalJobsTest {
             assertEquals(0, launches.get())
         }
     }
+    @Test fun parserHandlesOrderedUnorderedFalseAndMissingRoutingFields() {
+        val auto = McpTerminalJobs.parseRoutingAnnotation(
+            "AIJS_BACKEND_ROUTING routed=true routedFrom=app routedTo=shizuku requirement=SHELL_ONLY autoRoute=true",
+            McpTerminalJobs.BACKEND_APP,
+        )
+        assertTrue(auto.routed)
+        assertEquals(McpTerminalJobs.BACKEND_APP, auto.requestedBackend)
+        assertEquals(McpTerminalJobs.BACKEND_SHIZUKU, auto.effectiveBackend)
+        assertEquals("SHELL_ONLY", auto.requirement)
+
+        val unordered = McpTerminalJobs.parseRoutingAnnotation(
+            "AIJS_BACKEND_ROUTING requirement=SHELL_ONLY routedTo=shizuku routed=true routedFrom=app",
+            McpTerminalJobs.BACKEND_APP,
+        )
+        assertTrue(unordered.routed)
+        assertEquals(McpTerminalJobs.BACKEND_SHIZUKU, unordered.effectiveBackend)
+
+        val blocked = McpTerminalJobs.parseRoutingAnnotation(
+            "AIJS_BACKEND_ROUTING routed=false requestedBackend=app effectiveBackend=app " +
+                "requirement=SHELL_ONLY; 该命令需要 shizuku 后端，建议改用 backend=shizuku",
+            McpTerminalJobs.BACKEND_APP,
+        )
+        assertFalse(blocked.routed)
+        assertEquals(McpTerminalJobs.BACKEND_APP, blocked.effectiveBackend)
+        assertTrue(blocked.hint.contains("backend=shizuku"))
+
+        val missingTarget = McpTerminalJobs.parseRoutingAnnotation(
+            "AIJS_BACKEND_ROUTING routed=true routedFrom=app", McpTerminalJobs.BACKEND_APP)
+        assertFalse(missingTarget.routed)
+        assertEquals(McpTerminalJobs.BACKEND_APP, missingTarget.effectiveBackend)
+
+        val notFirstLine = McpTerminalJobs.parseRoutingAnnotation(
+            "normal log\nAIJS_BACKEND_ROUTING routed=true routedFrom=app routedTo=shizuku",
+            McpTerminalJobs.BACKEND_APP,
+        )
+        assertFalse(notFirstLine.routed)
+        assertEquals(McpTerminalJobs.BACKEND_APP, notFirstLine.effectiveBackend)
+
+        val noMarker = McpTerminalJobs.parseRoutingAnnotation(
+            "routed=true routedFrom=app routedTo=shizuku", McpTerminalJobs.BACKEND_APP)
+        assertFalse(noMarker.routed)
+    }
+
+    @Test fun readAndListExposeRoutingFieldsAndOnlyFirstLineWins() {
+        val children = mutableListOf<Child>()
+        McpTerminalJobs(temp.root, { _, _, _ ->
+            val child = Child(); synchronized(children) { children.add(child) }
+            McpTerminalJobs.RunningCommand(child, child::destroy)
+        }).use { jobs ->
+            val id = id(jobs.execute("pm list packages", backend = McpTerminalJobs.BACKEND_APP)); running(jobs, id)
+            val child = synchronized(children) { children.single() }
+            child.print("AIJS_BACKEND_ROUTING routed=true routedFrom=app routedTo=shizuku " +
+                "requirement=SHELL_ONLY autoRoute=true\noriginal pm list output\n")
+            child.finish()
+            val state = done(jobs, id)
+            assertEquals(McpTerminalJobs.BACKEND_APP, state.get("backend").asString)
+            assertEquals(McpTerminalJobs.BACKEND_APP, state.get("requestedBackend").asString)
+            assertEquals(McpTerminalJobs.BACKEND_SHIZUKU, state.get("effectiveBackend").asString)
+            assertTrue(state.get("routed").asBoolean)
+            assertEquals("SHELL_ONLY", state.get("routingRequirement").asString)
+            assertEquals("", state.get("routingHint").asString)
+            assertEquals("original pm list output\n", state.get("output").asString.substringAfter('\n'))
+            val listed = jobs.list().single()
+            assertEquals(McpTerminalJobs.BACKEND_APP, listed.get("requestedBackend").asString)
+            assertEquals(McpTerminalJobs.BACKEND_SHIZUKU, listed.get("effectiveBackend").asString)
+            assertTrue(listed.get("routed").asBoolean)
+
+            val second = id(jobs.execute("boot")); running(jobs, second)
+            val secondChild = synchronized(children) { children.last() }
+            secondChild.print("normal output\nAIJS_BACKEND_ROUTING routed=true routedFrom=app routedTo=shizuku\n")
+            secondChild.finish()
+            val ignored = done(jobs, second)
+            assertFalse(ignored.get("routed").asBoolean)
+            assertEquals(McpTerminalJobs.BACKEND_APP, ignored.get("effectiveBackend").asString)
+        }
+    }
+
+    @Test fun blockedRoutingKeepsRequestedAndHintStructured() {
+        val children = mutableListOf<Child>()
+        McpTerminalJobs(temp.root, { _, _, _ ->
+            val child = Child(); synchronized(children) { children.add(child) }
+            McpTerminalJobs.RunningCommand(child, child::destroy)
+        }).use { jobs ->
+            val id = id(jobs.execute("pm install app.apk", backend = McpTerminalJobs.BACKEND_APP)); running(jobs, id)
+            val child = synchronized(children) { children.single() }
+            child.print("AIJS_BACKEND_ROUTING routed=false requestedBackend=app effectiveBackend=app " +
+                "requirement=SHELL_ONLY; 该命令需要 shizuku 后端，建议改用 backend=shizuku\n" +
+                "inaccessible or not found\n")
+            child.finish(127)
+            val state = done(jobs, id)
+            assertFalse(state.get("routed").asBoolean)
+            assertEquals(McpTerminalJobs.BACKEND_APP, state.get("effectiveBackend").asString)
+            assertEquals("SHELL_ONLY", state.get("routingRequirement").asString)
+            assertTrue(state.get("routingHint").asString.contains("backend=shizuku"))
+            assertTrue(state.get("output").asString.contains("inaccessible or not found"))
+        }
+    }
+
+    @Test fun annotationWithoutNewlineIsParsedWhenTheJobFinishes() {
+        val child = Child()
+        McpTerminalJobs(temp.root, { _, _, _ -> McpTerminalJobs.RunningCommand(child, child::destroy) }).use { jobs ->
+            val id = id(jobs.execute("route")); running(jobs, id)
+            child.print("AIJS_BACKEND_ROUTING routed=true routedFrom=app routedTo=shizuku requirement=SHELL_ONLY")
+            child.finish()
+            val state = done(jobs, id)
+            assertTrue(state.get("routed").asBoolean)
+            assertEquals(McpTerminalJobs.BACKEND_SHIZUKU, state.get("effectiveBackend").asString)
+        }
+    }
+
+    @Test fun plainOutputKeepsDefaultRoutingFields() {
+        val child = Child()
+        McpTerminalJobs(temp.root, { _, _, _ -> McpTerminalJobs.RunningCommand(child, child::destroy) }).use { jobs ->
+            val id = id(jobs.execute("ls")); running(jobs, id)
+            child.print("file1\nfile2\n"); child.finish()
+            val state = done(jobs, id)
+            assertFalse(state.get("routed").asBoolean)
+            assertEquals(McpTerminalJobs.BACKEND_APP, state.get("requestedBackend").asString)
+            assertEquals(McpTerminalJobs.BACKEND_APP, state.get("effectiveBackend").asString)
+            assertEquals("", state.get("routingRequirement").asString)
+            assertEquals("", state.get("routingHint").asString)
+        }
+    }
+
 }

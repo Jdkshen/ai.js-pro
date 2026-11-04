@@ -120,18 +120,29 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         if(name=="frida_eval") { val script=args.tString("script");require(script.toByteArray(Charsets.UTF_8).size<=65536){"Frida脚本超过64KiB"}
             request.addProperty("pid",args.tInt("pid",0,1,Int.MAX_VALUE));request.addProperty("script",script);request.addProperty("durationMs",args.tInt("durationMs",1000,1,10000)) }
         val input=File(temp,"request.json").apply{writeText(request.toString(),Charsets.UTF_8)}
+        // T1：自动采集 /proc/net/tcp[6] 证据（调用方给的 tcpText/tcp6Text 优先；读不到就留空，不猜）。
+        // 注意 sameUid 不能从 tcp 文件推断，仍需调用方比较 UID。
+        val gadgetPort=endpoint.substringAfterLast(':').toInt()
+        val tcpEvidence=ToolkitProcNetTcp.forDiagnosis(
+            args.tString("tcpText","").ifEmpty{runCatching{File(ToolkitProcNetTcp.PROC_TCP).readText()}.getOrDefault("")},
+            args.tString("tcp6Text","").ifEmpty{runCatching{File(ToolkitProcNetTcp.PROC_TCP6).readText()}.getOrDefault("")}.ifEmpty{null},
+            gadgetPort)
+        val evidencePortListening=args.tBool("portListening",tcpEvidence.get("portListening")?.asBoolean?:false)
+        val evidenceSynSent=args.tBool("synSentObserved",tcpEvidence.get("synSentObserved")?.asBoolean?:false)
         val response=try{
             runner(listOf(File(c,"bin/aijs-frida").path,input.path),temp,c,args)
         }catch(failure:ToolkitException){
             // Bug 3：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT）。
             // 超时/被丢弃不是「组件没装」，这里必须把可执行的下一步写进错误信息。
             val diagnosis=ToolkitFridaDiagnosis.classifyConnectFailure(failure.message?:"",
-                args.tBool("portListening",false),args.tBool("synSentObserved",false),args.tBool("sameUid",false))
+                evidencePortListening,evidenceSynSent,args.tBool("sameUid",false))
             if(diagnosis.get("selinuxLoopbackSuspect")?.asBoolean==true){
                 throw ToolkitException(failure.code?:"FRIDA_CONNECT_FAILED",
                     "Frida listen 连接超时：跨 UID loopback 可能被 SELinux 静默 DROP（confidence="+diagnosis.get("confidence").asString+
                         "），这不代表组件没装。下一步：改用 Gadget interactionType=script（不碰网络）或把执行端放进目标同 UID；"+
-                        "先 grep -i ':69A2' /proc/net/tcp 确认 state=0A(LISTEN) 再 cat /proc/<client-pid>/net/tcp 看是否 SYN_SENT(02)。"+
+                        "先 grep -i ':" + ToolkitProcNetTcp.hexPort(gadgetPort) + "' /proc/net/tcp 确认 state=0A(LISTEN) 再 cat /proc/<client-pid>/net/tcp 看是否 SYN_SENT(02)。"+
+                        "（本次自动解析：portHex=" + tcpEvidence.get("portHex")?.asString + " portListening=" + evidencePortListening +
+                        " synSentObserved=" + evidenceSynSent + "）"+
                         "原始错误："+failure.message,
                     "endpoint")
             }
@@ -152,8 +163,9 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 add("gadgetScriptMode",ToolkitFridaDiagnosis.gadgetScriptModeGuidance())
             }
             if(name=="frida_status"||name=="frida_eval"){
+                add("tcpEvidence",tcpEvidence)
                 add("connectDiagnosis",ToolkitFridaDiagnosis.classifyConnectFailure("",
-                    args.tBool("portListening",false),args.tBool("synSentObserved",false),args.tBool("sameUid",false)))
+                    evidencePortListening,evidenceSynSent,args.tBool("sameUid",false)))
             }
         }
     }

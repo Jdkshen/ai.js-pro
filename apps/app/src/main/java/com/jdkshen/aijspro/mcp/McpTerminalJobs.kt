@@ -17,6 +17,15 @@ internal class McpTerminalJobs(
 ) : Closeable {
     class RunningCommand(val process: Process, val terminate: () -> Unit)
 
+    /** 解析自首行 AIJS_BACKEND_ROUTING 标注的结构化路由信息；未路由时 effective=requested。 */
+    data class RoutingInfo(
+        val routed: Boolean,
+        val requestedBackend: String,
+        val effectiveBackend: String,
+        val requirement: String = "",
+        val hint: String = "",
+    )
+
     private class Job(val id: String, val command: String, val directory: File, val backend: String) {
         val lock = Object()
         val createdAt = System.currentTimeMillis()
@@ -30,6 +39,15 @@ internal class McpTerminalJobs(
         var pendingInput = 0
         var outputOffset = 0L
         val output = StringBuilder()
+
+        // UX/T2：只由首行 AIJS_BACKEND_ROUTING 标注更新；未标注时保持 requested/effective 相同、routed=false。
+        val requestedBackend: String = backend
+        var effectiveBackend: String = backend
+        var routed: Boolean = false
+        var routingRequirement: String = ""
+        var routingHint: String = ""
+        var routingParsed: Boolean = false
+
         val input = Executors.newSingleThreadExecutor { r -> Thread(r, "mcp-terminal-input").apply { isDaemon = true } }
     }
 
@@ -118,6 +136,8 @@ internal class McpTerminalJobs(
                 runCatching { running?.process?.outputStream?.close() }
                 job.input.shutdownNow()
                 synchronized(job.lock) {
+                    // 若命令没有输出换行，也必须用完整首行做最后一次路由解析。
+                    parseRoutingIfReady(job, force = true)
                     job.finishedAt = System.currentTimeMillis()
                     job.running = null
                     job.lock.notifyAll()
@@ -176,9 +196,26 @@ internal class McpTerminalJobs(
 
     private fun append(job: Job, text: String) = synchronized(job.lock) {
         job.output.append(text)
+        parseRoutingIfReady(job, force = false)
         val drop = job.output.length - outputCapacity
         if (drop > 0) { job.output.delete(0, drop); job.outputOffset += drop }
         job.lock.notifyAll()
+    }
+
+    /** 只读取输出首行；首行完整（有换行）或任务结束时解析一次，之后不再被后续行覆盖。 */
+    private fun parseRoutingIfReady(job: Job, force: Boolean) {
+        if (job.routingParsed) return
+        val output = job.output
+        if (output.isEmpty()) return
+        val newline = output.indexOf('\n')
+        if (newline < 0 && !force) return
+        val firstLine = if (newline >= 0) output.substring(0, newline) else output.toString()
+        val info = parseRoutingAnnotation(firstLine, job.requestedBackend)
+        job.effectiveBackend = info.effectiveBackend
+        job.routed = info.routed
+        job.routingRequirement = info.requirement
+        job.routingHint = info.hint
+        job.routingParsed = true
     }
 
     private fun snapshot(job: Job, requestedOffset: Long, maxChars: Int, waitMillis: Int): JsonObject = synchronized(job.lock) {
@@ -195,6 +232,11 @@ internal class McpTerminalJobs(
             addProperty("jobId", job.id); addProperty("command", job.command)
             addProperty("workingDirectory", job.directory.relativeTo(root).invariantSeparatorsPath)
             addProperty("backend", job.backend)
+            addProperty("requestedBackend", job.requestedBackend)
+            addProperty("effectiveBackend", job.effectiveBackend)
+            addProperty("routed", job.routed)
+            addProperty("routingRequirement", job.routingRequirement)
+            addProperty("routingHint", job.routingHint)
             addProperty("status", job.status); addProperty("running", job.status in ACTIVE)
             addProperty("processActive", job.running != null || job.finishedAt == 0L)
             addProperty("createdAt", job.createdAt); addProperty("finishedAt", job.finishedAt)
@@ -241,6 +283,42 @@ internal class McpTerminalJobs(
 
         /** Reserved launcher-only env key; never accepted from a tool caller. */
         const val INTERNAL_BACKEND_ENV = "AIJS_MCP_TERMINAL_BACKEND"
+
+        /** McpAndroidTerminal 写在输出首行的路由标注前缀。 */
+        const val ROUTING_MARKER = "AIJS_BACKEND_ROUTING"
+
+        /**
+         * 解析首行 AIJS_BACKEND_ROUTING 标注；纯函数，不访问 Job/系统。
+         *
+         * 支持 routedFrom/routedTo、requestedBackend/effectiveBackend 两套键，
+         * 键顺序任意；只有第一行以 marker 开头才解析，非首行/缺字段按未路由兜底。
+         * routed=true 但没有有效目标时保守地返回 routed=false，effective=requested。
+         */
+        fun parseRoutingAnnotation(line: String, requestedBackend: String): RoutingInfo {
+            val fallback = requestedBackend.trim().lowercase().ifEmpty { BACKEND_APP }
+            val firstLine = line.lineSequence().firstOrNull()?.trim().orEmpty()
+            if (!firstLine.startsWith(ROUTING_MARKER)) return RoutingInfo(false, fallback, fallback)
+            val body = firstLine.removePrefix(ROUTING_MARKER).trim()
+            val semicolon = body.indexOf(';')
+            val keyValuePart = if (semicolon >= 0) body.substring(0, semicolon) else body
+            val suffixHint = if (semicolon >= 0) body.substring(semicolon + 1).trim() else ""
+            val values = LinkedHashMap<String, String>()
+            Regex("""([A-Za-z][A-Za-z0-9_]*)=([^\s;]+)""").findAll(keyValuePart).forEach { match ->
+                values[match.groupValues[1]] = match.groupValues[2]
+            }
+            val fromRaw = values["routedFrom"] ?: values["requestedBackend"] ?: fallback
+            val from = fromRaw.trim().lowercase().ifEmpty { fallback }
+            val requested = if (from == BACKEND_APP || from == BACKEND_SHIZUKU) from else fallback
+            val toRaw = values["routedTo"] ?: values["effectiveBackend"] ?: ""
+            val to = toRaw.trim().lowercase()
+            val target = if (to == BACKEND_APP || to == BACKEND_SHIZUKU) to else requested
+            val routedFlag = values["routed"]?.equals("true", ignoreCase = true) == true
+            val routed = routedFlag && target != requested
+            val effective = if (routed) target else requested
+            val requirement = (values["requirement"] ?: values["routingRequirement"] ?: "").trim().uppercase()
+            val hint = (values["routingHint"] ?: values["hint"] ?: suffixHint).trim()
+            return RoutingInfo(routed, requested, effective, requirement, hint)
+        }
 
         private val ACTIVE = setOf("STARTING", "RUNNING")
     }

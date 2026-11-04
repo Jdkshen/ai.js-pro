@@ -4,9 +4,10 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import com.google.gson.JsonParser
 import java.io.File
 
-/** UX-1 pure JVM tests for ToolkitR2Session (no r2 process, no Android, no gradle). */
+/** UX-1/T3 pure JVM tests for ToolkitR2Session (no r2 process, no Android, no gradle). */
 class ToolkitR2SessionTest {
     @get:Rule
     val temp = TemporaryFolder()
@@ -46,6 +47,7 @@ class ToolkitR2SessionTest {
         assertEquals("create", first.get("phase").asString)
         assertTrue(first.get("command").asString.startsWith("aaa;Ps "))
         assertTrue(argvStrings(first).contains("bin.relocs.apply=true"))
+        assertTrue(File(project).mkdirs()) // 模拟调用方执行了首次 aaa;Ps
 
         now += 5
         val second = session.plan(id, "aflj")
@@ -170,6 +172,7 @@ class ToolkitR2SessionTest {
         assertEquals("bar", envs.single()["FOO"])
         assertEquals(7, timeouts.single())
         assertEquals(file.path, calls.single().last())
+        assertTrue(File(first.get("projectPath").asString).mkdirs()) // 模拟 runner 生成了 r2 project
 
         val second = session.query(id, "ij", timeoutSeconds = 3)
         assertEquals("query", second.get("phase").asString)
@@ -190,5 +193,102 @@ class ToolkitR2SessionTest {
         assertFalse(dry.get("executed").asBoolean)
         assertEquals("create+query", dry.get("phase").asString)
         assertTrue(dry.get("command").asString.startsWith("aaa;Ps "))
+    }
+
+    @Test fun indexRestoresSessionAcrossManagers() {
+        val file = input()
+        val store = temp.newFolder("index-restore")
+        var now = 1_700_000_000_000L
+        val first = ToolkitR2Session(store, { now })
+        val opened = first.open(file.path, sha(file), relocsApply = false)
+        val id = opened.get("sessionId").asString
+        val project = File(opened.get("projectPath").asString)
+        first.plan(id, null)
+        assertTrue(project.mkdirs())
+        now += 100
+
+        val second = ToolkitR2Session(store, { now })
+        val listed = second.list()
+        assertEquals(1, listed.get("total").asInt)
+        assertEquals(1, listed.get("restoredSessions").asInt)
+        assertEquals(0, listed.get("indexErrors").asInt)
+        assertTrue(File(store, "sessions.index.json").isFile)
+        val row = listed.getAsJsonArray("sessions").single().asJsonObject
+        assertEquals(id, row.get("sessionId").asString)
+        assertEquals(file.path, row.get("inputPath").asString)
+        assertEquals(project.path, row.get("projectPath").asString)
+        assertFalse(row.get("relocsApply").asBoolean)
+        assertTrue(row.get("initialized").asBoolean)
+        assertTrue(row.get("projectExists").asBoolean)
+        assertFalse(row.get("projectMissing").asBoolean)
+    }
+
+    @Test fun missingProjectIsReportedAndPlanFallsBackToCreate() {
+        val file = input()
+        val store = temp.newFolder("index-missing-project")
+        var now = 1_700_000_000_000L
+        val first = ToolkitR2Session(store, { now })
+        val id = first.open(file.path, sha(file)).get("sessionId").asString
+        first.plan(id, null) // initialized=true, project intentionally not created
+        now += 10
+
+        val second = ToolkitR2Session(store, { now })
+        val row = second.list().getAsJsonArray("sessions").single().asJsonObject
+        assertTrue(row.get("initialized").asBoolean)
+        assertFalse(row.get("projectExists").asBoolean)
+        assertTrue(row.get("projectMissing").asBoolean)
+        val plan = second.plan(id, null)
+        assertTrue(plan.get("first").asBoolean)
+        assertEquals("create", plan.get("phase").asString)
+        assertTrue(plan.get("command").asString.startsWith("aaa;Ps "))
+    }
+
+    @Test fun expiredSessionCleanupAlsoRewritesIndexAndDeletesProject() {
+        val file = input()
+        val store = temp.newFolder("index-expiry")
+        var now = 1_700_000_000_000L
+        val first = ToolkitR2Session(store, { now }, ttlMillis = 1000)
+        val opened = first.open(file.path, sha(file))
+        val id = opened.get("sessionId").asString
+        val project = File(opened.get("projectPath").asString)
+        first.plan(id, null)
+        assertTrue(project.mkdirs())
+        File(project, "data").writeText("saved", Charsets.UTF_8)
+        now += 1001
+
+        val second = ToolkitR2Session(store, { now }, ttlMillis = 1000)
+        assertEquals(0, second.list().get("total").asInt)
+        assertFalse(project.exists())
+        val index = JsonParser().parse(File(store, "sessions.index.json").readText()).asJsonObject
+        assertEquals(0, index.getAsJsonArray("sessions").size())
+    }
+
+    @Test fun corruptOrIncompleteIndexNeverBreaksList() {
+        val store = temp.newFolder("index-bad")
+        File(store, "sessions.index.json").writeText("{not valid json", Charsets.UTF_8)
+        val broken = ToolkitR2Session(store, { 1_700_000_000_000L })
+        val brokenList = broken.list()
+        assertEquals(0, brokenList.get("total").asInt)
+        assertTrue(brokenList.get("indexErrors").asInt >= 1)
+
+        File(store, "sessions.index.json").writeText(
+            "{\"sessions\":[{\"sessionId\":\"missing-fields\"}]}", Charsets.UTF_8)
+        val incomplete = ToolkitR2Session(store, { 1_700_000_000_000L })
+        val incompleteList = incomplete.list()
+        assertEquals(0, incompleteList.get("total").asInt)
+        assertTrue(incompleteList.get("indexErrors").asInt >= 1)
+    }
+
+    @Test fun closeRemovesSessionFromIndexForNewManager() {
+        val file = input()
+        val store = temp.newFolder("index-close")
+        val first = ToolkitR2Session(store, { 1_700_000_000_000L })
+        val id = first.open(file.path, sha(file)).get("sessionId").asString
+        first.close(id)
+        val second = ToolkitR2Session(store, { 1_700_000_000_000L })
+        val listed = second.list()
+        assertEquals(0, listed.get("total").asInt)
+        val index = JsonParser().parse(File(store, "sessions.index.json").readText()).asJsonObject
+        assertEquals(0, index.getAsJsonArray("sessions").size())
     }
 }

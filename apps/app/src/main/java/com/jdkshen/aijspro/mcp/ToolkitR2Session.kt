@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.mcp
 
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.google.gson.JsonPrimitive
 import java.io.File
 import java.util.Locale
@@ -33,6 +34,11 @@ internal data class R2RunnerResult(
  * resolve adrp/add relocations. This class never starts a process itself: execution
  * is delegated to the optional [runner] supplied by the wiring layer. Without a
  * runner, query returns a plan with executed=false rather than pretending to run.
+ *
+ * T3: session metadata is mirrored to storeDir/sessions.index.json with ToolkitIo.atomic.
+ * A new manager restores unexpired sessions from that index; a project file deleted out from
+ * under an initialized session is reported as projectMissing and plan/query falls back to aaa.
+ * Malformed index entries are ignored and counted in list().indexErrors instead of throwing.
  */
 internal class ToolkitR2Session(
     private val storeDir: File,
@@ -70,6 +76,9 @@ internal class ToolkitR2Session(
     private val root = storeDir.canonicalFile
     private val lock = ReentrantLock()
     private val sessions = LinkedHashMap<String, Session>()
+    private val indexFile = File(root, "sessions.index.json")
+    private var indexErrors = 0
+    private var restoredSessions = 0
 
     init {
         require(storeDir.exists() || storeDir.mkdirs()) { "cannot create r2 session store" }
@@ -78,6 +87,7 @@ internal class ToolkitR2Session(
         require(maxSessions > 0) { "maxSessions must be positive" }
         require(maxCommandChars > 0) { "maxCommandChars must be positive" }
         require(maxOutputBytes > 0L) { "maxOutputBytes must be positive" }
+        restoreSessionsIndexLocked()
     }
 
     fun open(
@@ -115,6 +125,7 @@ internal class ToolkitR2Session(
             lastAccessAt = now,
         )
         sessions[sessionId] = session
+        persistIndexLocked()
         return openJson(session)
     }
 
@@ -123,6 +134,7 @@ internal class ToolkitR2Session(
         val requested = normalizeUserCommand(command, allowNull = true)
         val result = planJson(session, requested, markInitialized = true)
         touch(session)
+        persistIndexLocked()
         return result
     }
 
@@ -138,7 +150,7 @@ internal class ToolkitR2Session(
             )
         }
         val verification = verifyInputHash(session)
-        val first = !session.initialized
+        val first = !session.initialized || !session.project.exists()
         val phase = if (first) "create+query" else "query"
         val commandText = if (first) {
             "aaa;Ps " + session.project.path + ";" + requested
@@ -174,6 +186,7 @@ internal class ToolkitR2Session(
         }
         session.initialized = true
         touch(session)
+        persistIndexLocked()
         return executedQueryJson(session, phase, commandText, argv, timeoutSeconds, verification, result, outputBytes)
     }
 
@@ -184,6 +197,7 @@ internal class ToolkitR2Session(
         val existed = session.project.exists()
         val releasedBytes = if (existed) fileBytes(session.project) else 0L
         val deleted = deleteProject(session.project)
+        persistIndexLocked()
         return ToolkitIo.json(
             "sessionId" to sessionId,
             "closed" to true,
@@ -208,6 +222,7 @@ internal class ToolkitR2Session(
                 "project" to session.project.path,
                 "input" to session.inputPath,
                 "projectExists" to session.project.exists(),
+                "projectMissing" to (session.initialized && !session.project.exists()),
                 "relocsApply" to session.relocsApply,
                 "createdAt" to session.createdAt,
                 "lastAccessAt" to session.lastAccessAt,
@@ -226,11 +241,149 @@ internal class ToolkitR2Session(
             "maxCommandChars" to maxCommandChars,
             "maxOutputBytes" to maxOutputBytes,
             "runnerConfigured" to (runner != null),
+            "indexPath" to indexFile.path,
+            "indexExists" to indexFile.isFile,
+            "indexErrors" to indexErrors,
+            "restoredSessions" to restoredSessions,
+        )
+    }
+
+    // ------------------------------------------------------------------
+    // 跨进程索引
+    // ------------------------------------------------------------------
+
+    private fun persistIndexLocked() {
+        val array = JsonArray()
+        for (session in sessions.values.sortedBy { it.createdAt }) {
+            val env = JsonObject()
+            session.extraEnv.toSortedMap().forEach { (key, value) -> env.addProperty(key, value) }
+            array.add(ToolkitIo.json(
+                "sessionId" to session.sessionId,
+                "inputPath" to session.inputPath,
+                "sha256" to session.sha256,
+                "sha16" to session.sha16,
+                "projectPath" to session.project.path,
+                "relocsApply" to session.relocsApply,
+                "createdAt" to session.createdAt,
+                "lastAccessAt" to session.lastAccessAt,
+                "initialized" to session.initialized,
+                "extraEnv" to env,
+            ))
+        }
+        val payload = ToolkitIo.json(
+            "schemaVersion" to 1,
+            "updatedAt" to clock(),
+            "sessions" to array,
+        )
+        runCatching {
+            ToolkitIo.atomic(indexFile) { temp -> temp.writeText(payload.toString(), Charsets.UTF_8) }
+        }.onFailure { indexErrors++ }
+    }
+
+    /**
+     * 从轻量索引恢复未过期会话。索引/单个条目损坏都不抛异常，只累加 indexErrors，
+     * 保证 list 永远可用。project 文件缺失时不丢会话，由 list 标记 projectMissing，
+     * plan/query 会自动回退到 create（aaa）。
+     */
+    private fun restoreSessionsIndexLocked() {
+        if (!indexFile.isFile) return
+        val parsed = runCatching {
+            JsonParser().parse(indexFile.readText(Charsets.UTF_8)).asJsonObject
+        }.getOrNull()
+        if (parsed == null) {
+            indexErrors++
+            return
+        }
+        val elements = parsed.getAsJsonArray("sessions")?.toList()
+            ?: parsed.getAsJsonObject("sessions")?.entrySet()?.map { it.value }
+            ?: run {
+                indexErrors++
+                return
+            }
+        var changed = false
+        val now = clock()
+        for (element in elements) {
+            val objectValue = element.takeIf { it.isJsonObject }?.asJsonObject
+            if (objectValue == null) {
+                indexErrors++
+                continue
+            }
+            val restored = runCatching { restoreIndexEntry(objectValue) }.getOrNull()
+            if (restored == null) {
+                indexErrors++
+                continue
+            }
+            if (now >= expiresAt(restored)) {
+                deleteProject(restored.project)
+                changed = true
+                continue
+            }
+            if (sessions.containsKey(restored.sessionId) || sessions.size >= maxSessions) {
+                indexErrors++
+                continue
+            }
+            sessions[restored.sessionId] = restored
+            restoredSessions++
+        }
+        if (changed) persistIndexLocked()
+    }
+
+    private fun restoreIndexEntry(value: JsonObject): Session {
+        fun requiredString(key: String): String {
+            val element = value.get(key) ?: throw IllegalArgumentException("missing " + key)
+            if (!element.isJsonPrimitive || !element.asJsonPrimitive.isString) {
+                throw IllegalArgumentException("bad " + key)
+            }
+            return element.asString
+        }
+        val sessionId = requiredString("sessionId")
+        validateSessionId(sessionId)
+        val inputPath = normalizeInputPath(requiredString("inputPath"))
+        val sha256 = normalizeSha(requiredString("sha256"))
+        val sha16 = requiredString("sha16")
+        if (sha16 != sha256.take(16)) throw IllegalArgumentException("sha16 mismatch")
+        val projectRaw = requiredString("projectPath")
+        val projectCandidate = File(projectRaw)
+        val project = (if (projectCandidate.isAbsolute) projectCandidate else File(root, projectRaw)).canonicalFile
+        val base = root.canonicalFile
+        if (project == base || !project.path.startsWith(base.path + File.separator)) {
+            throw IllegalArgumentException("projectPath outside store")
+        }
+        val relocsApply = value.get("relocsApply")?.takeIf {
+            it.isJsonPrimitive && it.asJsonPrimitive.isBoolean
+        }?.asBoolean ?: throw IllegalArgumentException("bad relocsApply")
+        val createdAt = value.get("createdAt")?.takeIf {
+            it.isJsonPrimitive && it.asJsonPrimitive.isNumber
+        }?.asLong ?: throw IllegalArgumentException("bad createdAt")
+        val lastAccessAt = value.get("lastAccessAt")?.takeIf {
+            it.isJsonPrimitive && it.asJsonPrimitive.isNumber
+        }?.asLong ?: throw IllegalArgumentException("bad lastAccessAt")
+        val initialized = value.get("initialized")?.takeIf {
+            it.isJsonPrimitive && it.asJsonPrimitive.isBoolean
+        }?.asBoolean ?: throw IllegalArgumentException("bad initialized")
+        val env = LinkedHashMap<String, String>()
+        value.getAsJsonObject("extraEnv")?.entrySet()?.forEach { (key, raw) ->
+            if (raw.isJsonPrimitive && raw.asJsonPrimitive.isString && ENV_KEY.matches(key)) {
+                env[key] = raw.asString
+            }
+        }
+        return Session(
+            sessionId = sessionId,
+            inputPath = inputPath,
+            sha256 = sha256,
+            sha16 = sha16,
+            project = project,
+            relocsApply = relocsApply,
+            extraEnv = env,
+            createdAt = createdAt,
+            lastAccessAt = lastAccessAt,
+            initialized = initialized,
         )
     }
 
     private fun planJson(session: Session, command: String?, markInitialized: Boolean): JsonObject {
-        val first = !session.initialized
+        val projectMissing = session.project.exists().not()
+        val first = !session.initialized || projectMissing
         val base = if (first) "aaa;Ps " + session.project.path else "Po " + session.project.path
         val commandText = if (command == null) base else base + ";" + command
         val argv = r2Argv(session, commandText, includeRelocs = first)
@@ -260,6 +413,7 @@ internal class ToolkitR2Session(
             "initialized" to session.initialized,
             "initializedAfter" to session.initialized,
             "projectExists" to session.project.exists(),
+            "projectMissing" to (session.initialized && projectMissing),
             "envKeys" to envKeys(session.extraEnv),
             "maxCommandChars" to maxCommandChars,
             "maxOutputBytes" to maxOutputBytes,
@@ -278,6 +432,7 @@ internal class ToolkitR2Session(
             "project" to session.project.path,
             "input" to session.inputPath,
             "projectExists" to session.project.exists(),
+            "projectMissing" to (session.initialized && !session.project.exists()),
             "relocsApply" to session.relocsApply,
             "relocsFlag" to ("bin.relocs.apply=" + if (session.relocsApply) "true" else "false"),
             "extraEnvKeys" to envKeys(session.extraEnv),
@@ -288,6 +443,8 @@ internal class ToolkitR2Session(
             "maxSessions" to maxSessions,
             "maxCommandChars" to maxCommandChars,
             "maxOutputBytes" to maxOutputBytes,
+            "indexPath" to indexFile.path,
+            "indexErrors" to indexErrors,
             "firstPlan" to firstPlan,
             "firstCommand" to firstPlan.get("command").asString,
             "firstCommandLine" to firstPlan.get("commandLine").asString,
@@ -412,6 +569,7 @@ internal class ToolkitR2Session(
         "outputLimitBytes" to maxOutputBytes,
         "maxOutputBytes" to maxOutputBytes,
         "projectExists" to session.project.exists(),
+        "projectMissing" to (session.initialized && !session.project.exists()),
         "note" to "no R2Runner configured: returning executable plan without running r2 or fabricating output",
     )
 
@@ -453,6 +611,7 @@ internal class ToolkitR2Session(
         "relocsFlag" to ("bin.relocs.apply=" + if (session.relocsApply) "true" else "false"),
         "initialized" to session.initialized,
         "projectExists" to session.project.exists(),
+        "projectMissing" to (session.initialized && !session.project.exists()),
         "envKeys" to envKeys(session.extraEnv),
     )
 
@@ -463,6 +622,7 @@ internal class ToolkitR2Session(
         if (clock() >= expiresAt(session)) {
             sessions.remove(sessionId)
             deleteProject(session.project)
+            persistIndexLocked()
             throw ToolkitException(
                 "SESSION_EXPIRED",
                 "r2 session exceeded TTL " + ttlMillis + "ms; project and session were removed",
@@ -479,6 +639,7 @@ internal class ToolkitR2Session(
             sessions.remove(session.sessionId)
             deleteProject(session.project)
         }
+        if (expired.isNotEmpty()) persistIndexLocked()
     }
 
     private fun touch(session: Session) {

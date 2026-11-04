@@ -60,11 +60,11 @@ internal class McpAndroidTerminal(private val context: Context) {
             if (target != null) {
                 backend = target
                 routingNote = "AIJS_BACKEND_ROUTING routed=true routedFrom=$requestedBackend routedTo=$target " +
-                    "requirement=$requirement autoRoute=true（只读白名单命令）"
+                    "effectiveBackend=$target requirement=$requirement autoRoute=true"
             } else {
                 val hint = routing.get("hint").asString
                 routingNote = "AIJS_BACKEND_ROUTING routed=false requestedBackend=$requestedBackend " +
-                    "requirement=$requirement; $hint"
+                    "effectiveBackend=$requestedBackend requirement=$requirement; $hint"
             }
         }
         // 保留原始命令及其原始输出：路由提示只作为前置一行写进同一 stdout/stderr 流，
