@@ -1,5 +1,9 @@
 package com.jdkshen.aijspro.mcp
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonNull
+import com.google.gson.JsonObject
+import com.google.gson.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -116,6 +120,77 @@ class ToolkitShellCapabilitiesTest {
         val noArgs = ToolkitShellCapabilities.nodeScriptCommand("/tmp/x.js", emptyList())
         assertEquals(2, noArgs.getAsJsonArray("argv").size())
         assertEquals("node /tmp/x.js", noArgs.tString("command"))
+    }
+
+    @Test
+    fun parseArgsHandlesQuotesSpacesEmptyAndWhitespace() {
+        assertEquals(emptyList<String>(), ToolkitShellCapabilities.parseArgs(null))
+        assertEquals(emptyList<String>(), ToolkitShellCapabilities.parseArgs(""))
+        assertEquals(emptyList<String>(), ToolkitShellCapabilities.parseArgs("   \t\n "))
+        assertEquals(listOf("--out", "/storage/emulated/0/脚本/a.txt"), ToolkitShellCapabilities.parseArgs(
+            "--out \"/storage/emulated/0/脚本/a.txt\"",
+        ))
+        assertEquals(listOf("--out", "/path with space/a.txt", "--name", "hello world", ""), ToolkitShellCapabilities.parseArgs(
+            "--out '/path with space/a.txt'   --name 'hello world' \"\"",
+        ))
+        assertEquals(listOf("a", "b"), ToolkitShellCapabilities.parseArgs(listOf("a", "b")))
+        assertEquals(listOf("a b", ""), ToolkitShellCapabilities.parseArgs(listOf("a b", "")))
+        assertEquals(listOf("a b"), ToolkitShellCapabilities.parseArgs("a\\ b"))
+        assertEquals(listOf("--flag"), ToolkitShellCapabilities.parseArgs("  --flag  "))
+    }
+
+    @Test
+    fun rawArgsAcceptsJsonStringArrayNullAndRejectsInvalidTypesWithoutThrowing() {
+        val script = "/storage/emulated/0/脚本/test.js"
+        val stringArgs = ToolkitShellCapabilities.nodeScriptCommandFromRaw(
+            script,
+            JsonPrimitive("--out \"/storage/emulated/0/脚本/a.txt\" --name 'hello world'"),
+        )
+        assertTrue(stringArgs.get("ok").asBoolean)
+        assertEquals("string", stringArgs.tString("argsMode"))
+        assertEquals(
+            listOf("--out", "/storage/emulated/0/脚本/a.txt", "--name", "hello world"),
+            stringArgs.getAsJsonArray("args").map { it.asString },
+        )
+        assertTrue(stringArgs.tString("command").contains("node "))
+
+        val arrayArgs = JsonArray().apply {
+            add("--out")
+            add("/storage/emulated/0/脚本/a.txt")
+        }
+        val fromArray = ToolkitShellCapabilities.nodeScriptCommandFromRaw(script, arrayArgs)
+        assertTrue(fromArray.get("ok").asBoolean)
+        assertEquals("array", fromArray.tString("argsMode"))
+        assertEquals(listOf("--out", "/storage/emulated/0/脚本/a.txt"), fromArray.getAsJsonArray("args").map { it.asString })
+
+        for (raw in listOf(null, JsonNull.INSTANCE)) {
+            val empty = ToolkitShellCapabilities.nodeScriptCommandFromRaw(script, raw)
+            assertTrue(empty.get("ok").asBoolean)
+            assertEquals(0, empty.getAsJsonArray("args").size())
+            assertEquals("null", empty.tString("argsMode"))
+        }
+
+        val blankPath = ToolkitShellCapabilities.nodeScriptCommandFromRaw("   ", JsonPrimitive("a"))
+        assertFalse(blankPath.get("ok").asBoolean)
+        assertEquals("INVALID_ARGUMENT", blankPath.getAsJsonObject("error").tString("code"))
+        assertEquals("scriptPath", blankPath.getAsJsonObject("error").tString("argument"))
+
+        val invalidNumber = ToolkitShellCapabilities.nodeScriptCommandFromRaw(script, JsonPrimitive(42))
+        assertFalse(invalidNumber.get("ok").asBoolean)
+        assertEquals("INVALID_ARGUMENT", invalidNumber.getAsJsonObject("error").tString("code"))
+        assertEquals("args", invalidNumber.getAsJsonObject("error").tString("argument"))
+        assertEquals("primitive", invalidNumber.getAsJsonObject("error").tString("receivedType"))
+
+        val invalidObject = ToolkitShellCapabilities.nodeScriptCommandFromRaw(script, JsonObject())
+        assertFalse(invalidObject.get("ok").asBoolean)
+        assertEquals("object", invalidObject.getAsJsonObject("error").tString("receivedType"))
+
+        val invalidArrayElement = ToolkitShellCapabilities.nodeScriptCommandFromRaw(
+            script,
+            JsonArray().apply { add(1); add("ok") },
+        )
+        assertFalse(invalidArrayElement.get("ok").asBoolean)
+        assertEquals("INVALID_ARGUMENT", invalidArrayElement.getAsJsonObject("error").tString("code"))
     }
 
     @Test

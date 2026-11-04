@@ -120,7 +120,24 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         if(name=="frida_eval") { val script=args.tString("script");require(script.toByteArray(Charsets.UTF_8).size<=65536){"Frida脚本超过64KiB"}
             request.addProperty("pid",args.tInt("pid",0,1,Int.MAX_VALUE));request.addProperty("script",script);request.addProperty("durationMs",args.tInt("durationMs",1000,1,10000)) }
         val input=File(temp,"request.json").apply{writeText(request.toString(),Charsets.UTF_8)}
-        return runner(listOf(File(c,"bin/aijs-frida").path,input.path),temp,c,args).apply{
+        val response=try{
+            runner(listOf(File(c,"bin/aijs-frida").path,input.path),temp,c,args)
+        }catch(failure:ToolkitException){
+            // Bug 3：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT）。
+            // 超时/被丢弃不是「组件没装」，这里必须把可执行的下一步写进错误信息。
+            val diagnosis=ToolkitFridaDiagnosis.classifyConnectFailure(failure.message?:"",
+                args.tBool("portListening",false),args.tBool("synSentObserved",false),args.tBool("sameUid",false))
+            if(diagnosis.get("selinuxLoopbackSuspect")?.asBoolean==true){
+                throw ToolkitException(failure.code?:"FRIDA_CONNECT_FAILED",
+                    "Frida listen 连接超时：跨 UID loopback 可能被 SELinux 静默 DROP（confidence="+diagnosis.get("confidence").asString+
+                        "），这不代表组件没装。下一步：改用 Gadget interactionType=script（不碰网络）或把执行端放进目标同 UID；"+
+                        "先 grep -i ':69A2' /proc/net/tcp 确认 state=0A(LISTEN) 再 cat /proc/<client-pid>/net/tcp 看是否 SYN_SENT(02)。"+
+                        "原始错误："+failure.message,
+                    "endpoint")
+            }
+            throw failure
+        }
+        return response.apply{
             if(name=="frida_eval"){
                 val errors=getAsJsonArray("messages")?.count{it.isJsonObject&&it.asJsonObject.tString("type","")=="error"}?:0
                 addProperty("scriptErrorCount",errors);addProperty("scriptSucceeded",errors==0)
@@ -130,6 +147,13 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 // §10：native 客户端可用 ≠ Java.perform 可用；java-bridge 必须单独报告。
                 val bridgePresent=runCatching{component("frida-java-bridge").let{it.isDirectory||it.isFile}}.getOrDefault(false)
                 add("javaBridge",fridaSessions.javaBridgeStatus(bridgePresent,null))
+                // Bug 3：listen 模式的 SELinux 边界与 script 模式建议，一起返回，避免用户原地排查。
+                add("listenModeLimits",ToolkitFridaDiagnosis.listenModeLimits())
+                add("gadgetScriptMode",ToolkitFridaDiagnosis.gadgetScriptModeGuidance())
+            }
+            if(name=="frida_status"||name=="frida_eval"){
+                add("connectDiagnosis",ToolkitFridaDiagnosis.classifyConnectFailure("",
+                    args.tBool("portListening",false),args.tBool("synSentObserved",false),args.tBool("sameUid",false)))
             }
         }
     }
@@ -139,7 +163,9 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk")
         val unsigned=File(temp,"gadget-unsigned.apk")
         val info=ToolkitGadget.prepare(input,unsigned,temp,component("frida-gadget"),args.tInt("port",27042,1024,65535),
-            android.os.Build.SUPPORTED_ABIS.firstOrNull()?:"unknown")
+            android.os.Build.SUPPORTED_ABIS.firstOrNull()?:"unknown",
+            args.tString("interactionType","listen"),
+            args.tString("scriptPath","").ifEmpty{null})
         ToolkitArchiveAlignment.align(unsigned)
         val signed=File(temp,"gadget-signed.apk")
         val signer=AutoSigningIdentity.signer(temp,"MCP免Root Gadget集成")

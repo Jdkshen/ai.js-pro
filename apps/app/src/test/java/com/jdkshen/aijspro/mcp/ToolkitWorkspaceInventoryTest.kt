@@ -4,10 +4,14 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 /**
- * task-250：工作区清单/配额/受控 GC 的纯 JVM 测试。
+ * task-250 / BUG-2：工作区清单、配额、受控 GC、会话释放的纯 JVM 测试。
  * 不启动 Android、不运行 gradle；由 Lead 统一编译执行。
  */
 class ToolkitWorkspaceInventoryTest {
@@ -22,7 +26,7 @@ class ToolkitWorkspaceInventoryTest {
     }
 
     private fun workspace(id: String, temporary: Boolean, createdAt: Long, baseBytes: Int,
-                          owner: String? = null, clientId: String? = null, sessionId: String? = null,
+                          owner: String? = null, ownerSource: String? = null, clientId: String? = null, sessionId: String? = null,
                           basePresent: Boolean = true, sessions: Int = 0): File {
         val dir = File(store, id)
         assertTrue(dir.mkdirs())
@@ -35,6 +39,7 @@ class ToolkitWorkspaceInventoryTest {
             "sha256" to ("sha-" + id),
         )
         if (owner != null) info.addProperty("owner", owner)
+        if (ownerSource != null) info.addProperty("ownerSource", ownerSource)
         if (clientId != null) info.addProperty("clientId", clientId)
         if (sessionId != null) info.addProperty("sessionId", sessionId)
         File(dir, "workspace.json").writeText(info.toString(), Charsets.UTF_8)
@@ -200,5 +205,136 @@ class ToolkitWorkspaceInventoryTest {
         val legacy = owned.getAsJsonArray("skipped").map { it.asJsonObject }
             .first { it.get("workspaceId").asString == "id-legacy" }
         assertTrue(legacy.get("protectedReasons").asJsonArray.any { it.asString == "unknown_owner" })
+    }
+
+    @Test fun gcRelaxedExplicitReleaseDeletesExpiredUnknownOwnerAndEditSessions() {
+        init()
+        workspace("id-expired", true, now - 2 * 24 * 60 * 60_000L, 5, sessions = 2)
+        workspace("id-saved", false, now - 60 * 60_000L, 7)
+        workspace("id-current", true, now - 2 * 24 * 60 * 60_000L, 3)
+        workspace("id-page", true, now - 2 * 24 * 60 * 60_000L, 4)
+        val active = ToolkitWorkspaceInventory.ActiveReferences(
+            currentWorkspaceId = "id-current",
+            pageReferences = mapOf("id-page" to 1),
+        )
+        val before = inventory.inventory(ToolkitIo.json("expiredAfterMinutes" to 60), active)
+        val expired = before.getAsJsonArray("items").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-expired" }
+        assertTrue(expired.get("pendingCleanup").asBoolean)
+        assertEquals(2, expired.get("sessionCount").asInt)
+
+        val result = inventory.gc(ToolkitIo.json(
+            "dryRun" to false,
+            "includeUnknownOwner" to true,
+            "includeTemporary" to true,
+            "minAgeMinutes" to 0,
+            "expiredAfterMinutes" to 60,
+        ), active)
+        assertEquals(1, result.get("deletedCount").asInt)
+        assertTrue(result.getAsJsonArray("deletedIds").any { it.asString == "id-expired" })
+        assertEquals(2, result.get("wouldReleaseEditSessions").asInt)
+        assertEquals(2, result.get("releasedEditSessions").asInt)
+        assertFalse(File(store, "id-expired").exists())
+        assertTrue(File(store, "id-saved").isDirectory)
+        assertTrue(File(store, "id-current").isDirectory)
+        assertTrue(File(store, "id-page").isDirectory)
+        val skipped = result.getAsJsonArray("skipped").map { it.asJsonObject }
+        assertTrue(skipped.first { it.get("workspaceId").asString == "id-saved" }
+            .get("protectedReasons").asJsonArray.any { it.asString == "saved_workspace" })
+        assertTrue(skipped.first { it.get("workspaceId").asString == "id-current" }
+            .get("protectedReasons").asJsonArray.any { it.asString == "current_workspace" })
+        assertTrue(skipped.first { it.get("workspaceId").asString == "id-page" }
+            .get("protectedReasons").asJsonArray.any { it.asString == "active_reference" })
+    }
+
+    @Test fun serverDefaultOwnerIsVisibleAndEligibleUnderExplicitGc() {
+        init()
+        workspace("id-server", true, now - 2 * 24 * 60 * 60_000L, 3,
+            owner = "mcp-host", ownerSource = "server-default")
+        val item = inventory.inventory(ToolkitIo.json("expiredAfterMinutes" to 60))
+            .getAsJsonArray("items").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-server" }
+        assertEquals("mcp-host", item.get("owner").asString)
+        assertEquals("server-default", item.get("ownerSource").asString)
+        val result = inventory.gc(ToolkitIo.json(
+            "dryRun" to false, "includeUnknownOwner" to true,
+            "includeTemporary" to true, "minAgeMinutes" to 0, "expiredAfterMinutes" to 60,
+        ), ToolkitWorkspaceInventory.ActiveReferences())
+        assertTrue(result.getAsJsonArray("deletedIds").any { it.asString == "id-server" })
+    }
+
+    @Test fun sessionReleaseCountsBytesRemainingAndIsIdempotent() {
+        init()
+        workspace("id-rel", true, now, 4, sessions = 2)
+        workspace("id-rel2", true, now, 2, sessions = 1)
+        val home = temp.newFolder("release-home")
+        val toolkit = McpApkToolkit(home, store, JsonObject())
+
+        val first = toolkit.call("apk_session_release",
+            ToolkitIo.json("workspaceId" to "id-rel")).getAsJsonObject("data")
+        assertEquals(2, first.get("releasedSessions").asInt)
+        assertTrue(first.get("releasedBytes").asLong > 0L)
+        assertEquals(1, first.get("remainingSessions").asInt)
+        assertFalse(File(store, "id-rel/sessions/session-0").exists())
+        assertTrue(File(store, "id-rel/base.apk").isFile)
+
+        val again = toolkit.call("apk_session_release",
+            ToolkitIo.json("workspaceId" to "id-rel")).getAsJsonObject("data")
+        assertEquals(0, again.get("releasedSessions").asInt)
+        assertEquals(0, again.get("releasedBytes").asLong)
+        assertTrue(again.get("idempotent").asBoolean)
+
+        val all = toolkit.call("apk_session_release",
+            ToolkitIo.json("all" to true)).getAsJsonObject("data")
+        assertEquals(1, all.get("releasedSessions").asInt)
+        assertEquals(0, all.get("remainingSessions").asInt)
+    }
+
+    @Test fun quotaErrorContainsExecutableInventoryGcDeleteAndReleaseCommands() {
+        init()
+        repeat(16) { workspace(ToolkitIo.fresh(), true, now, 1) }
+        val home = temp.newFolder("quota-home")
+        File(home, "dummy.dex").writeBytes(byteArrayOf(1, 2, 3))
+        val toolkit = McpApkToolkit(home, store, JsonObject())
+        val error = runCatching {
+            toolkit.call("artifact_open", ToolkitIo.json("path" to "dummy.dex"))
+        }.exceptionOrNull()
+        assertNotNull(error)
+        val message = error?.message.orEmpty()
+        for (marker in listOf(
+            "apk_workspace_inventory",
+            "apk_workspace_gc",
+            "\"dryRun\":false",
+            "includeUnknownOwner",
+            "includeTemporary",
+            "minAgeMinutes",
+            "apk_workspace_delete",
+            "apk_session_release",
+            "owner=null",
+        )) {
+            assertTrue("quota hint missing " + marker + ": " + message, message.contains(marker))
+        }
+    }
+
+    @Test fun openWritesServerDefaultOwnerAndOwnerSource() {
+        init()
+        val home = temp.newFolder("owner-home")
+        val source = File(home, "fixture.apk")
+        ZipOutputStream(source.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("AndroidManifest.xml"))
+            zip.write("<manifest package=\"com.example.fixture\"/>".toByteArray(Charsets.UTF_8))
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("classes.dex"))
+            zip.write(byteArrayOf(0x64, 0x65, 0x78, 0x0a, 0x30, 0x33, 0x35, 0x00))
+            zip.closeEntry()
+        }
+        val toolkit = McpApkToolkit(home, store, JsonObject())
+        val opened = toolkit.call("apk_workspace_open",
+            ToolkitIo.json("path" to source.name, "temporary" to true)).getAsJsonObject("data")
+        val id = opened.get("workspaceId").asString
+        val info = JsonParser().parse(File(File(store, id), "workspace.json").readText()).asJsonObject
+        assertEquals("mcp-host", info.get("owner").asString)
+        assertEquals("server-default", info.get("ownerSource").asString)
+        assertFalse(info.has("clientId"))
     }
 }

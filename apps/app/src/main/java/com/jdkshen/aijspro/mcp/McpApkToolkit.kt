@@ -43,6 +43,7 @@ internal class McpApkToolkit(
             "apk_workspace_list" -> ToolkitIo.ok(ToolkitIo.json("items" to workspaces().filter { !it.tBool("temporary") }))
             "apk_workspace_inventory" -> ToolkitIo.ok(workspaceInventory(args))
             "apk_workspace_gc" -> ToolkitIo.ok(workspaceGc(args))
+            "apk_session_release" -> ToolkitIo.ok(releaseEditSessions(args))
             "apk_list_available_apks" -> listAvailable(args)
             "apk_workspace_delete" -> {
                 val workspace = workspace(args.tString("workspaceId")); val id = workspace.tString("workspaceId")
@@ -167,6 +168,7 @@ internal class McpApkToolkit(
         "apk_workspace_open" -> "创建 APK 只读快照。path 在工具目录内；temporary=true 为一次性工作区。后续修改先 apk_session_create。"
         "apk_workspace_inventory" -> "解释 APK 工作区配额占用：列出保存/临时/过期/dangling 工作区、实际字节、owner/clientId/sessionId、活动引用、orphanDirs 与 danglingEntries；配额 16，统计范围见 quotaScope。"
         "apk_workspace_gc" -> "受控清理过期临时 APK 工作区：默认 dryRun=true 只预览；支持 protectedIds/minAgeMinutes/owner/clientId 过滤，保存/活动引用/编辑会话/未知所有权默认全部保护；orphan/dangling 永不自动删除。"
+        "apk_session_release" -> "释放 APK 工作区的编辑会话（workspaceId 或 all=true）；只删除 sessions/ 下会话，不删除工作区/快照；返回 releasedSessions/releasedBytes/remainingSessions，重复调用幂等。"
         "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。"
         "apk_native_disassemble", "apk_native_xref", "apk_native_analyze_control_flow" -> "有界直接指令分析：原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），否则回退 AArch64 常见指令子集；未知指令明确标出，间接引用与完整数据流不作成功保证。"
         "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64、ARM/Thumb、x86/x86-64 指令，expectedHex 防旧数据。常见指令可直接处理，一般汇编可通过可选 C/C++ 组件完成。"
@@ -202,14 +204,99 @@ internal class McpApkToolkit(
         return result
     }
 
-    private fun addClientMetadata(args: JsonObject, info: JsonObject) {
-        listOf("owner", "clientId", "sessionId").forEach { key ->
-            if (args.has(key)) {
-                val value = args.tString(key, "")
-                if (value.isNotEmpty()) info.addProperty(key, value)
-            }
+    /**
+     * 释放编辑会话（不删除工作区快照）。workspaceId 指定单个；all=true 释放所有
+     * store 工作区。重复调用返回 releasedSessions=0，便于幂等重试。
+     */
+    private fun releaseEditSessions(args: JsonObject): JsonObject {
+        val all = args.tBool("all", false)
+        val workspaceId = args.tString("workspaceId", "").trim()
+        if (!all && workspaceId.isEmpty()) {
+            throw ToolkitException("INVALID_ARGUMENT", "需要 workspaceId 或 all=true", "workspaceId")
         }
+        val targets = if (all) {
+            store.listFiles()?.filter { it.isDirectory && it.name != "jobs" && !it.name.startsWith(".") } ?: emptyList()
+        } else listOf(workspaceDirectoryForRelease(workspaceId))
+        val releasedIds = JsonArray()
+        val releasedWorkspaces = LinkedHashSet<String>()
+        var releasedSessions = 0
+        var releasedBytes = 0L
+        for (workspace in targets) {
+            val sessionsDir = File(workspace, "sessions")
+            val sessions = sessionsDir.listFiles()?.filter { it.isDirectory && File(it, "session.json").isFile } ?: emptyList()
+            for (session in sessions) {
+                val bytes = directoryBytes(session)
+                safeRemove(session, store)
+                releasedSessions++
+                releasedBytes += bytes
+                releasedIds.add(session.name)
+                releasedWorkspaces.add(workspace.name)
+            }
+            if (sessionsDir.isDirectory && sessionsDir.listFiles()?.isEmpty() == true) sessionsDir.delete()
+        }
+        return ToolkitIo.json(
+            "workspaceId" to if (all) null else workspaceId,
+            "all" to all,
+            "releasedSessions" to releasedSessions,
+            "releasedBytes" to releasedBytes,
+            "releasedSessionIds" to releasedIds,
+            "releasedWorkspaces" to releasedWorkspaces.toList(),
+            "remainingSessions" to countRemainingSessions(),
+            "idempotent" to (releasedSessions == 0),
+        )
     }
+
+    private fun workspaceDirectoryForRelease(id: String): File {
+        if (!id.matches(Regex("[A-Za-z0-9_-]{1,128}"))) {
+            throw ToolkitException("INVALID_ARGUMENT", "workspaceId 格式无效", "workspaceId")
+        }
+        val base = store.canonicalFile
+        val target = File(store, id).canonicalFile
+        if (target.parentFile != base || target.name != id) {
+            throw ToolkitException("INVALID_ARGUMENT", "workspaceId 路径无效", "workspaceId")
+        }
+        return target
+    }
+
+    private fun countRemainingSessions(): Int =
+        (store.listFiles() ?: emptyArray()).filter { it.isDirectory && it.name != "jobs" && !it.name.startsWith(".") }
+            .sumOf { workspace -> File(workspace, "sessions").listFiles()?.count { File(it, "session.json").isFile } ?: 0 }
+
+    private fun directoryBytes(file: File): Long {
+        if (file.isFile) return file.length()
+        if (!file.isDirectory) return 0L
+        return file.listFiles()?.sumOf { directoryBytes(it) } ?: 0L
+    }
+
+    private fun addClientMetadata(args: JsonObject, info: JsonObject) {
+        val owner = optionalArgument(args, "owner")
+        if (owner != null) {
+            info.addProperty("owner", owner)
+            info.addProperty("ownerSource", "caller")
+        } else {
+            // 服务端默认身份：新记录不再落入 unknown_owner 保护桶。
+            info.addProperty("owner", "mcp-host")
+            info.addProperty("ownerSource", "server-default")
+        }
+        optionalArgument(args, "clientId")?.let { info.addProperty("clientId", it) }
+        optionalArgument(args, "sessionId")?.let { info.addProperty("sessionId", it) }
+    }
+
+    private fun optionalArgument(args: JsonObject, key: String): String? =
+        args.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+            ?.asString?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * 配额报满时的可执行建议。旧记录 owner=null 必须显式 includeUnknownOwner；
+     * 新记录 owner=mcp-host/ownerSource=server-default，可用同一命令回收。
+     */
+    private fun workspaceQuotaHint(): String =
+        "；可复制执行：apk_workspace_inventory {}；" +
+            "apk_workspace_gc {\"dryRun\":true,\"includeUnknownOwner\":true,\"includeTemporary\":true,\"minAgeMinutes\":0} 先预览，" +
+            "确认后执行 apk_workspace_gc {\"dryRun\":false,\"includeUnknownOwner\":true,\"includeTemporary\":true,\"minAgeMinutes\":0}；" +
+            "apk_workspace_delete {\"workspaceId\":\"<id>\"}；" +
+            "apk_session_release {\"workspaceId\":\"<id>\"} 或 {\"all\":true} 释放编辑会话。" +
+            "旧记录 owner=null 时必须带 includeUnknownOwner=true；新记录 owner=mcp-host/ownerSource=server-default。"
 
     private fun directory(id: String) = File(store, ToolkitIo.id(id))
     private fun snapshot(id: String): File = File(directory(id), "base.apk").also { require(it.isFile) { "APK 工作区不存在" } }
@@ -246,7 +333,7 @@ internal class McpApkToolkit(
         val hash = ToolkitIo.sha(source)
         if (!temporary) workspaces().firstOrNull { !it.tBool("temporary") && it.tString("sourcePath") == source.path && it.tString("sha256") == hash }?.let { currentWorkspace = it.tString("workspaceId"); return it }
         val workspaceCount = workspaces().size
-        val quotaHint = "；先调用 apk_workspace_inventory 查看占用，再用 apk_workspace_gc（dryRun=true）预览清理"
+        val quotaHint = workspaceQuotaHint()
         require(workspaceCount < 16) { "最多保留 16 个 APK 工作区，当前 " + workspaceCount + " 个" + quotaHint }
         val existingSize = workspaces().sumOf { it.get("size").asLong }
         require(existingSize + source.length() <= 1024L * 1024 * 1024) {
@@ -302,7 +389,7 @@ internal class McpApkToolkit(
         require(suffix in setOf("dex","so","elf","apks","xapk","apkm")){"支持APK、DEX、ELF/SO及APKS/XAPK/APKM；该文件按结构不是 APK（"+(probe?.let{describeProbe(it)}?:"未探测")+"），确认候选请用 file_discover_apk"}
         val workspaceCount = workspaces().size
         val existingSize = workspaces().sumOf { it.get("size").asLong }
-        val quotaHint = "；先调用 apk_workspace_inventory 查看占用，再用 apk_workspace_gc（dryRun=true）预览清理"
+        val quotaHint = workspaceQuotaHint()
         require(workspaceCount < 16) { "最多保留 16 个 APK 工作区，当前 " + workspaceCount + " 个" + quotaHint }
         require(existingSize + source.length() <= 1024L * 1024 * 1024) {
             "APK 快照总量超过 1 GiB（当前 " + existingSize + " 字节，新增 " + source.length() + " 字节）" + quotaHint

@@ -18,10 +18,10 @@ internal object ToolkitReverseTools {
         "native_xrefs" to "radare2 查询到指定 address 的引用；raw axtj 默认不解析重定位，0 条引用不能当作没有调用者；可选 relocsApply=true 先设置 e bin.relocs.apply=true；需要 pdg 或 relocs.apply=true 补 adrp/add 引用。offset/limit 分页，需 radare2，后台 jobId。",
         "native_compare" to "比较两个二进制 path/otherPath 的有界字节变化，附 radare2 元数据。返回变化范围与截断标记；不把相同大小当成语义相同。后台 jobId。",
         "artifact_fingerprint" to "读取 path 的 SHA256、格式和 APK 库/壳/框架线索。内置启发式指纹，明确证据与置信度；不是完整 APKiD，不执行目标。后台 jobId。",
-        "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。返回endpoint/token，打开输出应用后用frida_status/processes/eval连接。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
+        "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。默认 interactionType=listen 返回 endpoint/token，用 frida_status/processes/eval 连接；但 listen 跨 UID 可能被 SELinux 静默 DROP（实测停在 SYN_SENT，不是组件问题），此时改用 interactionType=script + scriptPath（启动即加载脚本，不碰网络）。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
         "yara_scan" to "使用 yara 组件按 rulesPath 扫描 path；规则≤1MiB，输入≤64MiB，扫描≤30秒，禁用 include。返回规则命中/偏移及截断；不是自动恶意性结论。后台 jobId。",
         "native_emulate" to "Unicorn 隔离模拟 codeHex 原始机器码，可选 dataHex 与 registers；arm64/arm/thumb/x86/x86_64。代码≤64KiB、数据≤4096B、指令≤100000、时间≤1000ms，不提供完整 Android/ELF/JNI 环境。后台 jobId。",
-        "frida_status" to "检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。后台 jobId。",
+        "frida_status" to "检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。注意：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT/超时，不是组件没装）；传入 portListening/synSentObserved/sameUid 可获得 connectDiagnosis，返回里另有 listenModeLimits 与 gadgetScriptMode（推荐改用 script 模式，不碰网络）。后台 jobId。",
         "frida_processes" to "列出指定免Root Gadget endpoint 可见的进程（最多500），需 frida 组件和已打开的Gadget应用，token取apk_inject_gadget结果。应用UID不能任意附加其他应用。后台 jobId。",
         "frida_eval" to "对 endpoint 的 pid 附加并有界执行 Frida script，durationMs≤10000，返回消息后卸载脚本/分离。需可访问Gadget，传相同endpoint/token；Java.perform需另行打包frida-java-bridge；停止任务杀掉本次客户端进程组。后台 jobId。",
         "frida_session_open" to "开启有界 Frida 观测会话（内存态，TTL/消息上限）：绑定目标 packageName/pid 与 endpoint，脚本只记录长度与哈希，endpoint/token 回显掩码。本版本不实现持久 attach（attached=false 会如实标注），真实执行仍走 frida_eval；进程退出会话即丢失，需重新 open。",
@@ -74,7 +74,9 @@ internal object ToolkitReverseTools {
             "apk_decode_project"->{path();path("outDir");field("decodeResources",ToolkitIo.json("type" to "boolean","default" to true))}
             "apk_build_project"->{path("projectDir");path("outPath");field("sign",ToolkitIo.json("type" to "boolean","default" to false))}
             "apk_install_framework"->{path();field("tag",str())}
-            "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))}
+            "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))
+                field("interactionType",ToolkitIo.json("type" to "string","enum" to listOf("listen","script"),"default" to "listen","description" to "listen=监听127.0.0.1端口；script=启动即加载脚本（不碰网络，跨UID SELinux 拦不到）"))
+                field("scriptPath",str("script 模式下目标应用可读的脚本绝对路径"))}
             "artifact_fingerprint","native_analyze"->path()
             "native_functions"->{path();page()}
             "native_function_detail"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)
@@ -91,7 +93,8 @@ internal object ToolkitReverseTools {
             "native_compare"->{path();path("otherPath");page()}
             "yara_scan"->{path();path("rulesPath");field("scanTimeoutSeconds",num(1,30,10));field("includeOffsets",ToolkitIo.json("type" to "boolean","default" to true))}
             "native_emulate"->{field("architecture",ToolkitIo.json("type" to "string","enum" to listOf("arm64","arm","thumb","x86","x86_64")),true);field("codeHex",str(),true);field("dataHex",str());field("registers",ToolkitIo.json("type" to "object","additionalProperties" to str("0x十六进制寄存器值")));field("timeoutMs",num(1,1000,100));field("instructionLimit",num(1,100000,10000))}
-            "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE,1),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}}
+            "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE,1),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}
+                field("portListening",ToolkitIo.json("type" to "boolean","default" to false));field("synSentObserved",ToolkitIo.json("type" to "boolean","default" to false));field("sameUid",ToolkitIo.json("type" to "boolean","default" to false))}
             "frida_session_open"->{field("packageName",str("目标包名"),true);field("pid",num(1,Int.MAX_VALUE,1));field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str());field("script",str("Frida JavaScript ≤64KiB"),true)}
             "frida_session_read"->{field("sessionId",str(),true);field("offset",num(0,1000000,0));field("limit",num(1,500,50))}
             "frida_session_close"->field("sessionId",str(),true)

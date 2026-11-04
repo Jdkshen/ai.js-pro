@@ -95,7 +95,9 @@ internal object McpToolkitCatalog {
         "file_access_diagnose",
         // §11/§12：可验证二进制变换与统一证据导出。
         "binary_transform",
-        "evidence_export"
+        "evidence_export",
+        // Bug 2：释放编辑会话，让配额 GC 能真正回收（用户实测 gc 删不动）。
+        "apk_session_release"
     )
     val aliases = names.take(58).filter { it != "toolkit_status" }.associateBy { "mt_" + it }
 }

@@ -417,10 +417,17 @@ internal class McpTools(private val context: Context, private val event: (String
                 toolJson(McpAppTools.handle(context, name, args) ?: throw McpInvalidParamsException("未知工具：$name"))
             in McpAppTraceTools.names -> toolJson(McpAppTraceTools.call(context, name, args))
             "shell_capabilities" -> toolJson(ToolkitShellCapabilities.matrix())
-            "shell_classify_failure" -> toolJson(ToolkitShellCapabilities.classifyFailure(args.string("command"), args.string("output")))
-            "node_script_command" -> toolJson(ToolkitShellCapabilities.nodeScriptCommand(args.string("scriptPath"),
-                args.getAsJsonArray("args")?.mapNotNull { element -> element?.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList()))
-            "crash_buffer_semantics" -> toolJson(ToolkitShellCapabilities.crashBufferSemantics())
+            // 辅助工具不能让参数形状问题变成 MCP「Internal error」：一律捕获并返回结构化错误。
+            "shell_classify_failure" -> toolJson(runCatching {
+                ToolkitShellCapabilities.classifyFailure(args.string("command"), args.string("output"))
+            }.getOrElse { failure -> helperError("shell_classify_failure", failure) })
+            "node_script_command" -> toolJson(runCatching {
+                // 库层已容忍「字符串 / 数组 / null」三种 args 形状（实测曾因字符串 args 报 Internal error）。
+                ToolkitShellCapabilities.nodeScriptCommandFromRaw(args.string("scriptPath"), args.get("args"))
+            }.getOrElse { failure -> helperError("node_script_command", failure) })
+            "crash_buffer_semantics" -> toolJson(runCatching {
+                ToolkitShellCapabilities.crashBufferSemantics()
+            }.getOrElse { failure -> helperError("crash_buffer_semantics", failure) })
             else -> McpAppTools.handle(context, name, args)?.let { toolJson(it) }
                 ?: throw McpInvalidParamsException("未知工具：$name")
         }
@@ -957,6 +964,45 @@ internal class McpTools(private val context: Context, private val event: (String
         val merged = McpTerminalHelp.merge(base)
         return if (playbook.isNullOrBlank()) merged else merged.trimEnd() + "\n\n---\n\n" + playbook.trimEnd() + "\n"
     }
+    /** 辅助工具的统一结构化错误（避免把 Kotlin 异常栈暴露成 MCP Internal error）。 */
+    private fun helperError(tool: String, failure: Throwable): JsonObject = ToolkitIo.json(
+        "ok" to false,
+        "error" to ToolkitIo.json(
+            "code" to "INVALID_ARGUMENT",
+            "tool" to tool,
+            "message" to (failure.message ?: failure.javaClass.simpleName),
+            "recoverable" to true
+        )
+    )
+
+    /**
+     * 兼容 args 的三种形状：数组 / 单个字符串（按空白拆分并尊重引号）/ null。
+     * 用户在实测里传 "--out /path/a.txt" 时旧实现直接 getAsJsonArray 抛异常 → MCP Internal error。
+     */
+    private fun scriptArgs(args: JsonObject): List<String> {
+        val element = args.get("args") ?: return emptyList()
+        if (element.isJsonNull) return emptyList()
+        if (element.isJsonArray) {
+            return element.asJsonArray.mapNotNull { item -> item?.takeIf { it.isJsonPrimitive }?.asString }
+        }
+        if (!element.isJsonPrimitive) return emptyList()
+        val raw = element.asString.trim()
+        if (raw.isEmpty()) return emptyList()
+        val result = ArrayList<String>()
+        val current = StringBuilder()
+        var quote = ' '
+        raw.forEach { ch ->
+            when {
+                quote != ' ' -> if (ch == quote) quote = ' ' else current.append(ch)
+                ch == '\'' || ch == '"' -> quote = ch
+                ch.isWhitespace() -> if (current.isNotEmpty()) { result.add(current.toString()); current.setLength(0) }
+                else -> current.append(ch)
+            }
+        }
+        if (current.isNotEmpty()) result.add(current.toString())
+        return result
+    }
+
     private fun terminalEnvironment(args: JsonObject): LinkedHashMap<String, String> {
         val env = linkedMapOf<String, String>()
         args.get("env")?.let { element ->

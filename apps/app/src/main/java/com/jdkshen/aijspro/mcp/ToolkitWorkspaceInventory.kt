@@ -13,8 +13,9 @@ import java.io.File
  * 解释历史快照，不保证等于实际占用。
  *
  * owner/clientId/sessionId 仅从现有 workspace.json 读取；旧工作区没有这些字段时返回 JSON
- * null，不伪造客户端身份。lastAccessAt 优先使用显式字段；旧记录回退到文件系统 mtime 并
- * 标记 lastAccessSource=filesystem_mtime。
+ * null，不伪造客户端身份。新 open/openArtifact 会落 owner=mcp-host、ownerSource=server-default；
+ * 旧 null 记录仍必须显式 includeUnknownOwner=true 才会被 GC 回收。lastAccessAt 优先使用显式
+ * 字段；旧记录回退到文件系统 mtime 并标记 lastAccessSource=filesystem_mtime。
  */
 internal class ToolkitWorkspaceInventory(private val store: File) {
     companion object {
@@ -51,6 +52,7 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         val sessionCount: Int,
         val baseApkPresent: Boolean,
         val owner: String?,
+        val ownerSource: String?,
         val clientId: String?,
         val sessionId: String?,
     )
@@ -112,7 +114,8 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             "danglingEntries" to scan.danglingEntries,
             "warnings" to warnings,
             "notes" to JsonArray().apply {
-                add(JsonPrimitive("owner/clientId/sessionId 只从现有 workspace.json 读取；旧工作区缺失时返回 null"))
+                add(JsonPrimitive("owner/clientId/sessionId 只从现有 workspace.json 读取；旧工作区缺失时返回 null；新 open 由服务端写 owner=mcp-host/ownerSource=server-default"))
+                add(JsonPrimitive("旧记录 owner=null 时 GC 必须显式 includeUnknownOwner=true；clientId 仍可选"))
                 add(JsonPrimitive("lastAccessAt 旧记录回退 filesystem_mtime，不是真实读取时间"))
                 add(JsonPrimitive("orphanDirs/danglingEntries 只报告，不自动删除"))
                 add(JsonPrimitive("配额报满时应先查本清单，再用 apk_workspace_gc dryRun=true 预览"))
@@ -122,8 +125,10 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
 
     /**
      * 受控 GC。默认 dryRun=true 只出计划；dryRun=false 才删除。
-     * 只清理满足全部条件的过期临时工作区：保存/current/page/编辑会话/protectedIds/
-     * 未知或其它 owner/client/未知年龄/活动任务/dangling/corrupt 全部跳过。
+     * 默认只清理满足全部条件的过期临时工作区；保存/current/page/protectedIds/未知或
+     * 其它 owner/client/未知年龄/活动任务/dangling/corrupt 均保护。显式同时传
+     * includeUnknownOwner=true、includeTemporary=true、minAgeMinutes=0 时，expired 且
+     * pendingCleanup=true 的工作区可连同其编辑会话一起释放（返回 releasedEditSessions）。
      * orphanDirs 与 danglingEntries 永不删除。
      */
     fun gc(args: JsonObject, active: ActiveReferences = ActiveReferences()): JsonObject {
@@ -142,38 +147,44 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         val planned = JsonArray()
         val skipped = JsonArray()
         val wouldDelete = ArrayList<String>()
+        val wouldReleaseCounts = LinkedHashMap<String, Int>()
         var wouldReclaim = 0L
+        var wouldReleaseEditSessions = 0
         val activeJobs = inv.get("activeJobs")?.asInt ?: 0
+        val relaxedCleanup = includeUnknownOwner && includeTemporary && minAge == 0
         for (raw in inv.getAsJsonArray("items")) {
             val item = raw.asJsonObject
             val id = item.tString("workspaceId")
             val state = item.tString("state")
             val itemOwner = optionalString(item, "owner")
+            val itemOwnerSource = optionalString(item, "ownerSource")
             val itemClient = optionalString(item, "clientId")
+            val sessionCount = item.get("sessionCount")?.asInt ?: 0
+            val pendingCleanup = item.get("pendingCleanup")?.asBoolean == true
+            val releaseEditSessions = relaxedCleanup && state == "expired" && pendingCleanup
             val reasons = ArrayList<String>()
             if (id in protectedIds) reasons.add("protected_ids")
             if (item.get("current")?.asBoolean == true) reasons.add("current_workspace")
             if ((item.get("activeRefCount")?.asInt ?: 0) > 0) reasons.add("active_reference")
-            if ((item.get("sessionCount")?.asInt ?: 0) > 0) reasons.add("edit_session")
+            if (sessionCount > 0 && !releaseEditSessions) reasons.add("edit_session")
             if (state == "saved") reasons.add("saved_workspace")
             if (state == "dangling" || state == "corrupt") reasons.add(state)
             if (state != "expired" && !(includeTemporary && state == "temporary")) reasons.add("not_expired")
             if (activeJobs > 0) reasons.add("active_jobs_workspace_unknown")
-            if (callerOwner == null) {
-                if (itemOwner != null) reasons.add("other_owner")
-                else if (!includeUnknownOwner) reasons.add("unknown_owner")
-            } else if (itemOwner != callerOwner) {
-                if (itemOwner == null) {
-                    if (!includeUnknownOwner) reasons.add("unknown_owner")
-                } else reasons.add("other_owner")
+            val serverDefaultOwner = itemOwner == "mcp-host" && itemOwnerSource == "server-default"
+            if (itemOwner == null) {
+                if (!includeUnknownOwner) reasons.add("unknown_owner")
+            } else if (callerOwner != null && itemOwner == callerOwner) {
+                // exact caller-owned workspace
+            } else if (serverDefaultOwner && includeUnknownOwner) {
+                // server-default owner: explicit includeUnknownOwner opts in
+            } else {
+                reasons.add("other_owner")
             }
-            if (callerClientId == null) {
-                if (itemClient != null) reasons.add("other_client")
-                else if (!includeUnknownOwner) reasons.add("unknown_client")
+            if (itemClient == null) {
+                if (!includeUnknownOwner) reasons.add("unknown_client")
             } else if (itemClient != callerClientId) {
-                if (itemClient == null) {
-                    if (!includeUnknownOwner) reasons.add("unknown_client")
-                } else reasons.add("other_client")
+                reasons.add("other_client")
             }
             val createdAt = item.get("createdAt")?.takeIf { !it.isJsonNull }?.asLong
             if (createdAt == null && !includeUnknownAge) reasons.add("unknown_age")
@@ -183,14 +194,19 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             val row = ToolkitIo.json("workspaceId" to id,
                 "bytes" to (item.get("bytes")?.asLong ?: 0L),
                 "state" to state, "action" to if (canDelete) "delete" else "skip",
-                "protectedReasons" to unique, "owner" to itemOwner, "clientId" to itemClient)
+                "protectedReasons" to unique, "owner" to itemOwner, "ownerSource" to itemOwnerSource,
+                "clientId" to itemClient, "sessionCount" to sessionCount,
+                "wouldReleaseEditSessions" to if (canDelete) sessionCount else 0)
             if (canDelete) {
                 planned.add(row); wouldDelete.add(id)
+                wouldReleaseCounts[id] = sessionCount
+                wouldReleaseEditSessions += sessionCount
                 wouldReclaim += item.get("bytes")?.asLong ?: 0L
             } else skipped.add(row)
         }
         val deleted = ArrayList<String>()
         var reclaimed = 0L
+        var releasedEditSessions = 0
         val failures = JsonArray()
         if (!dryRun) {
             val base = store.canonicalFile
@@ -205,6 +221,7 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
                 val removal = runCatching { deleteDirectory(target) }
                 if (removal.isSuccess) {
                     deleted.add(id); reclaimed += size
+                    releasedEditSessions += (wouldReleaseCounts[id] ?: 0)
                 } else {
                     failures.add(ToolkitIo.json("workspaceId" to id,
                         "error" to (removal.exceptionOrNull()?.message ?: "删除失败")))
@@ -225,11 +242,13 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             "callerClientId" to callerClientId,
             "wouldDeleteCount" to wouldDelete.size,
             "wouldDeleteIds" to wouldDelete,
+            "wouldReleaseEditSessions" to wouldReleaseEditSessions,
             "wouldReclaimBytes" to wouldReclaim,
             "planned" to planned,
             "skipped" to skipped,
             "deletedCount" to deleted.size,
             "deletedIds" to deleted,
+            "releasedEditSessions" to releasedEditSessions,
             "reclaimedBytes" to reclaimed,
             "failures" to failures,
             "orphanDirs" to inv.get("orphanDirs"),
@@ -285,6 +304,7 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
                 sessionCount = countSessions(dir),
                 baseApkPresent = basePresent,
                 owner = optionalString(parsed, "owner"),
+                ownerSource = optionalString(parsed, "ownerSource"),
                 clientId = optionalString(parsed, "clientId"),
                 sessionId = optionalString(parsed, "sessionId"),
             ))
@@ -314,7 +334,8 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         if (activeRefs > 0) reasons.add("active_reference")
         if (entry.sessionCount > 0) reasons.add("edit_session")
         if (state == "dangling" || !entry.baseApkPresent) reasons.add("dangling")
-        val pending = state == "expired" && reasons.isEmpty()
+        val pending = state == "expired" && !current && activeRefs == 0 &&
+            entry.baseApkPresent && state != "saved"
         return ToolkitIo.json(
             "workspaceId" to entry.id,
             "state" to state,
@@ -326,6 +347,7 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             "lastAccessAt" to entry.lastAccessAt,
             "lastAccessSource" to entry.lastAccessSource,
             "owner" to entry.owner,
+            "ownerSource" to entry.ownerSource,
             "clientId" to entry.clientId,
             "sessionId" to entry.sessionId,
             "activeRefCount" to activeRefs,

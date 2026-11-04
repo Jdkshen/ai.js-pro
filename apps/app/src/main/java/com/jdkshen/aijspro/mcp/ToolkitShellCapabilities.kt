@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.mcp
 
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import java.util.Locale
 
@@ -244,10 +245,75 @@ internal object ToolkitShellCapabilities {
         )
     }
 
-    /** 推荐把脚本写入文件再运行 node；明确 argv 索引，避免 node -e 双重转义。 */
+    /**
+     * 推荐把脚本写入文件再运行 node；保留数组入参的既有字段与 argv 语义。
+     * 本方法对空 scriptPath/含 NUL 参数也返回结构化错误，不抛异常，便于其它调用方直接复用。
+     */
     fun nodeScriptCommand(scriptPath: String, args: List<String>): JsonObject {
-        require(scriptPath.isNotBlank() && scriptPath.none { it.code == 0 }) { "scriptPath 不能为空且不能含 NUL" }
-        require(args.none { it.any { ch -> ch.code == 0 } }) { "参数不能含 NUL" }
+        validateScriptPath(scriptPath)?.let { return nodeCommandError("scriptPath", it) }
+        validateNodeArgs(args)?.let { return nodeCommandError("args", it) }
+        return buildNodeScriptCommand(scriptPath, args)
+    }
+
+    /**
+     * 宽容解析 args：支持字符串（shell 风格拆分，尊重单/双引号、空白和转义）、
+     * 字符串数组/null；非法类型抛 IllegalArgumentException，由 raw 入口转成结构化错误。
+     */
+    fun parseArgs(value: Any?): List<String> {
+        return when (value) {
+            null -> emptyList()
+            is String -> tokenizeRawArgs(value)
+            is JsonElement -> when {
+                value.isJsonNull -> emptyList()
+                value.isJsonArray -> parseJsonArgsArray(value.asJsonArray)
+                value.isJsonPrimitive && value.asJsonPrimitive.isString -> tokenizeRawArgs(value.asString)
+                else -> throw IllegalArgumentException(
+                    "args 必须为字符串或字符串数组，收到 " + valueTypeName(value),
+                )
+            }
+            is Iterable<*> -> value.mapIndexed { index, item -> anyArg(item, index) }
+            is Array<*> -> value.mapIndexed { index, item -> anyArg(item, index) }
+            else -> throw IllegalArgumentException(
+                "args 必须为字符串或字符串数组，收到 " + valueTypeName(value),
+            )
+        }
+    }
+
+    /**
+     * 兼容 MCP 实际可能传入的三种形状：JSON 数组 / JSON 字符串 / null（缺失或 JsonNull）。
+     * 其它类型或空 scriptPath 返回 {ok:false,error:{code:"INVALID_ARGUMENT"...}}，绝不抛异常。
+     */
+    fun nodeScriptCommandFromRaw(scriptPath: String, rawArgs: JsonElement?): JsonObject {
+        validateScriptPath(scriptPath)?.let { return nodeCommandError("scriptPath", it) }
+        return try {
+            val mode = when {
+                rawArgs == null || rawArgs.isJsonNull -> "null"
+                rawArgs.isJsonArray -> "array"
+                rawArgs.isJsonPrimitive && rawArgs.asJsonPrimitive.isString ->
+                    if (rawArgs.asString.isBlank()) "empty" else "string"
+                else -> throw IllegalArgumentException(
+                    "args 必须为字符串或字符串数组，收到 " + valueTypeName(rawArgs),
+                )
+            }
+            val args = when {
+                rawArgs == null || rawArgs.isJsonNull -> emptyList()
+                rawArgs.isJsonArray -> parseJsonArgsArray(rawArgs.asJsonArray)
+                rawArgs.isJsonPrimitive && rawArgs.asJsonPrimitive.isString -> tokenizeRawArgs(rawArgs.asString)
+                else -> throw IllegalArgumentException(
+                    "args 必须为字符串或字符串数组，收到 " + valueTypeName(rawArgs),
+                )
+            }
+            buildNodeScriptCommand(scriptPath, args).apply {
+                addProperty("ok", true)
+                addProperty("argsMode", mode)
+                addProperty("argsSource", if (mode == "string" || mode == "empty") "string" else mode)
+            }
+        } catch (error: Exception) {
+            nodeCommandError("args", error.message ?: "args 解析失败", rawArgs)
+        }
+    }
+
+    private fun buildNodeScriptCommand(scriptPath: String, args: List<String>): JsonObject {
         val argv = ArrayList<String>(args.size + 2)
         argv.add("node")
         argv.add(scriptPath)
@@ -258,6 +324,7 @@ internal object ToolkitShellCapabilities {
         args.forEach { argsJson.add(it) }
         val command = argv.joinToString(" ") { shellQuote(it) }
         return ToolkitIo.json(
+            "ok" to true,
             "mode" to "file",
             "recommended" to true,
             "writeFileFirst" to true,
@@ -300,6 +367,132 @@ internal object ToolkitShellCapabilities {
                 "脚本路径或参数含空格时命令会自动加单引号；内容无法安全内联时应拒绝 node -e 写法",
             ),
         )
+    }
+
+    private fun validateScriptPath(scriptPath: String): String? = when {
+        scriptPath.isBlank() -> "scriptPath 不能为空或仅空白"
+        scriptPath.any { it.code == 0 } -> "scriptPath 不能包含 NUL"
+        else -> null
+    }
+
+    private fun validateNodeArgs(args: List<String>): String? =
+        if (args.any { it.any { ch -> ch.code == 0 } }) "args 不能包含 NUL" else null
+
+    private fun nodeCommandError(
+        argument: String,
+        message: String,
+        rawArgs: JsonElement? = null,
+    ): JsonObject = ToolkitIo.json(
+        "ok" to false,
+        "error" to ToolkitIo.json(
+            "code" to "INVALID_ARGUMENT",
+            "argument" to argument,
+            "message" to message,
+            "receivedType" to rawArgs?.let { valueTypeName(it) },
+        ),
+        "argument" to argument,
+        "message" to message,
+        "receivedType" to rawArgs?.let { valueTypeName(it) },
+        "hint" to if (argument == "args") {
+            "args 允许 JSON 字符串或字符串数组；字符串会按 shell 风格拆分，单/双引号内的空格保留"
+        } else {
+            "scriptPath 必须是非空路径；请传绝对路径或可读文件路径"
+        },
+    )
+
+    private fun parseJsonArgsArray(array: JsonArray): List<String> {
+        val result = ArrayList<String>(array.size())
+        for (index in 0 until array.size()) {
+            val element = array.get(index)
+            if (!element.isJsonPrimitive || !element.asJsonPrimitive.isString) {
+                throw IllegalArgumentException("args[" + index + "] 必须为字符串")
+            }
+            result.add(element.asString)
+        }
+        return result
+    }
+
+    private fun anyArg(value: Any?, index: Int): String = when (value) {
+        is String -> value
+        is JsonElement -> when {
+            value.isJsonPrimitive && value.asJsonPrimitive.isString -> value.asString
+            else -> throw IllegalArgumentException("args[" + index + "] 必须为字符串")
+        }
+        else -> throw IllegalArgumentException("args[" + index + "] 必须为字符串")
+    }
+
+    private fun tokenizeRawArgs(raw: String): List<String> {
+        val result = ArrayList<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var escaped = false
+        var hasToken = false
+        for (ch in raw) {
+            if (escaped) {
+                current.append(ch)
+                escaped = false
+                hasToken = true
+                continue
+            }
+            when {
+                quote == '\'' -> {
+                    if (ch == '\'') quote = null else {
+                        current.append(ch)
+                        hasToken = true
+                    }
+                }
+                quote == '"' -> when (ch) {
+                    '"' -> quote = null
+                    '\\' -> escaped = true
+                    else -> {
+                        current.append(ch)
+                        hasToken = true
+                    }
+                }
+                ch == '\\' -> {
+                    escaped = true
+                    hasToken = true
+                }
+                ch == '\'' || ch == '"' -> {
+                    quote = ch
+                    hasToken = true
+                }
+                ch.isWhitespace() -> {
+                    if (hasToken) {
+                        result.add(current.toString())
+                        current.setLength(0)
+                        hasToken = false
+                    }
+                }
+                else -> {
+                    current.append(ch)
+                    hasToken = true
+                }
+            }
+        }
+        if (escaped) {
+            current.append('\\')
+        }
+        if (hasToken) result.add(current.toString())
+        return result
+    }
+
+    private fun valueTypeName(value: Any?): String = when (value) {
+        null -> "null"
+        is JsonElement -> when {
+            value.isJsonNull -> "null"
+            value.isJsonArray -> "array"
+            value.isJsonObject -> "object"
+            value.isJsonPrimitive && value.asJsonPrimitive.isString -> "string"
+            value.isJsonPrimitive -> "primitive"
+            else -> "json"
+        }
+        is String -> "string"
+        is Iterable<*> -> "array"
+        is Array<*> -> "array"
+        is Number -> "number"
+        is Boolean -> "boolean"
+        else -> value::class.java.simpleName
     }
 
     /** logcat -b crash -c 的清缓冲语义、旧条目原因和可验证采集窗口。 */

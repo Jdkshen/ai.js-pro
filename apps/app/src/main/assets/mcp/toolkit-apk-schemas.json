@@ -1839,6 +1839,21 @@
       "member"
     ]
   },
+  "apk_session_release": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string",
+        "description": "只释放该工作区的编辑会话；与 all=true 二选一。"
+      },
+      "all": {
+        "type": "boolean",
+        "default": false,
+        "description": "释放所有工作区的编辑会话（不删除工作区与 base.apk）。"
+      }
+    }
+  },
   "binary_transform": {
     "type": "object",
     "additionalProperties": false,

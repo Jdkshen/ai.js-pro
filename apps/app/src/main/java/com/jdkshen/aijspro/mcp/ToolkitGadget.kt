@@ -19,8 +19,16 @@ internal object ToolkitGadget {
     const val LIBRARY = "aijsgadget"
     val ABIS = setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 
-    fun prepare(input: File, output: File, scratch: File, component: File, port: Int, defaultAbi: String): JsonObject {
-        require(port in 1024..65535) { "Gadget port 必须为1024..65535" }
+    fun prepare(input: File, output: File, scratch: File, component: File, port: Int, defaultAbi: String,
+                interactionType: String = "listen", scriptPath: String? = null): JsonObject {
+        require(interactionType == "listen" || interactionType == "script") { "interactionType 只能是 listen 或 script" }
+        if (interactionType == "script") {
+            // 跨 UID 的 loopback 可能被 SELinux 静默 DROP（实测停在 SYN_SENT），script 模式不碰网络。
+            require(!scriptPath.isNullOrBlank()) { "script 模式必须提供 scriptPath（目标应用可读的脚本绝对路径）" }
+            require(scriptPath.length <= 1024 && !scriptPath.contains('\u0000')) { "scriptPath 无效" }
+        } else {
+            require(port in 1024..65535) { "Gadget port 必须为1024..65535" }
+        }
         require(!output.exists() && output.parentFile?.isDirectory == true) { "必须输出到父目录存在的新文件" }
         val token = ToolkitIo.hex(ByteArray(24).also { SecureRandom().nextBytes(it) }).lowercase()
         val suffix = ToolkitIo.fresh().replace("-", "")
@@ -53,11 +61,18 @@ internal object ToolkitGadget {
             val dex = compileProvider(provider, scratch)
             info = ToolkitIo.json("schemaVersion" to 1, "mode" to "rootless-gadget", "requiresRoot" to false,
                 "packageName" to patched.second, "providerClass" to provider, "providerProcess" to "application-default-process",
-                "endpoint" to "127.0.0.1:$port", "token" to token, "onLoad" to "resume", "portConflict" to "fail",
+                "interactionType" to interactionType,
+                "endpoint" to if (interactionType == "listen") "127.0.0.1:$port" else null,
+                "scriptPath" to scriptPath,
+                "token" to if (interactionType == "listen") token else null, "onLoad" to "resume", "portConflict" to "fail",
                 "fridaVersion" to "17.25.2", "abis" to abis.sorted(), "dexEntry" to dexName, "minimumRuntimeSdk" to 21,
                 "originalSha256" to ToolkitIo.sha(input), "resourceTableRecompiled" to false)
-            val config = ToolkitIo.json("interaction" to ToolkitIo.json("type" to "listen", "address" to "127.0.0.1", "port" to port,
-                "on_port_conflict" to "fail", "on_load" to "resume", "token" to token)).toString().toByteArray(Charsets.UTF_8)
+            val config = ToolkitIo.json("interaction" to if (interactionType == "script") {
+                ToolkitIo.json("type" to "script", "path" to scriptPath, "on_load" to "resume")
+            } else {
+                ToolkitIo.json("type" to "listen", "address" to "127.0.0.1", "port" to port,
+                    "on_port_conflict" to "fail", "on_load" to "resume", "token" to token)
+            }).toString().toByteArray(Charsets.UTF_8)
             ZipOutputStream(output.outputStream()).use { out ->
                 fun add(name: String, data: ByteArray) { out.putNextEntry(ZipEntry(name)); out.write(data); out.closeEntry() }
                 for (entry in entries) {
