@@ -226,7 +226,22 @@ internal class McpApkToolkit(
             require(!temporary) { "已保存工作区需 temporary=false" }
             val info = workspace(path.substringAfterLast('/')); currentWorkspace = info.tString("workspaceId"); return info
         }
-        val source = ToolkitIo.resolve(root, path); require(source.isFile && source.name.endsWith(".apk", true) && source.length() <= ToolkitIo.MAX_APK) { "需要工具目录内不超过 512 MiB 的 APK" }
+        val source = ToolkitIo.resolve(root, path)
+        require(source.isFile && source.length() <= ToolkitIo.MAX_APK) { "需要工具目录内不超过 512 MiB 的 APK" }
+        // §5.2：扩展名只作初筛，ZIP 魔数 + APK 结构才是判据；非 ZIP 在复制前就拦下，
+        // 避免把 java.util.zip.ZipException 直接抛给调用方。
+        val probe = runCatching { ToolkitDiscovery.probe(source) }.getOrNull()
+        if (!source.name.endsWith(".apk", true)) {
+            require(probe?.candidate == true) {
+                "文件不是 APK 结构（扩展名 " + (source.extension.ifEmpty { "无" }) + "：" +
+                    (probe?.let { describeProbe(it) } ?: "探测失败") + "）；先用 file_discover_apk 扫描"
+            }
+        } else {
+            require(probe == null || probe.zipMagic) {
+                "文件扩展名是 .apk 但不是 ZIP（" + (probe?.let { describeProbe(it) } ?: "未探测") +
+                    "）；确认候选请用 file_discover_apk"
+            }
+        }
         val hash = ToolkitIo.sha(source)
         if (!temporary) workspaces().firstOrNull { !it.tBool("temporary") && it.tString("sourcePath") == source.path && it.tString("sha256") == hash }?.let { currentWorkspace = it.tString("workspaceId"); return it }
         val workspaceCount = workspaces().size
@@ -254,11 +269,36 @@ internal class McpApkToolkit(
             File(folder, "workspace.json").writeText(gson.toJson(info)); currentWorkspace = id; return info
         } catch (error: Exception) { safeRemove(folder, store); throw error }
     }
+    /** §5.2：制品发现的短提示，放进错误里，避免「只报不支持」而让调用方无处可去。 */
+    private fun describeProbe(probe: ToolkitDiscovery.Probe): String = buildString {
+        append("zipStatus=").append(probe.zipStatus)
+        append("，zipMagic=").append(probe.zipMagic)
+        append("，entryCount=").append(probe.entryCount)
+        append("，AndroidManifest=").append(probe.hasAndroidManifest)
+        append("，confidence=").append(probe.confidence)
+    }
+
+    /** §5.2：目录不是制品；用有界扫描列出候选，并给出下一步。 */
+    private fun discoveryHintForDirectory(dir: File): String {
+        val scan = runCatching {
+            ToolkitDiscovery.scan(dir, ToolkitDiscovery.Limits(maxEntries = 500, maxProbes = 200, limit = 5), false)
+        }.getOrNull()
+        val candidates = scan?.candidates.orEmpty()
+        val listed = if (candidates.isEmpty()) "该目录（含子目录，已按预算扫描）没有结构上像 APK 的文件"
+        else "候选：" + candidates.take(5).joinToString("；") { it.path + "(" + it.confidence + ")" }
+        val truncated = if (scan?.truncated == true) "；结果被预算截断（stopReason=" + scan.stopReason + "），可放宽 file_discover_apk 预算重扫" else ""
+        return "路径是目录，不是可打开的制品。$listed$truncated"
+    }
+
     private fun openArtifact(args:JsonObject):JsonObject {
-        val source=ToolkitIo.resolve(root,args.tString("path"));require(source.isFile&&source.length()<=ToolkitIo.MAX_APK)
+        val source=ToolkitIo.resolve(root,args.tString("path"))
+        if(source.isDirectory)throw IllegalArgumentException(discoveryHintForDirectory(source))
+        require(source.isFile&&source.length()<=ToolkitIo.MAX_APK){ "需要不超过 512 MiB 的制品文件，当前路径：" + source.path }
         val suffix=source.extension.lowercase()
-        if(suffix=="apk")return open(args)
-        require(suffix in setOf("dex","so","elf","apks","xapk","apkm")){"支持APK、DEX、ELF/SO及APKS/XAPK/APKM"}
+        // §5.2：先按结构判断 APK（覆盖 .apk.1/.bak/无扩展名），扩展名只作旧行为兼容。
+        val probe=runCatching{ToolkitDiscovery.probe(source)}.getOrNull()
+        if(suffix=="apk"||probe?.candidate==true)return open(args)
+        require(suffix in setOf("dex","so","elf","apks","xapk","apkm")){"支持APK、DEX、ELF/SO及APKS/XAPK/APKM；该文件按结构不是 APK（"+(probe?.let{describeProbe(it)}?:"未探测")+"），确认候选请用 file_discover_apk"}
         val workspaceCount = workspaces().size
         val existingSize = workspaces().sumOf { it.get("size").asLong }
         val quotaHint = "；先调用 apk_workspace_inventory 查看占用，再用 apk_workspace_gc（dryRun=true）预览清理"

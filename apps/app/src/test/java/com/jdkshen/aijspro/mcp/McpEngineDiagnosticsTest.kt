@@ -85,6 +85,51 @@ class McpEngineDiagnosticsTest {
     }
 
     @Test
+    fun nodeRuntimeFormSeparatesEmbeddedRuntimeFromStandaloneCli() {
+        // 默认形态：嵌入式共享库；CLI 尚未提取 → 不能声称可以启动独立 node。
+        val embedded = McpEngineDiagnostics.nodeRuntimeForm(
+            McpEngineDiagnostics.NodeRuntimeFormInput(
+                processName = "com.jdkshen.aijspro:node24_1",
+                hostExecutablePath = "/system/bin/app_process64",
+                hostExecutablePresent = true,
+                runtimeDirectoryPath = "/data/user/0/com.jdkshen.aijspro/app_node24-runtime/d2165091a8360066",
+                cliLauncherPath = "/data/user/0/com.jdkshen.aijspro/app_node24-runtime/d2165091a8360066/node",
+                cliLauncherPresent = false,
+                cliLauncherExecutable = false,
+                runtimeLibraryPath = "/data/user/0/com.jdkshen.aijspro/app_node24-runtime/d2165091a8360066/libnode.so",
+                runtimeLibraryPresent = true,
+                toolsDirectoryPath = "/data/user/0/com.jdkshen.aijspro/app_node24-tools/8619e4cdfc02e6b2",
+                toolsDirectoryPresent = false
+            )
+        )
+        assertEquals("embedded-shared-library", embedded.get("runtimeMode").asString)
+        assertFalse(embedded.get("canSpawnStandaloneNode").asBoolean)
+        assertTrue(embedded.get("hostExecutableNote").asString.contains("process.execPath"))
+        assertEquals(1, embedded.getAsJsonArray("supportedChildScriptRunner").size())
+        assertFalse(embedded.getAsJsonObject("standaloneCli").get("runnable").asBoolean)
+
+        // CLI 已提取且同目录有 libnode.so：才能说可以启动独立 CLI，并给出命令形态。
+        val extracted = McpEngineDiagnostics.nodeRuntimeForm(
+            McpEngineDiagnostics.NodeRuntimeFormInput(
+                processName = "com.jdkshen.aijspro",
+                hostExecutablePath = "/system/bin/app_process64",
+                hostExecutablePresent = true,
+                runtimeDirectoryPath = "/data/user/0/com.jdkshen.aijspro/app_node24-runtime/d2165091a8360066",
+                cliLauncherPath = "/data/user/0/com.jdkshen.aijspro/app_node24-runtime/d2165091a8360066/node",
+                cliLauncherPresent = true,
+                cliLauncherExecutable = true,
+                runtimeLibraryPath = "/data/user/0/com.jdkshen.aijspro/app_node24-runtime/d2165091a8360066/libnode.so",
+                runtimeLibraryPresent = true,
+                toolsDirectoryPath = "/data/user/0/com.jdkshen.aijspro/app_node24-tools/8619e4cdfc02e6b2",
+                toolsDirectoryPresent = true
+            )
+        )
+        assertTrue(extracted.get("canSpawnStandaloneNode").asBoolean)
+        assertEquals(2, extracted.getAsJsonArray("supportedChildScriptRunner").size())
+        assertTrue(extracted.getAsJsonArray("supportedChildScriptRunner")[1].asString.startsWith("cli:"))
+    }
+
+    @Test
     fun failureRecordingKeepsNewestEvidenceWithoutCopyingUserData() {
         val now = System.currentTimeMillis()
         McpEngineDiagnostics.recordFailure("nodejs", "latest", now, "PoolBusyException")

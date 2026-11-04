@@ -61,8 +61,112 @@ object McpEngineDiagnostics {
             poolCapacity = capacity,
             nodeProcesses = observeNodeProcesses(context, capacity),
             runtimePinCount = runtimePins,
-            lastFailure = failureSnapshot()
+            lastFailure = failureSnapshot(),
+            nodeRuntimeForm = nodeRuntimeForm(nodeRuntimeFormInput(context, currentProcessName(context)))
         ).toString()
+    }
+
+    /**
+     * §6.3：嵌入式 Node 的**真实运行形态**。复盘指出「process.execPath」在本形态下指向
+     * app_process64/32，不能当独立 Node CLI 用。这里只做只读文件探测，不启动进程、不执行脚本。
+     */
+    internal data class NodeRuntimeFormInput(
+        val processName: String,
+        val hostExecutablePath: String?,
+        val hostExecutablePresent: Boolean,
+        val runtimeDirectoryPath: String?,
+        val cliLauncherPath: String?,
+        val cliLauncherPresent: Boolean,
+        val cliLauncherExecutable: Boolean,
+        val runtimeLibraryPath: String?,
+        val runtimeLibraryPresent: Boolean,
+        val toolsDirectoryPath: String?,
+        val toolsDirectoryPresent: Boolean
+    )
+
+    internal fun nodeRuntimeForm(input: NodeRuntimeFormInput): JsonObject {
+        val runnable = input.cliLauncherPresent && input.cliLauncherExecutable && input.runtimeLibraryPresent
+        val reason = when {
+            !input.cliLauncherPresent ->
+                "独立 CLI 启动器尚未提取；首次使用 Node CLI/npm 时由 Node24Tools.prepare 复制到运行时目录"
+            !input.cliLauncherExecutable -> "启动器存在但没有可执行位"
+            !input.runtimeLibraryPresent -> "启动器缺少同目录的 libnode.so，无法独立运行"
+            else -> "同目录已有 libnode.so 与可执行启动器，可按需启动独立 CLI"
+        }
+        return ToolkitIo.json(
+            "runtimeMode" to "embedded-shared-library",
+            "runtimeModeNote" to "Node 以 libnode.so 载入 :node24_N 应用进程；默认形态不是独立 node 进程。",
+            "hostProcess" to input.processName,
+            "hostExecutable" to input.hostExecutablePath,
+            "hostExecutablePresent" to input.hostExecutablePresent,
+            "hostExecutableNote" to "Android 由 zygote/app_process 启动应用进程，因此 process.execPath 指向 " +
+                "app_process64/32；不能据此判断「这是 Node CLI」，也不要据此启动子脚本。",
+            "standaloneCli" to ToolkitIo.json(
+                "assetPath" to "node24/tools/node",
+                "kind" to "elf-cli-launcher",
+                "requires" to listOf("libnode.so", "libc++_shared.so"),
+                "runtimeDirectory" to input.runtimeDirectoryPath,
+                "cliLauncher" to input.cliLauncherPath,
+                "cliLauncherPresent" to input.cliLauncherPresent,
+                "cliLauncherExecutable" to input.cliLauncherExecutable,
+                "runtimeLibrary" to input.runtimeLibraryPath,
+                "runtimeLibraryPresent" to input.runtimeLibraryPresent,
+                "toolsDirectory" to input.toolsDirectoryPath,
+                "toolsDirectoryPresent" to input.toolsDirectoryPresent,
+                "runnable" to runnable,
+                "reason" to reason
+            ),
+            "canSpawnStandaloneNode" to runnable,
+            "supportedChildScriptRunner" to buildList {
+                add("mcp:run_script engine=nodejs（嵌入式进程池，始终可用）")
+                if (runnable && input.cliLauncherPath != null) add("cli:" + input.cliLauncherPath + " <script.js>")
+            },
+            "processExecPathNote" to "不要用 process.execPath 判断运行形态；以本对象为准。"
+        )
+    }
+
+    /** 只读推导运行时目录 app_node24-runtime/<libnode.so sha256 前16位>；不创建目录、不执行文件。 */
+    private fun resolveRuntimeDirectory(context: Context): File? = runCatching {
+        val pins = context.assets.open("$NODE_ASSET_PREFIX/runtime.json").use { input ->
+            org.json.JSONObject(input.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        }
+        val libnode = pins.optString("libnode.so")
+        if (libnode.length < 16) return null
+        val base = context.filesDir.parentFile ?: return null
+        File(File(base, "app_node24-runtime"), libnode.substring(0, 16))
+    }.getOrNull()
+
+    /** CLI/npm 工具目录 app_node24-tools/<npm.zip sha256 前16位>（Node24Tools.prepare 的落点）。 */
+    private fun resolveToolsDirectory(context: Context): File? = runCatching {
+        val pins = context.assets.open("node24/tools/tools.json").use { input ->
+            org.json.JSONObject(input.bufferedReader(Charsets.UTF_8).use { it.readText() })
+        }
+        val npm = pins.optString("npm.zip")
+        if (npm.length < 16) return null
+        val base = context.filesDir.parentFile ?: return null
+        File(File(base, "app_node24-tools"), npm.substring(0, 16))
+    }.getOrNull()
+
+    private fun nodeRuntimeFormInput(context: Context, processName: String): NodeRuntimeFormInput {
+        val hostExecutable = listOf(File("/system/bin/app_process64"), File("/system/bin/app_process32"))
+            .firstOrNull { it.exists() }
+        val runtimeDirectory = resolveRuntimeDirectory(context)
+        val cliLauncher = runtimeDirectory?.let { File(it, "node") }
+        val runtimeLibrary = runtimeDirectory?.let { File(it, "libnode.so") }
+        val toolsDirectory = resolveToolsDirectory(context)
+        return NodeRuntimeFormInput(
+            processName = processName,
+            hostExecutablePath = hostExecutable?.path,
+            hostExecutablePresent = hostExecutable != null,
+            runtimeDirectoryPath = runtimeDirectory?.path,
+            cliLauncherPath = cliLauncher?.path,
+            cliLauncherPresent = cliLauncher?.isFile == true,
+            cliLauncherExecutable = cliLauncher?.canExecute() == true,
+            runtimeLibraryPath = runtimeLibrary?.path,
+            runtimeLibraryPresent = runtimeLibrary?.isFile == true,
+            toolsDirectoryPath = toolsDirectory?.path,
+            toolsDirectoryPresent = toolsDirectory?.isDirectory == true
+        )
     }
 
     /** Pure builder; tests can verify the contract without an Android Context. */
@@ -74,7 +178,8 @@ object McpEngineDiagnostics {
         poolCapacity: Int,
         nodeProcesses: List<NodeProcessObservation>,
         runtimePinCount: Int,
-        lastFailure: JsonObject?
+        lastFailure: JsonObject?,
+        nodeRuntimeForm: JsonObject? = null
     ): JsonObject = JsonObject().apply {
         addProperty("schemaVersion", SCHEMA_VERSION)
         addProperty("capturedAt", capturedAt)
@@ -125,6 +230,7 @@ object McpEngineDiagnostics {
                 addProperty("speedMeasured", false)
             })
             addProperty("note", "只检查很小的 runtime.json 是否存在；不读取/校验 106MB 运行时，不启动新 Node 脚本，也不声称已测速。")
+            if (nodeRuntimeForm != null) add("nodeRuntimeForm", nodeRuntimeForm)
         })
         if (lastFailure == null) add("lastFailure", JsonNull.INSTANCE)
         else add("lastFailure", lastFailure)

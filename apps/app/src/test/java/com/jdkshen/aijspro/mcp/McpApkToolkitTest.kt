@@ -50,6 +50,30 @@ class McpApkToolkitTest {
         workspace = tools.call("apk_workspace_open",args("path" to source.name,"temporary" to true)).getAsJsonObject("data").tString("workspaceId")
         session = tools.call("apk_session_create",args("workspaceId" to workspace)).getAsJsonObject("data").tString("editSessionId")
     }
+    @Test fun artifactOpenAcceptsApkStructureWithoutStandardExtension() {
+        // §5.2：真实目标可能叫 xxx.apk.1；结构判定优先于扩展名。
+        val disguised = File(home, "影安加固-测试demo.apk.1")
+        source.copyTo(disguised)
+        val opened = tools.call("artifact_open", args("path" to disguised.name, "temporary" to true)).getAsJsonObject("data")
+        assertTrue(opened.tString("workspaceId").isNotEmpty())
+
+        // 扩展名像 APK 但结构不是：报结构原因，不要只说“不支持”。
+        val fake = File(home, "fake.apk"); fake.writeText("not a zip at all")
+        val fakeError = try { tools.call("artifact_open", args("path" to fake.name, "temporary" to true)); null }
+            catch (failure: IllegalArgumentException) { failure.message ?: "" }
+        assertNotNull(fakeError)
+        assertTrue(fakeError!!.contains("不是 ZIP"))
+
+        // 目录：给出有界扫描候选，而不是笼统失败。
+        val scanDir = File(home, "scan-dir"); assertTrue(scanDir.mkdirs())
+        source.copyTo(File(scanDir, "inner.apk"))
+        val dirError = try { tools.call("artifact_open", args("path" to "scan-dir", "temporary" to true)); null }
+            catch (failure: IllegalArgumentException) { failure.message ?: "" }
+        assertNotNull(dirError)
+        assertTrue(dirError!!.contains("目录"))
+        assertTrue(dirError.contains("inner.apk"))
+    }
+
     @Test fun snapshotsRemainImmutableAndTextChangesAreVersioned() {
         val original = ToolkitIo.sha(source)
         val read = invoke("apk_read_text","locator" to "zip_entry:assets/test.txt")
