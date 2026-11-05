@@ -21,6 +21,12 @@ internal object ToolkitDecompileView {
     const val DEFAULT_MAX_CODE_CHARS = 131072
     const val MAX_CODE_CHARS_LIMIT = 4 * 1024 * 1024
 
+    /** projectSegments 的段数硬上限（超出夹取，不抛异常）。 */
+    const val MAX_SEGMENT_COUNT = 64
+
+    /** 伪代码体量超过该值时，summarizeBigFunction 建议改用 projectSegments 分段阅读。 */
+    const val SEGMENT_RECOMMENDED_CHARS = 16 * 1024
+
     /** 一条反编译原始结果（来自 r2ghidra/其它后端的最小公共形状）。 */
     data class RawDecompile(
         val code: String,
@@ -296,6 +302,263 @@ internal object ToolkitDecompileView {
             "noDirectReferenceConclusion" to if (directReference) "not_applicable" else "cannot_conclude_absent",
             "notes" to JsonArray().apply { notes.forEach { add(it) } },
         )
+    }
+
+    /**
+     * 大函数伪代码的有界分段投影（为 vmInterpret 这类 82,684 B 函数准备）。
+     *
+     * 按行切分 pdgText，每段总字符数不超过 maxCodeChars；段数不超过 maxSegments（夹取到 1..64）。
+     * 单行/单段超过 maxCodeChars 时只在该段内截断并标 truncated=true，然后停止（剩余用 nextOffset 续读）；
+     * 续读时把 nextOffset 作为 offset 再次调用（默认 0）：段、行号都是相对原 pdgText，保持连续。
+     *
+     * 输出证据等级固定为 static_inferred（伪代码是静态推断，不是运行时确认）；pdg 的 relocAware=true。
+     * 本视图只投影伪代码文本，不包含 r2ghidra 注解（omittedAnnotations=true）。
+     */
+    fun projectSegments(
+        pdgText: String,
+        address: String,
+        maxCodeChars: Int = DEFAULT_MAX_CODE_CHARS,
+        maxSegments: Int = 8,
+        offset: Int = 0,
+    ): JsonObject {
+        val charBudget = maxCodeChars.coerceIn(1, MAX_CODE_CHARS_LIMIT)
+        val segmentBudget = maxSegments.coerceIn(1, MAX_SEGMENT_COUNT)
+        val start = offset.coerceIn(0, pdgText.length)
+
+        // 行边界与行号前缀；行号 1-based。lineRanges 的 end 含行尾换行符（若有）。
+        val newlinePrefix = IntArray(pdgText.length + 1)
+        for (i in pdgText.indices) {
+            newlinePrefix[i + 1] = newlinePrefix[i] + (if (pdgText[i] == '\n') 1 else 0)
+        }
+        val lineRanges = ArrayList<Pair<Int, Int>>()
+        var linePos = 0
+        while (linePos < pdgText.length) {
+            val newline = pdgText.indexOf('\n', linePos)
+            val end = if (newline < 0) pdgText.length else newline + 1
+            lineRanges.add(linePos to end)
+            linePos = end
+        }
+
+        val segments = JsonArray()
+        val notes = ArrayList<String>()
+        notes.add("伪代码是静态推断（evidenceLevel=static_inferred），不是运行时确认。")
+        notes.add("pdg 会解析重定位（relocAware=true）；能看到 adrp/add 目标地址，但重定位可见性不等于运行时行为。")
+        notes.add("本视图只投影伪代码文本，不含 r2ghidra 注解（omittedAnnotations=true）；需要注解请用 project(includeAnnotations=true)。")
+
+        var cursor = start
+        var index = 0
+        var anyTruncated = false
+        var returnedChars = 0
+        while (cursor < pdgText.length && index < segmentBudget) {
+            val firstLine = lineIndexFor(lineRanges, cursor)
+            val segmentStart = cursor
+            var segmentEnd = cursor
+            var truncated = false
+            var endsMidLine = false
+            var lineIndex = firstLine
+            while (lineIndex < lineRanges.size) {
+                val range = lineRanges[lineIndex]
+                val to = range.second
+                if (to - cursor > charBudget) {
+                    if (segmentEnd == segmentStart) {
+                        val available = pdgText.substring(cursor, to)
+                        segmentEnd = cursor + safeSegmentEnd(available, charBudget)
+                        truncated = true
+                        endsMidLine = true
+                    }
+                    break
+                }
+                segmentEnd = to
+                lineIndex++
+            }
+            if (segmentEnd <= segmentStart) break // 防御：预算非法/异常时避免死循环
+            val code = pdgText.substring(segmentStart, segmentEnd)
+            returnedChars += code.length
+            anyTruncated = anyTruncated || truncated
+            segments.add(
+                ToolkitIo.json(
+                    "index" to index,
+                    "startLine" to (newlinePrefix[segmentStart] + 1),
+                    "endLine" to if (pdgText[segmentEnd - 1] == '\n') {
+                        newlinePrefix[segmentEnd]
+                    } else {
+                        newlinePrefix[segmentEnd] + 1
+                    },
+                    "chars" to code.length,
+                    "truncated" to truncated,
+                    "endsMidLine" to endsMidLine,
+                    "code" to code,
+                ),
+            )
+            cursor = segmentEnd
+            index++
+            if (truncated) break // 单个超长行：本段截断后停止，剩余交给 nextOffset 续读。
+        }
+
+        val hasMore = cursor < pdgText.length
+        val remaining = pdgText.length - cursor
+        if (hasMore) {
+            notes.add("还有 " + remaining + " 字符未返回；把 nextOffset 作为 offset 再次调用 projectSegments 可续读（同一 pdgText）。")
+        }
+        if (anyTruncated) {
+            notes.add("存在超过 maxCodeChars 的单个行/段，已在本段内截断（truncated=true）；下一段从 nextOffset 续读。")
+        }
+        val boundaryInfo = boundary(false, null, null, null, null)
+        return ToolkitIo.json(
+            "view" to "segmented",
+            "source" to "pdg",
+            "projectionVersion" to PROJECTION_VERSION,
+            "address" to address,
+            "functionAddress" to address,
+            "offset" to start,
+            "offsetRequested" to offset,
+            "offsetClamped" to (start != offset),
+            "maxCodeChars" to charBudget,
+            "maxCodeCharsRequested" to maxCodeChars,
+            "maxCodeCharsClamped" to (charBudget != maxCodeChars),
+            "maxSegments" to segmentBudget,
+            "maxSegmentsRequested" to maxSegments,
+            "maxSegmentsClamped" to (segmentBudget != maxSegments),
+            "totalChars" to pdgText.length,
+            "returnedChars" to returnedChars,
+            "remainingChars" to remaining,
+            "segmentCount" to segments.size(),
+            "hasMore" to hasMore,
+            "nextOffset" to (if (hasMore) cursor else null),
+            "truncated" to (hasMore || anyTruncated),
+            "segments" to segments,
+            "omittedAnnotations" to true,
+            "annotationsIncluded" to false,
+            "boundarySource" to boundaryInfo.get("source").asString,
+            "boundaryConfidence" to boundaryInfo.get("confidence").asString,
+            "boundary" to boundaryInfo,
+            "evidenceLevel" to "static_inferred",
+            "relocAware" to true,
+            "notes" to JsonArray().apply { notes.forEach { add(it) } },
+        )
+    }
+
+    /**
+     * 大函数体量摘要：用 pdfj（raw 反汇编 JSON）的 blocks/ops 统计 + pdg 行数/字符数。
+     * pdfj 缺失或不可解析时 instructionCount/basicBlockCount 保持 null，并在 notes 说明（不猜）。
+     * 伪代码仍是 static_inferred，不是运行时确认；pdg 才具备 relocAware=true。
+     */
+    fun summarizeBigFunction(pdgText: String, pdfjText: String?, address: String): JsonObject {
+        val notes = ArrayList<String>()
+        notes.add("伪代码（pdg）是静态推断，不是运行时确认；evidenceLevel=static_inferred。")
+        notes.add("pdg 会解析重定位（relocAware=true）；能看到 adrp/add 目标地址，但重定位可见性不等于运行时行为。")
+        var instructionCount: Int? = null
+        var basicBlockCount: Int? = null
+        var pdfjPresent = false
+        var pdfjParsable = false
+        var pdfjNote: String? = null
+        if (!pdfjText.isNullOrBlank()) {
+            pdfjPresent = true
+            // 本仓库 gson 没有 JsonParser.parseString 静态方法（编译期实测 Unresolved reference），用实例方法。
+            val parsed = runCatching { JsonParser().parse(pdfjText) }.getOrNull()
+            if (parsed == null) {
+                pdfjNote = "pdfj 文本不是合法 JSON：instructionCount/basicBlockCount 留 null（不猜）。"
+            } else {
+                pdfjParsable = true
+                if (parsed.isJsonObject) {
+                    val root = parsed.asJsonObject
+                    val blocks = root.getAsJsonArray("blocks")
+                    if (blocks != null) {
+                        basicBlockCount = blocks.size()
+                        var ops = 0
+                        for (element in blocks) {
+                            if (element.isJsonObject) {
+                                ops += element.asJsonObject.getAsJsonArray("ops")?.size() ?: 0
+                            }
+                        }
+                        instructionCount = ops
+                    } else {
+                        val ops = root.getAsJsonArray("ops")
+                        if (ops != null) instructionCount = ops.size()
+                        val nbbs = root.get("nbbs")?.takeIf { it.isJsonPrimitive }?.asInt
+                        if (nbbs != null) basicBlockCount = nbbs
+                        if (ops != null) notes.add("pdfj 没有 blocks 字段：basicBlockCount 留 null；instructionCount 来自顶层 ops 统计。")
+                    }
+                    if (instructionCount == null) {
+                        val nops = root.get("nops")?.takeIf { it.isJsonPrimitive }?.asInt
+                        if (nops != null) instructionCount = nops
+                    }
+                    if (instructionCount == null && basicBlockCount == null) {
+                        pdfjNote = "pdfj 可解析但未找到 ops/blocks 统计字段：instructionCount/basicBlockCount 留 null（不猜）。"
+                    }
+                } else if (parsed.isJsonArray) {
+                    instructionCount = parsed.asJsonArray.size()
+                    notes.add("pdfj 顶层是数组：instructionCount 取数组长度，basicBlockCount 留 null（不猜）。")
+                } else {
+                    pdfjNote = "pdfj 顶层不是对象/数组：instructionCount/basicBlockCount 留 null（不猜）。"
+                }
+            }
+        } else {
+            pdfjNote = "pdfj 缺失（null 或空文本）：instructionCount/basicBlockCount 留 null（不猜）。"
+        }
+        pdfjNote?.let { notes.add(it) }
+
+        val lines = pseudoCodeLines(pdgText)
+        val chars = pdgText.length
+        if (chars == 0) notes.add("pdg 为空：pseudoCodeLines/pseudoCodeChars 为 0，不能据此判断函数体量。")
+        val recommended = chars > SEGMENT_RECOMMENDED_CHARS || lines > 2000
+        if (recommended) {
+            notes.add(
+                "函数体量较大（pseudoCodeLines=" + lines + "，pseudoCodeChars=" + chars +
+                    "）：建议用 projectSegments 分段阅读；vmInterpret 这类 82,684 B 函数不要一次性全量返回。",
+            )
+        }
+        return ToolkitIo.json(
+            "view" to "big-function-summary",
+            "address" to address,
+            "instructionCount" to instructionCount,
+            "basicBlockCount" to basicBlockCount,
+            "pseudoCodeLines" to lines,
+            "pseudoCodeChars" to chars,
+            "evidenceLevel" to "static_inferred",
+            "relocAware" to true,
+            "pdfjPresent" to pdfjPresent,
+            "pdfjParsable" to pdfjParsable,
+            "pdfjNote" to pdfjNote,
+            "segmentedReadRecommended" to recommended,
+            "notes" to JsonArray().apply { notes.forEach { add(it) } },
+        )
+    }
+
+    private fun pseudoCodeLines(text: String): Int {
+        if (text.isEmpty()) return 0
+        var lines = 1
+        for (character in text) if (character == '\n') lines++
+        if (text.endsWith('\n')) lines--
+        return lines
+    }
+
+    /** 二分查找包含 offset 的行区间（offset 必须落在某个行区间内）。 */
+    private fun lineIndexFor(lineRanges: List<Pair<Int, Int>>, offset: Int): Int {
+        var low = 0
+        var high = lineRanges.size - 1
+        var result = 0
+        while (low <= high) {
+            val middle = (low + high) / 2
+            if (lineRanges[middle].first <= offset) {
+                result = middle
+                low = middle + 1
+            } else {
+                high = middle - 1
+            }
+        }
+        return result.coerceIn(0, lineRanges.size - 1)
+    }
+
+    /** 段内截断：不切断 UTF-16 代理对；极端情况下（代理对起点 + 预算 1）至少返回 2 个单元，保证前进。 */
+    private fun safeSegmentEnd(code: String, maxChars: Int): Int {
+        if (maxChars >= code.length) return code.length
+        var end = maxChars.coerceAtLeast(1)
+        if (end < code.length && Character.isHighSurrogate(code[end - 1]) && Character.isLowSurrogate(code[end])) {
+            end--
+        }
+        if (end <= 0) end = if (code.length >= 2) 2 else code.length
+        return end.coerceAtMost(code.length)
     }
 
     /** 截断到 maxCodeChars，但不切断 UTF-16 代理对（emoji 等不会变成半个字符）。 */

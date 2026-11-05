@@ -42,14 +42,20 @@ internal object ToolkitReverseTools {
         "native_session_plan" to "查看/生成该会话下一步要执行的 r2 命令（首次 aaa;Ps <project>，后续 Po <project>;<cmd>），可先核对再执行。",
         "native_session_query" to "在已有会话上执行有界 r2 查询（复用已保存的 project，不重新 aaa）；命令长度与输出字节有界，禁止 ! shell 逃逸。",
         "native_session_close" to "关闭会话并返回真实释放（project 文件是否删除、剩余会话数）。",
-        "native_session_list" to "列出 r2 分析会话（输入哈希、TTL、是否已初始化、project 路径）。"
+        "native_session_list" to "列出 r2 分析会话（输入哈希、TTL、是否已初始化、project 路径）。",
+        "native_resident_open" to "打开**常驻 r2 进程**会话（一次加载、多次查询）：与 native_session_* 的 project 复用不同，这里复用同一个进程的 stdin/stdout，单条查询从秒级降到毫秒级。默认 e bin.relocs.apply=true；进程死亡/超时如实报错。",
+        "native_resident_command" to "在常驻会话里执行单条 r2 命令（framing=<cmd>;?e <marker>，返回剔除 marker）；输出/超时都有界，禁止 ! shell 逃逸。",
+        "native_resident_batch" to "在常驻会话里一次执行多条 r2 命令（逐条隔离：一条失败/超时不影响其它条）；返回每条 ok/errorCode/output 与总数/总字节。",
+        "native_resident_close" to "关闭常驻 r2 会话并返回真实释放（closed/remainingSessions/releasedProcess）。",
+        "native_resident_list" to "列出常驻 r2 会话（TTL、是否注入执行器 runnerConfigured、命令计数、marker）。"
     )
     val names = descriptions.keys.toList()
     val guideNames = setOf("reverse_guide", "reverse_plan")
     /** 会话类工具是内存态、同步返回，不做后台 job（否则 read/close 会拿不到同一进程内的会话）。 */
     val sessionTools = setOf("frida_session_open", "frida_session_read", "frida_session_close", "frida_session_list")
     /** native 分析会话同样是同步的内存/文件态接口，不做后台 job。 */
-    val sessionNativeTools = setOf("native_session_open","native_session_plan","native_session_query","native_session_close","native_session_list")
+    val sessionNativeTools = setOf("native_session_open","native_session_plan","native_session_query","native_session_close","native_session_list",
+        "native_resident_open","native_resident_command","native_resident_batch","native_resident_close","native_resident_list")
     val analysisTools = setOf("native_analysis_open","native_analysis_status","native_analysis_define_function",
         "native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay",
         "native_analysis_save","native_analysis_close","native_analysis_list","native_analysis_r2_commands")
@@ -105,6 +111,11 @@ internal object ToolkitReverseTools {
             "native_session_query"->{field("sessionId",str(),true);field("command",str("纯 r2 命令；禁止 ! 逃逸"),true);field("timeoutSeconds",num(1,300,60))}
             "native_session_close"->field("sessionId",str(),true)
             "native_session_list"->Unit
+            "native_resident_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("relocsApply",ToolkitIo.json("type" to "boolean","default" to true))}
+            "native_resident_command"->{field("sessionId",str(),true);field("command",str("纯 r2 命令；禁止 ! 逃逸"),true);field("timeoutMillis",num(1,300000,30000))}
+            "native_resident_batch"->{field("sessionId",str(),true);field("commands",ToolkitIo.json("type" to "array","items" to ToolkitIo.json("type" to "string")));field("timeoutMillis",num(1,300000,30000))}
+            "native_resident_close"->field("sessionId",str(),true)
+            "native_resident_list"->Unit
             "native_analysis_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("abi",str());field("sessionId",str())}
             "native_analysis_list"->Unit
             "native_analysis_status","native_analysis_save","native_analysis_close","native_analysis_r2_commands"->field("sessionId",str(),true)
@@ -119,7 +130,7 @@ internal object ToolkitReverseTools {
     }
     fun definitions()=JsonArray().apply{names.forEach{name->add(ToolkitIo.json("name" to name,"description" to descriptions.getValue(name),
         "category" to "reverse","categoryTitle" to "逆向分析","inputSchema" to schema(name),
-        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","apk_inject_gadget","frida_eval","frida_session_open","frida_session_close","native_analysis_open","native_analysis_define_function","native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay","native_analysis_save","native_analysis_close","native_session_open","native_session_plan","native_session_query","native_session_close")),"openWorldHint" to name.startsWith("frida_")),
+        "annotations" to ToolkitIo.json("readOnlyHint" to (name !in setOf("apk_decode_project","apk_build_project","apk_install_framework","apk_inject_gadget","frida_eval","frida_session_open","frida_session_close","native_analysis_open","native_analysis_define_function","native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay","native_analysis_save","native_analysis_close","native_session_open","native_session_plan","native_session_query","native_session_close","native_resident_open","native_resident_command","native_resident_batch","native_resident_close")),"openWorldHint" to name.startsWith("frida_")),
         "_meta" to ToolkitIo.json("aijs" to ToolkitIo.json("guideTool" to "reverse_guide","dependencies" to (dependencies[name]?:emptyList<String>()),"backgroundDefault" to (name in operations),
             "resultTools" to if(name in operations)listOf("apk_job_status","apk_job_result","apk_job_cancel")else emptyList<String>()))))}}
     fun validate(name:String,args:JsonObject){

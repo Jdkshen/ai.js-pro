@@ -290,4 +290,85 @@ class ToolkitDecompileViewTest {
         assertTrue(notesOf(indirect).any { it.contains("静态推断") })
         assertTrue(notesOf(indirect).any { it.contains("动态覆盖已执行") })
     }
+    // ---- T5：大函数分段投影与体量摘要（manifest-detector 中途失败，由 Lead 补测） ----
+
+    private fun notesOf2(json: com.google.gson.JsonObject): List<String> =
+        json.getAsJsonArray("notes").map { it.asString }
+
+    @Test
+    fun projectSegmentsSplitsInOrderAndContinuesFromNextOffset() {
+        val text = (1..40).joinToString("\n") { "line" + it + " body" }
+        val first = ToolkitDecompileView.projectSegments(text, "0x1000", maxCodeChars = 60, maxSegments = 2)
+        assertEquals("segmented", first.get("view").asString)
+        assertEquals(text.length, first.get("totalChars").asInt)
+        assertTrue(first.get("segmentCount").asInt in 1..2)
+        assertTrue(first.get("hasMore").asBoolean)
+        assertTrue(first.get("nextOffset").asInt > 0)
+        assertTrue(first.get("returnedChars").asInt <= text.length)
+        assertEquals("static_inferred", first.get("evidenceLevel").asString)
+        assertEquals(true, first.get("relocAware").asBoolean)
+        assertEquals(true, first.get("omittedAnnotations").asBoolean)
+        assertTrue(notesOf2(first).any { it.contains("static_inferred") })
+        assertTrue(notesOf2(first).any { it.contains("relocAware=true") })
+        assertTrue(notesOf2(first).any { it.contains("不是运行时确认") })
+
+        val second = ToolkitDecompileView.projectSegments(text, "0x1000", maxCodeChars = 60,
+            maxSegments = 2, offset = first.get("nextOffset").asInt)
+        assertEquals(first.get("nextOffset").asInt, second.get("offset").asInt)
+        val firstCode = first.getAsJsonArray("segments")[0].asJsonObject.get("code").asString
+        val secondCode = second.getAsJsonArray("segments")[0].asJsonObject.get("code").asString
+        assertFalse(secondCode.isNotEmpty() && secondCode == firstCode)
+    }
+
+    @Test
+    fun projectSegmentsTruncatesOversizedSingleLine() {
+        val text = "x".repeat(500)
+        val json = ToolkitDecompileView.projectSegments(text, "0x2000", maxCodeChars = 64, maxSegments = 4)
+        val segment = json.getAsJsonArray("segments")[0].asJsonObject
+        assertEquals(true, segment.get("truncated").asBoolean)
+        assertTrue(segment.get("code").asString.length <= 64)
+        assertTrue(json.get("truncated").asBoolean)
+    }
+
+    @Test
+    fun projectSegmentsClampsBudgetsAndHandlesEmptyInput() {
+        val clamped = ToolkitDecompileView.projectSegments("a\nb\n", "0x1", maxCodeChars = 0, maxSegments = 0)
+        assertTrue(clamped.get("maxCodeChars").asInt >= 1)
+        assertEquals(1, clamped.get("maxSegments").asInt)
+        assertEquals(true, clamped.get("maxSegmentsClamped").asBoolean)
+        val empty = ToolkitDecompileView.projectSegments("", "0x1", maxCodeChars = 10, maxSegments = 4)
+        assertEquals(0, empty.get("totalChars").asInt)
+        assertEquals(0, empty.get("segmentCount").asInt)
+        assertFalse(empty.get("hasMore").asBoolean)
+    }
+
+    @Test
+    fun summarizeBigFunctionUsesPdfjWhenPresent() {
+        val pdfj = "{\"blocks\":[{\"ops\":[1,2,3]},{\"ops\":[4,5]}]}"
+        val pdg = "void f() {\n  a();\n  b();\n}"
+        val json = ToolkitDecompileView.summarizeBigFunction(pdg, pdfj, "0x3a1e4")
+        assertEquals("big-function-summary", json.get("view").asString)
+        assertEquals(5, json.get("instructionCount").asInt)
+        assertEquals(2, json.get("basicBlockCount").asInt)
+        // pseudoCodeLines = 1 + 换行数（"void f() {\n  a();\n  b();\n}" 有 3 个换行 → 4 行）
+        assertEquals(4, json.get("pseudoCodeLines").asInt)
+        assertEquals(pdg.length, json.get("pseudoCodeChars").asInt)
+        assertEquals("static_inferred", json.get("evidenceLevel").asString)
+        assertEquals(true, json.get("relocAware").asBoolean)
+        assertEquals(true, json.get("pdfjParsable").asBoolean)
+    }
+
+    @Test
+    fun summarizeBigFunctionKeepsCountsNullWithoutPdfj() {
+        val json = ToolkitDecompileView.summarizeBigFunction("void f() {}", null, "0x3a1e4")
+        assertFalse(json.get("pdfjPresent").asBoolean)
+        assertFalse(json.get("pdfjParsable").asBoolean)
+        assertEquals(com.google.gson.JsonNull.INSTANCE, json.get("instructionCount"))
+        assertEquals(com.google.gson.JsonNull.INSTANCE, json.get("basicBlockCount"))
+        assertTrue(notesOf2(json).any { it.contains("pdfj 缺失") })
+        val bad = ToolkitDecompileView.summarizeBigFunction("void f() {}", "{not json", "0x3a1e4")
+        assertEquals(com.google.gson.JsonNull.INSTANCE, bad.get("instructionCount"))
+        assertTrue(notesOf2(bad).any { it.contains("不是合法 JSON") })
+    }
 }
+

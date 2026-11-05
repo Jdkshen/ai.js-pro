@@ -33,6 +33,59 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             }finally{temp.deleteRecursively()}
         })
     }
+    /**
+     * T4：常驻 r2 进程（一次加载、多次查询）。framing 由 ToolkitR2Resident 负责（<cmd>;?e <marker>），
+     * 这里只实现进程与管道；进程死掉/超时会如实报错，不伪造输出。
+     */
+    private val r2Resident by lazy {
+        // R2Pipe 是普通 interface（不是 fun interface），必须用 object 表达式而不是 SAM 简写。
+        ToolkitR2Resident(File(context.noBackupFilesDir,"r2-resident"), object : R2Pipe {
+          override fun open(inputPath:String, argv:List<String>):R2PipeHandle {
+            val c=component("radare2")
+            val work=File(context.cacheDir,"r2-resident-"+ToolkitIo.fresh()).apply{require(mkdirs())}
+            val builder=ProcessBuilder(listOf(File(c,"bin/radare2").path)+argv)
+            builder.directory(work)
+            builder.environment().putAll(env(c))
+            builder.redirectErrorStream(true)
+            val process=builder.start()
+            return object : R2PipeHandle {
+                private val stdin=process.outputStream.bufferedWriter()
+                override fun write(line:String){stdin.write(line);stdin.write("\n");stdin.flush()}
+                // r2 以 -0 启动：每条命令后跟一个 NUL（保证非 TTY 下立即刷新）。
+                // 这里忽略 NUL/CR，按行累积，直到出现 marker 行才算本次命令结束——
+                // NUL 只用来触发刷新，不能当终止符（实测用 NUL 终止会整体错位一条命令）。
+                override fun readUntil(marker:String,timeoutMillis:Long,maxBytes:Long):String{
+                    val raw=java.io.ByteArrayOutputStream()
+                    val deadline=System.currentTimeMillis()+timeoutMillis
+                    while(System.currentTimeMillis()<deadline){
+                        val available=process.inputStream.available()
+                        if(available>0){
+                            val buffer=ByteArray(minOf(available,8192))
+                            val read=process.inputStream.read(buffer)
+                            if(read<0)throw IllegalStateException("r2 stdout closed")
+                            for(i in 0 until read)if(buffer[i]!=0.toByte())raw.write(buffer[i].toInt())
+                            val text=String(raw.toByteArray(),Charsets.UTF_8)
+                            val lastLine=text.trimEnd('\r','\n').substringAfterLast('\n').trim()
+                            if(lastLine==marker)return text
+                            if(raw.size()>maxBytes)return text
+                            continue
+                        }
+                        if(!process.isAlive)throw IllegalStateException("r2 process exited")
+                        Thread.sleep(5)
+                    }
+                    throw java.util.concurrent.TimeoutException("r2 marker not observed within "+timeoutMillis+"ms")
+                }
+                override fun alive():Boolean=process.isAlive
+                override fun close(){
+                    runCatching{stdin.close()}
+                    process.destroy()
+                    if(process.isAlive)process.destroyForcibly()
+                    work.deleteRecursively()
+                }
+            }
+          }
+        })
+    }
     private fun optionalString(args:JsonObject,key:String):String?=
         args.get(key)?.takeIf{it.isJsonPrimitive&&it.asJsonPrimitive.isString}?.asString
     private fun file(args:JsonObject,key:String="path",limit:Long=ToolkitIo.MAX_ENTRY.toLong()):File=
@@ -53,6 +106,17 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "native_emulate"->emulate(args,temp)
             "frida_status","frida_processes","frida_eval"->frida(name,args,temp)
             "frida_session_open","frida_session_read","frida_session_close","frida_session_list"->fridaSession(name,args)
+            "native_resident_open"->{
+                val requested=args.tString("path")
+                val resolved=runCatching{ToolkitIo.resolve(root,requested).path}.getOrDefault(requested)
+                r2Resident.open(resolved,args.tString("sha256"),args.tBool("relocsApply",true))
+            }
+            "native_resident_command"->r2Resident.command(args.tString("sessionId"),args.tString("command"),args.tInt("timeoutMillis",30000,1,300000).toLong())
+            "native_resident_batch"->r2Resident.batch(args.tString("sessionId"),
+                args.getAsJsonArray("commands")?.mapNotNull{element->element?.takeIf{it.isJsonPrimitive}?.asString}?:emptyList(),
+                args.tInt("timeoutMillis",30000,1,300000).toLong())
+            "native_resident_close"->r2Resident.close(args.tString("sessionId"))
+            "native_resident_list"->r2Resident.list()
             "native_session_open"->{
                 val requested=args.tString("path")
                 val resolved=runCatching{ToolkitIo.resolve(root,requested).path}.getOrDefault(requested)
