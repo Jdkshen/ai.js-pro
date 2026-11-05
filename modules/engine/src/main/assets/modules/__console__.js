@@ -57,20 +57,64 @@ module.exports = function (runtime, scope) {
         console.log(util.format.apply(util, arguments) + "\n" + k.stack);
     };
 
+    // log4j-android（de.mindpipe…）并非所有运行时都打包。缺它时旧实现会直接抛
+    // "TypeError: [JavaPackage …] is not a function, it is object"，把整个脚本打断
+    // （真实用户脚本 华仔部落_佣兵战纪 就死在这一行）。现在：有 log4j 照旧配置，
+    // 没有就降级为内置日志并提示一次，绝不因为日志配置让脚本挂掉。
     console.setGlobalLogConfig = function (config) {
-        let logConfigurator = new Packages["de.mindpipe.android.logging.log4j"].LogConfigurator();
-        if (config.file) {
-            logConfigurator.setFileName(files.path(config.file));
-            logConfigurator.setUseFileAppender(true);
+        var LogConfiguratorClass = null;
+        try {
+            var log4jPackage = Packages["de.mindpipe.android.logging.log4j"];
+            if (log4jPackage) {
+                LogConfiguratorClass = log4jPackage.LogConfigurator;
+            }
+        } catch (e) {
+            LogConfiguratorClass = null;
         }
-        logConfigurator.setFilePattern(option(config.filePattern, "%m%n"))
-        logConfigurator.setMaxFileSize(option(config.maxFileSize, 512 * 1024));
-        logConfigurator.setImmediateFlush(option(config.immediateFlush, true));
-        let rootLevel = option(config.rootLevel, "ALL");
-        logConfigurator.setRootLevel(org.apache.log4j.Level[rootLevel.toUpperCase()]);
-        logConfigurator.setMaxBackupSize(option(config.maxBackupSize, 5));
-        logConfigurator.setResetConfiguration(option(config.resetConfiguration, true));
-        logConfigurator.configure();
+        if (LogConfiguratorClass) {
+            try {
+                var logConfigurator = new LogConfiguratorClass();
+                if (config.file) {
+                    logConfigurator.setFileName(files.path(config.file));
+                    logConfigurator.setUseFileAppender(true);
+                }
+                logConfigurator.setFilePattern(option(config.filePattern, "%m%n"))
+                logConfigurator.setMaxFileSize(option(config.maxFileSize, 512 * 1024));
+                logConfigurator.setImmediateFlush(option(config.immediateFlush, true));
+                var rootLevel = option(config.rootLevel, "ALL");
+                var levelClass = null;
+                try { levelClass = org.apache.log4j.Level; } catch (e2) { levelClass = null; }
+                if (levelClass) {
+                    logConfigurator.setRootLevel(levelClass[rootLevel.toUpperCase()]);
+                }
+                logConfigurator.setMaxBackupSize(option(config.maxBackupSize, 5));
+                logConfigurator.setResetConfiguration(option(config.resetConfiguration, true));
+                logConfigurator.configure();
+                return;
+            } catch (e3) {
+                // 有类但配置失败：继续走降级路径，不打断脚本。
+            }
+        }
+        try {
+            var fallbackFile = (config && config.file) ? files.path(config.file) : null;
+            if (fallbackFile) {
+                var target = new java.io.File(fallbackFile);
+                var parent = target.getParentFile();
+                if (parent && !parent.exists()) { parent.mkdirs(); }
+            }
+            scope.__aijsLogConfig = {
+                level: (config && config.rootLevel) ? String(config.rootLevel).toUpperCase() : "ALL",
+                file: fallbackFile,
+                degraded: true,
+                reason: "log4j (de.mindpipe.android.logging.log4j.LogConfigurator) 在当前运行时不可用"
+            };
+            if (typeof rtConsole !== "undefined" && rtConsole && rtConsole.warn) {
+                rtConsole.warn("console.setGlobalLogConfig 已降级：当前运行时没有 log4j" +
+                    (fallbackFile ? "（已记录文件路径 " + fallbackFile + "；日志仍可在应用内日志页查看）" : "（日志仍可在应用内日志页查看）"));
+            }
+        } catch (e4) {
+            // 降级路径也失败时保持静默：日志配置不应该让脚本挂掉。
+        }
     }
 
     function option(value, def) {

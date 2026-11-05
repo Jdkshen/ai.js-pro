@@ -154,6 +154,11 @@ public class PPOcr implements AutoCloseable, OcrSession {
      * @param detectRotation 忽略：PP-OCR 这里不做旋转检测，rotation 恒为 0
      * @param region       识别区域 [left, top, width, height] 或 [left, top]（null=整图）
      */
+    /** 与 {@link Ocr#detect(Object, int, boolean, int[])} 同理：插件式调用允许直接传 Bitmap。 */
+    public OCRResult[] detect(Object image, int max, boolean detectRotation, int[] region) {
+        return detect(Ocr.coerceToImageWrapper(image), max, detectRotation, region);
+    }
+
     @Override
     public OCRResult[] detect(ImageWrapper image, int max, boolean detectRotation, int[] region) {
         if (mReleased) {
