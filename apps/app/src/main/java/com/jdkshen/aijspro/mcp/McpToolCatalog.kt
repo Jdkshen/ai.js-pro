@@ -31,6 +31,8 @@ internal object McpToolCatalog {
         "workspace_cleanup",
         "get_ui_layout",
         "capture_screen",
+        // P1-6（.4 反馈「三套坐标系没有换算工具」）：截图/显示/浮窗三套空间的换算与标定
+        "coordinate_convert",
         "check_syntax",
         "learn_autojs_skill",
         "stop_all_scripts",

@@ -208,7 +208,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据；示例：{\"executionId\":\"mcp-1\",\"timeoutSeconds\":60}", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
             add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一；source 传源码字符串）；需要结果/错误日志时 wait=true。示例：{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}", McpToolSchema.runSchema()))
-            add(tool("list_engine_api", "枚举三引擎实际全局或 require(module) 的 API；Node 同时返回实际内置模块目录", objSchema("engine", "module")))
+            add(tool("list_engine_api", "枚举三引擎实际全局或 require(module) 的 API；Node 同时返回实际内置模块目录。**每项还会给出 documented 对账**：原 items 保持不变，另附 documentedItems[{name,documented}] 与 documentedCount/undocumentedCount/build/note（文档是否提到该导出；文档落后于构建时这里会直接暴露）", objSchema("engine", "module")))
             add(tool("probe_engine_api", "按 descriptor/shape 探测三引擎 API 的 present/accessor/missing/unverified、成员和函数 arity；module 可选，includeInherited 默认 true；探针不执行 getter（call_engine_api 才真实求值与调用）", objSchema("engine", "module", "name", "includeInherited", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比三个引擎的全局 API；保留旧 Rhino/QuickJS 字段，增加 Node 与三引擎交集"))
             add(tool("stop_script", "停止本 MCP 发起的运行任务", objSchema("executionId", required = arrayOf("executionId"))))
@@ -224,6 +224,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("workspace_cleanup", "清理无用的工作区私有副本：默认只删无修改的 OPEN 与已回退的；applied=true 时连已应用的也删（默认保留 keepAppliedHours=24 小时以便回退）", objSchema("applied", "olderThanHours", "keepAppliedHours")))
             add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需无障碍服务；示例：{\"maxNodes\":300,\"maxDepth\":64}", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
             add(tool("capture_screen", "截屏并返回 MCP 图像内容；mode 四种预设（MI8 1080×2160 实测）：fastest = 360 宽 + JPEG40（只够看有没有/大概在哪）；fast = 540 宽 + JPEG60，约 0.22~0.28s / 36KB（适合定位、轮询、先看一眼）；balanced = 原图 PNG，约 0.61~0.77s / 217KB（**与历史默认一致**）；quality = 原图 PNG + 更长超时，约 0.63~0.65s / 217KB（适合存档、像素级比对）。耗时主因是 PNG 编码（约 550ms），fast 靠缩小 + JPEG 把它省掉；显式传的 format/quality/maxWidth/timeoutMillis 覆盖预设；返回含 captureMs/encodeMs/totalMs/bytes/scale/effective，便于自己权衡质量与速度；region 可只截一块（[left,top,right,bottom] / \"[l,t][r,b]\" / {x,y,width,height}，越界自动夹取）——只截一块时**先裁后缩**，编码成本极低且保留 1:1 像素，比整屏缩小更清楚；缩小或裁剪后块内坐标 = 屏幕坐标 − 区域左上角，再乘 scale（返回里有 region/scale/regionNote）。**savePath（逐帧 CV 的关键）**：只要路径不要图像 —— 写入脚本目录内文件并只返回 {path,width,height,bytes,captureMs/encodeMs/writeMs/totalMs}，不回传 base64/JSON；saveFormat=raw 直接写 RGBA8888 原始像素（stride=width*4、无文件头，与 image.exportPixels 布局一致），省掉 PNG 编码（约 550ms）→ 适合逐帧循环；saveFormat 也可 auto（按扩展名）/png/jpg。需 Android 11+ 无障碍截图权限。示例：{\"mode\":\"fastest\"}、{\"savePath\":\"poker-recog/calib/live-6.png\",\"saveFormat\":\"raw\"}、{\"mode\":\"fast\"} / {\"mode\":\"quality\",\"maxWidth\":1080} / {\"mode\":\"fast\",\"region\":[0,1000,1080,1400]}", objSchema("mode", "format", "quality", "dataUri", "maxWidth", "timeoutMillis", "region", "savePath", "saveFormat")))
+            add(tool("coordinate_convert", "截图/显示/浮窗三套坐标系的换算与标定：action=state 给出 panel（物理面板≈截图尺寸）、appDisplay（无障碍与浮窗同一套）、可选 measureScreenshot 实测截图尺寸，并给出仿射 dst=src*(scaleX,scaleY)+(offsetX,offsetY)；action=calibrate 传两组对应点（windowPoint1/screenshotPoint1[/2]）持久化标定值；action=convert 传 from/to/point|rect 换算；action=clear 清除标定。示例：{\"action\":\"state\",\"measureScreenshot\":true} 或 {\"action\":\"convert\",\"from\":\"window\",\"to\":\"screenshot\",\"rect\":[100,200,300,400]}", objSchema("action", "measureScreenshot", "windowPoint1", "screenshotPoint1", "windowPoint2", "screenshotPoint2", "from", "to", "point", "rect")))
             add(tool("check_syntax", "按 Rhino/QuickJS/Node.js 只编译检查源码，不执行任何脚本；Node 使用同版本真实编译器；示例：{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}", objSchema("code", "engine", "name", required = arrayOf("code"))))
             add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 完整使用说明、三引擎规则、权限和实际支持范围；首次连接或调用报错前先调用一次"))
             add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本）；普通任务应使用 stop_script"))
@@ -365,6 +366,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "probe_engine_api" -> probeEngineApi(args)
             "engine_api_diff" -> engineApiDiff()
             "stop_script" -> stopScript(args)
+            "coordinate_convert" -> McpCoordinateTools.call(context, args)
             "check_syntax" -> {
                 val code = args.string("code")
                 val engine = McpEngines.normalize(args.stringOr("engine", "")).ifEmpty {
@@ -600,12 +602,21 @@ internal class McpTools(private val context: Context, private val event: (String
         val module = args.stringOr("module", "")
         val data = com.google.gson.JsonParser().parse(engineProbe(engine, McpEngineApi.list(module))).asJsonObject
         val items = data.getAsJsonArray("items")
+        // P0-2（.4 反馈）：每项加 documented 对账——「有实现没文档 / 有文档没实现」，
+        // 省得使用者像他们那样「靠真跑才发现文档写着未接入的 matchTemplateMulti 其实可用」。
+        // 兼容优先：**保留原 items（字符串数组）不变**，另外给 documentedItems 明细与计数。
+        val annotated = McpEngineApi.documentedItems(items, engine, module, apiDocs)
         // 必须走 toolJson 包成标准 MCP tool result envelope，
         // 否则官方 Kotlin SDK 会因为顶层是 {engine,count,items} 而报
         // "Cannot determine RequestResult type from JSON"。
         return toolJson(JsonObject().apply {
             addProperty("engine", engine); addProperty("count", items.size()); add("items", items)
             addProperty("module", module); add("modules", data.getAsJsonArray("modules"))
+            add("documentedItems", annotated.getAsJsonArray("items"))
+            addProperty("documentedCount", annotated.get("documentedCount").asInt)
+            addProperty("undocumentedCount", annotated.get("undocumentedCount").asInt)
+            addProperty("build", annotated.get("build").asString)
+            addProperty("documentedNote", annotated.get("note").asString)
         })
     }
 

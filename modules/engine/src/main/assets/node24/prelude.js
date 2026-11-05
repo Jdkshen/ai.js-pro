@@ -4290,7 +4290,13 @@
         return true;
       }
       return wrapImage(image).recycle();
-    }
+    },
+    /**
+     * 只读诊断：当前存活图片句柄与已注册像素总额（P0-5 反馈：连抓 11 帧后只报「图片总像素超过上限」
+     * 却不知道是哪个句柄泄漏）。返回 {registeredPixels, limit, liveCount, handles:[{id,width,height,ageMs}]}。
+     */
+    diagnostics: function () { return imageHostCall('diagnostics'); },
+    handles: function () { return imageHostCall('diagnostics'); }
   };
 
   // ------------------------------------------------------------------

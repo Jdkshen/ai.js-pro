@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.mcp
 
 import com.google.gson.JsonArray
+import com.google.gson.JsonNull
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.security.MessageDigest
@@ -8,6 +9,23 @@ import java.util.Locale
 
 /** Read-only documentation, loaded lazily from the exact asset used by the App WebView. */
 internal class McpApiDocs(private val load: () -> String) {
+    /** 文档索引里出现的一个名字（标题/指南标题或 category 的 module），用于 documented 对账。 */
+    private data class DocName(
+        val name: String,
+        val module: String,
+        val engines: Set<String>,
+        val title: String,
+    )
+
+    /** list_engine_api 单个名字的文档匹配结果；规则写进返回顶层 note。 */
+    internal data class DocumentedMatch(
+        val documented: Boolean,
+        val sameModule: Boolean,
+        val matchedTitle: String?,
+        val matchedModule: String?,
+        val rule: String,
+    )
+
     private data class Entry(
         val id: String, val title: String, val category: String, val kind: String,
         val source: String, val engines: List<String>, val text: String, val content: String, val link: String?,
@@ -31,7 +49,16 @@ internal class McpApiDocs(private val load: () -> String) {
             })
         }
     }
-    private data class Index(val hash: String, val scope: String, val entries: List<Entry>)
+    private data class Index(
+        val hash: String,
+        val scope: String,
+        val entries: List<Entry>,
+        val names: List<DocName>,
+        val documentedAt: Long?,
+        val documentedAtSource: String,
+        val schemaVersion: Int,
+    )
+
     private val index by lazy {
         val asset = load()
         val prefix = "window.AIJS_API_REFERENCE="
@@ -51,7 +78,16 @@ internal class McpApiDocs(private val load: () -> String) {
         check(entries.map { it.id }.toSet().size == entries.size) { "API 文档 ID 重复" }
         val hash = MessageDigest.getInstance("SHA-256").digest(asset.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
-        Index("sha256:$hash", data.get("scope").asString, entries)
+        val timestamp = indexTimestamp(data)
+        Index(
+            "sha256:" + hash,
+            data.get("scope").asString,
+            entries,
+            collectDocumentedNames(entries),
+            timestamp.first,
+            timestamp.second,
+            data.get("schemaVersion").asInt,
+        )
     }
 
     fun search(args: JsonObject): JsonObject {
@@ -154,7 +190,148 @@ internal class McpApiDocs(private val load: () -> String) {
     private fun base(data: Index) = JsonObject().apply {
         addProperty("indexSha256", data.hash); addProperty("indexedRecords", data.entries.size)
         addProperty("scope", data.scope)
+        // 向后兼容：只新增字段，不改变 indexSha256/scope/indexedRecords 语义。
+        addProperty("build", com.jdkshen.aijspro.BuildConfig.VERSION_NAME)
+        data.documentedAt?.let { addProperty("documentedAt", it) } ?: add("documentedAt", JsonNull.INSTANCE)
+        addProperty("documentedAtSource", data.documentedAtSource)
+        addProperty(
+            "documentedAtNote",
+            if (data.documentedAt != null && data.documentedAtSource == "apk.lastUpdateTime") {
+                "documentedAt 来源：apk.lastUpdateTime（这个 build 的安装时间，epoch millis）—— 索引里没有文档生成时间，" +
+                    "所以这里给的是「你手上这个 build 有多新」，用来和 build 字段一起对账；它不是文档生成时间，也不是运行验证。"
+            } else if (data.documentedAt != null) {
+                "documentedAt 来源：" + data.documentedAtSource + "（epoch millis）；用于文档与构建对账，不是运行验证。"
+            } else {
+                "索引 schema v" + data.schemaVersion +
+                    " 未提供生成时间，且读不到 APK 内 assets/docs/api-reference-data.js 的 ZIP 条目时间" +
+                    "（或该时间早于 2000 年，视为不可信）；因此 documentedAt=null 而不是猜测。" +
+                    "生成器写入 generatedAt（本实现优先读取）后即可显示。"
+            },
+        )
         addProperty("hint", "文档标注不等于运行验证；传统参考仅标注 Rhino。真实 API 形状用 probe_engine_api，行为需在目标引擎验证。ID 随索引更新可变化，读取时建议携带 indexSha256。")
+    }
+
+    /**
+     * list_engine_api 对账入口：索引里是否存在该名字。
+     *
+     * 匹配规则：
+     * 1) 名字来自索引标题/指南标题中的标识符（去掉参数列表、大小写不敏感），以及 category 里的 module；
+     * 2) 该条记录 engines 必须包含当前 engine（未标 engines 的记录视为通用；Rhino-only 记录不会把 QuickJS/Node 标成已文档化）；
+     * 3) 先同 module 匹配（如 module=device + name=width -> device.width），找不到再看任意 module；
+     * 4) 仍找不到返回 documented=false，不猜。
+     *
+     * 注意：指南标题里出现的名字算「有文档提及」，不等于逐成员文档；返回顶层 note 会说明。
+     */
+    internal fun matchDocumented(engine: String, module: String, name: String): DocumentedMatch {
+        val data = index
+        val engineKey = engine.trim().lowercase(Locale.ROOT)
+        val moduleKey = module.trim().lowercase(Locale.ROOT)
+        val nameKey = name.trim().lowercase(Locale.ROOT)
+        if (nameKey.isEmpty()) return DocumentedMatch(false, false, null, null, "empty_name")
+        val full = if (moduleKey.isEmpty()) nameKey else moduleKey + "." + nameKey
+        val relevant = data.names.filter { engineKey.isEmpty() || engineKey in it.engines }
+
+        fun matches(candidate: DocName): Boolean =
+            candidate.name == full || candidate.name == nameKey || (moduleKey.isEmpty() && candidate.module == nameKey)
+
+        val sameModule = relevant.firstOrNull { candidate ->
+            (moduleKey.isNotEmpty() && candidate.module == moduleKey &&
+                (candidate.name == full || candidate.name == nameKey)) ||
+                (moduleKey.isEmpty() && (candidate.name == nameKey || candidate.module == nameKey))
+        }
+        if (sameModule != null) {
+            return DocumentedMatch(true, true, sameModule.title, sameModule.module, "same_module")
+        }
+        val any = relevant.firstOrNull { matches(it) }
+        if (any != null) {
+            return DocumentedMatch(true, false, any.title, any.module, "any_module")
+        }
+        return DocumentedMatch(false, false, null, null, if (relevant.isEmpty()) "no_records_for_engine" else "not_found")
+    }
+
+    /** 供诊断/测试查看索引可匹配名字数量（不暴露全文）。 */
+    internal fun documentedNameCount(): Int = index.names.size
+
+    private fun collectDocumentedNames(entries: List<Entry>): List<DocName> {
+        val result = ArrayList<DocName>()
+        entries.forEach { entry ->
+            val categoryModule = moduleFromCategory(entry.category)
+            val engines = entry.engines.map { it.lowercase(Locale.ROOT) }.toSet()
+            val normalizedTitle = entry.title
+                .replace('（', '(').replace('）', ')')
+                .replace('，', ',').replace('、', ',')
+            val head = normalizedTitle.substringBefore('(').trim()
+            IDENTIFIER_TOKEN.findAll(head).forEach { match ->
+                val name = match.value.lowercase(Locale.ROOT)
+                if (!name.matches(IDENTIFIER_PATTERN) || name in STOPWORDS) return@forEach
+                val module = when {
+                    name.contains('.') -> name.substringBefore('.')
+                    categoryModule.isNotEmpty() -> categoryModule
+                    else -> ""
+                }
+                result.add(DocName(name, module, engines, entry.title))
+            }
+            if (categoryModule.isNotEmpty()) {
+                result.add(DocName(categoryModule, categoryModule, engines, entry.title))
+            }
+        }
+        return result
+    }
+
+    private fun moduleFromCategory(category: String): String {
+        val raw = category.substringAfter("· ", "").trim().lowercase(Locale.ROOT)
+        return if (raw.matches(IDENTIFIER_PATTERN)) raw else ""
+    }
+
+    /** 索引若带生成时间则直接使用；否则 documentedAt=null 并记录来源，不用构建日期冒充。 */
+    private fun indexTimestamp(data: JsonObject): Pair<Long?, String> {
+        val keys = listOf(
+            "generatedAt", "generated_at", "builtAt", "built_at",
+            "indexedAt", "indexed_at", "documentedAt", "documented_at",
+        )
+        for (key in keys) {
+            val value = data.get(key) ?: continue
+            if (!value.isJsonPrimitive) return null to "unavailable:" + key + "-not-primitive"
+            val primitive = value.asJsonPrimitive
+            if (primitive.isNumber) return primitive.asLong to "index." + key
+            if (primitive.isString) {
+                val parsed = primitive.asString.trim().toLongOrNull()
+                return if (parsed != null) parsed to "index." + key else null to "unavailable:unsupported-" + key
+            }
+            return null to "unavailable:unsupported-" + key
+        }
+        // 索引没有生成时间时的兜底：APK 内该 asset 的 ZIP 条目时间（构建/打包时间，可作文件修改时间近似）。
+        // 用 runCatching 包住：纯 JVM 单测里 GlobalAppContext 不可用属于预期，返回 null+来源说明即可。
+        val assetTime = runCatching {
+            val context = com.stardust.app.GlobalAppContext.get()
+            val applicationInfo = context.javaClass.getMethod("getApplicationInfo").invoke(context)
+            val sourceDir = applicationInfo.javaClass.getField("sourceDir").get(applicationInfo) as? String
+            if (sourceDir.isNullOrEmpty()) return@runCatching null
+            val apk = java.io.File(sourceDir)
+            if (!apk.isFile) return@runCatching null
+            java.util.zip.ZipFile(apk).use { zip ->
+                val entry = zip.getEntry("assets/docs/api-reference-data.js") ?: return@use null
+                entry.time.takeIf { it > 946684800000L } // 2000-01-01；更早的 1980 时间不可信
+            }
+        }.getOrNull()
+        if (assetTime != null) return assetTime to "apk.assets-entry-time"
+        // 最后兜底：该 build 的安装时间。APK 内 ZIP 条目时间常常是 1980/0（打包工具不写），
+        // 与其报 unavailable，不如给一个真实、可解释、且明确标注来源的时间戳。
+        val updatedAt = runCatching {
+            val context = com.stardust.app.GlobalAppContext.get()
+            val flags = 0
+            val info = context.packageManager.getPackageInfo(context.packageName, flags)
+            info.lastUpdateTime.takeIf { it > 946684800000L }
+        }.getOrNull()
+        return if (updatedAt != null) updatedAt to "apk.lastUpdateTime" else null to "unavailable"
+    }
+
+    private companion object {
+        private val IDENTIFIER_PATTERN = Regex("[a-z_$][a-z0-9_$]*(?:\\.[a-z_$][a-z0-9_$]*)*")
+        private val IDENTIFIER_TOKEN = Regex("[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*)*")
+        private val STOPWORDS = setOf(
+            "rhino", "quickjs", "nodejs", "node24", "node", "api", "mcp", "ocr", "yolo", "js", "dev", "pro",
+        )
     }
 
     private fun allowed(args: JsonObject, names: Set<String>) {

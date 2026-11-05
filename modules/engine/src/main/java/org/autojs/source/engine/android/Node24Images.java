@@ -155,6 +155,8 @@ public final class Node24Images implements AutoCloseable {
     private final long mMaxImagePixels;
     private final long mMaxTotalPixels;
     private final Map<Integer, Bitmap> mBitmaps = new LinkedHashMap<>();
+    // P0-5：图片登记时间（只用于超限错误/只读诊断，与 mBitmaps 同生命周期；受本实例锁保护）。
+    private final Map<Integer, Long> mBitmapCreatedAt = new LinkedHashMap<>();
     // task-172：特征对象（detectAndComputeFeatures）— 与图片句柄 id 分开编号。
     private final Map<Integer, FeatureState> mFeatures = new LinkedHashMap<>();
     private int mNextId = 1;
@@ -273,6 +275,12 @@ public final class Node24Images implements AutoCloseable {
                 case "recycle":
                     recycle(request.optInt("id", -1));
                     return ok(Boolean.TRUE);
+                // P0-5：只读诊断（不改变句柄；仅在显式调用时遍历，不参与热路径）。
+                case "diagnostics":
+                case "handles":
+                case "imageHandles":
+                case "image_handles":
+                    return ok(diagnostics());
                 default:
                     return error("image 不支持的操作：" + action
                             + "（支持 read/write/pixel/findColor/findMultiColors/"
@@ -280,7 +288,8 @@ public final class Node24Images implements AutoCloseable {
                             + "analyzeXiangqiBoard/detectXiangqiCircles/"
                             + "grayscale/clip/threshold/resize/sizeOf/countColor/"
                             + "getPixels/samplePixels/pixelsToFile/detectsColor/detectsMultiColors/recycle/"
-                            + "detectAndComputeFeatures/matchFeatures/recycleFeatures）");
+                            + "detectAndComputeFeatures/matchFeatures/recycleFeatures/"
+                            + "diagnostics(handles/imageHandles/image_handles)）");
             }
         } catch (Throwable failure) {
             Log.w(TAG, "image action failed: " + request, failure);
@@ -617,6 +626,7 @@ public final class Node24Images implements AutoCloseable {
             int id = mNextId++;
             JSONObject response = descriptor(id, bitmap);
             mBitmaps.put(id, bitmap);
+            mBitmapCreatedAt.put(id, System.currentTimeMillis());
             mLivePixels += (long) width * (long) height;
             registered = true;
             return response;
@@ -3039,6 +3049,7 @@ public final class Node24Images implements AutoCloseable {
     private void recycle(int id) {
         // 先失效 Mat 缓存：Bitmap 一旦回收，缓存的 Mat 快照也没有意义且占内存。
         invalidateCachedMats(id);
+        mBitmapCreatedAt.remove(id);
         Bitmap bitmap = mBitmaps.remove(id);
         if (bitmap == null) {
             // 契约要求 recycle 幂等：未知/已回收句柄也返回 true。
@@ -3074,6 +3085,7 @@ public final class Node24Images implements AutoCloseable {
             }
         }
         mLivePixels = 0L;
+        mBitmapCreatedAt.clear();
         for (Iterator<Map.Entry<Integer, FeatureState>> iterator = mFeatures.entrySet().iterator();
              iterator.hasNext(); ) {
             FeatureState state = iterator.next().getValue();
@@ -3135,6 +3147,7 @@ public final class Node24Images implements AutoCloseable {
         }
         if (bitmap.isRecycled()) {
             mBitmaps.remove(id);
+            mBitmapCreatedAt.remove(id);
             invalidateCachedMats(id);
             mLivePixels = Math.max(0L, mLivePixels - (long) bitmap.getWidth() * (long) bitmap.getHeight());
             throw new IllegalArgumentException("图片句柄已回收：" + id);
@@ -3199,13 +3212,78 @@ public final class Node24Images implements AutoCloseable {
     void checkRegisterBudget(int width, int height) {
         if (mBitmaps.size() >= mMaxLiveImages) {
             throw new IllegalStateException("图片句柄数量已达上限（" + mMaxLiveImages
-                    + "），请先 recycle() 不再使用的图片");
+                    + "；registeredPixels=" + mLivePixels + "/" + mMaxTotalPixels
+                    + "，liveCount=" + mBitmaps.size()
+                    + "，最近创建的句柄（最多5个）=" + recentHandlesJson(5)
+                    + "）。是否忘记 recycle()？请调用 images.recycle(img) / img.recycle()，"
+                    + "或宿主 action=recycle {id}；任务结束/宿主 close() 也会统一释放；只读诊断："
+                    + "__ajsHostValue({kind:'image',action:'diagnostics'})");
         }
         long pixels = (long) width * (long) height;
         if (mLivePixels + pixels > mMaxTotalPixels) {
-            throw new IllegalStateException("图片总像素超过上限（" + mMaxTotalPixels
-                    + "），请先 recycle() 不再使用的图片");
+            throw new IllegalStateException("图片总像素超过上限（registeredPixels=" + mLivePixels
+                    + "/" + mMaxTotalPixels
+                    + "，本次新增=" + pixels
+                    + "，liveCount=" + mBitmaps.size()
+                    + "，最近创建的句柄（最多5个）=" + recentHandlesJson(5)
+                    + "）。是否忘记 recycle()？请调用 images.recycle(img) / img.recycle()，"
+                    + "或宿主 action=recycle {id}；任务结束/宿主 close() 也会统一释放；只读诊断："
+                    + "__ajsHostValue({kind:'image',action:'diagnostics'})");
         }
+    }
+
+    /**
+     * P0-5：只读诊断。只在显式调用时遍历存活句柄（最多 256 个），不影响注册热路径；
+     * 调用方已在本实例 synchronized 锁内。返回 registeredPixels/limit/liveCount/handles。
+     */
+    private JSONObject diagnostics() throws JSONException {
+        JSONObject result = new JSONObject();
+        result.put("registeredPixels", mLivePixels);
+        result.put("limit", mMaxTotalPixels);
+        result.put("liveCount", mBitmaps.size());
+        result.put("maxLiveImages", mMaxLiveImages);
+        result.put("maxImagePixels", mMaxImagePixels);
+        result.put("closed", mClosed);
+        result.put("handles", handlesJson(Integer.MAX_VALUE));
+        result.put("hint", "handles[].ageMs 为登记后经过的毫秒数；用完图片请 recycle(id) / images.recycle(img) / img.recycle()，任务结束/宿主 close() 会统一释放");
+        return result;
+    }
+
+    /** 最近创建的最多 limit 个句柄（新→旧），字段 id/width/height/ageMs；仅供错误/诊断使用。 */
+    private JSONArray recentHandlesJson(int limit) {
+        return handlesJson(limit);
+    }
+
+    /** 存活句柄快照；limit<=0 表示全部。按登记时间新→旧排序，不修改任何状态。 */
+    private JSONArray handlesJson(int limit) {
+        JSONArray array = new JSONArray();
+        try {
+            List<Map.Entry<Integer, Long>> entries = new ArrayList<>(mBitmapCreatedAt.entrySet());
+            long now = System.currentTimeMillis();
+            int emitted = 0;
+            for (int i = entries.size() - 1; i >= 0; i--) {
+                if (limit > 0 && emitted >= limit) {
+                    break;
+                }
+                Map.Entry<Integer, Long> entry = entries.get(i);
+                int id = entry.getKey();
+                Bitmap bitmap = mBitmaps.get(id);
+                if (bitmap == null || bitmap.isRecycled()) {
+                    continue;
+                }
+                long createdAt = entry.getValue() == null ? now : entry.getValue();
+                JSONObject handle = new JSONObject();
+                handle.put("id", id);
+                handle.put("width", bitmap.getWidth());
+                handle.put("height", bitmap.getHeight());
+                handle.put("ageMs", Math.max(0L, now - createdAt));
+                array.put(handle);
+                emitted++;
+            }
+        } catch (JSONException ignored) {
+            // JSONObject.put(int/long) 理论上不会失败；诊断不能反过来影响业务。
+        }
+        return array;
     }
 
     private static void recycleQuietly(Bitmap bitmap) {

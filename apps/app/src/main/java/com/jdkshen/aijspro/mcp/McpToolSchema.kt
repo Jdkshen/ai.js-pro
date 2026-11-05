@@ -5,12 +5,16 @@ import com.google.gson.JsonObject
 
 /** Parameter types shared by the public MCP tool definitions. */
 internal object McpToolSchema {
+    /** 数组型参数（元素为数字）：坐标点/矩形。 */
+    private val numberArrayParams = setOf("point", "rect", "windowPoint1", "screenshotPoint1", "windowPoint2", "screenshotPoint2")
+
     private val integerParams = setOf(
         "offset", "limit", "maxBytes", "afterId", "timeoutSeconds",
         "olderThanHours", "keepAppliedHours", "maxNodes", "maxDepth", "windowId", "timeoutMillis",
         "quality", "maxWidth", "maxChars", "waitMillis", "x", "y", "x1", "y1", "x2", "y2", "durationMillis", "index", "intervalMillis", "maxResults"
     )
-    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited", "eof", "includeSystem", "exact")
+    private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited", "eof", "includeSystem", "exact",
+        "measureScreenshot")
 
     fun terminalSchema(): JsonObject = terminalCommandSchema(includeBackend = true)
     fun shellRishSchema(): JsonObject = terminalCommandSchema(includeBackend = false)
@@ -156,11 +160,18 @@ internal object McpToolSchema {
         add("properties", JsonObject().apply {
             names.forEach { name ->
                 add(name, JsonObject().apply {
-                    addProperty("type", when (name) {
-                        in integerParams -> "integer"
-                        in booleanParams -> "boolean"
-                        else -> "string"
-                    })
+                    if (name in numberArrayParams) {
+                        // 坐标点/矩形：[x,y] 或 [l,t,r,b]
+                        addProperty("type", "array")
+                        add("items", JsonObject().apply { addProperty("type", "number") })
+                        addProperty("minItems", 2); addProperty("maxItems", 4)
+                    } else {
+                        addProperty("type", when (name) {
+                            in integerParams -> "integer"
+                            in booleanParams -> "boolean"
+                            else -> "string"
+                        })
+                    }
                 })
             }
         })

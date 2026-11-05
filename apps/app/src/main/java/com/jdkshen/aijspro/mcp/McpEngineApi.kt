@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.mcp
 
 import com.google.gson.Gson
 import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 
 /** Generates ordinary scripts evaluated by the selected real engine, never a second evaluator. */
 internal object McpEngineApi {
@@ -309,6 +310,54 @@ internal object McpEngineApi {
 
     private fun render(template: String, values: Map<String, String>): String =
         Regex("__[A-Z]+__").replace(template) { values[it.value] ?: it.value }
+
+    /**
+     * 给 list_engine_api 的 items 增加 documented 对账（P0-2/P2-12）。
+     *
+     * 输入是探针返回的字符串数组（也兼容已有 {name:...} 对象），输出 items 为对象数组
+     * {name, documented}；顶层同时给出 documentedCount / undocumentedCount / build / note。
+     *
+     * documented 的判定在 McpApiDocs.matchDocumented：索引标题/指南标题中的名字（去参数、
+     * 大小写不敏感、同一 module 优先，找不到再看任意 module），且记录 engines 含当前 engine。
+     * 传统 Rhino-only 记录不会把 QuickJS/Node 标成已文档化；指南标题提及 != 逐成员文档。
+     *
+     * 说明：McpTools.listEngineApi 目前直接使用原始字符串 items，需要 Lead 接线本函数
+     * （其它文件本轮不允许修改），否则工具输出不会变化。
+     */
+    fun documentedItems(items: JsonArray, engine: String, module: String, docs: McpApiDocs): JsonObject {
+        val enriched = JsonArray()
+        var documentedCount = 0
+        items.forEach { element ->
+            val name = when {
+                element.isJsonPrimitive -> element.asString
+                element.isJsonObject -> element.asJsonObject.get("name")?.takeIf { it.isJsonPrimitive }?.asString ?: ""
+                else -> ""
+            }
+            val match = docs.matchDocumented(engine, module, name)
+            if (match.documented) documentedCount++
+            enriched.add(JsonObject().apply {
+                addProperty("name", name)
+                addProperty("documented", match.documented)
+                if (match.documented) {
+                    match.matchedTitle?.let { addProperty("documentedTitle", it) }
+                    addProperty("documentedSameModule", match.sameModule)
+                    addProperty("documentedRule", match.rule)
+                }
+            })
+        }
+        return JsonObject().apply {
+            add("items", enriched)
+            addProperty("documentedCount", documentedCount)
+            addProperty("undocumentedCount", items.size() - documentedCount)
+            addProperty("build", com.jdkshen.aijspro.BuildConfig.VERSION_NAME)
+            addProperty(
+                "note",
+                "documented 规则：索引标题/指南标题中的名字（去参数、大小写不敏感、同一 module 优先，找不到再看任意 module），" +
+                    "且记录 engines 含本次 engine；传统 Rhino-only 记录不会把 QuickJS/Node 标成已文档化；" +
+                    "指南标题提及不等于逐成员文档，找不到任何标注即 false。",
+            )
+        }
+    }
 
     fun probe(module: String, name: String, inherited: Boolean): String {
         require(module.length <= 240 && !module.contains('\u0000')) { "module 过长或包含 NUL" }
