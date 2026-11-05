@@ -55,6 +55,32 @@ internal object McpCapturePreset {
         )
     }
 
+    /**
+     * `savePath` 解析：相对路径落在脚本目录（与 file_* 工具同一套边界），目录会自动补文件名；
+     * 越界或非法路径给可读错误。返回 null 表示「不回传图像、直接落盘」没被启用。
+     */
+    fun resolveSaveTarget(savePath: String?): java.io.File? {
+        val raw = savePath?.trim().orEmpty()
+        if (raw.isEmpty()) return null
+        val root = java.io.File(com.jdkshen.aijspro.Pref.getScriptDirPath())
+        var target = McpPathRules.resolve(root, raw, "savePath 必须在脚本目录内")
+        if (raw.endsWith("/") || raw.endsWith("\\") || target.isDirectory) {
+            target = java.io.File(target, "capture-${System.currentTimeMillis()}.png")
+        }
+        return target
+    }
+
+    /** saveFormat：auto（按扩展名）/ png / jpg / raw（RGBA8888 原始像素，最快）。 */
+    fun resolveSaveFormat(saveFormat: String?, hasSaveTarget: Boolean): String {
+        val raw = saveFormat?.trim()?.lowercase().orEmpty()
+        val normalized = when (raw) {
+            "" -> if (hasSaveTarget) "auto" else "png"
+            "auto", "png", "jpg", "jpeg", "raw" -> raw
+            else -> throw IllegalArgumentException("saveFormat 只能是 auto、png、jpg 或 raw，收到：$saveFormat")
+        }
+        return if (normalized == "jpeg") "jpg" else normalized
+    }
+
     /** 区域（屏幕坐标，right/bottom 为边界）：先裁剪再缩放，坐标换算与整屏一致。 */
     data class Region(val left: Int, val top: Int, val right: Int, val bottom: Int) {
         val width: Int get() = right - left

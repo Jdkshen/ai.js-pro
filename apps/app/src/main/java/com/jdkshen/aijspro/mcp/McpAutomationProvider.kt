@@ -71,6 +71,8 @@ internal object McpAutomationTransport {
                 int("maxWidth", -1).takeIf { it >= 0 },
                 int("timeoutMillis", 0).takeIf { it > 0 },
                 args.get("region"),
+                str("savePath", "").ifEmpty { null },
+                str("saveFormat", "").ifEmpty { null },
             )
         }
         val value = when (name) {

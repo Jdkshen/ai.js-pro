@@ -18,10 +18,23 @@ internal class McpRunInput(args: JsonObject) {
     val loopTimes: Int
 
     init {
-        val inputs = listOf("path", "file", "source").filter { args.has(it) }
-        require(inputs.size == 1) { "必须且只能提供 path、file、source 中的一个" }
+        // 兼容别名：check_syntax 用 code、run_script 用 source，同一份文档里两套名字必然被混用；
+        // code 直接当 source 的别名，报错也点名说清楚（P0-4 反馈）。
+        val hasSource = args.has("source")
+        val hasCodeAlias = args.has("code")
+        require(!(hasSource && hasCodeAlias)) { "source 与 code 是同义参数（code 是 source 的别名），只能给一个" }
+        val inputs = listOf("path", "file").filter { args.has(it) } +
+            if (hasSource || hasCodeAlias) listOf("source") else emptyList()
+        require(inputs.size == 1) {
+            when {
+                inputs.isEmpty() && args.has("engine") && !args.has("path") ->
+                    "必须且只能提供 path、file、source（或别名 code）中的一个；只给了 engine：内存源码请放 source/code，磁盘脚本请放 path/file"
+                inputs.isEmpty() -> "必须且只能提供 path、file、source（或别名 code）中的一个：你这次一个都没传"
+                else -> "必须且只能提供 path、file、source（或别名 code）中的一个，收到：${inputs.joinToString()}（path/file 是磁盘脚本，source/code 是内存源码）"
+            }
+        }
         val input = inputs.single()
-        val value = string(args, input)!!
+        val value = if (input == "source" && !hasSource) string(args, "code") else string(args, input)!!
         source = value.takeIf { input == "source" }
         path = value.takeIf { input != "source" }
         require(source == null || source.toByteArray(Charsets.UTF_8).size <= 256 * 1024) { "源码不得超过 256 KiB" }

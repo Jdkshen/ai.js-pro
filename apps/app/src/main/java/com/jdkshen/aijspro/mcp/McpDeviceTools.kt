@@ -12,6 +12,9 @@ import com.stardust.autojs.core.image.capture.AccessibilityScreenCapturer
 import com.stardust.view.accessibility.AccessibilityService
 import com.stardust.view.accessibility.LayoutCaptureSelector
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.util.Collections
 import java.util.IdentityHashMap
 
@@ -92,10 +95,20 @@ internal object McpDeviceTools {
      * 便于调用方自己权衡「质量 vs 速度」，而不是猜。
      */
     fun screenshot(mode: String, format: String?, quality: Int?, dataUri: Boolean,
-                   maxWidth: Int?, timeoutMillis: Int?, region: com.google.gson.JsonElement? = null): JsonObject {
+                   maxWidth: Int?, timeoutMillis: Int?, region: com.google.gson.JsonElement? = null,
+                   savePath: String? = null, saveFormat: String? = null): JsonObject {
         require(McpCapturePreset.isKnownMode(mode)) { "mode 必须是 fastest、fast、balanced 或 quality" }
         val requestedRegion = McpCapturePreset.parseRegion(region)
-        val effective = McpCapturePreset.resolve(mode, format, quality, maxWidth, timeoutMillis)
+        val saveTarget = McpCapturePreset.resolveSaveTarget(savePath)
+        val resolvedSaveFormat = McpCapturePreset.resolveSaveFormat(saveFormat, saveTarget != null)
+        // saveFormat=auto 时按 savePath 扩展名决定编码；raw 表示写原始像素（不看 format）。
+        val autoFormat = when {
+            resolvedSaveFormat != "auto" && resolvedSaveFormat != "raw" -> resolvedSaveFormat
+            resolvedSaveFormat == "auto" && saveTarget != null ->
+                if (saveTarget.extension.lowercase() in setOf("jpg", "jpeg")) "jpg" else "png"
+            else -> null
+        }
+        val effective = McpCapturePreset.resolve(mode, format ?: autoFormat, quality, maxWidth, timeoutMillis)
         val resolvedFormat = effective.format
         require(resolvedFormat in setOf("png", "jpg", "jpeg")) { "format 必须是 png、jpg 或 jpeg" }
         require(effective.quality in 1..100 && effective.maxWidth in 0..4096 && effective.timeoutMillis in 500..15000)
@@ -122,15 +135,31 @@ internal object McpDeviceTools {
                 Bitmap.createScaledBitmap(croppedBitmap, effective.maxWidth,
                     (croppedBitmap.height.toLong() * effective.maxWidth / croppedBitmap.width).toInt().coerceAtLeast(1), true).also { scaled = it }
             } else croppedBitmap
-            val mime = if (resolvedFormat == "png") "image/png" else "image/jpeg"
+            val rawRequested = resolvedSaveFormat == "raw"
+            val mime = if (rawRequested) "application/octet-stream" else if (resolvedFormat == "png") "image/png" else "image/jpeg"
             val encodeStartedAt = System.currentTimeMillis()
-            val bytes = ByteArrayOutputStream().use { out ->
-                check(output.compress(if (resolvedFormat == "png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, effective.quality, out)) { "截图编码失败" }
-                out.toByteArray()
+            val bytes = if (rawRequested) {
+                // CV 流水线要的就是原始像素：RGBA8888 行优先、stride = width*4、无文件头，
+                // 与脚本侧 image.exportPixels / readFileSync 的布局一致；省掉 PNG/JPEG 编码（约 550ms）。
+                val buffer = ByteBuffer.allocate(output.width * output.height * 4)
+                output.copyPixelsToBuffer(buffer)
+                buffer.array()
+            } else {
+                ByteArrayOutputStream().use { out ->
+                    check(output.compress(if (resolvedFormat == "png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, effective.quality, out)) { "截图编码失败" }
+                    out.toByteArray()
+                }
             }
             val encodeMs = System.currentTimeMillis() - encodeStartedAt
+            var writeMs = 0L
+            if (saveTarget != null) {
+                val writeStartedAt = System.currentTimeMillis()
+                saveTarget.parentFile?.mkdirs()
+                FileOutputStream(saveTarget).use { it.write(bytes) }
+                writeMs = System.currentTimeMillis() - writeStartedAt
+            }
             check(bytes.size <= 16 * 1024 * 1024) { "截图过大，请使用 jpg 或 maxWidth 缩小尺寸" }
-            val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            val encoded = if (saveTarget == null || dataUri) Base64.encodeToString(bytes, Base64.NO_WRAP) else ""
             val metadata = JsonObject().apply {
                 addProperty("success", true); addProperty("width", output.width); addProperty("height", output.height)
                 addProperty("sourceWidth", bitmap.width); addProperty("sourceHeight", bitmap.height)
@@ -149,6 +178,13 @@ internal object McpDeviceTools {
                 addProperty("size", bytes.size); addProperty("method", "accessibility")
                 addProperty("mode", effective.mode)
                 addProperty("modeNote", effective.note)
+                if (saveTarget != null) {
+                    addProperty("saved", true)
+                    addProperty("path", saveTarget.absolutePath)
+                    addProperty("saveFormat", resolvedSaveFormat)
+                    addProperty("writeMs", writeMs)
+                    if (rawRequested) addProperty("rawLayout", "RGBA8888 行优先，stride=width*4，无文件头（${output.width}x${output.height}，共 ${bytes.size} 字节）")
+                }
                 addProperty("captureMs", captureMs); addProperty("encodeMs", encodeMs)
                 addProperty("totalMs", System.currentTimeMillis() - startedAt)
                 add("effective", JsonObject().apply {
@@ -158,10 +194,15 @@ internal object McpDeviceTools {
                 })
                 if (dataUri) addProperty("dataUri", "data:$mime;base64,$encoded")
             }
+            // 只落盘（savePath 且没显式要 dataUri）时不回传图像：省掉 base64 与 JSON 传输，
+            // 这正是逐帧 CV 循环想要的「给个路径就行」。
+            val embedImage = saveTarget == null || dataUri
             return JsonObject().apply {
                 add("structuredContent", metadata)
                 add("content", JsonArray().apply {
-                    add(JsonObject().apply { addProperty("type", "image"); addProperty("data", encoded); addProperty("mimeType", mime) })
+                    if (embedImage) {
+                        add(JsonObject().apply { addProperty("type", "image"); addProperty("data", encoded); addProperty("mimeType", mime) })
+                    }
                     add(JsonObject().apply { addProperty("type", "text"); addProperty("text", metadata.toString()) })
                 })
             }

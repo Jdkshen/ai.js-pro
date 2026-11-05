@@ -1,6 +1,8 @@
 package com.jdkshen.aijspro.mcp
 
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import com.google.gson.JsonArray
 import com.google.gson.JsonElement
@@ -221,7 +223,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_cleanup", "清理无用的工作区私有副本：默认只删无修改的 OPEN 与已回退的；applied=true 时连已应用的也删（默认保留 keepAppliedHours=24 小时以便回退）", objSchema("applied", "olderThanHours", "keepAppliedHours")))
             add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需无障碍服务；示例：{\"maxNodes\":300,\"maxDepth\":64}", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
-            add(tool("capture_screen", "截屏并返回 MCP 图像内容；mode 四种预设（MI8 1080×2160 实测）：fastest = 360 宽 + JPEG40（只够看有没有/大概在哪）；fast = 540 宽 + JPEG60，约 0.22~0.28s / 36KB（适合定位、轮询、先看一眼）；balanced = 原图 PNG，约 0.61~0.77s / 217KB（**与历史默认一致**）；quality = 原图 PNG + 更长超时，约 0.63~0.65s / 217KB（适合存档、像素级比对）。耗时主因是 PNG 编码（约 550ms），fast 靠缩小 + JPEG 把它省掉；显式传的 format/quality/maxWidth/timeoutMillis 覆盖预设；返回含 captureMs/encodeMs/totalMs/bytes/scale/effective，便于自己权衡质量与速度；region 可只截一块（[left,top,right,bottom] / \"[l,t][r,b]\" / {x,y,width,height}，越界自动夹取）——只截一块时**先裁后缩**，编码成本极低且保留 1:1 像素，比整屏缩小更清楚；缩小或裁剪后块内坐标 = 屏幕坐标 − 区域左上角，再乘 scale（返回里有 region/scale/regionNote）。需 Android 11+ 无障碍截图权限。示例：{\"mode\":\"fastest\"} / {\"mode\":\"quality\",\"maxWidth\":1080} / {\"mode\":\"fast\",\"region\":[0,1000,1080,1400]}", objSchema("mode", "format", "quality", "dataUri", "maxWidth", "timeoutMillis", "region")))
+            add(tool("capture_screen", "截屏并返回 MCP 图像内容；mode 四种预设（MI8 1080×2160 实测）：fastest = 360 宽 + JPEG40（只够看有没有/大概在哪）；fast = 540 宽 + JPEG60，约 0.22~0.28s / 36KB（适合定位、轮询、先看一眼）；balanced = 原图 PNG，约 0.61~0.77s / 217KB（**与历史默认一致**）；quality = 原图 PNG + 更长超时，约 0.63~0.65s / 217KB（适合存档、像素级比对）。耗时主因是 PNG 编码（约 550ms），fast 靠缩小 + JPEG 把它省掉；显式传的 format/quality/maxWidth/timeoutMillis 覆盖预设；返回含 captureMs/encodeMs/totalMs/bytes/scale/effective，便于自己权衡质量与速度；region 可只截一块（[left,top,right,bottom] / \"[l,t][r,b]\" / {x,y,width,height}，越界自动夹取）——只截一块时**先裁后缩**，编码成本极低且保留 1:1 像素，比整屏缩小更清楚；缩小或裁剪后块内坐标 = 屏幕坐标 − 区域左上角，再乘 scale（返回里有 region/scale/regionNote）。**savePath（逐帧 CV 的关键）**：只要路径不要图像 —— 写入脚本目录内文件并只返回 {path,width,height,bytes,captureMs/encodeMs/writeMs/totalMs}，不回传 base64/JSON；saveFormat=raw 直接写 RGBA8888 原始像素（stride=width*4、无文件头，与 image.exportPixels 布局一致），省掉 PNG 编码（约 550ms）→ 适合逐帧循环；saveFormat 也可 auto（按扩展名）/png/jpg。需 Android 11+ 无障碍截图权限。示例：{\"mode\":\"fastest\"}、{\"savePath\":\"poker-recog/calib/live-6.png\",\"saveFormat\":\"raw\"}、{\"mode\":\"fast\"} / {\"mode\":\"quality\",\"maxWidth\":1080} / {\"mode\":\"fast\",\"region\":[0,1000,1080,1400]}", objSchema("mode", "format", "quality", "dataUri", "maxWidth", "timeoutMillis", "region", "savePath", "saveFormat")))
             add(tool("check_syntax", "按 Rhino/QuickJS/Node.js 只编译检查源码，不执行任何脚本；Node 使用同版本真实编译器；示例：{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}", objSchema("code", "engine", "name", required = arrayOf("code"))))
             add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 完整使用说明、三引擎规则、权限和实际支持范围；首次连接或调用报错前先调用一次"))
             add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本）；普通任务应使用 stop_script"))
@@ -292,6 +294,21 @@ internal class McpTools(private val context: Context, private val event: (String
         if (McpAutomationTransport.supports(name)) return McpAutomationTransport.call(context, name, args)
         return when (name) {
             "get_status" -> toolJson(JsonObject().apply {
+                // P1-9：直接回答「这是哪个 build、有多少工具、更新了什么」，不用再去 app_info 绕。
+                val packageInfo = runCatching {
+                    if (Build.VERSION.SDK_INT >= 33) context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+                    else @Suppress("DEPRECATION") context.packageManager.getPackageInfo(context.packageName, 0)
+                }.getOrNull()
+                add("app", JsonObject().apply {
+                    addProperty("packageName", context.packageName)
+                    addProperty("versionName", packageInfo?.versionName ?: com.jdkshen.aijspro.BuildConfig.VERSION_NAME)
+                    addProperty("build", packageInfo?.versionName ?: com.jdkshen.aijspro.BuildConfig.VERSION_NAME)
+                    val versionCode = if (Build.VERSION.SDK_INT >= 28) packageInfo?.longVersionCode else packageInfo?.versionCode?.toLong()
+                    addProperty("versionCode", versionCode ?: com.jdkshen.aijspro.BuildConfig.VERSION_CODE.toLong())
+                    addProperty("lastUpdateTime", packageInfo?.lastUpdateTime ?: 0L)
+                })
+                addProperty("toolCount", McpToolCatalog.names.size)
+                addProperty("canonicalToolCount", McpToolCatalog.canonicalNames.size)
                 addProperty("scriptRoot", root.path); addProperty("writeAllowed", McpService.allowWrite)
                 addProperty("executionAllowed", McpService.allowExecution)
                 addProperty("activeMcpRuns", runs.values.count { it.status in ACTIVE_STATES })
@@ -303,6 +320,16 @@ internal class McpTools(private val context: Context, private val event: (String
                 add("engineDiagnostics", engineDiagnostics())
                 add("rootStability", McpRootStability.observe(root.path))
                 add("toolCategories", JsonObject().apply { McpToolCategories.counts().forEach { (id, count) -> addProperty(id, count) } })
+                // P2-10：工作区残留到 193 个时应该主动给可执行的清理建议，而不是只报数字。
+                val workspaceCount = workspaces.list().size
+                val pendingApprovals = workspaces.list().count { it.pendingApproval }
+                if (workspaceCount > WORKSPACE_ALERT_THRESHOLD || pendingApprovals > 0) {
+                    add("nextActions", JsonArray().apply {
+                        add("工作区已有 $workspaceCount 个（阈值 $WORKSPACE_ALERT_THRESHOLD）：先跑 workspace_cleanup{dryRun:true} 看能回收多少，再决定是否真删")
+                        if (pendingApprovals > 0) add("有 $pendingApprovals 个工作区等待确认：workspace_list 查看后在 App 内确认或回退")
+                        add("APK 工作区另可用 apk_workspace_inventory / apk_workspace_gc 单独回收")
+                    })
+                }
             })
             "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
             "read_script" -> toolJson(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
@@ -714,10 +741,16 @@ internal class McpTools(private val context: Context, private val event: (String
         if (run.errorType.isNotEmpty()) add("error", JsonObject().apply {
             addProperty("type", run.errorType); addProperty("message", run.errorMessage); addProperty("stack", run.errorStack)
         })
-        if (includeLogs) add("logs", JsonArray().apply {
+        if (includeLogs) {
             val snapshot = run.logs ?: runLogs(run)
-            snapshot.forEach { add(it) }
-        })
+            add("logs", JsonArray().apply { snapshot.forEach { add(it) } })
+            // P2-11：结构化 logs[] 本来就是干净的；再给一份可直接读的文本，省掉调用方自己剥控制前缀。
+            val cleanText = snapshot.mapNotNull { entry ->
+                val obj = entry.asJsonObject
+                (obj.get("content") ?: obj.get("text"))?.takeIf { it.isJsonPrimitive }?.asString
+            }.joinToString("\n")
+            addProperty("logsText", cleanText)
+        }
     }
 
     private fun readApkLogs(afterId: Int, limit: Int): JsonObject {
@@ -856,7 +889,27 @@ internal class McpTools(private val context: Context, private val event: (String
                 } } }
             }
         }
-        return firstPage(hits, limit).apply { addProperty("scannedFiles", scanned); addProperty("truncatedScan", truncatedFiles || hits.size >= MAX_SEARCH_HITS) }
+        val hitLimitReached = hits.size >= MAX_SEARCH_HITS
+        val truncated = truncatedFiles || hitLimitReached
+        val stopReason = when {
+            hitLimitReached -> "hit_limit_reached"
+            truncatedFiles -> "file_scan_limit_reached"
+            else -> "completed"
+        }
+        return firstPage(hits, limit).apply {
+            addProperty("scannedFiles", scanned)
+            addProperty("truncatedScan", truncated)
+            // P1-8：截断时必须能区分「扫完没有」和「没扫完」，否则 total=0 会被误读成「项目里没有」。
+            addProperty("stopReason", stopReason)
+            add("scanLimits", JsonObject().apply {
+                addProperty("maxFiles", MAX_SEARCH_FILES); addProperty("maxHits", MAX_SEARCH_HITS)
+                addProperty("scannedFiles", scanned); addProperty("hits", hits.size)
+            })
+            if (truncated) {
+                addProperty("warning", "扫描未完成（stopReason=$stopReason）：**不能据此判定「不存在」**；请用 path 缩小范围后重搜")
+                addProperty("resumeHint", "已扫 $scanned 个文件（上限 $MAX_SEARCH_FILES）；把 path 指到子目录（例如 path=poker-recog）即可完整扫描")
+            }
+        }
     }
 
     @Synchronized private fun firstPage(items: List<JsonObject>, limit: Int): JsonObject {
@@ -1076,6 +1129,8 @@ internal class McpTools(private val context: Context, private val event: (String
         private const val MAX_SEARCH_HITS = 2000
         private const val MAX_SEARCH_FILE_BYTES = 512L * 1024
         private const val MAX_CURSORS = 16
+        /** P2-10：工作区超过这个数就在 get_status 里直接给清理建议。 */
+        private const val WORKSPACE_ALERT_THRESHOLD = 50
         private const val CURSOR_TTL_MS = 10 * 60 * 1000L
         private const val MAX_RUN_LOGS = 300
     }

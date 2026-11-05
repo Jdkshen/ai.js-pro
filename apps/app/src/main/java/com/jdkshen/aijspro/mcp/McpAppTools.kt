@@ -106,6 +106,16 @@ internal object McpAppTools {
             pm.checkPermission(Manifest.permission.QUERY_ALL_PACKAGES, context.packageName) ==
             PackageManager.PERMISSION_GRANTED
         val visibility = visibilityState(Build.VERSION.SDK_INT, queryAllGranted)
+        // P0-1：scanTotal 与 scanScope 必须自洽。PackageManager 只回 1 个包时（QUERY_ALL_PACKAGES 被
+        // 系统策略/分身限制），旧实现仍报 visibilityLimited=false + scanScope=all_installed，
+        // 会让人以为「这台机器只装了 1 个应用」。这里补原始计数与可疑标记，宁可说不确定。
+        val installedPackagesCount = runCatching { pm.getInstalledPackages(0).size }.getOrDefault(-1)
+        val launcherPackagesCount = runCatching {
+            pm.queryIntentActivities(
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0,
+            ).map { it.activityInfo.packageName }.toSet().size
+        }.getOrDefault(-1)
+        val coverageSuspect = launcherPackagesCount > 0 && all.size < launcherPackagesCount
         JsonObject().apply {
             addProperty("success", true)
             add("items", JsonArray().apply { page.items.forEach { add(appSummaryJson(it)) } })
@@ -119,9 +129,18 @@ internal object McpAppTools {
             addProperty("hasMore", page.hasMore)
             addProperty("includeSystem", includeSystem)
             addProperty("requiresRoot", false)
-            addProperty("visibilityLimited", visibility.limited)
-            addProperty("scanScope", visibility.scanScope)
-            addProperty("scanNote", visibility.note)
+            addProperty("visibilityLimited", if (coverageSuspect) true else visibility.limited)
+            addProperty("visibilityVerified", false)
+            addProperty("coverageSuspect", coverageSuspect)
+            addProperty("scanScope", if (coverageSuspect) "package_manager_returned" else visibility.scanScope)
+            addProperty("scanNote", if (coverageSuspect)
+                "PackageManager 只返回了 ${all.size} 个包，但 launcher 查询看到 $launcherPackagesCount 个：" +
+                    "查询可见性被系统限制（QUERY_ALL_PACKAGES 授权=${queryAllGranted}）。此结果不能当作「已装应用全集」" else visibility.note)
+            add("rawCounts", JsonObject().apply {
+                addProperty("getInstalledPackages", installedPackagesCount)
+                addProperty("launcherActivities", launcherPackagesCount)
+                addProperty("packageManagerReturned", all.size)
+            })
             addProperty("queryAllPackagesGranted", queryAllGranted)
             addProperty("normalizedQuery", search.normalizedQuery)
             rawQuery?.let { addProperty("query", it) }
