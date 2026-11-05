@@ -55,4 +55,43 @@ class McpCapturePresetTest {
         val resolved = McpCapturePreset.resolve("turbo")
         assertEquals("balanced", resolved.mode)
     }
+
+    @Test
+    fun fastestPresetIsTheSmallest() {
+        val resolved = McpCapturePreset.resolve(McpCapturePreset.MODE_FASTEST)
+        assertEquals("jpg", resolved.format)
+        assertEquals(40, resolved.quality)
+        assertEquals(360, resolved.maxWidth)
+        assertEquals(1500, resolved.timeoutMillis)
+    }
+
+    @Test
+    fun regionAcceptsArrayStringAndObjectForms() {
+        val array = McpCapturePreset.parseRegion(com.google.gson.JsonParser().parse("[10,20,110,220]"))!!
+        assertEquals(10, array.left); assertEquals(20, array.top)
+        assertEquals(110, array.right); assertEquals(220, array.bottom)
+        assertEquals(100, array.width); assertEquals(200, array.height)
+
+        val text = McpCapturePreset.parseRegion(com.google.gson.JsonParser().parse("\"[10,20][110,220]\""))!!
+        assertEquals(array, text)
+
+        val rect = McpCapturePreset.parseRegion(com.google.gson.JsonParser().parse("{\"left\":10,\"top\":20,\"right\":110,\"bottom\":220}"))!!
+        assertEquals(array, rect)
+
+        val xyw = McpCapturePreset.parseRegion(com.google.gson.JsonParser().parse("{\"x\":10,\"y\":20,\"width\":100,\"height\":200}"))!!
+        assertEquals(array, xyw)
+
+        assertEquals(null, McpCapturePreset.parseRegion(null))
+        assertEquals(null, McpCapturePreset.parseRegion(com.google.gson.JsonNull.INSTANCE))
+    }
+
+    @Test
+    fun regionRejectsBadInput() {
+        val cases = listOf("[1,2,3]", "\"10,20,30,40\"", "{\"x\":10,\"y\":20}", "[300,20,110,220]")
+        for (text in cases) {
+            var failed = false
+            try { McpCapturePreset.parseRegion(com.google.gson.JsonParser().parse(text)) } catch (error: IllegalArgumentException) { failed = true }
+            assertTrue("应当拒绝：$text", failed)
+        }
+    }
 }

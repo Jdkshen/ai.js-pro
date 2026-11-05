@@ -70,6 +70,7 @@ internal object McpAutomationTransport {
                 bool("dataUri", false),
                 int("maxWidth", -1).takeIf { it >= 0 },
                 int("timeoutMillis", 0).takeIf { it > 0 },
+                args.get("region"),
             )
         }
         val value = when (name) {

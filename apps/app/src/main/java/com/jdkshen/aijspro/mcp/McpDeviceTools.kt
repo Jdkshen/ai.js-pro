@@ -92,8 +92,9 @@ internal object McpDeviceTools {
      * 便于调用方自己权衡「质量 vs 速度」，而不是猜。
      */
     fun screenshot(mode: String, format: String?, quality: Int?, dataUri: Boolean,
-                   maxWidth: Int?, timeoutMillis: Int?): JsonObject {
-        require(McpCapturePreset.isKnownMode(mode)) { "mode 必须是 fast、balanced 或 quality" }
+                   maxWidth: Int?, timeoutMillis: Int?, region: com.google.gson.JsonElement? = null): JsonObject {
+        require(McpCapturePreset.isKnownMode(mode)) { "mode 必须是 fastest、fast、balanced 或 quality" }
+        val requestedRegion = McpCapturePreset.parseRegion(region)
         val effective = McpCapturePreset.resolve(mode, format, quality, maxWidth, timeoutMillis)
         val resolvedFormat = effective.format
         require(resolvedFormat in setOf("png", "jpg", "jpeg")) { "format 必须是 png、jpg 或 jpeg" }
@@ -103,11 +104,24 @@ internal object McpDeviceTools {
         val bitmap = AccessibilityScreenCapturer().capture(effective.timeoutMillis.toLong())
         val captureMs = System.currentTimeMillis() - startedAt
         var scaled: Bitmap? = null
+        var cropped: Bitmap? = null
         try {
-            val output = if (effective.maxWidth > 0 && bitmap.width > effective.maxWidth) {
-                Bitmap.createScaledBitmap(bitmap, effective.maxWidth,
-                    (bitmap.height.toLong() * effective.maxWidth / bitmap.width).toInt().coerceAtLeast(1), true).also { scaled = it }
-            } else bitmap
+            // 区域优先：先按屏幕坐标裁剪（越界自动夹取），再决定是否缩小 —— 只截一小块时
+            // 既能把编码成本降到极低，又能保留 1:1 像素（比整屏缩小更清楚）。
+            val region = requestedRegion?.let {
+                McpCapturePreset.Region(
+                    it.left.coerceIn(0, bitmap.width - 1),
+                    it.top.coerceIn(0, bitmap.height - 1),
+                    it.right.coerceIn(it.left + 1, bitmap.width),
+                    it.bottom.coerceIn(it.top + 1, bitmap.height),
+                )
+            }
+            val croppedBitmap = if (region == null) bitmap else Bitmap.createBitmap(
+                bitmap, region.left, region.top, region.width, region.height).also { cropped = it }
+            val output = if (effective.maxWidth > 0 && croppedBitmap.width > effective.maxWidth) {
+                Bitmap.createScaledBitmap(croppedBitmap, effective.maxWidth,
+                    (croppedBitmap.height.toLong() * effective.maxWidth / croppedBitmap.width).toInt().coerceAtLeast(1), true).also { scaled = it }
+            } else croppedBitmap
             val mime = if (resolvedFormat == "png") "image/png" else "image/jpeg"
             val encodeStartedAt = System.currentTimeMillis()
             val bytes = ByteArrayOutputStream().use { out ->
@@ -120,7 +134,17 @@ internal object McpDeviceTools {
             val metadata = JsonObject().apply {
                 addProperty("success", true); addProperty("width", output.width); addProperty("height", output.height)
                 addProperty("sourceWidth", bitmap.width); addProperty("sourceHeight", bitmap.height)
-                addProperty("scale", output.width.toDouble() / bitmap.width)
+                addProperty("scale", output.width.toDouble() / (if (requestedRegion == null) bitmap.width else requestedRegion.width))
+                if (requestedRegion != null) {
+                    addProperty("cropped", true)
+                    // 裁剪区域（已按屏幕边界夹取）与块内坐标换算用这两个字段
+                    addProperty("region", "[${requestedRegion.left},${requestedRegion.top}][${requestedRegion.right},${requestedRegion.bottom}]")
+                    addProperty("regionClamped", requestedRegion.left != requestedRegion.left.coerceIn(0, bitmap.width - 1) ||
+                        requestedRegion.top != requestedRegion.top.coerceIn(0, bitmap.height - 1) ||
+                        requestedRegion.right != requestedRegion.right.coerceIn(requestedRegion.left + 1, bitmap.width) ||
+                        requestedRegion.bottom != requestedRegion.bottom.coerceIn(requestedRegion.top + 1, bitmap.height))
+                    addProperty("regionNote", "输出图内坐标 = 屏幕坐标 - 区域左上角，再乘 scale；用 get_ui_layout 的节点 bounds 可直接减区域左上角")
+                }
                 addProperty("mimeType", mime); addProperty("format", if (resolvedFormat == "png") "png" else "jpg")
                 addProperty("size", bytes.size); addProperty("method", "accessibility")
                 addProperty("mode", effective.mode)
@@ -141,7 +165,11 @@ internal object McpDeviceTools {
                     add(JsonObject().apply { addProperty("type", "text"); addProperty("text", metadata.toString()) })
                 })
             }
-        } finally { scaled?.takeIf { it !== bitmap }?.recycle(); bitmap.recycle() }
+        } finally {
+            scaled?.takeIf { it !== bitmap && it !== cropped }?.recycle()
+            cropped?.takeIf { it !== bitmap }?.recycle()
+            bitmap.recycle()
+        }
     }
 
     private class AndroidNode(private val node: AccessibilityNodeInfo, private val owned: Boolean = true) : McpUiTree.Node {
