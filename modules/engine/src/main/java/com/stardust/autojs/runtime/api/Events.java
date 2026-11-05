@@ -221,7 +221,14 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         if (mListeningKey)
             return;
         AccessibilityService service = getAccessibilityService();
-        if ((service.getServiceInfo().flags & AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS) == 0) {
+        // serviceInfo 在「无障碍已启用但服务还没连上/被系统回收」时是 null；
+        // 旧实现直接 service.getServiceInfo().flags → NullPointerException，
+        // 官方示例「事件与按键、触摸监听/按键监听.js」等会以一句看不懂的 NPE 失败。
+        AccessibilityServiceInfo info = service == null ? null : service.getServiceInfo();
+        if (info == null) {
+            throw new ScriptException("无障碍服务未连接：按键监听需要无障碍已启用并处于连接状态（当前 serviceInfo 为空，请重新启用无障碍服务后重试）");
+        }
+        if ((info.flags & AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS) == 0) {
             throw new ScriptException(mContext.getString(R.string.text_should_enable_key_observing));
         }
         ensureHandler();

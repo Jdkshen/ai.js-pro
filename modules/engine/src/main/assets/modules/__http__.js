@@ -109,9 +109,29 @@ module.exports = function (runtime, scope) {
             var file = new com.stardust.pio.PFile(path);
             fileName = fileName || file.getName();
             mimeType = mimeType || parseMimeType(file.getExtension());
-            builder.addFormDataPart(key, fileName, RequestBody.create(MediaType.parse(mimeType), file));
+            // OkHttp 3/4/5 创建 RequestBody 的方式不同：旧实现直接用静态 create，在新版上失败时
+            // Rhino 只会报「Cannot find function addFormDataPart」，非常难查（示例 文件上传.js 就是死在这）。
+            builder.addFormDataPart(key, fileName, createFileBody(mimeType, file));
         }
         return builder.build();
+    }
+
+    /** 跨 OkHttp 版本创建文件 body：4+ 用 file.asRequestBody，3 用 RequestBody.create(mediaType, file)。 */
+    function createFileBody(mimeType, file) {
+        var mediaType = null;
+        try { mediaType = MediaType.parse(mimeType); } catch (e0) { mediaType = MediaType.parse('application/octet-stream'); }
+        try { if (file != null && typeof file.asRequestBody === 'function') { return file.asRequestBody(mediaType); } } catch (e1) { }
+        try { return RequestBody.create(mediaType, file); } catch (e2) { }
+        try { return RequestBody.create(file, mediaType); } catch (e3) { }
+        throw new Error('无法为上传创建 RequestBody（OkHttp 版本不兼容）：' + mimeType);
+    }
+
+    /** 跨版本创建文本 body。 */
+    function createStringBody(contentType, text) {
+        var mediaType = MediaType.parse(contentType);
+        try { return RequestBody.create(mediaType, text); } catch (e1) { }
+        try { return RequestBody.create(text, mediaType); } catch (e2) { }
+        throw new Error('无法为请求体创建 RequestBody（OkHttp 版本不兼容）：' + contentType);
     }
 
     function parseMimeType(ext) {
@@ -155,16 +175,12 @@ module.exports = function (runtime, scope) {
 
     function parseBody(options, body) {
         if (typeof (body) == "string") {
-            body = RequestBody.create(MediaType.parse(options.contentType), body);
+            body = createStringBody(options.contentType, body);
         } else if (body instanceof RequestBody) {
             return body;
         } else {
-            body = new RequestBody({
-                contentType: function () {
-                    return MediaType.parse(options.contentType);
-                },
-                writeTo: body
-            });
+            // RequestBody 在 OkHttp 里是抽象类，Rhino 不能 new；给可读错误而不是难懂的 TypeError。
+            throw new Error("不支持的请求体类型（需要字符串、RequestBody 或文件）；收到：" + (body === null ? "null" : typeof body));
         }
         return body;
     }
@@ -190,12 +206,20 @@ module.exports = function (runtime, scope) {
         }
         r.body = {};
         var body = res.body();
-        r.body.string = body.string.bind(body);
-        r.body.bytes = body.bytes.bind(body);
-        r.body.json = function () {
-            return JSON.parse(r.body.string());
+        if (body == null) {
+            // 204/304 或请求没发出去时 body 为 null：旧实现 body.string.bind → "Cannot call method bind of undefined"，
+            // 把 HTTP 层问题伪装成脚本错误（示例 获取网页.js / 文件下载.js 都踩）。
+            r.body.string = function () { return ""; };
+            r.body.bytes = function () { return []; };
+            r.body.json = function () { return null; };
+            r.body.contentType = null;
+            r.body.emptyReason = "响应没有 body（HTTP " + r.statusCode + "：可能是 204/304，或请求根本没有发出去）";
+        } else {
+            r.body.string = function () { return body.string(); };
+            r.body.bytes = function () { return body.bytes(); };
+            r.body.json = function () { return JSON.parse(r.body.string()); };
+            r.body.contentType = body.contentType();
         }
-        r.body.contentType = body.contentType();
         r.request = res.request();
         r.url = r.request.url();
         r.method = r.request.method();

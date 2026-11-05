@@ -301,7 +301,8 @@ public class ScriptRuntime {
         yolo = new Yolo(context);
         sqlite = new Sqlite(context, files, this);
         crypto = new Crypto();
-        zips = new Zips(context);
+        // 传 files 让 $zip.* 的相对路径与 files.path() 用同一个脚本 cwd（官方示例依赖这一点）。
+        zips = new Zips(context, files);
         debug = new Debug(this);
         powerManager = new PowerManager(context);
     }

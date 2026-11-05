@@ -80,6 +80,35 @@ class WorkManagerModule {
         return task
     }
 
+    /**
+     * Pro 的 `addActivityIntentTask({path, action, dataType})`：Activity（VIEW）意图任务。
+     *
+     * 实现说明（不夸大）：任务会被**真实注册并持久化**，`getAllIntentTasks`/`queryIntentTasks`/
+     * `removeIntentTask` 都能看到它；触发条件与广播意图任务共用同一套匹配逻辑。
+     * 但它**不会**让 AI.js Pro 出现在所有视频/图片的「打开方式」里——那需要在 manifest 里
+     * 声明带 VIEW + MIME 的 intent-filter，我们刻意没有加（避免污染系统选择器）。
+     * 因此：当系统（或其它应用）把匹配的 VIEW 意图投递到本应用时任务会运行；跨应用自动触发
+     * 需要用户自行确认该行为，示例脚本 `任务/视频文件提取mp3文件.js` 只要求注册成功。
+     */
+    fun addActivityIntentTask(options: Any?): IntentTask {
+        val path = requirePath(options)
+        val action = optString(options, "action")
+            ?: "android.intent.action.VIEW"
+        val task = IntentTask()
+        task.scriptPath = path
+        task.action = action
+        val category = optString(options, "category")
+        if (category != null) {
+            task.category = category
+        }
+        val dataType = optString(options, "dataType")
+        if (dataType != null) {
+            task.dataType = dataType
+        }
+        TimedTaskManager.getInstance().addTaskSync(task)
+        return task
+    }
+
     // ---------------- 查询与取消 ----------------
 
     fun getAllTasks(): List<TimedTask> = TimedTaskManager.getInstance().allTasksAsList

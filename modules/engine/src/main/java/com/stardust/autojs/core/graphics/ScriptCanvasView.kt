@@ -57,6 +57,9 @@ class ScriptCanvasView(context: Context, private val mScriptRuntime: ScriptRunti
         val pool = mDrawingThreadPool?.takeUnless { it.isShutdown }
                 ?: Executors.newSingleThreadExecutor().also { mDrawingThreadPool = it }
         pool.run {
+          // execute{} 在脚本被停止时会抛 ScriptInterruptedException；以前它从线程池任务里逃逸成
+          // FATAL EXCEPTION（pool-*-thread-*），直接杀掉 :script 进程——画布示例「停止脚本」就会触发。
+          try {
             execute {
                 var time = SystemClock.uptimeMillis()
                 try {
@@ -88,14 +91,24 @@ class ScriptCanvasView(context: Context, private val mScriptRuntime: ScriptRunti
                         }
                         time = SystemClock.uptimeMillis()
                     }
-                } catch (e: Exception) {
-                    if (mDrawing) mScriptRuntime.exit(e)
+                } catch (e: Throwable) {
+                    // 先落 mDrawing，再 exit：exit 自己会抛 ScriptInterruptedException（停止脚本的正常路径），
+                    // 不能再让它从 catch 里逃出去。
+                    val wasDrawing = mDrawing
                     mDrawing = false
+                    if (wasDrawing) {
+                        runCatching { mScriptRuntime.exit(e) }
+                    }
                 } finally {
                     mDrawTaskRunning.set(false)
                     if (mDrawing && isAvailable && !mFrameBuffer.isClosed) performDraw()
                 }
             }
+          } catch (interrupted: ScriptInterruptedException) {
+            Log.d(LOG_TAG, "canvas drawing stopped: " + interrupted.message)
+          } catch (error: Throwable) {
+            Log.w(LOG_TAG, "canvas drawing task failed", error)
+          }
         }
     }
 

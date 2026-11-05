@@ -27,13 +27,40 @@ import java.util.zip.ZipOutputStream;
 public class Zips {
 
     private final Context mContext;
+    /** 用于把脚本里的相对路径解析成与 `files.path()` 一致（脚本 cwd）的绝对路径。 */
+    private final Files mFiles;
 
     public Zips(Context context) {
+        this(context, null);
+    }
+
+    public Zips(Context context, Files files) {
         mContext = context;
+        mFiles = files;
+    }
+
+    /**
+     * 相对路径必须按脚本工作目录解析：本类以前直接用 `new File(path)`，进程 cwd 通常是 `/`，
+     * 于是官方示例 `$zip.zipDir("./zip_test/", ...)` 会报「不是文件夹」（文件明明创建成功了）。
+     */
+    private String resolve(String path) {
+        if (path == null || path.startsWith("/")) {
+            return path;
+        }
+        if (mFiles == null) {
+            return path;
+        }
+        try {
+            return mFiles.path(path);
+        } catch (Exception e) {
+            return path;
+        }
     }
 
     @ScriptInterface
     public boolean zip(String srcDir, String destZip) {
+        srcDir = resolve(srcDir);
+        destZip = resolve(destZip);
         try (ZipOutputStream zos = new ZipOutputStream(
                 new BufferedOutputStream(new FileOutputStream(destZip)))) {
             File root = new File(srcDir);
@@ -85,6 +112,8 @@ public class Zips {
 
     @ScriptInterface
     public boolean unzip(String zipFile, String dest, Scriptable options) {
+        zipFile = resolve(zipFile);
+        dest = resolve(dest);
         File dir = new File(dest);
         if (!dir.exists() && !dir.mkdirs()) {
             return false;
@@ -115,6 +144,8 @@ public class Zips {
 
     @ScriptInterface
     public boolean zipDir(String dir, String dest, Scriptable options) {
+        dir = resolve(dir);
+        dest = resolve(dest);
         try {
             File folder = new File(dir);
             if (!folder.isDirectory()) {
@@ -137,6 +168,8 @@ public class Zips {
 
     @ScriptInterface
     public boolean zipFile(String file, String dest, Scriptable options) {
+        file = resolve(file);
+        dest = resolve(dest);
         try {
             File src = new File(file);
             if (!src.isFile()) {
@@ -164,6 +197,11 @@ public class Zips {
             if (files.isEmpty()) {
                 throw new RuntimeException("fileList 不能为空");
             }
+            // 列表里的相对路径同样按脚本 cwd 解析。
+            for (int i = 0; i < files.size(); i++) {
+                files.set(i, new File(resolve(files.get(i).getPath())));
+            }
+            dest = resolve(dest);
             net.lingala.zip4j.model.ZipParameters parameters = ZipSupport.zipParameters(options);
             net.lingala.zip4j.core.ZipFile zip = newZipFile(dest);
             zip.createZipFile(files, parameters);
@@ -176,7 +214,8 @@ public class Zips {
     /** `$zip.open(file)`：打开压缩包，返回文档里的 ZipFile 对象。 */
     @ScriptInterface
     public ZipFile open(String file) {
-        return new ZipFile(file);
+        // 把 files 一起传进去：返回的 ZipFile 上的 addFile/addFolder 等相对路径也要按脚本 cwd 解析。
+        return new ZipFile(resolve(file), mFiles);
     }
 
     private static net.lingala.zip4j.core.ZipFile newZipFile(String dest) throws Exception {
@@ -205,6 +244,7 @@ public class Zips {
 
     @ScriptInterface
     public String[] list(String zipPath) {
+        zipPath = resolve(zipPath);
         try (ZipInputStream zis = new ZipInputStream(
                 new BufferedInputStream(new FileInputStream(zipPath)))) {
             List<String> names = new ArrayList<>();

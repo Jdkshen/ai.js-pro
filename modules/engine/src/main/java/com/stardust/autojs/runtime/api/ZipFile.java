@@ -20,12 +20,30 @@ public class ZipFile {
 
     private final String mPath;
     private String mPassword;
+    /** 用于把脚本里的相对路径解析成脚本 cwd 下的绝对路径（与 files.path() 一致）。 */
+    private final Files mFiles;
 
     public ZipFile(String path) {
+        this(path, null);
+    }
+
+    public ZipFile(String path, Files files) {
         if (path == null || path.isEmpty()) {
             throw new IllegalArgumentException("open(file) 需要压缩包路径");
         }
         mPath = path;
+        mFiles = files;
+    }
+
+    private String resolve(String path) {
+        if (path == null || path.startsWith("/") || mFiles == null) {
+            return path;
+        }
+        try {
+            return mFiles.path(path);
+        } catch (Exception e) {
+            return path;
+        }
     }
 
     /**
@@ -87,7 +105,7 @@ public class ZipFile {
     @ScriptInterface
     public void addFile(String file, Scriptable options) {
         try {
-            open().addFile(new java.io.File(file), ZipSupport.zipParameters(options));
+            open().addFile(new java.io.File(resolve(file)), ZipSupport.zipParameters(options));
         } catch (ZipException e) {
             throw new RuntimeException("addFile 失败: " + e.getMessage());
         }
@@ -102,7 +120,11 @@ public class ZipFile {
     @ScriptInterface
     public void addFiles(Object fileList, Scriptable options) {
         try {
-            open().addFiles(toFileList(fileList), ZipSupport.zipParameters(options));
+            java.util.ArrayList<java.io.File> files = toFileList(fileList);
+            for (int i = 0; i < files.size(); i++) {
+                files.set(i, new java.io.File(resolve(files.get(i).getPath())));
+            }
+            open().addFiles(files, ZipSupport.zipParameters(options));
         } catch (ZipException e) {
             throw new RuntimeException("addFiles 失败: " + e.getMessage());
         }
@@ -117,7 +139,7 @@ public class ZipFile {
     @ScriptInterface
     public void addFolder(String folder, Scriptable options) {
         try {
-            open().addFolder(folder, ZipSupport.zipParameters(options));
+            open().addFolder(resolve(folder), ZipSupport.zipParameters(options));
         } catch (ZipException e) {
             throw new RuntimeException("addFolder 失败: " + e.getMessage());
         }
@@ -208,7 +230,7 @@ public class ZipFile {
         }
     }
 
-    /** JS 数组 / 单个字符串 → File 列表（Rhino 传进来的是 NativeArray）。 */
+    /** JS 数组 / 单个字符串 → File 列表（Rhino 传进来的是 NativeArray）。相对路径由调用方 resolve。 */
     static ArrayList<java.io.File> toFileList(Object fileList) {
         ArrayList<java.io.File> files = new ArrayList<>();
         if (fileList == null) {
