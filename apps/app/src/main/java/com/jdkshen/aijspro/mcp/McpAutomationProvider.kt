@@ -61,8 +61,17 @@ internal object McpAutomationTransport {
         fun str(key: String, fallback: String = "") = args.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: fallback
         fun int(key: String, fallback: Int) = args.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt ?: fallback
         fun bool(key: String, fallback: Boolean) = args.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: fallback
-        if (name == "capture_screen") return McpDeviceTools.screenshot(str("format", "png").lowercase(), int("quality", 100),
-            bool("dataUri", false), int("maxWidth", 0), int("timeoutMillis", 3000))
+        if (name == "capture_screen") {
+            // 预设只决定「没传的参数」：显式传了就以调用方为准（int("-1"/0) 表示未传）。
+            return McpDeviceTools.screenshot(
+                str("mode", McpCapturePreset.MODE_BALANCED).lowercase(),
+                str("format", "").lowercase().ifEmpty { null },
+                int("quality", 0).takeIf { it > 0 },
+                bool("dataUri", false),
+                int("maxWidth", -1).takeIf { it >= 0 },
+                int("timeoutMillis", 0).takeIf { it > 0 },
+            )
+        }
         val value = when (name) {
             "get_ui_layout" -> McpDeviceTools.layout(if (args.has("windowId")) int("windowId", -1) else null,
                 int("maxNodes", 3000), int("maxDepth", 64), int("timeoutMillis", 3000))

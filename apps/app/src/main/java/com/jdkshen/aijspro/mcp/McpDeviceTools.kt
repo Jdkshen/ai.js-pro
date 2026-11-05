@@ -86,30 +86,52 @@ internal object McpDeviceTools {
         } finally { roots.forEach { it.recycle() } }
     }
 
-    fun screenshot(format: String, quality: Int, dataUri: Boolean, maxWidth: Int, timeoutMillis: Int): JsonObject {
-        require(format in setOf("png", "jpg", "jpeg")) { "format 必须是 png、jpg 或 jpeg" }
-        require(quality in 1..100 && maxWidth in 0..4096 && timeoutMillis in 500..15000)
+    /**
+     * 截图。`mode` 提供三种预设：fast（快、小、够看）/ balanced（与旧默认一致）/ quality（原图无损）。
+     * 调用方显式传的 format/quality/maxWidth/timeoutMillis 覆盖预设；返回里给出真实耗时与生效参数，
+     * 便于调用方自己权衡「质量 vs 速度」，而不是猜。
+     */
+    fun screenshot(mode: String, format: String?, quality: Int?, dataUri: Boolean,
+                   maxWidth: Int?, timeoutMillis: Int?): JsonObject {
+        require(McpCapturePreset.isKnownMode(mode)) { "mode 必须是 fast、balanced 或 quality" }
+        val effective = McpCapturePreset.resolve(mode, format, quality, maxWidth, timeoutMillis)
+        val resolvedFormat = effective.format
+        require(resolvedFormat in setOf("png", "jpg", "jpeg")) { "format 必须是 png、jpg 或 jpeg" }
+        require(effective.quality in 1..100 && effective.maxWidth in 0..4096 && effective.timeoutMillis in 500..15000)
         if (Build.VERSION.SDK_INT < 30) throw IllegalStateException("直接无障碍截图需要 Android 11+；旧系统请通过 run_script 使用 requestScreenCapture/captureScreen")
-        val bitmap = AccessibilityScreenCapturer().capture(timeoutMillis.toLong())
+        val startedAt = System.currentTimeMillis()
+        val bitmap = AccessibilityScreenCapturer().capture(effective.timeoutMillis.toLong())
+        val captureMs = System.currentTimeMillis() - startedAt
         var scaled: Bitmap? = null
         try {
-            val output = if (maxWidth > 0 && bitmap.width > maxWidth) {
-                Bitmap.createScaledBitmap(bitmap, maxWidth,
-                    (bitmap.height.toLong() * maxWidth / bitmap.width).toInt().coerceAtLeast(1), true).also { scaled = it }
+            val output = if (effective.maxWidth > 0 && bitmap.width > effective.maxWidth) {
+                Bitmap.createScaledBitmap(bitmap, effective.maxWidth,
+                    (bitmap.height.toLong() * effective.maxWidth / bitmap.width).toInt().coerceAtLeast(1), true).also { scaled = it }
             } else bitmap
-            val mime = if (format == "png") "image/png" else "image/jpeg"
+            val mime = if (resolvedFormat == "png") "image/png" else "image/jpeg"
+            val encodeStartedAt = System.currentTimeMillis()
             val bytes = ByteArrayOutputStream().use { out ->
-                check(output.compress(if (format == "png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, quality, out)) { "截图编码失败" }
+                check(output.compress(if (resolvedFormat == "png") Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, effective.quality, out)) { "截图编码失败" }
                 out.toByteArray()
             }
+            val encodeMs = System.currentTimeMillis() - encodeStartedAt
             check(bytes.size <= 16 * 1024 * 1024) { "截图过大，请使用 jpg 或 maxWidth 缩小尺寸" }
             val encoded = Base64.encodeToString(bytes, Base64.NO_WRAP)
             val metadata = JsonObject().apply {
                 addProperty("success", true); addProperty("width", output.width); addProperty("height", output.height)
                 addProperty("sourceWidth", bitmap.width); addProperty("sourceHeight", bitmap.height)
                 addProperty("scale", output.width.toDouble() / bitmap.width)
-                addProperty("mimeType", mime); addProperty("format", if (format == "png") "png" else "jpg")
+                addProperty("mimeType", mime); addProperty("format", if (resolvedFormat == "png") "png" else "jpg")
                 addProperty("size", bytes.size); addProperty("method", "accessibility")
+                addProperty("mode", effective.mode)
+                addProperty("modeNote", effective.note)
+                addProperty("captureMs", captureMs); addProperty("encodeMs", encodeMs)
+                addProperty("totalMs", System.currentTimeMillis() - startedAt)
+                add("effective", JsonObject().apply {
+                    addProperty("format", if (resolvedFormat == "png") "png" else "jpg")
+                    addProperty("quality", effective.quality); addProperty("maxWidth", effective.maxWidth)
+                    addProperty("timeoutMillis", effective.timeoutMillis)
+                })
                 if (dataUri) addProperty("dataUri", "data:$mime;base64,$encoded")
             }
             return JsonObject().apply {
