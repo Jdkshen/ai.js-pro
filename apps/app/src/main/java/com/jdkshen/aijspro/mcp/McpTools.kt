@@ -261,6 +261,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("app_trace_stop", "停止 trace 会话并返回真实清理计数", objSchema("traceSessionId", required = arrayOf("traceSessionId"))))
             add(tool("app_trace_list", "列出未过期的 trace 会话及其上限/TTL"))
             add(tool("app_launch_trace", "先建立 trace 再启动应用；启动失败也保留 traceSessionId 便于诊断", McpToolSchema.appLaunchSchema()))
+            add(tool("floating_menu", "应用自身悬浮球（悬浮窗）的状态/显示/关闭：action=state|show|close。close 走 FloatyWindowManger，主线程执行并回读真实状态，用于「悬浮球关不掉」时可靠关闭", objSchema("action")))
             add(tool("shell_capabilities", "列出手机 shell 的实测能力清单与替代写法（grep 无 \\b/\\s、cat 无 -n/-A、无 zip/jar/7z 只有 tar、python 链接可能坏、node 可用），并指向 MCP 自身的替代工具", objSchema()))
             add(tool("shell_classify_failure", "把 shell 失败输出分类成能力缺口/后端问题/文件不存在/未知，并给出替代写法与所需后端；判断保守，未知不猜", objSchema("command", "output", required = arrayOf("command", "output"))))
             add(tool("node_script_command", "给出「写脚本文件再运行」的推荐命令（避免 node -e 双重转义），并说明 argv[0]=node、argv[1]=脚本、argv[2] 才是参数", objSchema("scriptPath", "args", required = arrayOf("scriptPath"))))
@@ -425,6 +426,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 // 库层已容忍「字符串 / 数组 / null」三种 args 形状（实测曾因字符串 args 报 Internal error）。
                 ToolkitShellCapabilities.nodeScriptCommandFromRaw(args.string("scriptPath"), args.get("args"))
             }.getOrElse { failure -> helperError("node_script_command", failure) })
+            "floating_menu" -> toolJson(McpFloatingTools.call(context, name, args))
             "crash_buffer_semantics" -> toolJson(runCatching {
                 ToolkitShellCapabilities.crashBufferSemantics()
             }.getOrElse { failure -> helperError("crash_buffer_semantics", failure) })

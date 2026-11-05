@@ -71,6 +71,8 @@ internal object McpToolCatalog {
         "app_trace_stop",
         "app_trace_list",
         "app_launch_trace",
+        // 应用自身悬浮球：状态/显示/关闭（用户反馈「悬浮窗关闭不了」时唯一的可靠入口）
+        "floating_menu",
         // §2.4/§2.5/§2.6 与 §2.1 的用户侧辅助入口
         "shell_capabilities",
         "shell_classify_failure",

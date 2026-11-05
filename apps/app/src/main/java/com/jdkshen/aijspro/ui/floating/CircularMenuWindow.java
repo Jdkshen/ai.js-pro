@@ -3,6 +3,7 @@ package com.jdkshen.aijspro.ui.floating;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.preference.PreferenceManager;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.OrientationEventListener;
 import android.view.View;
@@ -17,6 +18,7 @@ import com.jdkshen.aijspro.ui.floating.gesture.BounceDragGesture;
 
 public class CircularMenuWindow extends FloatyWindow {
 
+    private static final String TAG = "CircularMenuWindow";
     private static final String KEY_POSITION_X = CircularMenuWindow.class.getName() + ".position.x";
     private static final String KEY_POSITION_Y = CircularMenuWindow.class.getName() + ".position.y";
 
@@ -298,13 +300,46 @@ public class CircularMenuWindow extends FloatyWindow {
                     .apply();
             mDragGesture.cancel();
             mOrientationEventListener.disable();
-            getWindowManager().removeView(mCircularActionMenu);
-            getWindowManager().removeView(mCircularActionView);
+        } catch (Exception e) {
+            Log.w(TAG, "close: saving state failed", e);
+        }
+        // 三步**各自独立**移除：以前它们串在同一个 try 里，只要第一步抛异常（例如菜单还没
+        // inflate/attach 时 removeView 会抛 IllegalArgumentException），后面两步就都不执行，
+        // 悬浮球留在屏幕上——用户看到的就是「悬浮窗关不掉」。
+        removeViewSafely(mCircularActionMenu);
+        removeViewSafely(mCircularActionView);
+        try {
             FloatyService.removeWindow(this);
         } catch (Exception e) {
-            e.printStackTrace();
-        } finally {
-            if (mOnCloseListener != null) mOnCloseListener.run();
+            Log.w(TAG, "close: FloatyService.removeWindow failed", e);
+        }
+        if (mOnCloseListener != null) {
+            try {
+                mOnCloseListener.run();
+            } catch (Exception e) {
+                Log.w(TAG, "close: onClose listener failed", e);
+            }
+        }
+    }
+
+    /** 安全移除一个悬浮窗子视图：未 attach/父为空/重复移除都不算失败，也不再中断后续清理。 */
+    private void removeViewSafely(View view) {
+        if (view == null) {
+            return;
+        }
+        try {
+            if (view.getParent() != null || view.isAttachedToWindow()) {
+                getWindowManager().removeView(view);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "removeView failed, fallback to immediate", e);
+            try {
+                if (view.getParent() != null) {
+                    getWindowManager().removeViewImmediate(view);
+                }
+            } catch (Exception ignored) {
+                Log.w(TAG, "removeViewImmediate also failed", ignored);
+            }
         }
     }
 

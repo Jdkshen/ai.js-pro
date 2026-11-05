@@ -94,12 +94,22 @@ public class FloatyWindowManger {
     }
 
     public static void hideCircularMenu() {
-        if (sCircularMenu == null)
-            return;
-        CircularMenu menu = sCircularMenu.get();
-        if (menu != null)
-            menu.close();
+        // 先摘引用再关闭：即使 close() 内部某一步失败，也不会留下「看起来还在显示」的陈旧引用
+        // （那会让 showCircularMenuIfNeeded() 以为无需重建，从此再也关不掉/打不开）。
+        WeakReference<CircularMenu> reference = sCircularMenu;
         sCircularMenu = null;
+        if (reference == null) {
+            return;
+        }
+        CircularMenu menu = reference.get();
+        if (menu == null) {
+            return;
+        }
+        try {
+            menu.close();
+        } catch (Throwable error) {
+            android.util.Log.w("FloatyWindowManger", "hideCircularMenu failed", error);
+        }
     }
 
     /** Main thread: keep the menu mounted, without changing the user's enabled state. */
