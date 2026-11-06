@@ -52,6 +52,12 @@ import java.util.Locale;
  * <p>Phase1 起 {@code :script} 进程的 {@code ScriptHostStaging} 也复用本类，但用各自的
  * 暂存根目录名（{@code native-staging} / {@code script-staging}）—— 两个进程同跑同一项目时
  * 不能互相清空对方正在使用的副本。见 {@link #stageIfNeeded(Context, File, String)}。
+ *
+ * <p>与 {@code com.jdkshen.aijspro.flutterpoc.FsCopyTree} 的关系：本类<b>不复用</b>该通用
+ * 目录复制器。FsCopyTree 只保留 PocPackaging/PocWorkspace 的「普通文件/目录复制」语义；
+ * 本类还带递归深度上限（防符号链接成环）、按相对路径跳过 .git 与普通 .apk、只保留
+ * build/project-res.apk(+json)、单文件/整树字节上限、CopyStats 统计和失败清理，这些是
+ * 暂存项目的领域规则，不是单纯目录复制，强行合并会改变行为，故保留独立实现。
  */
 public final class NativeProjectStaging {
 

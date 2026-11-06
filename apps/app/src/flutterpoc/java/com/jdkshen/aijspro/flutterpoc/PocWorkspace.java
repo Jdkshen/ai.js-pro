@@ -694,27 +694,7 @@ final class PocWorkspace {
     }
 
     private static void copyTree(File source, File target) throws IOException {
-        if (source.isDirectory()) {
-            if (!target.mkdir() && !target.isDirectory()) {
-                throw new IOException("无法创建目录：" + target);
-            }
-            File[] children = source.listFiles();
-            if (children == null) {
-                throw new IOException("无法读取目录：" + source);
-            }
-            for (File child : children) {
-                copyTree(child, new File(target, child.getName()));
-            }
-            return;
-        }
-        try (InputStream in = new FileInputStream(source);
-             OutputStream out = new FileOutputStream(target)) {
-            byte[] buffer = new byte[8192];
-            int count;
-            while ((count = in.read(buffer)) != -1) {
-                out.write(buffer, 0, count);
-            }
-        }
+        FsCopyTree.copyWorkspace(source, target);
     }
 
     private static boolean deleteTree(File file) {

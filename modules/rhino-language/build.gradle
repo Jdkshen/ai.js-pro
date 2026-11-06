@@ -14,7 +14,8 @@ android {
 dependencies {
     // Transitional parser/API dependency. Execution is enabled only when the
     // separate :engine-rhino provider is packaged.
-    // SPIKE(2026-10-05): 升级试验——官方 Rhino 1.7.15.1（1.7.14.1 在 Android 上撞 javax.lang.model.SourceVersion；
-    // 回退改回 rhino-1.7.7.2.jar 即可）
+    // SPIKE(2026-10-05): 升级试验——官方 Rhino 1.7.15.1（1.7.14.1 在 Android 上撞 javax.lang.model.SourceVersion，已删除）
+    // 回退改回 rhino-1.7.7.2.jar 即可：该 jar **有意保留**在 libs/ 下（1.24MB，换一行就能回退，比重新找包便宜）。
+    // 2026-11-06 整理规范时确认：只有 1.7.15.1 被构建引用；1.7.14.1 零引用已删；不要因为"没被 build.gradle 引用"删掉 1.7.7.2。
     api files('libs/rhino-1.7.15.1.jar')
 }

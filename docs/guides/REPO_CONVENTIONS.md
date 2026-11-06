@@ -95,6 +95,33 @@ Pop-Location
 | `runs/` | 88 MB | 运行时残留 |
 | `chess-preview/` | 120 MB | 象棋预览产物 |
 
+### 2026-11-06 实际执行过的清理（可照抄）
+
+| 对象 | 规则 | 结果 |
+|---|---|---|
+| `.artifacts/updates/**` | **永不删**（LAN 更新源，`update.json` 指向它） | 保留 |
+| `.artifacts/flutter-release-candidate/*.apk` | 只留**最新 4 个** | 保留 1363–1366 |
+| `.artifacts` 下其它 `*.apk` | 删 **14 天前**的（构建产物可重建） | 删 53 个 / 4.97 GB |
+| `.artifacts` 下 `*.log` | 删 **30 天前**的 | 删 1430 个 / 105 MB |
+| `output/ci-head.zip`、`output/local-cleanup-20261106/` | 无 docs 引用 → 删 | 268.9 MB |
+| `output/node-pro-gaps-20261021/`（2.9 GB） | **被 5 篇文档引用 → 保留** | 保留 |
+| `output/toolchain-20261025/`（226 MB） | 组件重打包的暂存（debs/repack.py）→ 保留 | 保留 |
+
+合计释放 **≈5.2 GB**（工作区 11.5 → 11.0 GB；`.artifacts` 29 → 23.5 GB）。命令模板：
+
+```powershell
+$art="C:\Users\18101\Documents\ai-js-pro\.artifacts"
+$keep = Get-ChildItem -Recurse -File "$art\flutter-release-candidate" -Filter *.apk |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 4
+$del = Get-ChildItem -Recurse -File $art -Filter *.apk |
+  Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-14) -and
+                 $_.FullName -notmatch "\\updates\\" -and
+                 ($keep.FullName -notcontains $_.FullName) }
+$del | Measure-Object -Property Length -Sum   # 先看再删
+# $del | Remove-Item -Force                   # 确认后执行
+```
+
+**删除前必做**：`git grep --fixed-strings "<目录名>" -- docs` 查有没有报告把它当证据引用（`node-pro-gaps-20261021` 就是被引用而保留的）。
 安全清理（**先看再删**）：
 
 ```powershell

@@ -904,23 +904,7 @@ final class PocPackaging {
     }
 
     private static void copyTree(File source, File target) throws IOException {
-        if (source.isDirectory()) {
-            if (!target.isDirectory() && !target.mkdirs()) {
-                throw new IOException("无法创建目录：" + target);
-            }
-            File[] children = source.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    copyTree(child, new File(target, child.getName()));
-                }
-            }
-            return;
-        }
-        File parent = target.getParentFile();
-        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
-            throw new IOException("无法创建目录：" + parent);
-        }
-        copyFile(source, target);
+        FsCopyTree.copy(source, target);
     }
 
     private static void copyFile(File source, File target) throws IOException {
