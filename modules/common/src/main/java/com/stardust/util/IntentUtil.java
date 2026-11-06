@@ -10,6 +10,7 @@ import androidx.annotation.RequiresApi;
 import androidx.core.content.FileProvider;
 
 import android.os.Build;
+import android.util.Log;
 import android.widget.Toast;
 
 import com.stardust.R;
@@ -18,6 +19,36 @@ import java.io.File;
 
 
 public class IntentUtil {
+
+    private static final String TAG = "IntentUtil";
+
+    /**
+     * 给**图片**的 content URI 追加一个版本参数 `v=<长度>-<修改时间>`。
+     *
+     * <p>为什么需要：`app.viewFile()` 走系统 ACTION_VIEW，本应用不负责解码/显示；同一个路径
+     * 经 FileProvider 得到的 content URI 在文件被重写前后**完全一样**，外部查看器按 URI/路径缓存时
+     * 就会「改了图还显示旧图」（真实反馈：同名重写 PNG 后 viewFile 仍是上一版，换文件名才正常）。
+     * 这里只改我们交给外部查看器的 URI，让它有机会把重写后的图片当成新资源；
+     * FileProvider 解析路径时忽略 query，所以读取仍然正常。
+     *
+     * <p>边界：这**不能**清除外部查看器自己的缓存，也不能保证所有查看器都按完整 URI 做键。
+     */
+    private static Uri withImageVersion(Uri uri, String path, String mimeType) {
+        if (uri == null || path == null || mimeType == null || !mimeType.startsWith("image/")) {
+            return uri;
+        }
+        try {
+            File file = new File(path);
+            if (!file.isFile()) {
+                return uri;
+            }
+            return uri.buildUpon()
+                    .appendQueryParameter("v", file.length() + "-" + file.lastModified())
+                    .build();
+        } catch (Exception e) {
+            return uri;
+        }
+    }
 
     public static boolean chatWithQQ(Context context, String qq) {
         try {
@@ -163,6 +194,8 @@ public class IntentUtil {
     public static boolean viewFile(Context context, String path, String mimeType, String fileProviderAuthority) {
         try {
             Uri uri = getUriOfFile(context, path, fileProviderAuthority);
+            uri = withImageVersion(uri, path, mimeType);
+            Log.d(TAG, "viewFile uri=" + uri + " mime=" + mimeType);
             context.startActivity(new Intent(Intent.ACTION_VIEW)
                     .setDataAndType(uri, mimeType)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
