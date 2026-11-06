@@ -1,10 +1,10 @@
 # AI.js Pro 文档索引（docs/INDEX.md）
 
 > 本页是 `docs/` 的统一入口：**统计快照 + 分类索引 + 最近 20 篇摘要 + 重复/取代清单 + 读文档顺序**。
-> 生成时间：2026/11/6 16:11:21（快照口径：docs/ 磁盘文件；统计不含本页 INDEX.md。并发整理任务新产出的 `ARCHITECTURE.md` 与 `2026-11-06_死代码与冗余资产盘点.md` 已补入本页，数字会随其它整理任务小幅漂移）。
+> 生成时间：2026/11/6 16:12:35（快照口径：docs/ 磁盘文件；统计不含本页 INDEX.md。并发整理任务新产出的 `ARCHITECTURE.md` 与 `2026-11-06_死代码与冗余资产盘点.md` 已补入本页，数字会随其它整理任务小幅漂移）。
 > 维护约定见 §7；新增报告/指南后请在同一提交里补一行。
 
-**一句话现状**：当前发布版本与测试机以 [`AGENTS.md`](../AGENTS.md) 顶部为准（本索引快照时为 **dev-1362 LAN，默认测试机 K40 cccc62c7**；`docs/HANDOFF_AI.md` 顶部到 dev-1352，`docs/PROJECT_STATUS.md`/`docs/README.md` 更旧）。历史报告里的数字只代表当时环境，不代表当前工作树。
+**一句话现状**：当前发布版本与测试机以 [`AGENTS.md`](../AGENTS.md) 顶部为准（本索引快照时为 **dev-1362 LAN，默认测试机 K40 cccc62c7**；`docs/HANDOFF_AI.md` 顶部到 dev-1352，`docs/PROJECT_STATUS.md`/`docs/README.md` 更旧）。AGENTS.md 顶部还包含 2026-11-06 源码整理/框架梳理记录（commit a8786cd7/822a072a/d491154e，未 push）。历史报告里的数字只代表当时环境，不代表当前工作树。
 
 ## 0. 30 秒上手：先读哪 3 篇
 
@@ -12,26 +12,26 @@
 2. [`docs/guides/REPO_CONVENTIONS.md`](guides/REPO_CONVENTIONS.md) —— **仓库规范**：备份、目录职责、跟踪策略、报告六段、只本地提交/只发 LAN、测试机 K40。
 3. [`docs/INDEX.md`](INDEX.md)（本页） —— 文档地图、457 篇 reports 的分类索引、重复/取代清单与读法。
 
-> 只关心「现在是什么状态/怎么发版」而不读架构时，直接看 [`AGENTS.md`](../AGENTS.md) 顶部（最新发布/测试机/雷区）；[@HANDOFF_AI.md](HANDOFF_AI.md) 是更完整但部分旧（§4 状态）的总纲。
+> 只关心「现在是什么状态/怎么发版」而不读架构时，直接看 [`AGENTS.md`](../AGENTS.md) 顶部（最新发布/测试机/雷区）；[HANDOFF_AI.md](HANDOFF_AI.md) 是更完整但部分旧（§4 状态）的总纲。
 
 ## 1. 统计数字（真实快照）
 
-### 1.1 顶层目录
+> 统计不含本页 `docs/INDEX.md` 自身；当前磁盘上含本页共 588 个文件。整理任务在 2026-11-06 16:00 后仍在并发修改根目录状态页/新增文档，本页在最终生成时已按最新磁盘重算。
 
-> 统计不含本页 `docs/INDEX.md` 自身；当前磁盘上含本页共 588 个文件。
+### 1.1 顶层目录
 
 | 目录 | 全部文件 | Markdown | Markdown 体积 | 说明 |
 | --- | ---: | ---: | ---: | --- |
-| `(root)` | 11 | 11 | 248.1 KiB | 入口/规范/状态（HANDOFF、README、REMAINING_WORK 等） |
+| `(root)` | 11 | 11 | 249.8 KiB | 入口/规范/状态（HANDOFF、README、REMAINING_WORK 等） |
 | `architecture` | 12 | 10 | 199.6 KiB | 架构、API 对照、契约 JSON/CSV |
-| `guides` | 43 | 24 | 357.3 KiB | 长期有效的手册/指南（含截图资产） |
-| `plans` | 22 | 22 | 307.6 KiB | 方案/任务书 |
-| `node24-xiangqi` | 16 | 8 | 47.2 KiB | Node24 象棋识别移植专项记录 |
-| `reports` | 457 | 380 | 3.01 MiB | 按日期的一次性报告（含评测夹具资产） |
 | `archive` | 26 | 3 | 32.1 KiB | 已归档的一次性脚本与说明 |
-| **合计** | **587** | **458** | **4.17 MiB** | docs/ 全部文件约 34.10 MiB |
+| `guides` | 43 | 24 | 357.3 KiB | 长期有效的手册/指南（含截图资产） |
+| `node24-xiangqi` | 16 | 8 | 47.2 KiB | Node24 象棋识别移植专项记录 |
+| `plans` | 22 | 22 | 307.6 KiB | 方案/任务书 |
+| `reports` | 457 | 380 | 3.02 MiB | 按日期的一次性报告（含评测夹具资产） |
+| **合计** | **587** | **458** | **4.18 MiB** | docs/ 全部文件约 34.21 MiB |
 
-> 结论：`reports/` 占文件数的绝大头（457/587 ≈ 78%），但其中只有 380 个是 Markdown，其余 77 个是 PNG/CSV/JSON/PY 等评测资产；真正的可读文档主体是 **458 篇 Markdown / 4.17 MiB**。
+> 结论：`reports/` 占文件数的绝大头（457/587 ≈ 78%），但其中只有 380 个是 Markdown，其余 77 个是 PNG/CSV/JSON/PY 等评测资产；真正的可读文档主体是 **458 篇 Markdown / 4.18 MiB**。
 
 ### 1.2 reports 时间分布（按文件名日期，2026 年）
 
@@ -51,7 +51,7 @@
 
 | 类型 | 数量 | 体积 | 说明 |
 | --- | ---: | ---: | --- |
-| `.md` | 458 | 4.17 MiB | 文档正文 |
+| `.md` | 458 | 4.18 MiB | 文档正文 |
 | `.png` | 63 | 24.57 MiB | 截图/评测模板图 |
 | `.js` | 28 | 162.0 KiB | 评测/探针脚本（多在 reports、node24-xiangqi、archive） |
 | `.py` | 14 | 98.0 KiB | 评测脚本（chess-skin-eval 等） |
@@ -75,14 +75,13 @@
 | [`REMAINING_WORK.md`](REMAINING_WORK.md) | 56.8 KiB |
 | [`reports/2026-10-18_Phase1_Pro脚本进程与AIDL架构spec.md`](reports/2026-10-18_Phase1_Pro脚本进程与AIDL架构spec.md) | 56.6 KiB |
 | [`reports/2026-09-14_象棋自动走棋_真机定位与手势结论.md`](reports/2026-09-14_象棋自动走棋_真机定位与手势结论.md) | 49.6 KiB |
+| [`HANDOFF_AI.md`](HANDOFF_AI.md) | 49.1 KiB |
 | [`reports/2026-10-17_Flutter玻璃界面POC验收.md`](reports/2026-10-17_Flutter玻璃界面POC验收.md) | 49.0 KiB |
-| [`HANDOFF_AI.md`](HANDOFF_AI.md) | 48.5 KiB |
 
 ### 1.5 自动扫描结果
 
 - 含「历史/已被取代/复核更正/保留历史」类表述的文档：**25 篇**（人工复核后的高置信项见 §5.1；其余多为「以…为准」的谨慎措辞，不等于整篇作废）。
 - 文件名带 dev 版本号的报告：约 **79 篇**（发布记录/按版本修复），属于同一版本链而非重复；见 §5.2 的系列说明。
-
 ## 2. 分类规则（本索引怎么归档）
 
 1. **入口文档**（repo 根 / docs 根）：HANDOFF、README、REMAINING_WORK、HANDOVER、PERMISSIONS、MCP 调用说明等；带「历史/已归档」标记的逐条标出。
@@ -184,10 +183,10 @@
 
 ### 4.1 入口文档（repo 根 / docs 根，11 篇）
 
-- — | AI 接手总纲（AI_HANDOFF） ⚠️历史/被取代 | 发布/推送约定（2026-10-31）：默认只发 LAN，不逐版本建 GitHub Release/tag；代码提交默认只本地，不自动 push——只有用户明确说「推一次」才推。 | [原文](<HANDOFF_AI.md>) （§4 状态旧；架构/流程权威）
-- — | AI.js Pro 文档索引 | 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以仓库根目录为基准。 | [原文](<README.md>) （旧索引，最新只到 dev-1299）
+- — | AI 接手总纲（AI_HANDOFF） | 发布/推送约定（2026-10-31）：默认只发 LAN，不逐版本建 GitHub Release/tag；代码提交默认只本地，不自动 push——只有用户明确说「推一次」才推。 | [原文](<HANDOFF_AI.md>) （§4 状态旧；已加去过期横幅；架构/流程权威）
+- — | AI.js Pro 文档索引 | 本文档目录按用途分类。除文档间的显式相对链接外，文中代码路径均以仓库根目录为基准。 | [原文](<README.md>) （旧索引正文 + 2026-11-06 状态横幅；最新看 AGENTS/INDEX）
 - — | AI.js Pro 剩余细节审计与收尾清单 ⚠️历史/被取代 | 当前高级版/三引擎对齐总账（2026-10-30，dev-1292）：见 16 个后续工作包与验收标准。8 个实现/行为收口、4 个兼容范围盘点、4 个实机专项；不是只差 16 个 API。声明账本尚未逐条回填， | [原文](<REMAINING_WORK.md>) 
-- — | AI.js Pro 项目现状 ⚠️历史/被取代 | 当前发布 dev-1256（2026-10-26）：启动主题与文档复制优化。统一深浅启动底色与系统栏，文档页面更紧凑、代码可一键完整复制。399 JVM、MI8深浅启动和最终R8包19项文档检查通过； | [原文](<PROJECT_STATUS.md>) （状态到 dev-1259）
+- — | AI.js Pro 项目现状 ⚠️历史/被取代 | 当前发布 dev-1256（2026-10-26）：启动主题与文档复制优化。统一深浅启动底色与系统栏，文档页面更紧凑、代码可一键完整复制。399 JVM、MI8深浅启动和最终R8包19项文档检查通过； | [原文](<PROJECT_STATUS.md>) （状态到 dev-1259；2026-11-06 已加去过期横幅）
 - — | AI.js Pro — 交接文档 (HANDOVER) ⚠️历史/被取代 | 当前 HEAD：45fae285（main，与 origin/main 同步）；dev 更新通道 dev-1112（AI-js-Pro-Flutter-dev-1112.apk，约 132.1 MB， | [原文](<HANDOVER.md>) （旧交接文档，dev-1112）
 - — | AI.js Pro 脚本 MCP | 本文是早期实现记录，以下旧工具数量和引擎范围已过期。dev-1257 的当前说明请读 MCP 连接指南 与 apps/app/src/main/assets/mcp/AIjs-MCP-Guide.md： | [原文](<MCP_SCRIPT_SERVICE.md>) （旧 MCP 记录，工具数已过期）
 - — | AI.js Pro MCP 逆向调用说明 | 完整教程与 App、MCP 共用同一份资源：内置逆向指南，机读工作流。本页用于把入口交给其他 AI，无需复制历史聊天。 | [原文](<MCP逆向调用说明.md>) 
@@ -761,14 +760,14 @@
 9. **编辑器剪贴板（2 篇，2026-10-25）**：见 §5.1 第 12 条；保留最终版。
 10. **象棋 2026-09-20 系列（12 篇）**：以 `2026-09-20_差分视觉与卡点四修` 为主报告，其余是分项证据；不建议删除或合并（识别链调试依赖这些原始数据），只在 INDEX 主题内按日期列。
 
-### 5.3 入口文档陈旧/重复（建议更新横幅，不要直接归档）
+### 5.3 入口文档陈旧/重复（部分已加横幅；建议进一步精简/标注）
 
-- [`docs/README.md`](README.md)：**旧索引**，最新只到 dev-1299，内容与 INDEX 职责重复。建议改成短页：顶部一行「当前状态见 AGENTS.md，完整索引见 INDEX.md」+ 保留 API 文档链接；或标记为历史。
-- [`docs/PROJECT_STATUS.md`](PROJECT_STATUS.md)：状态停在 dev-1259，与 AGENTS 顶部重复。建议顶部加「历史快照，当前状态见 AGENTS.md」横幅；不要据此判断当前版本。
-- [`docs/HANDOVER.md`](HANDOVER.md)：旧交接（dev-1112），与 `HANDOFF_AI.md` 重复。建议归档或合并进 HANDOFF_AI 的「历史」节。
-- [`docs/HANDOFF_AI.md`](HANDOFF_AI.md)：**主交接仍有效**，但 §4「当前状态（dev-1177）」与顶部发布链（dev-1352）均落后于 AGENTS（dev-1362）；建议只更新 §4/顶部，不要重写 §3 架构。
+- [`docs/README.md`](README.md)：**旧索引正文**（最新只到 dev-1299），但 2026-11-06 整理时已加「状态页去过期」横幅并指向 AGENTS/ARCHITECTURE/REPO_CONVENTIONS/INDEX。建议下一步把正文压成短页（只留 API 文档入口），旧内容归档。
+- [`docs/PROJECT_STATUS.md`](PROJECT_STATUS.md)：数字停在 dev-1259，已加去过期横幅（指向 AGENTS 顶部）。保留横幅即可，当前状态不要引用此页。
+- [`docs/HANDOFF_AI.md`](HANDOFF_AI.md)：主交接仍有效，已加去过期横幅；§4「当前状态」仍写 dev-1177，建议只更新 §4/顶部发布链，不要重写 §3 架构。
+- [`docs/HANDOVER.md`](HANDOVER.md)：旧交接（dev-1112），与 HANDOFF_AI 重复且没有去过期横幅；建议归档或合并进 HANDOFF_AI 的「历史」节。
 - [`docs/MCP_SCRIPT_SERVICE.md`](MCP_SCRIPT_SERVICE.md)：文首自述「早期实现、工具数量和引擎范围已过期」；应合并进 `guides/MCP连接指南.md` 或加「历史」横幅。
-- [`docs/MIUIX_PILOT.md`](MIUIX_PILOT.md)、[`docs/TUTORIAL_API_ALIGNMENT.md`](TUTORIAL_API_ALIGNMENT.md)、[`docs/PERMISSIONS_AND_RELEASE.md`](PERMISSIONS_AND_RELEASE.md)、[`docs/APK_SIGNING.md`](APK_SIGNING.md)：都有时效说明/仅覆盖某一轨道；保留但需在顶部明确「当前 dev 发布路径见 AGENTS」，避免误用。
+- [`docs/MIUIX_PILOT.md`](MIUIX_PILOT.md)、[`docs/TUTORIAL_API_ALIGNMENT.md`](TUTORIAL_API_ALIGNMENT.md)、[`docs/PERMISSIONS_AND_RELEASE.md`](PERMISSIONS_AND_RELEASE.md)、[`docs/APK_SIGNING.md`](APK_SIGNING.md)：都只覆盖某一轨道/时点；保留但需以 AGENTS 顶部为准（PERMISSIONS 的 Rhino 版本漂移已在 2026-11-06 整理中修正）。
 - [`docs/architecture/项目说明.md`](architecture/项目说明.md)：自述「历史架构记录（已归档）」但仍在 architecture/；建议移动到 `docs/archive/architecture/`。
 
 ### 5.4 清理候选（本轮未执行）
@@ -814,9 +813,9 @@
 
 ## 8. 快照说明与已知差异
 
-- 快照时间：2026/11/6 16:10:16；口径是 `docs/` 磁盘文件（含未跟踪/未提交文件，不含本页 INDEX.md；生成中新增的 `2026-11-06_死代码与冗余资产盘点.md` 已补入）。
+- 快照时间：2026/11/6 16:12:35；口径是 `docs/` 磁盘文件（含未跟踪/未提交文件，不含本页 INDEX.md）。整理任务在本页生成期间仍在修改根目录状态页/新增报告，本页 §1 已按最终磁盘重算；后续并发变更以 AGENTS 顶部和最新报告为准。
 - 本轮**只新增 `docs/INDEX.md`**，没有移动/删除/改名任何文档，也没有改代码、文档其它文件；`.artifacts/` 下的统计中间产物被 gitignore。
-- 并发差异：同批整理任务产出的 `docs/guides/ARCHITECTURE.md` 与 `docs/guides/REPO_CONVENTIONS.md` 已出现；本页已把 ARCHITECTURE 补入 §0/§4.2 并计入统计。生成过程中新增的 `2026-11-06_死代码与冗余资产盘点.md` 也已补入 §3/§4.4.10。
+- 并发差异：同批整理任务产出的 `docs/guides/ARCHITECTURE.md`、`docs/guides/REPO_CONVENTIONS.md`、`2026-11-06_死代码与冗余资产盘点.md` 均已出现在统计中；根目录 `README/PROJECT_STATUS/HANDOFF_AI` 也已在 2026-11-06 加「状态页去过期」横幅（统计按最终文件大小）。
 - 状态差异：`AGENTS.md` 顶部最新到 dev-1362；`HANDOFF_AI.md` 顶部到 dev-1352；`PROJECT_STATUS.md` 到 dev-1259；`docs/README.md` 到 dev-1299；`reports/2026-11-06_多任务收口...dev-1365` 报告晚于 AGENTS 顶部，发布状态以最新发布记录为准。
 - 报告里的「真机通过」都带当时设备/版本（多为 MI8，2026-11-06 起切 K40）；换机/换版本后必须重跑，不能直接引用旧结论。
 
