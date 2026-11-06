@@ -22,16 +22,19 @@
     "additionalProperties": false,
     "properties": {
       "prefix": {
-        "type": "string"
+        "type": "string",
+        "description": "路径前缀；可省略，省略时为空字符串。",
+        "default": ""
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "description": "最多返回数量，1..200；可省略，省略时=50。",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 50
       }
     },
-    "required": [
-      "prefix",
-      "limit"
-    ]
+    "required": []
   },
   "apk_workspace_list": {
     "type": "object",
@@ -51,6 +54,8 @@
       },
       "view": {
         "type": "string",
+        "description": "列表视图；可省略，省略时=zip_entries。",
+        "default": "zip_entries",
         "enum": [
           "zip_entries",
           "dex_classes",
@@ -58,21 +63,21 @@
         ]
       },
       "prefix": {
-        "type": "string"
+        "type": "string",
+        "description": "条目路径前缀；可省略，省略时为空字符串。",
+        "default": ""
       },
       "limit": {
         "type": "integer",
         "minimum": 1,
         "maximum": 1000,
-        "description": "本页最多1000项，后续用apk_continue；最大值见返回pagination.limitMax。"
+        "description": "本页最多1000项，后续用apk_continue；可省略，省略时=200。",
+        "default": 200
       }
     },
     "required": [
       "workspaceId",
-      "editSessionId",
-      "view",
-      "prefix",
-      "limit"
+      "editSessionId"
     ]
   },
   "apk_search": {
@@ -87,7 +92,8 @@
       },
       "target": {
         "type": "string",
-        "description": "搜索范围。overview 覆盖 ZIP 路径、AXML 文本、资源名/值和 DEX（类/字段/方法/字符串）；资源文件路径用 resource_table_file_paths，native 用 native_symbols/native_strings；files 搜索 ZIP 路径及解码后的 AXML；smali 只支持 contains。",
+        "description": "搜索范围。overview 覆盖 ZIP 路径、AXML 文本、资源名/值和 DEX（类/字段/方法/字符串）；资源文件路径用 resource_table_file_paths，native 用 native_symbols/native_strings；files 搜索 ZIP 路径及解码后的 AXML；smali 只支持 contains。可省略，省略时=overview。",
+        "default": "overview",
         "enum": [
           "overview",
           "files",
@@ -108,7 +114,8 @@
       },
       "queryType": {
         "type": "string",
-        "description": "regex 使用 Java java.util.regex（支持环视/反向引用），受时间/字符访问预算限制。等价于 matchMode=regex；新调用建议直接用 matchMode。",
+        "description": "regex 使用 Java java.util.regex（支持环视/反向引用），受时间/字符访问预算限制。等价于 matchMode=regex；新调用建议直接用 matchMode。可省略，省略时=literal。",
+        "default": "literal",
         "enum": [
           "literal",
           "regex"
@@ -116,7 +123,8 @@
       },
       "caseSensitive": {
         "type": "boolean",
-        "description": "false 时使用 Unicode 不区分大小写匹配。"
+        "description": "false 时使用 Unicode 不区分大小写匹配。可省略，省略时=false。",
+        "default": false
       },
       "matchMode": {
         "type": "string",
@@ -131,34 +139,33 @@
       },
       "prefix": {
         "type": "string",
-        "description": "按目标类型过滤候选：DEX 可用 Java 包名或 JVM 描述符，资源可用 type/name 或 0x ID，ZIP/native 用路径前缀；overview 的 prefix 必须为空。可省略，省略时为空字符串。"
+        "description": "按目标类型过滤候选：DEX 可用 Java 包名或 JVM 描述符，资源可用 type/name 或 0x ID，ZIP/native 用路径前缀；overview 的 prefix 必须为空。可省略，省略时为空字符串。",
+        "default": ""
       },
       "includeMatchOffsets": {
         "type": "boolean",
-        "description": "true 时返回 matchOffsets.start/end（Java UTF-16 偏移，不是码点）和 matchOffset。"
+        "description": "true 时返回 matchOffsets.start/end（Java UTF-16 偏移，不是码点）和 matchOffset。可省略，省略时=false。",
+        "default": false
       },
       "limit": {
         "type": "integer",
         "minimum": 1,
-        "maximum": 200
+        "maximum": 200,
+        "description": "本页最多200条；可省略，省略时=50。",
+        "default": 50
       },
       "snippetMaxChars": {
         "type": "integer",
-        "description": "匹配预览的最大码点数；0 表示不返回 snippet。",
+        "description": "匹配预览的最大码点数；0 表示不返回 snippet。可省略，省略时=240。",
         "minimum": 0,
-        "maximum": 1000
+        "maximum": 1000,
+        "default": 240
       }
     },
     "required": [
       "workspaceId",
       "editSessionId",
-      "target",
-      "query",
-      "queryType",
-      "caseSensitive",
-      "includeMatchOffsets",
-      "limit",
-      "snippetMaxChars"
+      "query"
     ]
   },
   "apk_read_text": {
@@ -1087,7 +1094,8 @@
       },
       "replacementText": {
         "type": "string",
-        "description": "替换文本，可为空；不能包含 NUL。"
+        "description": "替换文本，可为空；可省略，省略时为空字符串。不能包含 NUL。",
+        "default": ""
       },
       "paddingMode": {
         "type": "string",
@@ -1106,7 +1114,6 @@
       "addressKind",
       "address",
       "expectedText",
-      "replacementText",
       "paddingMode"
     ]
   },

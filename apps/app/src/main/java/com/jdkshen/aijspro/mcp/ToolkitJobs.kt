@@ -590,6 +590,10 @@ internal class ToolkitJobs internal constructor(
                     job.finished = record.optLong("finishedAt") ?: clock()
                     job.lostByRestart = job.state == "INTERRUPTED"
                     job.reason = if (job.lostByRestart) RESTART_REASON else ""
+                    // 反馈实测（K40 dev-1374）：恢复时只改内存状态、不回写元数据 → 元数据文件里仍是 RUNNING/QUEUED，
+                    // 于是 workspace 清单的 scanActiveJobs() 永远认为有 activeJobs，apk_workspace_gc 永久保守跳过所有临时工作区
+                    // （现象：10 个临时快照 1.0 GiB 一个都回收不掉）。这里把终态写回元数据，幂等。
+                    persist(job)
                     job.resultReady = true
                     job.resultBytes = resultBytes
                     job.metadataFromIndex = true
@@ -609,6 +613,10 @@ internal class ToolkitJobs internal constructor(
                             clock(),
                         ),
                     )
+                    // 反馈实测（K40 dev-1375）：这条分支只加墓碑、**不清理陈旧元数据文件**，于是 workspace 清单的
+                    // scanActiveJobs() 继续把已死的任务当 active，apk_workspace_gc 永久保守跳过全部临时工作区。
+                    // 墓碑已经记录了这次重启丢失，元数据文件可以安全删除。
+                    runCatching { metadataFile(id).delete() }
                 }
             }
         }

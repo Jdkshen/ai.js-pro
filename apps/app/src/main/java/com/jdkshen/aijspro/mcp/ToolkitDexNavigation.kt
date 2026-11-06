@@ -515,17 +515,21 @@ internal class ToolkitDexNavigation(dexes: List<Pair<String, ToolkitDex>>) {
             "scannedSteps" to scanned,
             "reason" to stopReason,
         )
-        val budgetHint = if (truncated) {
+        val budgetStop = stopReason == "scan_budget" || stopReason == "time_budget"
+        val budgetHint = if (truncated && budgetStop) {
             "本次扫描未扫完（stopReason=" + (stopReason ?: "unknown") + "，已扫 " + scannedMembers +
                 " 个成员/" + scannedInstructions + " 条指令）：count=0 不能判定「不存在」；请缩小 prefix、指定 dexEntry，" +
                 "或改用 apk_search{target:\"dex_names\"} 先拿类名/locator 再搜。"
         } else null
-        val nextActions = if (truncated) JsonArray().apply {
+        val limitHint = if (stopReason == "limit") {
+            "本次是按调用方传入的 limit=$limit 截断，不是预算用尽；要更多结果请加大 limit 或缩小 prefix/查询范围。"
+        } else null
+        val nextActions = if (truncated && budgetStop) JsonArray().apply {
             add("缩小 prefix（例如只保留包名前缀）后重试，不要用 count=0 下结论")
             add("指定 dexEntry 只扫描一个 classes*.dex，减少扫描范围")
             add("改用 apk_search{target:\"dex_names\",query:\"" + query.replace("\"", "\\\"") + "\"} 再对本工具按类名/描述符定位")
         } else null
-        return ToolkitIo.json(
+        val data = ToolkitIo.json(
             "items" to JsonArray().apply { hits.forEach { add(it) } },
             "count" to hits.size,
             "limit" to limit,
@@ -535,14 +539,16 @@ internal class ToolkitDexNavigation(dexes: List<Pair<String, ToolkitDex>>) {
             "cancelled" to cancelled,
             "stopReason" to stopReason,
             "budgetUsed" to budgetUsed,
-            "budgetHint" to budgetHint,
-            "nextActions" to nextActions,
             "scope" to scope,
             "anchorFailureCount" to anchorFailures.size,
             "warnings" to warnings.toList(),
             "limits" to ToolkitIo.json("limitMax" to SEARCH_LIMIT_MAX, "scannedMax" to SEARCH_SCANNED_MAX,
                 "timeBudgetSeconds" to 8, "snippetMaxChars" to 1000),
         )
+        budgetHint?.let { data.addProperty("budgetHint", it) }
+        limitHint?.let { data.addProperty("limitHint", it) }
+        nextActions?.let { data.add("nextActions", it) }
+        return data
     }
 
     // ------------------------------------------------------------- call graph

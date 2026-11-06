@@ -797,6 +797,9 @@ internal class McpApkToolkit(
     }
     private fun elf(workspace: String, session: String, args: JsonObject) = ToolkitElf(raw(workspace, session, entryLocator(args.tString("locator"))))
     private fun patchNativeString(workspace: String, session: String, args: JsonObject): JsonObject {
+        // Schema marked replacementText optional with default ""; this is the tool entry point,
+        // so fill the default before the shared patcher (which still requires the key).
+        if (!args.has("replacementText")) args.addProperty("replacementText", "")
         return applyNativePatch(workspace, session, args, ToolkitNativePatches.string(elf(workspace, session, args), args))
     }
     private fun patchInstructions(workspace: String, session: String, args: JsonObject): JsonObject {

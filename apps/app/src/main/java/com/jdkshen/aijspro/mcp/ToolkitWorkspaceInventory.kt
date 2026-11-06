@@ -362,6 +362,9 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         )
     }
 
+    /** 超过这个时长没更新过的 active 元数据视为陈旧（最长任务超时 1800s 的 2 倍）。 */
+    private val STALE_ACTIVE_METADATA_MILLIS = 2L * 3600_000L
+
     private fun scanActiveJobs(): Int {
         val jobs = File(store, JOBS_DIR)
         if (!jobs.isDirectory) return 0
@@ -372,7 +375,12 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
                 JsonParser().parse(file.readText(Charsets.UTF_8)).asJsonObject
                     .get("state")?.asString
             }.getOrNull()
-            state in setOf("QUEUED", "RUNNING", "CANCELLING")
+            if (state !in setOf("QUEUED", "RUNNING", "CANCELLING")) return@count false
+            // 兜底：元数据若长时间未更新（超过最长超时的 2 倍），说明写下它的实例早已不在（崩溃/被杀/重启），
+            // 不能让它永久把 GC 挡住（实测：一个陈旧 RUNNING 就导致 10 个临时快照 1.0 GiB 全部无法回收）。
+            // 活跃任务会在状态迁移时 persist()，mtime 会持续刷新，所以正常长任务不会被误判。
+            val fresh = runCatching { System.currentTimeMillis() - file.lastModified() <= STALE_ACTIVE_METADATA_MILLIS }.getOrDefault(true)
+            fresh
         }
     }
 
