@@ -1,5 +1,10 @@
 # AI.js Pro 文档索引
 
+> ⚠️ **状态页去过期：本页的「当前版本/测试机」信息可能落后。**
+> **权威来源是仓库根 [`AGENTS.md`](../AGENTS.md) 顶部**；架构看 [`guides/ARCHITECTURE.md`](guides/ARCHITECTURE.md)，
+> 规范看 [`guides/REPO_CONVENTIONS.md`](guides/REPO_CONVENTIONS.md)，历史报告索引看 [`INDEX.md`](INDEX.md)。
+> （2026-11-06 整理规范时加。）
+
 > **2026-10-31 当前发布 dev-1299（LAN，MI8 已装）**：[Node UI 回调默认值与工程资源路径](reports/2026-10-31_NodeUI回调默认值与资源路径dev-1299.md)。修 JS 回调 undefined 的基本类型拆箱 NPE、缺少编译资源时显式告警、build-project-res 预处理。
 
 > **2026-10-31 当前发布 dev-1297（LAN，MI8 已装）**：[Node UI 事件与视图树修复](reports/2026-10-31_NodeUI事件与视图树修复dev-1297.md)。click/check/text_change 真机回调、`ui.inflate(layoutId)`、`addView/getParent`、`JsViewPager childCount=3`、BottomNav 监听；SHA 见发布记录。
