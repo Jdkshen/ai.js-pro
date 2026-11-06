@@ -6,7 +6,8 @@
 - 注册类：`com.jdkshen.apkbuilder.plugin.PluginRegistry`（`AndroidManifest.xml` 里的
   `org.autojs.plugin.sdk.registry` 元数据，官方 Auto.js Pro 与本仓库都按它反射加载）
 - 插件对象：`com.jdkshen.apkbuilder.plugin.ApkBuilderPlugin`
-- 体积：当前仓库里的 `assets/template.apk` 约 **67.5 MB**（70,808,075 B），几乎全是打包运行时模板（arm64 未签名，由 `:inrt` 构建）
+- 体积：当前仓库里的 `assets/template.apk` 实测 **84.24 MB**（88,335,762 B，SHA 前 8 位 `1CA77AD1`），几乎全是打包运行时模板（arm64 未签名，由 `:inrt` 构建）
+  （2026-11-06 校正：此前写的 67.5 MB / 70,808,075 B 已过期；宿主侧另有瘦身模板 20,418,813 B，两者用途不同，不要混用。）
 
 ## 为什么做成插件
 

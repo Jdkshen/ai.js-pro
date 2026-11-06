@@ -173,7 +173,9 @@ Java 侧只递「包名 + 盐 + 指纹 + 密文」，密钥不落到 Java 堆里
 - **两种引擎都支持**：Rhino → class 字节（运行端用 `AndroidClassLoader`（dx → DexClassLoader）加载执行）；
   QuickJS → 字节码（运行端 `JS_ReadObject` + `JS_EvalFunction`，原生层新增 `compileToBytecode` / `evaluateBytecode`）。
   打包端按产物的 `engine` 字段自动选择，无需手工切换。
-- **两端必须同源**：Rhino 编译端与运行端用同一份 `modules/rhino-language/libs/rhino-1.7.7.2.jar`；
+- **两端必须同源**：Rhino 编译端与运行端用同一份 `modules/rhino-language/libs/rhino-1.7.15.1.jar`；
+  （2026-11-06 校正：实际使用的是 1.7.15.1；1.7.14.1 在 Android 上撞 `javax.lang.model.SourceVersion` 已弃用并删除，
+  `rhino-1.7.7.2.jar` 仅作为注释里的回退版本保留。）
   QuickJS 字节码与 quickjs 版本严格绑定（`JS_ReadObject` 自校验），打包端与模板必须来自同一份仓库构建。
 - 编译时都关掉了源码信息：Rhino 侧 `setGeneratingSource(false)`，QuickJS 侧字节码本身不带源码文本。
   产物里搜不到脚本源码（字符串常量仍会在，因为脚本运行时要用）。

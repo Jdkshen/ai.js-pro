@@ -1,0 +1,118 @@
+# 仓库规范（REPO_CONVENTIONS）
+
+> 目的：**先备份、再动手；文件放对地方；同类问题只解释一次。**
+> 新接手先读：[`ARCHITECTURE.md`](ARCHITECTURE.md)（框架）→ 本文（规范）→ [`../INDEX.md`](../INDEX.md)（历史报告索引）。
+
+## 一、备份规范（改动前必做）
+
+任何"整理/重构/批量改"之前，先在**仓库外**留一份可回滚的快照（三步都很快）：
+
+```powershell
+$bk="C:\Users\18101\Documents\ai-js-pro-backups"   # 仓库外，别放仓库里
+New-Item -ItemType Directory -Force -Path $bk | Out-Null
+Push-Location C:\Users\18101\Documents\ai-js-pro
+$stamp=Get-Date -Format "yyyyMMdd-HHmmss"; $head=(git rev-parse --short HEAD)
+git tag -f "backup/$stamp-$head"                                   # 1) 打标签，便于回看
+git bundle create "$bk\ai-js-pro-all-$stamp.bundle" --all          # 2) 全历史（~65MB）
+git archive --format=zip -o "$bk\ai-js-pro-src-$head-$stamp.zip" HEAD   # 3) 当前跟踪源码快照（~320MB）
+Pop-Location
+```
+
+- 工作区若脏：先 `git status`，把未提交的改动也 `git stash` 或提交后再备份。
+- **`.artifacts/`（约 29GB）与 `output/`（约 3.9GB）不入备份**——它们是产物，需要时重建。
+- 恢复：`git bundle verify <bundle>` → `git clone <bundle>`；或直接 `git checkout <tag>`。
+
+## 二、目录职责（什么该放哪里）
+
+| 路径 | 职责 | 放什么 / 不放什么 |
+|---|---|---|
+| `apps/app` | 主 APK（Flutter 外壳 + 原生 + MCP 服务 + 引擎宿主） | 应用代码；大二进制走 LFS 或 `assets/` |
+| `apps/inrt` | 独立运行 APK（inrt 运行时） | 与主包共享的宿主逻辑 |
+| `modules/engine` | 三引擎运行时（Rhino/QuickJS/Node24）、prelude 资产、脚本 API | **脚本侧 API 与 prelude 都在这里**（`assets/modules/*.js`、`assets/node24/**`） |
+| `modules/automator` | 无障碍/自动化核心（点击、节点、手势、截屏） | 与 UI 无关的自动化能力 |
+| `modules/common` | 跨模块通用（`IntentUtil`、`MimeTypes`、`Pref`…） | 改这里**影响面最大**，必须全量回归 |
+| `modules/rhino-language` | Rhino 引擎封装 + 多版本 jar | 引擎升级只动这里 |
+| `apps/app/src/flutterpoc` | Flutter PoC 原生侧（Java，非标准 source set） | 与 `flutter-ui/` 配套；**不是** `main/java` |
+| `apps/app/src/main/assets` | 随包资产 | `sample/`（内置示例）、`models/`（PP-OCR）、`mcp/`（指南）、`indices/`（API 文档索引） |
+| `tools/` | 构建、发布、真机回归、审计脚本 | **默认全部跟踪**（见 §三）；产物/缓存除外 |
+| `docs/guides` | 长期有效文档（架构、规范、API 手册） | 会随版本演进的手册 |
+| `docs/reports` | 按日期的一次性报告 | 命名 `YYYY-MM-DD_主题.md`；见 §五 |
+| `docs/plans` | 方案/评估稿（未落地或部分落地） | 落地后补一份 report 指向它 |
+| `samples/` `third-party/` `plugins/` `vscode-extension/` `flutter-ui/` | 仓库内附带的独立子项目 | 各自有自己的构建，不动主流程 |
+
+**硬规则**：脚本能在 App 内跑到的 API，必须同时照顾 Rhino/QuickJS/Node 三条路径；只改一条会在另两条上"示例失败"。
+
+## 三、跟踪策略（`.gitignore` / `.gitattributes`）
+
+1. **`tools/` 默认跟踪**（2026-11-06 改正）。旧策略是"先生成 `/tools/*` 全部忽略、再逐个 `!` 白名单"，
+   结果是 **47 个真实脚本在磁盘上存在但从未入库**（device 驱动、引擎审计、Node24/QuickJS 契约测试、probes），
+   而且**每新增一个脚本都会再踩一次**（AGENTS.md 里已两次记录同一坑）。现在只忽略：
+   `__pycache__/`、`*.pyc`、`tools/templates/`、`tools/flutter-poc/*`（保留发布脚本）、`tools/apk-audit/*`（保留唯一源文件）、
+   `apktool-android/build|dist`、`r2ghidra-build`、`apk-components/.gradle`。
+   → **新增脚本不需要改 `.gitignore`**；如果发现又被忽略，说明策略被改回去了。
+2. **`build/` 既是产物目录也是 Java 包名**：`apps/app/src/main/java/**/build/`、`autojs/build/` 是**合法源码包**，
+   `.gitignore` 里有对应的 `!` 例外。**别再用 `(^|/)build/` 这种正则去"清理产物"**——会误伤 24 个源码文件（我第一次就误判了）。
+3. **大二进制走 LFS**：`*.aar/*.so/*.a/*.bin/*.onnx/*.otf`、两个 `template.apk`、flutter embedding jar 都在 `.gitattributes` 里配了 LFS。
+   新增同类二进制要同步加规则，否则会把几百 MB 直接塞进 git 历史。
+4. **行尾**：`.gitattributes` 已声明 `* text=auto eol=lf`、`*.ps1/*.bat eol=crlf`。
+   我们**没有**对存量做 `git add --renormalize`（会产出几万行无意义 diff）；新文件按上面规则走即可。
+
+## 四、代码规范
+
+- **注释/文档用中文，标识符用英文**（沿用现状）；注释写"为什么"，不写"做了什么"。
+- **改脚本侧 API**：Java 侧在 `modules/engine/.../runtime/api/`，JS 侧在 `modules/engine/src/main/assets/modules/`；
+  两处**必须同时改**，并在 prelude 里保留向后兼容（本次 OCR 的 MlKitContext/结果序列化就是没同时照顾的教训）。
+- **R8 会裁掉只被脚本反射调用的东西**：新增"给脚本用的 Java 方法/类"时，检查 `apps/app/proguard-rules.pro` 是否需要 keep。
+  真实案例：`okhttp3.MultipartBody$Builder.addFormDataPart`（文件上传示例挂）、`com.android.apksig.ApkSigner$Builder`（V3 签名永远回退）。
+- **错误要可执行**：报错里给"下一步做什么"（参数名、可调常量名、下一步工具），不要只说"失败"。
+- **不假装成功**：拿不到证据就报 `not_run`/`unavailable`/`assumed`（如 V1 只报"存在性"、`documentedAt` 标注来源）。
+
+## 五、报告与文档规范
+
+- 报告文件名：`docs/reports/YYYY-MM-DD_主题.md`；主题用中文，不带版本号（版本写在正文）。
+- 报告**必备六段**：现象 / 证据（命令与原始输出）/ 根因 / 修复 / 验证（真机 + 单测）/ 边界与未做。
+  **没有真机证据的不要写"已验证"**；无法验证的明确写"未验证 + 原因"。
+- 每版发布后：更新 `AGENTS.md` 顶部一条（一段话说清改了什么+证据+SHA），并在 `docs/INDEX.md` 留一行。
+- 引用文件用相对链接；行号用 `path:行` 形式，方便跳转。
+
+## 六、提交与发布规范
+
+- **只本地提交，默认不 `git push`**；只有用户明确说"推一次"才推。
+- **只发 LAN**（`tools\publish.ps1`，`192.168.10.7:8080`），不逐版本建 GitHub Release/tag（业务约定，2026-10-31 起）。
+- 版本号逐版本 +1（dev-NNNN）；发布前**必须**在真机跑一次（`publish.ps1` 会验证手机拉 `update.json`）。
+- 测试机**默认 K40 `cccc62c7`**（`adb -s cccc62c7 forward tcp:18768 tcp:8765`）；MI8 `ce4d2bdb` 已退役，只作历史参照。
+- 构建由 **Lead 独占**（本机 Gradle daemon 不稳，并发构建会互相打断）：`. .\tools\jdk17.ps1` 后跑
+  `tools\flutter-poc\build-release-candidate.ps1 -VersionCode N -VersionName "dev-N" -R8 -TestSigning -NoUsbDiscovery -MaxHeapMb 2560 -MaxWorkers 1`。
+
+## 七、磁盘卫生（仓库外的大户）
+
+| 目录 | 体积（2026-11-06） | 说明 |
+|---|---|---|
+| `.artifacts/` | **29 GB** | 构建产物 + 发布日志 + 历史候选 APK |
+| `output/` | **3.9 GB** | 本地分析/回归产物（MCP 导出、示例镜像、日志） |
+| `.codegraph/` | 250 MB | 代码索引，可 `codegraph init` 重建 |
+| `.gradle/` | 204 MB | Gradle 缓存，可删（下次构建重建，变慢） |
+| `runs/` | 88 MB | 运行时残留 |
+| `chess-preview/` | 120 MB | 象棋预览产物 |
+
+安全清理（**先看再删**）：
+
+```powershell
+# 只看：最近 30 天没动过的构建产物有多大
+Get-ChildItem C:\Users\18101\Documents\ai-js-pro\.artifacts -Recurse -File |
+  Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
+  Measure-Object -Property Length -Sum | ForEach-Object { [math]::Round($_.Sum/1GB,2) }
+```
+
+**不要**把 `.artifacts/`、`output/`、`.codegraph/` 提交进 git（已在 `.gitignore`）。
+
+## 八、常见坑速查
+
+| 坑 | 结论 |
+|---|---|
+| 新增 `tools/` 脚本后 `git status` 看不到 | 策略已改为默认跟踪；若再现，说明 `.gitignore` 被改回 `/tools/*` |
+| 用 `build/` 正则清理产物 | 会误伤 `com/jdkshen/aijspro/**/build/` 源码包（24 个文件） |
+| 重装 APK 后无障碍截图报"需要 Android 11+" | 关一次再开无障碍（服务未重绑） |
+| 脚本里新加的 Java 方法在 R8 包里"不存在" | 补 `proguard-rules.pro` keep（反射调用 R8 看不见） |
+| `adb shell` 卡住 / 设备从列表消失 | USB/Hub 问题：换线或重插；`adb kill-server; adb start-server` 后确认只剩目标机 |
+| 同一 API 在 Node 能跑、Rhino 挂 | 检查各进程自己的初始化（如 ML Kit 的 `MlKitContext`：Node 侧有、Rhino 侧曾漏） |
