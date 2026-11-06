@@ -368,6 +368,19 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val framework=File(context.noBackupFilesDir,"apk-frameworks").apply{mkdirs()}
         val subcommand=mutableListOf<String>()
         var output:File?=null;var projectTarget:File?=null
+        // 任务2：staging 诊断（copy/in_place），只在 apk_build_project 成功返回中暴露。
+        var stagingMode="copy"
+        var copyMs=0L
+        var copiedEntries=0
+        var skippedEntries=0
+        var skippedBytes=0L
+        var inPlaceRequested=false
+        var inPlaceFallbackReason:String?=null
+        var inPlaceProject:File?=null
+        var sourceHashBefore:String?=null
+        var sourceHashAfter:String?=null
+        var sourceTreeUnchanged=false
+        var inPlaceCleanupOk=true
         when(name){
             "apk_decode_project"->{val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk");validateArchive(input)
                 projectTarget=ToolkitIo.resolve(root,args.tString("outDir"));require(!projectTarget.exists()&&projectTarget.parentFile?.isDirectory==true){"outDir 必须是父目录存在的新目录"}
@@ -375,10 +388,34 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 if(!args.tBool("decodeResources",true))subcommand+="-r"
             }
             "apk_build_project"->{val project=ToolkitIo.resolve(root,args.tString("projectDir"));require(project.isDirectory&&File(project,"apktool.yml").isFile){"projectDir 不是Apktool解包工程"}
-                val copied=File(temp,"project").apply{mkdir()};ToolkitReverseFiles.copyTree(project,copied)
+                inPlaceRequested=args.tBool("buildInPlace",false)
+                var buildRoot=project
+                if(inPlaceRequested){
+                    var refusal=if(project.canonicalFile==root.canonicalFile)"project_is_root" else ToolkitReverseFiles.inPlaceRefusal(project)
+                    if(refusal==null){
+                        val before=runCatching{ToolkitReverseFiles.sourceTreeSha256(project)}
+                        sourceHashBefore=before.getOrNull()
+                        if(sourceHashBefore==null){
+                            refusal="source_hash_failed:"+(before.exceptionOrNull()?.message?:"unknown")
+                        }
+                    }
+                    if(refusal==null){
+                        stagingMode="in_place";inPlaceProject=project
+                    }else{
+                        inPlaceFallbackReason=refusal;sourceHashBefore=null
+                    }
+                }
+                if(stagingMode=="copy"){
+                    val copied=File(temp,"project").apply{mkdir()}
+                    val started=System.nanoTime()
+                    val stats=ToolkitReverseFiles.copyTreeDetailed(project,copied)
+                    copyMs=(System.nanoTime()-started)/1_000_000L
+                    copiedEntries=stats.copiedEntries;skippedEntries=stats.skippedEntries;skippedBytes=stats.skippedBytes
+                    buildRoot=copied
+                }
                 val aapt=native("apk-resources");val wrapper=File(temp,"aapt2").apply{
                     writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${McpAndroidTerminal.quote(File(aapt,"lib").path)} exec ${McpAndroidTerminal.quote(File(aapt,"bin/aapt2").path)} \"\$@\"\n",Charsets.UTF_8);require(setExecutable(true,true))}
-                output=File(temp,"unsigned.apk");subcommand+=listOf("b",copied.path,"--aapt",wrapper.path,"--no-crunch","-p",framework.path,"-o",output.path,"-j","1")
+                output=File(temp,"unsigned.apk");subcommand+=listOf("b",buildRoot.path,"--aapt",wrapper.path,"--no-crunch","-p",framework.path,"-o",output.path,"-j","1")
             }
             "apk_install_framework"->{val input=stage(file(args,limit=ToolkitIo.MAX_ENTRY.toLong()),temp,"framework.apk");validateArchive(input)
                 subcommand+=listOf("if",input.path,"-p",framework.path)
@@ -387,13 +424,31 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         }
         // Do not put Termux libz/libc++ ahead of ART system libraries. Only the aapt child gets LD_LIBRARY_PATH.
         val command=apktoolCommand(temp,payload,context.applicationInfo.sourceDir,framework,subcommand)
-        val result=execute(command,temp,mapOf("CLASSPATH" to payload.path+File.pathSeparator+context.applicationInfo.sourceDir,"LD_LIBRARY_PATH" to ""),args)
-        if(result.exitCode!=0)throw ToolkitException("APKTOOL_FAILED","Apktool exit=${result.exitCode}（子进程堆 -Xmx${McpLimits.CHILD_HEAP_MB}m）: ${result.text.takeLast(12000)}")
-        if(name=="apk_install_framework")return ToolkitIo.json("installed" to true,"scope" to "apktool-private-framework-cache","diagnostics" to result.text.takeLast(12000))
+        var result:ToolkitProcess.Result?=null
+        var executionFailure:Throwable?=null
+        try{
+            result=execute(command,temp,mapOf("CLASSPATH" to payload.path+File.pathSeparator+context.applicationInfo.sourceDir,"LD_LIBRARY_PATH" to ""),args)
+        }catch(failure:Throwable){
+            executionFailure=failure
+        }finally{
+            if(stagingMode=="in_place")inPlaceCleanupOk=cleanupInPlaceGenerated(inPlaceProject!!)
+        }
+        if(stagingMode=="in_place"){
+            val project=inPlaceProject!!
+            sourceHashAfter=runCatching{ToolkitReverseFiles.sourceTreeSha256(project)}.getOrElse{failure->
+                throw ToolkitException("IN_PLACE_SOURCE_HASH_FAILED","in_place 构建后无法计算工程树 SHA-256：${failure.message}; 请用 buildInPlace=false 复制模式重试","projectDir")}
+            sourceTreeUnchanged=sourceHashBefore?.let{it==sourceHashAfter}==true
+            if(!sourceTreeUnchanged)throw ToolkitException("IN_PLACE_SOURCE_MODIFIED","in_place 构建前后工程树 SHA-256 不一致（before=${sourceHashBefore?.take(16)}… after=${sourceHashAfter?.take(16)}…）：源工程可能被改动，已中止；请用 buildInPlace=false 复制模式重试","projectDir")
+            if(!inPlaceCleanupOk)throw ToolkitException("IN_PLACE_CLEANUP_FAILED","in_place 构建后清理 build/dist 失败：请检查工程目录权限，或改用 buildInPlace=false 复制模式","projectDir")
+        }
+        executionFailure?.let{throw it}
+        val completed=result!!
+        if(completed.exitCode!=0)throw ToolkitException("APKTOOL_FAILED","Apktool exit=${completed.exitCode}（子进程堆 -Xmx${McpLimits.CHILD_HEAP_MB}m）: ${completed.text.takeLast(12000)}")
+        if(name=="apk_install_framework")return ToolkitIo.json("installed" to true,"scope" to "apktool-private-framework-cache","diagnostics" to completed.text.takeLast(12000))
         if(name=="apk_decode_project") {
             require(output!!.isDirectory&&File(output,"apktool.yml").isFile){"解包没有生成有效工程"}
             ToolkitReverseFiles.publishTree(output,projectTarget!!)
-            return ToolkitIo.json("path" to projectTarget.path,"backend" to "apktool","decoded" to true,"diagnostics" to result.text.takeLast(12000),"rebuildGuaranteed" to false)
+            return ToolkitIo.json("path" to projectTarget.path,"backend" to "apktool","decoded" to true,"diagnostics" to completed.text.takeLast(12000),"rebuildGuaranteed" to false)
         }
         require(output!!.isFile){"回编译没有生成APK"};validateArchive(output)
         ToolkitArchiveAlignment.align(output)
@@ -405,7 +460,34 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         }
         val destination=ToolkitIo.resolve(root,args.tString("outPath"))
         ToolkitIo.withFileLocks(listOf(destination)){require(!destination.exists()){"outPath 已存在，请使用新文件名"};ToolkitIo.atomic(destination){output.copyTo(it,true)}}
-        return ToolkitIo.json("path" to destination.path,"sha256" to ToolkitIo.sha(destination),"size" to destination.length(),"signed" to args.tBool("sign"),"verification" to verification,"alignment" to alignmentDiagnosticsJson(verification,true),"backend" to "apktool","diagnostics" to result.text.takeLast(12000))
+        return ToolkitIo.json(
+            "path" to destination.path,
+            "sha256" to ToolkitIo.sha(destination),
+            "size" to destination.length(),
+            "signed" to args.tBool("sign"),
+            "verification" to verification,
+            "alignment" to alignmentDiagnosticsJson(verification,true),
+            "backend" to "apktool",
+            "stagingMode" to stagingMode,
+            "buildInPlace" to (stagingMode=="in_place"),
+            "buildInPlaceRequested" to inPlaceRequested,
+            "inPlaceFallbackReason" to inPlaceFallbackReason,
+            "copyMs" to copyMs,
+            "copiedEntries" to copiedEntries,
+            "skippedEntries" to skippedEntries,
+            "skippedBytes" to skippedBytes,
+            "sourceTreeSha256Before" to sourceHashBefore,
+            "sourceTreeSha256After" to sourceHashAfter,
+            "sourceTreeUnchanged" to if(stagingMode=="in_place") sourceTreeUnchanged else null,
+            "sourceTreeVerification" to if(stagingMode=="in_place") "sha256_before_after" else "not_needed_copy_mode",
+            "diagnostics" to completed.text.takeLast(12000),
+        )
+    }
+    /** 删除 in_place 构建新建的 apktool 输出目录；只在预检确认 build/dist 原本不存在时调用。 */
+    private fun cleanupInPlaceGenerated(project:File):Boolean{
+        var ok=true
+        for(name in listOf("build","dist")){val dir=File(project,name);if(dir.exists()&&!dir.deleteRecursively())ok=false}
+        return ok&&!File(project,"build").exists()&&!File(project,"dist").exists()
     }
     /**
      * §10 会话工具：只做内存态登记、分页与清理，不冒充完成真实 attach。

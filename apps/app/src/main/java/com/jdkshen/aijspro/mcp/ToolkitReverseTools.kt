@@ -78,7 +78,11 @@ internal object ToolkitReverseTools {
             "reverse_plan"->field("goal",str("reverse_guide index 返回的 workflows[].goal"),true)
             "reverse_capabilities"->Unit
             "apk_decode_project"->{path();path("outDir");field("decodeResources",ToolkitIo.json("type" to "boolean","default" to true))}
-            "apk_build_project"->{path("projectDir");path("outPath");field("sign",ToolkitIo.json("type" to "boolean","default" to false))}
+            "apk_build_project"->{path("projectDir");path("outPath");field("sign",ToolkitIo.json("type" to "boolean","default" to false));
+                // 工程已在 MCP 根目录内且可写时，可跳过整树复制直接原地构建（默认 false=复制）。
+                // 原地址构建会在前后各算一次工程树 SHA-256，不一致会抛 IN_PLACE_SOURCE_MODIFIED。
+                field("buildInPlace",ToolkitIo.json("type" to "boolean","default" to false,
+                    "description" to "true=在工程目录原地构建（省掉整树复制；会校验源树未变）；false=复制到临时目录再构建"))}
             "apk_install_framework"->{path();field("tag",str())}
             "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))
                 field("interactionType",ToolkitIo.json("type" to "string","enum" to listOf("listen","script"),"default" to "listen","description" to "listen=监听127.0.0.1端口；script=启动即加载脚本（不碰网络，跨UID SELinux 拦不到）"))
