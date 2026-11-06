@@ -1,0 +1,36 @@
+'use strict';
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const source = fs.readFileSync(path.resolve(__dirname, '../../modules/engine/src/main/cpp/quickjs_jni.cpp'), 'utf8');
+const bootStart = source.indexOf('R"JS(') + 5;
+const bootEnd = source.indexOf(')JS";', bootStart);
+assert.ok(bootStart > 5 && bootEnd > bootStart);
+const bootstrap = source.slice(bootStart, bootEnd);
+new vm.Script(bootstrap, {filename:'QuickJS-bootstrap.js'});
+const start = bootstrap.indexOf('const drawingAccum =');
+const end = bootstrap.indexOf('// ---- app module ----', start);
+assert.ok(start >= 0 && end > start);
+const packets = [];
+const context = {global:{}, __aiNativeDrawCreate:() => true, __aiNativeDrawClose:() => {},
+    __aiNativeDrawUpdate:(json, text) => packets.push({items:JSON.parse(json), text})};
+vm.runInNewContext(bootstrap.slice(start, end), context);
+const drawing = context.global.drawing;
+drawing.show({renderer:'imgui'});
+drawing.drawArrow(500, 700, 100, 200, '#FFD54F', 5, 24).drawCircle(100, 200, 20, '#40C4FF', 3);
+drawing.update([], 'first\nsecond');
+assert.deepStrictEqual(packets.at(-1).items[0], {kind:'arrow', x1:500,y1:700,x2:100,y2:200,
+    label:'',color:'#FFD54F',strokeWidth:5,headSize:24});
+assert.strictEqual(packets.at(-1).items[1].radius, 20);
+drawing.update([{kind:'arrow',x1:1,y1:2,x2:3,y2:4,headSize:30}], '');
+assert.strictEqual(packets.at(-1).items[0].headSize, 30, 'snapshot packing must preserve arrow geometry');
+assert.strictEqual(packets.at(-1).text, '', 'an explicit empty HUD must clear the previous text');
+drawing.clear();
+drawing.update([], 'fresh');
+drawing.update([]);
+assert.strictEqual(packets.at(-1).text, 'fresh', 'omitted stats retain the current HUD');
+drawing.hide(); drawing.show(); drawing.update([]);
+assert.deepStrictEqual(packets.at(-1), {items:[],text:''}, 'new overlays must not replay commands from the previous window');
+assert.throws(() => drawing.show({renderer:'unknown'}), /renderer/);
+console.log('DRAWING_PRIMITIVES OK: bootstrap syntax, arrow/circle transport, HUD clear, lifecycle reset');

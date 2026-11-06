@@ -7,71 +7,28 @@
 # Local machine configuration
 /local.properties
 /.vscode/settings.json
-/tools/*
-!/tools/build-api-reference.py
-!/tools/build-toolkit-native.py
-!/tools/test-api-reference.py
-!/tools/test-api-code.cjs
-# Reviewed five-item optimization helpers (keep unrelated local tools ignored).
-!/tools/tests/
-/tools/tests/*
-!/tools/tests/test_m3_lazy_setup.py
-!/tools/tests/test_apk_size_audit.py
-!/tools/tests/test_mcp_probe_behavior.py
-!/tools/tests/test_aijs_ui.py
-!/tools/audit-apk-size.py
-!/tools/check-apk-retrofit.py
-!/tools/apk-audit/
-/tools/apk-audit/*
-!/tools/apk-audit/CheckRetrofitSignatures.java
-!/tools/flutter-poc/
+
+# ---------------------------------------------------------------------------
+# tools/ 的跟踪策略（2026-11-06 整理规范时改正）
+#
+# 旧策略是「先生成 /tools/* 全部忽略，再逐个 ! 白名单」。后果：44 个真实脚本
+# （device 驱动、引擎审计、Node24 契约测试、probes…）被**静默忽略**、无法入库，
+# 而且每次新增脚本都会再踩一次（AGENTS.md 里已两次记录同一个坑）。
+# 现在改为：**tools/ 下默认全部跟踪**，只忽略缓存与本地专用目录。
+# 新增脚本不再需要改 .gitignore。
+# ---------------------------------------------------------------------------
+/tools/**/__pycache__/
+/tools/**/*.pyc
+/tools/templates/
+# 打包试验目录：只入库发布脚本，产物与临时树忽略。
 /tools/flutter-poc/*
 !/tools/flutter-poc/build-release-candidate.ps1
-!/tools/ace-android-touch.js
-!/tools/vendor-ace-editor.py
-!/tools/test-ace-language.cjs
-!/tools/test-ace-clipboard.cjs
-!/tools/test-ace-clipboard-jvm.ps1
-!/tools/EditorClipboardJvmTest.java
-!/tools/build-slim-template.ps1
-!/tools/test-miuix.ps1
-!/tools/compare-engine-api.ps1
-!/tools/measure-ui-performance.ps1
-!/tools/jdk17.ps1
-# dev-update.ps1 是 AGENTS.md 指定的日常出包入口，此前被 /tools/* 静默忽略，
-# 导致对它的修改（如多设备 -DeviceId 修复）无法提交且没有任何提示。
-!/tools/dev-update.ps1
-# publish.ps1 是推荐的发布入口（前置校验 + 发布后验证 + 自动日志 + -DryRun）；
-# 它原先只存在于被忽略的 .artifacts/ 下，永远无法入库。
-!/tools/publish.ps1
-!/tools/serve-updates.ps1
-!/tools/probe-engine-api.ps1
-# 16 KB 页对齐守卫（P0）：gradle verify16kbAlignment / 发布前置校验共用的静态检查脚本。
-!/tools/verify-16kb-alignment.ps1
-# 原生库 strip 守卫（task-145）：检查 AAR/APK 里没有未 strip 的 .so、R8 API 数据库资源被排除。
-!/tools/verify-native-strip.ps1
-# OpenCV AAR strip 工具（task-145）：重生成 AAR 后跑一次，去掉 native 调试符号。
-!/tools/strip-opencv-aar.ps1
-# Pro ws-rpc 协议核心的 javac + JUnit 自测（不跑 Gradle、不连设备；见脚本头部说明）。
-!/tools/test-pro-rpc.ps1
-!/tools/test-engine-flavors-device.ps1
-# Node 示例真机回归工具（task-216）：自动发现/push/运行/判定 Node 示例，结果写 output/。
-!/tools/test-node-samples-device.ps1
-!/tools/verify-mcp-alignment-device.py
-!/tools/verify-mcp-terminal.py
-!/tools/floaty-stop-regression.py
-!/tools/create-gh-proxy-manifest.py
-!/tools/observe-filelist.ps1
-# Reproducible SIFT/chess device evaluation sources.
-!/tools/prepare-sift-chess-fixtures.py
-!/tools/test-sift-chess-device.js
-!/tools/sift-chess-pipeline.js
-!/tools/test-sift-chess-pipeline-device.js
-!/tools/xiangqi-release.py
-!/tools/imgui-font-subset.py
-# Gradle 构建直接调用的生成脚本（prepareXiangqiRelease / verifyImGuiFontSubset）：
-# 曾被 /tools/* 静默忽略，导致全新 clone 与 CI 在第一个 gradle 任务就失败。
-
+/tools/apk-audit/*
+!/tools/apk-audit/CheckRetrofitSignatures.java
+/tools/apktool-android/build/
+/tools/apktool-android/dist/
+/tools/reverse-native/r2ghidra-build/
+/tools/apk-components/.gradle/
 # CodeGraph local index (regenerate with `codegraph init`)
 /.codegraph/
 
