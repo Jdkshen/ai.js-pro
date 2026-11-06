@@ -142,9 +142,14 @@ internal class ToolkitJobs internal constructor(
             "activeJobs" to jobs.values.count { it.finished == 0L },
             "maxActive" to maxActive,
             "retention" to retentionJson(),
+            "retentionNote" to retentionNote(),
             "service" to serviceJson(),
             "evicted" to evicted,
             "filter" to ToolkitIo.json("owner" to owner, "clientId" to clientId, "sessionId" to sessionId),
+            "nextActions" to JsonArray().apply {
+                add("要留档：apk_job_result 分段取回内容后立刻写到你自己的目录，不要依赖任务输出缓存")
+                add("apk_job_list.evicted[] 是 JOB_EVICTED 墓碑；JOB_EVICTED 表示保留窗口/数量淘汰，不等于升级丢失的 SERVICE_RESTARTED")
+            },
         )
     }
 
@@ -378,11 +383,20 @@ internal class ToolkitJobs internal constructor(
     private fun tombstoneMessage(tombstone: Tombstone): String {
         val whenText = "记录于 " + tombstone.recordedAt
         return if (tombstone.code == "JOB_EVICTED") {
-            "任务结果已超出保留窗口或数量上限并被淘汰（JOB_EVICTED）：" + tombstone.jobId +
-                "；原因=" + tombstone.reason + "；" + whenText + "。输出缓存已删除，无法再读取；请重新提交任务"
+            "任务结果已被淘汰（JOB_EVICTED）：" + tombstone.jobId +
+                "；原因=" + evictionReasonText(tombstone.reason) + "；" + whenText +
+                "。输出缓存已删除，无法再读取；请重新提交任务"
         } else {
             "任务在工具进程重启时丢失（SERVICE_RESTARTED）：" + tombstone.jobId +
                 "；原因=" + tombstone.reason + "；" + whenText + "。任务未自动重放，请重新提交"
+        }
+    }
+    private fun evictionReasonText(reason: String): String {
+        val window = if (retentionWindowMillis >= 0) (retentionWindowMillis / 3_600_000L).toString() + " 小时" else "不自动过期"
+        return when (reason) {
+            "retentionLimit" -> "超出保留窗口（" + window + "）或数量上限（" + maxRetainedFinished + " 条已完成任务）（retentionLimit）"
+            "retentionWindow" -> "超出保留窗口（" + window + "）（retentionWindow）"
+            else -> reason
         }
     }
 
@@ -494,6 +508,41 @@ internal class ToolkitJobs internal constructor(
         "maxResultBytes" to MAX_RESULT_BYTES,
         "tombstoneCount" to tombstones.size,
     )
+
+    /** get_status / toolkit_status 用的可发现摘要；不改保留策略本身。 */
+    @Synchronized
+    fun summary(): JsonObject {
+        trim()
+        val evicted = tombstones.values.filter { it.code == "JOB_EVICTED" }
+        val last = evicted.maxByOrNull { it.recordedAt }
+        return ToolkitIo.json(
+            "total" to jobs.size,
+            "active" to jobs.values.count { it.finished == 0L },
+            "finished" to jobs.values.count { it.finished > 0L },
+            "evictedCount" to evicted.size,
+            "retention" to ToolkitIo.json(
+                "windowMillis" to retentionWindowMillis,
+                "maxRetainedFinished" to maxRetainedFinished,
+                "maxActive" to maxActive,
+                "maxResultBytes" to MAX_RESULT_BYTES,
+            ),
+            "lastEviction" to last?.let {
+                ToolkitIo.json("jobId" to it.jobId, "operation" to it.operation, "reason" to it.reason, "recordedAt" to it.recordedAt)
+            },
+            "note" to retentionNote(),
+        )
+    }
+
+    private fun retentionNote(): String {
+        val window = if (retentionWindowMillis >= 0)
+            (retentionWindowMillis / 3_600_000L).toString() + " 小时"
+        else "不自动过期"
+        val count = if (maxRetainedFinished >= 0)
+            "最多 " + maxRetainedFinished + " 条已完成任务"
+        else "不限制已完成任务数量"
+        return "结果只保留 " + window + "或" + count +
+            "，超出即删除输出缓存（JOB_EVICTED/retentionLimit）；要长期留档请在任务完成后立刻把内容导出到自己的目录"
+    }
 
     private fun serviceJson(): JsonObject = ToolkitIo.json(
         "instance" to serviceInstance,

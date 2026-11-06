@@ -329,6 +329,15 @@ internal class McpTools(private val context: Context, private val event: (String
                 addProperty("retainedExecutions", runs.size); addProperty("workspaces", workspaces.list().size)
                 addProperty("pendingWorkspaceApprovals", workspaces.list().count { it.pendingApproval })
                 addProperty("activeTerminalJobs", terminals.list().count { it.get("processActive").asBoolean })
+                // jobs 的保留窗口/淘汰在地 3 进程（:tools）里，主进程 get_status 通过 toolkit_status 取摘要。
+                val jobsSummary = runCatching {
+                    McpToolkitBridge.call(context, root, "toolkit_status", JsonObject())
+                        .getAsJsonObject("data")?.getAsJsonObject("jobs")
+                }.getOrNull()
+                if (jobsSummary != null) add("jobs", jobsSummary) else add("jobs", JsonObject().apply {
+                    addProperty("unavailable", true)
+                    addProperty("note", "工具进程未就绪，无法读取任务保留统计；请稍后重试 get_status 或先调用 toolkit_status")
+                })
                 addProperty("overlayCount", OverlayStateReader.countAggregated(context))
                 addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
                 add("engineDiagnostics", engineDiagnostics())

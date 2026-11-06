@@ -305,9 +305,9 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             }.getOrNull() ?: throw failure
             val reasons=gadgetPartialReasons(verification)
             if(reasons.size()==0) reasons.add(ToolkitIo.json("check" to "post_injection","status" to "failed",
-                "errorIssueCount" to 1,"messages" to listOf(failure.message ?: failure.javaClass.simpleName)))
+                "errorIssueCount" to 1,"upstream" to false,"impact" to "may-block-load","messages" to listOf(failure.message ?: failure.javaClass.simpleName)))
             val schemes=runCatching{ToolkitSignatures.read(target).getAsJsonArray("schemes") ?: JsonArray()}.getOrDefault(JsonArray())
-            val note="可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载"
+            val note="可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载" + gadgetUpstreamNote(reasons)
             if(detail=="summary") return gadgetSummary(target,info,signerLabel,schemes,true,true,note)
             return ToolkitIo.json(
                 "outputPath" to target.path, "path" to target.path, "size" to target.length(),
@@ -333,13 +333,14 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val note=if(partial)
             "已重签并可安装；静态验证 status=" + verificationStatus + "，详见 partialReasons/verification；只有 warning 的检查不会造成 partial"
         else "已重签并通过静态验证；安装/启动仍需实测"
-        if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,note)
+        val noteWithUpstream=note + gadgetUpstreamNote(partialReasons)
+        if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,noteWithUpstream)
         verification?.add("partialReasons",partialReasons)
         return info.apply {
             addProperty("path",destination.path);addProperty("size",destination.length());addProperty("sha256",ToolkitIo.sha(destination))
             addProperty("signed",true);addProperty("installable",true);addProperty("partial",partial)
             addProperty("originalSignaturePreserved",false);addProperty("installed",false)
-            addProperty("signer",signerLabel);add("schemesApplied",schemes);add("partialReasons",partialReasons);addProperty("note",note)
+            addProperty("signer",signerLabel);add("schemesApplied",schemes);add("partialReasons",partialReasons);addProperty("note",noteWithUpstream)
             add("verification",verification)
             // 只读对齐诊断（与 apk_build 同源：写入后 align、再由 verifier 复核本地头偏移）
             add("alignment",alignmentDiagnosticsJson(verification,true))
@@ -369,6 +370,16 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "providerProcess" to info.get("providerProcess"), "providerProcessSource" to info.get("providerProcessSource"),
             "partial" to partial, "installable" to installable, "note" to note,
         )
+    private fun gadgetUpstreamNote(reasons:JsonArray):String {
+        val hasUpstream16k=reasons.any {
+            val r=it.asJsonObject
+            r.tString("check","")=="native" && r.tBool("upstream") &&
+                r.getAsJsonArray("errorCodes")?.any { code -> code.asString=="ELF_PT_LOAD_ALIGNMENT_16K" }==true
+        }
+        return if(hasUpstream16k)
+            "；partial 原因来自上游 Frida Gadget 预编译库的 PT_LOAD 页对齐（ELF_PT_LOAD_ALIGNMENT_16K）；实测不影响加载，但 16 KiB 页设备的上架/静态校验会判不合格；要消除需替换为 16 KiB 对齐的 Gadget 构建"
+        else ""
+    }
     private fun gadgetPartialReasons(verification:JsonObject?):JsonArray {
         val reasons=JsonArray()
         if(verification==null) return reasons
@@ -378,14 +389,19 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             if(status!="valid"){
                 val section=verification.getAsJsonObject(name)
                 val errors=section?.getAsJsonArray("issues")?.map{it.asJsonObject}?.filter{it.tString("severity","")=="error"} ?: emptyList()
+                val codes=errors.map{it.tString("code","")}.filter{it.isNotEmpty()}.distinct()
+                val upstream=name=="native" && "ELF_PT_LOAD_ALIGNMENT_16K" in codes
                 reasons.add(ToolkitIo.json("check" to name,"status" to status,
                     "errorIssueCount" to errors.size,"warningOnly" to errors.isEmpty(),
-                    "errorCodes" to errors.map{it.tString("code","")}.filter{it.isNotEmpty()}.distinct(),
+                    "upstream" to upstream,
+                    "impact" to if(upstream) "static-check-only" else "may-block-load",
+                    "errorCodes" to codes,
                     "messages" to errors.map{it.tString("message","")}.filter{it.isNotEmpty()}.take(5)))
             }
         }
         if(reasons.size()==0 && verification.tString("status","")!="valid")
-            reasons.add(ToolkitIo.json("check" to "verification","status" to verification.tString("status",""),"warningOnly" to false))
+            reasons.add(ToolkitIo.json("check" to "verification","status" to verification.tString("status",""),
+                "warningOnly" to false,"upstream" to false,"impact" to "may-block-load"))
         return reasons
     }
     private fun radare(name:String,args:JsonObject,temp:File):JsonObject {

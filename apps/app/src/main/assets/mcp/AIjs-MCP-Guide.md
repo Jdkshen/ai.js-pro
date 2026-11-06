@@ -269,6 +269,17 @@ config 支持：
 
 stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(executionId)。停止状态是 STOPPED，不属于脚本执行错误。
 
+### 后台任务结果保留（dev-1378）
+
+`apk_job_*` 的结果不是长期存档：输出只保留 **6 小时**（`windowMillis=21600000`）或**最多 64 条已完成任务**（`maxRetainedFinished=64`）；单结果最大 24 MiB（`maxResultBytes=25165824`），墓碑最多 256 条。超出后**删除输出缓存**并留墓碑：`apk_job_list.evicted[]` 里 `code=JOB_EVICTED`、`reason=retentionLimit`/`retentionWindow`；不是 `SERVICE_RESTARTED`。
+
+- **`.4` 实测真因**：升级后看不到结果，实际是 64 条 finished + 3 条活跃触发了 `retentionLimit`（`apk_job_list` 返回 32 条墓碑），与升级清空无关；升级清空只会出现 `SERVICE_RESTARTED`。先看 `retention` 和 `evicted[]`，不要臆断。
+- **正确做法**：任务一到终态就立即 `apk_job_result` 把 `content` 取回，写入自己的项目目录（如 `<项目>/recovered/`），不要等几个小时或升级后再找；Playbook 的留档约定也点名这条。
+- `apk_job_result` 默认读取窗口 **1,048,576 字符**（dev-1378；旧版 16,384），大结果一次可拿回；响应里 `hasMore`/`nextOffset`/`totalChars`/`defaultMaxChars` 仍按分页语义。显式传 `maxChars` 时当前 schema 上限仍是 200000（不要传 1 MiB；要更大的结果用默认值 + `nextOffset` 续读）。
+
+**怎么验证**：调 `apk_job_list {}`，检查 `retention` 是否包含 `windowMillis/maxRetainedFinished/maxTombstones/maxResultBytes`；若有 `evicted[]`，确认 `code=JOB_EVICTED` 且 `reason=retentionLimit|retentionWindow`。对墓碑 jobId 调 `apk_job_result` 应报 `JOB_EVICTED`；对 `SERVICE_RESTARTED` 的 job 才说明是进程重启丢失。再跑一个 >16K 的后台结果（如反编译类），不传 `maxChars` 调 `apk_job_result`，检查 `content` 长度 >16384、`defaultMaxChars=1048576`、必要时 `hasMore/nextOffset`。
+
+
 ## 三种引擎与 API 调用
 
 - engine 支持 rhino、quickjs、nodejs；node / node24 是 Node 别名。首行 `// @engine quickjs`、`// @engine rhino`、`// @engine node24` 也可选择引擎；工具的 engine 参数优先于源码首行。字符串指令如 `"nodejs";` 应独占一行。
@@ -557,6 +568,29 @@ clang main.c -O2 -o hello
 ```
 
 **怎么验证**：先传一个父目录不存在的 `outPath` 复现错误；`file_create_directory` 返回 `created:true` 后再传同一路径（`outPath` 不能已存在）应成功。
+
+### apk_inject_gadget detail=summary 与 partialReasons（dev-1378）
+
+`apk_inject_gadget` 新增可选 `detail=full|summary`（默认 full，老调用不变）。摘要只回 `path/size/sha256/signed/signer/schemesApplied/providerProcess/providerProcessSource/partial/installable/note`；同一云镜样本实测 full 42 KB → summary 480 字符。**summary 不含 `partialReasons`**；要定位 partial 真因必须用 full（默认）或 `apk_verify`。
+
+```json
+{"name":"apk_inject_gadget","arguments":{"path":"<原APK>","outPath":"<新APK>","interactionType":"script","scriptPath":"/data/local/tmp/a.js","detail":"summary"}}
+```
+
+full 诊断示例：
+
+```json
+{"name":"apk_inject_gadget","arguments":{"path":"<原APK>","outPath":"<新APK>","interactionType":"script","scriptPath":"/data/local/tmp/a.js","detail":"full"}}
+{"name":"apk_verify","arguments":{"path":"<输出APK>"}}
+```
+
+**16 KiB 页对齐警告**：full 结果若 `verification.status="partial"`，先看 `partialReasons[]`。实测 `.4` 云镜样本注入的真因是 **native 检查 5× `ELF_PT_LOAD_ALIGNMENT_16K`**：组件里的预编译 Frida gadget `.so` 的 `PT_LOAD` 不满足 16 KiB 页对齐。该属性属于**组件预编译产物**，不是目标 APK 的改动；当前**不影响已实测的加载**（云镜样本注入后确实加载成功），但在 16 KiB 页设备/上架校验时会被判不合格。
+
+**排查怎么验证**：
+1. 用 `detail=full` 注入同一 APK，读取顶层 `partialReasons[]`（full 的 `verification` 里也会带一份）；每项看 `check/status/errorIssueCount/errorCodes/messages`，若 `check=native` 且 `errorCodes=["ELF_PT_LOAD_ALIGNMENT_16K"]` 即上述组件问题。
+2. 对输出 APK 调 `apk_verify`，复核 native/ELF 对齐检查；`partial=true` 只表示静态验证未全过，不等于注入产物不可安装。
+3. 在 4 KiB 页设备（K40）安装打开、用 `frida_status`/logcat 确认 Gadget 加载；在 16 KiB 页设备必须重新验证，不能把当前“实测能加载”当成 16 KiB 合格。
+
 
 ### #13 `providerProcess` 已进 schema，省略时自动判定
 

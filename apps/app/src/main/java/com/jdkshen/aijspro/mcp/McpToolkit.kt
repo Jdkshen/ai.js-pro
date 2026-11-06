@@ -60,6 +60,7 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
                     "backendHealthProbe" to "signature.backendDiagnosis.asn1AnnotationsRetained"),
                 ToolkitIo.json("name" to "artifactAnalysis","status" to "available","formats" to listOf("apk","dex","elf","apks","xapk","apkm")),
                 ToolkitIo.json("name" to "longJobsAndRollback","status" to "available","evidence" to "implementation")), "toolCount" to McpToolkitCatalog.names.size,
+            "jobs" to jobs.summary(),
             "groups" to listOf("file", "zip", "apk", "dex", "resources", "elf"),
             "capabilities" to ToolkitIo.json("signatures" to listOf("V1", "V2", "V3", "V3.1"),
                 "zip" to ToolkitIo.json("readEncryption" to listOf("ZipCrypto", "AES"), "writeEncryption" to "AES-256", "authentication" to true),
