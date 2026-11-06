@@ -15,8 +15,9 @@ python tools/flutter-poc/refresh-base.py --sdk C:/Android/flutter-3.47.7 --strip
 builds Dart AOT and **fresh flutter_assets**, then records the AOT hash. Gradle's
 `verifyFlutterPayload` rejects a mismatched engine/embedding/AOT payload.
 
-The old `assets/` tree and `flutter_embedding_3.3.4.jar` remain as historical
-baseline files; the upgraded pipeline consumes neither. Application assets and
+The old `assets/` tree and `flutter_embedding_3.3.4.jar` were **removed on 2026-11-06**
+(the upgraded pipeline consumed neither; keeping ~9.4MB of unreferenced baseline files only
+invited confusion). Application assets and
 compiled shaders now come from `flutter-ui/` through the pinned Flutter build.
 
 See `docs/reports/2026-10-22_Flutter升级与16KB兼容修复.md` for verification and

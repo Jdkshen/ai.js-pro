@@ -337,7 +337,8 @@ const loader = host.runtime.getAndroidClassLoader();
 - Node 图像/OCR/YOLO：`node24/prelude.js`（image 2520–4036、accessibility 4472–4496、projection 4502–4665）；`node24/modules/ocr.js`；`node24/modules/floating_window.js`；`node24/modules/plugins.js`。
 - 三引擎公共层：`modules/common-api.js`、`common-lang.js`、`__http__.js`、`__threads__.js`、`__events__.js`、`__engines__.js`、`__images__.js`、`__ocr__.js`、`__yolo__.js`、`__touch__.js`、`__selector__.js`、`__ui__.js`。
 - MCP：`apps/app/src/main/assets/mcp/AIjs-MCP-Guide.md`、`docs/guides/MCP连接指南.md`、`docs/reports/2026-10-25_MCP手机终端与编译入口.md`。
-- 类型声明（仅作对照，不等于运行时实现）：`flutter-payload-base/assets/flutter_assets/assets/project_templates/nodejs/node_modules/@autojs/types-pro9/libautojs9.d.ts`。
+- 类型声明（仅作对照，不等于运行时实现）：`@autojs/types-pro9` 的 `libautojs9.d.ts`；
+  旧副本 `flutter-payload-base/assets/flutter_assets/assets/project_templates/…` 已于 2026-11-06 清理（新 Flutter 管线不消费该目录，需要时从上游包取）。
 
 **未确认/未验证项**
 - QuickJS 的 HTTP/continuation 细节、部分高级模块的 Promise/回调差异未逐项实测；本文只写能从当前源码确认的形状。
