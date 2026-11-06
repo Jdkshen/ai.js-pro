@@ -9,6 +9,27 @@ import java.io.File
 import java.util.zip.ZipFile
 import com.google.gson.stream.JsonReader
 
+/**
+ * B: apktool 子进程命令。-Xmx 必须放在 /system/bin（app_process 可执行路径）之前，
+ * 否则会被当成 app_process 之后的程序参数而不是 VM 选项。抽成 internal 便于 JVM 单测断言顺序。
+ */
+internal fun apktoolCommand(
+    temp:File,
+    payload:File,
+    applicationApk:String,
+    framework:File,
+    subcommand:List<String>,
+):MutableList<String> = mutableListOf(
+    "/system/bin/app_process",
+    "-Djava.io.tmpdir=${temp.path}",
+    "-Duser.home=${temp.path}",
+    "-Xmx${McpLimits.CHILD_HEAP_MB}m",
+    "/system/bin",
+    "--nice-name=aijs-apktool",
+    ToolkitCliMain::class.java.name,
+    "brut.apktool.Main",
+).apply{addAll(subcommand)}
+
 /** Typed reverse operations. Target bytes are staged; optional engines run in owned child VMs. */
 internal class AndroidReverseRuntime(private val context:Context,private val root:File,private val component:(String)->File) {
     /** §10：有界观测会话（内存态；真实 attach 仍走 frida_eval，本类只负责登记/分页/清理）。 */
@@ -26,7 +47,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 val c=component("radare2")
                 // ToolkitR2Session 的 argv 不含可执行文件（它单独返回 executable=radare2），这里补上。
                 val command=listOf(File(c,"bin/radare2").path)+argv
-                val result=ToolkitProcess.run(context,command,temp,env(c)+extra,timeoutSeconds.coerceIn(1,300),emptyList())
+                val result=ToolkitProcess.run(context,command,temp,env(c)+extra,timeoutSeconds.coerceIn(1,McpLimits.MAX_TIMEOUT_SECONDS),emptyList())
                 R2RunnerResult(result.text,result.exitCode,false)
             }catch(failure:Throwable){
                 R2RunnerResult(failure.message?:"r2 runner failed",1,false)
@@ -123,7 +144,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 r2Sessions.open(resolved,args.tString("sha256"),args.tBool("relocsApply",true))
             }
             "native_session_plan"->r2Sessions.plan(args.tString("sessionId"),optionalString(args,"command"))
-            "native_session_query"->r2Sessions.query(args.tString("sessionId"),args.tString("command"),args.tInt("timeoutSeconds",60,1,300))
+            "native_session_query"->r2Sessions.query(args.tString("sessionId"),args.tString("command"),args.tInt("timeoutSeconds",60,1,McpLimits.MAX_TIMEOUT_SECONDS))
             "native_session_close"->r2Sessions.close(args.tString("sessionId"))
             "native_session_list"->r2Sessions.list()
             "native_analysis_open"->nativeAnalysis.open(args.tString("path"),args.tString("sha256"),optionalString(args,"abi"),optionalString(args,"sessionId"))
@@ -151,7 +172,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         require(ToolkitIo.sha(target)==before&&ToolkitIo.sha(source)==before){"分析输入在复制时发生变化"};return target
     }
     private fun execute(command:List<String>,temp:File,env:Map<String,String>,args:JsonObject,watchedFiles:List<File> = emptyList())=
-        ToolkitProcess.run(context,command,temp,env,args.tInt("timeoutSeconds",120,1,300),watchedFiles)
+        ToolkitProcess.run(context,command,temp,env,args.tInt("timeoutSeconds",120,1,McpLimits.MAX_TIMEOUT_SECONDS),watchedFiles)
     private fun env(c:File)=mapOf("LD_LIBRARY_PATH" to File(c,"lib").path,"HOME" to context.filesDir.path,"R2_PREFIX" to c.path,
         "R2_LIBR_PLUGINS" to File(c,"lib/radare2").path,"R2_NOPLUGINS" to "1","R2_RCFILE" to "/dev/null")
     private fun runner(command:List<String>,temp:File,c:File,args:JsonObject):JsonObject {
@@ -343,28 +364,29 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
     private fun apktool(name:String,args:JsonObject,temp:File):JsonObject {
         val c=component("apktool");val payload=File(c,"apktool.dex.jar");require(payload.isFile){"Apktool组件不完整"}
         val framework=File(context.noBackupFilesDir,"apk-frameworks").apply{mkdirs()}
-        val command=mutableListOf("/system/bin/app_process","-Djava.io.tmpdir=${temp.path}","-Duser.home=${temp.path}","/system/bin","--nice-name=aijs-apktool",ToolkitCliMain::class.java.name,"brut.apktool.Main")
+        val subcommand=mutableListOf<String>()
         var output:File?=null;var projectTarget:File?=null
         when(name){
             "apk_decode_project"->{val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk");validateArchive(input)
                 projectTarget=ToolkitIo.resolve(root,args.tString("outDir"));require(!projectTarget.exists()&&projectTarget.parentFile?.isDirectory==true){"outDir 必须是父目录存在的新目录"}
-                output=File(temp,"decoded");command+=listOf("d",input.path,"-o",output.path,"-p",framework.path,"-j","1")
-                if(!args.tBool("decodeResources",true))command+="-r"
+                output=File(temp,"decoded");subcommand+=listOf("d",input.path,"-o",output.path,"-p",framework.path,"-j","1")
+                if(!args.tBool("decodeResources",true))subcommand+="-r"
             }
             "apk_build_project"->{val project=ToolkitIo.resolve(root,args.tString("projectDir"));require(project.isDirectory&&File(project,"apktool.yml").isFile){"projectDir 不是Apktool解包工程"}
                 val copied=File(temp,"project").apply{mkdir()};ToolkitReverseFiles.copyTree(project,copied)
                 val aapt=native("apk-resources");val wrapper=File(temp,"aapt2").apply{
                     writeText("#!/system/bin/sh\nLD_LIBRARY_PATH=${McpAndroidTerminal.quote(File(aapt,"lib").path)} exec ${McpAndroidTerminal.quote(File(aapt,"bin/aapt2").path)} \"\$@\"\n",Charsets.UTF_8);require(setExecutable(true,true))}
-                output=File(temp,"unsigned.apk");command+=listOf("b",copied.path,"--aapt",wrapper.path,"--no-crunch","-p",framework.path,"-o",output.path,"-j","1")
+                output=File(temp,"unsigned.apk");subcommand+=listOf("b",copied.path,"--aapt",wrapper.path,"--no-crunch","-p",framework.path,"-o",output.path,"-j","1")
             }
             "apk_install_framework"->{val input=stage(file(args,limit=ToolkitIo.MAX_ENTRY.toLong()),temp,"framework.apk");validateArchive(input)
-                command+=listOf("if",input.path,"-p",framework.path)
-                val tag=args.tString("tag","");if(tag.isNotEmpty()){require(tag.matches(Regex("[A-Za-z0-9_.-]{1,64}"))){"tag 无效"};command+=listOf("-t",tag)}
+                subcommand+=listOf("if",input.path,"-p",framework.path)
+                val tag=args.tString("tag","");if(tag.isNotEmpty()){require(tag.matches(Regex("[A-Za-z0-9_.-]{1,64}"))){"tag 无效"};subcommand+=listOf("-t",tag)}
             }
         }
         // Do not put Termux libz/libc++ ahead of ART system libraries. Only the aapt child gets LD_LIBRARY_PATH.
+        val command=apktoolCommand(temp,payload,context.applicationInfo.sourceDir,framework,subcommand)
         val result=execute(command,temp,mapOf("CLASSPATH" to payload.path+File.pathSeparator+context.applicationInfo.sourceDir,"LD_LIBRARY_PATH" to ""),args)
-        if(result.exitCode!=0)throw ToolkitException("APKTOOL_FAILED","Apktool exit=${result.exitCode}: ${result.text.takeLast(12000)}")
+        if(result.exitCode!=0)throw ToolkitException("APKTOOL_FAILED","Apktool exit=${result.exitCode}（子进程堆 -Xmx${McpLimits.CHILD_HEAP_MB}m）: ${result.text.takeLast(12000)}")
         if(name=="apk_install_framework")return ToolkitIo.json("installed" to true,"scope" to "apktool-private-framework-cache","diagnostics" to result.text.takeLast(12000))
         if(name=="apk_decode_project") {
             require(output!!.isDirectory&&File(output,"apktool.yml").isFile){"解包没有生成有效工程"}

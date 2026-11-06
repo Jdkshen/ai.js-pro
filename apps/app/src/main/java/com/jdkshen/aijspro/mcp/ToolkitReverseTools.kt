@@ -108,12 +108,12 @@ internal object ToolkitReverseTools {
             "frida_session_list"->Unit
             "native_session_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("relocsApply",ToolkitIo.json("type" to "boolean","default" to true))}
             "native_session_plan"->{field("sessionId",str(),true);field("command",str("可选；给出则只生成该命令的计划"))}
-            "native_session_query"->{field("sessionId",str(),true);field("command",str("纯 r2 命令；禁止 ! 逃逸"),true);field("timeoutSeconds",num(1,300,60))}
+            "native_session_query"->{field("sessionId",str(),true);field("command",str("纯 r2 命令；禁止 ! 逃逸"),true);field("timeoutSeconds",num(1,McpLimits.MAX_TIMEOUT_SECONDS,60))}
             "native_session_close"->field("sessionId",str(),true)
             "native_session_list"->Unit
             "native_resident_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("relocsApply",ToolkitIo.json("type" to "boolean","default" to true))}
-            "native_resident_command"->{field("sessionId",str(),true);field("command",str("纯 r2 命令；禁止 ! 逃逸"),true);field("timeoutMillis",num(1,300000,30000))}
-            "native_resident_batch"->{field("sessionId",str(),true);field("commands",ToolkitIo.json("type" to "array","items" to ToolkitIo.json("type" to "string")));field("timeoutMillis",num(1,300000,30000))}
+            "native_resident_command"->{field("sessionId",str(),true);field("command",str("纯 r2 命令；禁止 ! 逃逸"),true);field("timeoutMillis",num(1,McpLimits.MAX_TIMEOUT_SECONDS * 1000,30000))}
+            "native_resident_batch"->{field("sessionId",str(),true);field("commands",ToolkitIo.json("type" to "array","items" to ToolkitIo.json("type" to "string")));field("timeoutMillis",num(1,McpLimits.MAX_TIMEOUT_SECONDS * 1000,30000))}
             "native_resident_close"->field("sessionId",str(),true)
             "native_resident_list"->Unit
             "native_analysis_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("abi",str());field("sessionId",str())}
@@ -125,7 +125,7 @@ internal object ToolkitReverseTools {
             "native_analysis_overlay"->{field("sessionId",str(),true);field("address",str(),true);field("hexBytes",str(),true);field("note",str())}
             else->error("未知逆向工具")
         }
-        if(name in operations){field("background",ToolkitIo.json("type" to "boolean","default" to true));field("timeoutSeconds",num(1,300,120))}
+        if(name in operations){field("background",ToolkitIo.json("type" to "boolean","default" to true));field("timeoutSeconds",num(1,McpLimits.MAX_TIMEOUT_SECONDS,120))}
         return ToolkitIo.json("type" to "object","additionalProperties" to false,"properties" to p,"required" to required)
     }
     fun definitions()=JsonArray().apply{names.forEach{name->add(ToolkitIo.json("name" to name,"description" to descriptions.getValue(name),

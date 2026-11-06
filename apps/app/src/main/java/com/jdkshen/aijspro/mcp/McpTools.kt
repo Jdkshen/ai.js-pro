@@ -308,6 +308,7 @@ internal class McpTools(private val context: Context, private val event: (String
                     addProperty("versionCode", versionCode ?: com.jdkshen.aijspro.BuildConfig.VERSION_CODE.toLong())
                     addProperty("lastUpdateTime", packageInfo?.lastUpdateTime ?: 0L)
                 })
+                add("limits", McpLimits.describe())
                 addProperty("toolCount", McpToolCatalog.names.size)
                 addProperty("canonicalToolCount", McpToolCatalog.canonicalNames.size)
                 addProperty("scriptRoot", root.path); addProperty("writeAllowed", McpService.allowWrite)

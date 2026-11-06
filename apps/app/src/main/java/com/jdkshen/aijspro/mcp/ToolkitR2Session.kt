@@ -51,7 +51,8 @@ internal class ToolkitR2Session(
 ) {
     companion object {
         private const val MAX_INPUT_PATH = 4096
-        private const val MAX_TIMEOUT_SECONDS = 300
+        // 上界统一到 McpLimits（原 300s，会把 native_session_query 的 1800s 下游拒绝掉）
+    private const val MAX_TIMEOUT_SECONDS = McpLimits.MAX_TIMEOUT_SECONDS
         private const val MAX_ENV_ENTRIES = 64
         private val SHA256 = Regex("[0-9a-fA-F]{64}")
         private val SESSION_ID = Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,63}")

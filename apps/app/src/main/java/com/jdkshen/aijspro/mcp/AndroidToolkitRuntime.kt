@@ -15,6 +15,25 @@ import java.net.URL
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
 
+/**
+ * B: jadx 子进程命令。-Xmx 必须放在 /system/bin（app_process 可执行路径）之前，
+ * 否则会被当成 app_process 之后的程序参数而不是 VM 选项。抽成 internal 便于 JVM 单测断言顺序。
+ */
+internal fun jadxCommand(
+    temp:File,
+    payload:File,
+    applicationApk:String,
+    request:File,
+):MutableList<String> = mutableListOf(
+    "/system/bin/app_process",
+    "-Djava.io.tmpdir=${temp.path}",
+    "-Xmx${McpLimits.CHILD_HEAP_MB}m",
+    "/system/bin",
+    "--nice-name=aijs-jadx",
+    ToolkitComponentMain::class.java.name,
+    request.path,
+)
+
 /** Components run in owned child processes, never load decompiler classes into the host. */
 internal class AndroidToolkitRuntime(private val context:Context, private val root:File):ToolkitRuntime {
     private val home=File(context.noBackupFilesDir,"apk-components")
@@ -273,7 +292,10 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
             request.writeText(ToolkitIo.json("input" to codeOnly.path,"locator" to locator,"offset" to args.tInt("offset",0,0,10000000),
                 "maxChars" to args.tInt("maxChars",16384,1,200000),"output" to output.path).toString(),Charsets.UTF_8)
             val classpath=payload.path+File.pathSeparator+context.applicationInfo.sourceDir
-            val log=run(listOf("/system/bin/app_process","-Djava.io.tmpdir=${temp.path}","/system/bin","--nice-name=aijs-jadx",ToolkitComponentMain::class.java.name,request.path),temp,mapOf("CLASSPATH" to classpath),args.tInt("timeoutSeconds",120,1,300))
+            val command=jadxCommand(temp,payload,context.applicationInfo.sourceDir,request)
+            val result=ToolkitProcess.run(context,command,temp,mapOf("CLASSPATH" to classpath),args.tInt("timeoutSeconds",120,1,McpLimits.MAX_TIMEOUT_SECONDS))
+            require(result.exitCode==0){"JADX exit=${result.exitCode}（子进程堆 -Xmx${McpLimits.CHILD_HEAP_MB}m）: ${result.text.takeLast(12000)}"}
+            val log=result.text
             require(output.isFile&&output.length()<=4L*1024*1024){"反编译器没有返回有效结果：${log.takeLast(2000)}"}
             return JsonParser().parse(output.readText(Charsets.UTF_8)).asJsonObject.apply{addProperty("backend","jadx-component");addProperty("diagnostics",log.takeLast(4000))}
         }finally{temp.deleteRecursively()}

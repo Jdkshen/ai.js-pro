@@ -257,7 +257,7 @@ radare2 系列 `native_*` 工具直接读手机路径，不读 APK 快照 locato
 {"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"apk_job_status","arguments":{"jobId":"${JOB_ID}"}}}
 ```
 
-轮询接口没有 `waitMillis`，不要发明长轮询参数。任务最多排队 4 个、2 个 worker，`timeoutSeconds` 1..300（逆向操作；既有组件安装/decompile 可到 1800），超时会进入取消流程。
+轮询接口没有 `waitMillis`，不要发明长轮询参数。任务最多排队 4 个、2 个 worker，`timeoutSeconds` 1..1800（逆向操作、组件安装/decompile 与后台任务同用这一个上界；大工程回编请显式给 900~1800），超时会进入取消流程。
 
 ### 结果分页
 
@@ -686,7 +686,7 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 - 编辑会话：每工作区 8 个，每会话 2000 条变更/512 MiB；检查点最多 8 个。
 - 文本读取：`apk_read_text` 的 `maxChars` 上限 131072；`file_read_text` 单页 2..131072 码点。
 - 正则：每个 matcher 默认 750 ms、最多 8,000,000 次字符访问，并受总预算/取消检查限制。
-- 任务结果：24 MiB；`apk_job_result.maxChars` 1..200000；逆向任务 `timeoutSeconds` 1..300。
+- 任务结果：24 MiB；`apk_job_result.maxChars` 1..200000；逆向任务 `timeoutSeconds` 1..1800（上界由 `McpLimits.MAX_TIMEOUT_SECONDS` 统一控制）。
 - 原生输入：`native_*` 文件 ≤64 MiB；`yara_scan` 规则 ≤1 MiB、输入 ≤64 MiB、扫描 ≤30 秒。
 - `native_emulate`：代码 1..65536 字节、数据 ≤4096 字节、指令 ≤100000、时间 ≤1000 ms。
 - 分页：APK 列表/DEX 大纲 1000 项、native 列表 500 项、其余列表 200 项；以 `pagination.limitMax` 为准。

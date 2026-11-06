@@ -31,10 +31,13 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
             "runtime" to (runtime?.capabilities()?:ToolkitIo.json("available" to false)),"tools" to ToolkitReverseTools.names,"dependencies" to ToolkitReverseTools.dependencies,
             "discovery" to ToolkitIo.json("guide" to "reverse_guide","plan" to "reverse_plan","resources" to listOf("aijs://reverse/guide","aijs://reverse/workflows")),
             "fullApkid" to false,"fullGhidraDesktop" to false,"rootlessGadgetInjection" to true,"rootServerManaged" to false,"automaticPrivilegeEscalation" to false,"verifiedThisRequest" to false,
-            "limits" to ToolkitIo.json("nativeInputBytes" to ToolkitIo.MAX_ENTRY,"apkInputBytes" to ToolkitIo.MAX_APK,"processLogBytes" to 4194304,"timeoutSecondsMax" to 300,"concurrentWorkers" to 2,"maxQueuedAndRunning" to 4),
+            "limits" to ToolkitIo.json("nativeInputBytes" to ToolkitIo.MAX_ENTRY,"apkInputBytes" to ToolkitIo.MAX_APK,"processLogBytes" to 4194304,"timeoutSecondsMax" to McpLimits.MAX_TIMEOUT_SECONDS,"concurrentWorkers" to 2,"maxQueuedAndRunning" to 4,
+                "maxProjectEntries" to McpLimits.MAX_PROJECT_ENTRIES,"maxProjectBytes" to McpLimits.MAX_PROJECT_BYTES,"childHeapMb" to McpLimits.CHILD_HEAP_MB),
             "nextActions" to listOf("检查runtime.components[].available；缺组件显式apk_component_install","后台任务返回jobId，轮询apk_job_status到终态，再apk_job_result按nextOffset读完","免Root动态分析先apk_inject_gadget生成APK，安装打开后用返回endpoint/token连接；不需要Root/Server")))}
         name in ToolkitReverseTools.operations->{ToolkitReverseTools.validate(name,args)
-            if(args.tBool("background",true))ToolkitIo.ok(jobs.start(ToolkitIo.json("operation" to name,"arguments" to args,"timeoutSeconds" to args.tInt("timeoutSeconds",120,1,300))))else executeOperation(name,args)}
+            // 这里是逆向后台操作的真实闸门：schema 已放宽到 McpLimits.MAX_TIMEOUT_SECONDS，这里必须同步，
+            // 否则 schema 放行 301..1800 但实际仍被拒（旧上限 300）。
+            if(args.tBool("background",true))ToolkitIo.ok(jobs.start(ToolkitIo.json("operation" to name,"arguments" to args,"timeoutSeconds" to args.tInt("timeoutSeconds",120,1,McpLimits.MAX_TIMEOUT_SECONDS))))else executeOperation(name,args)}
         // 同步类逆向工具（Frida 观测会话、native 分析会话）：无子进程、无后台 job，必须走 runtime，
         // 否则会落到 APK 工具的 workspaceId 分支而报「缺少 workspaceId」。
         name in ToolkitReverseTools.names->{ToolkitReverseTools.validate(name,args)
@@ -65,10 +68,10 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
                 "native" to ToolkitIo.json("patchArchitectures" to listOf("aarch64", "arm", "thumb", "x86", "x86_64"),
                     "demangleAvailable" to ToolkitNative.demangleAvailable, "generalAssemblerOptional" to true,
                     "installCommand" to "aijs-toolchain install cpp", "availabilityProbe" to "get_build_tools")),
-            "limits" to listOf("APK 快照最大512MiB、总量1GiB；单条目分析64MiB，文本10MiB", "只操作配置的工具目录；写入需版本或原字节校验",
-                "ELF 元数据支持32/64位；指令分析在原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），不可用时回退有界 AArch64 子集；未知指令明确标出", "Java反编译由显式安装的JADX组件提供，产物用于分析，不保证原样重编；未安装时DEX仍可读Smali",
-                "正则兼容Java语法（含环视/反向引用），受时间/工作量/取消限制；资源支持逐项读取及一级直接引用摘要；ELF不提供完整间接调用/数据流证明",
-                "通用多架构汇编可使用终端可选 C/C++ 组件；缺后端会明确提示，不依赖MT")))
+            "limits" to McpLimits.describe(),
+            // 原 limits 是「人读能力说明」，已搬到 capabilityNotes；limits 现在是可机读的规模上限。
+            "capabilityNotes" to listOf("APK 快照最大512MiB、总量1GiB；单条目分析64MiB，文本10MiB", "只操作配置的工具目录；写入需版本或原字节校验", "ELF 元数据支持32/64位；指令分析在原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），不可用时回退有界 AArch64 子集；未知指令明确标出", "Java反编译由显式安装的JADX组件提供，产物用于分析，不保证原样重编；未安装时DEX仍可读Smali", "正则兼容Java语法（含环视/反向引用），受时间/工作量/取消限制；资源支持逐项读取及一级直接引用摘要；ELF不提供完整间接调用/数据流证明", "通用多架构汇编可使用终端可选 C/C++ 组件；缺后端会明确提示，不依赖MT"),
+            "limitsNote" to "工程条目/展开字节/子进程堆/超时上界；改动需重建宿主，可用本字段核对，避免反汇编"))
         name in McpFileToolkit.names -> synchronized(fileLock){files.call(name, args)}
         name in McpZipToolkit.names -> synchronized(zipLock){zip.call(name, args)}
         name in McpToolkitCatalog.names -> apk.call(name, args)

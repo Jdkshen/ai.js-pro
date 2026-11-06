@@ -41,7 +41,8 @@ internal class ToolkitR2Resident(
 ) {
     companion object {
         const val MAX_INPUT_PATH = 4096
-        const val MAX_TIMEOUT_MILLIS = 300_000L
+        // 上界统一到 McpLimits（原 300s）
+    const val MAX_TIMEOUT_MILLIS = McpLimits.MAX_TIMEOUT_SECONDS * 1000L
         private const val WARMUP_TIMEOUT_MILLIS = 15_000L
         private val SHA256 = Regex("[0-9a-fA-F]{64}")
         private val SESSION_ID = Regex("[A-Za-z0-9][A-Za-z0-9_-]{0,63}")

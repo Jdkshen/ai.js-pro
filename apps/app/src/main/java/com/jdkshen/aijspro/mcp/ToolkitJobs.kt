@@ -108,7 +108,7 @@ internal class ToolkitJobs internal constructor(
             ToolkitIo.fresh(),
             operation,
             values,
-            args.tInt("timeoutSeconds", 300, 1, 1800),
+            args.tInt("timeoutSeconds", DEFAULT_JOB_TIMEOUT_SECONDS, 1, McpLimits.MAX_TIMEOUT_SECONDS),
             clock(),
             identity(args, "owner"),
             identity(args, "clientId"),
@@ -521,7 +521,9 @@ internal class ToolkitJobs internal constructor(
                     id,
                     source.optString("operation") ?: return@runCatching,
                     JsonObject(),
-                    source.optLong("timeoutSeconds")?.toInt() ?: 300,
+                    source.optLong("timeoutSeconds")
+                        ?.coerceIn(1L, McpLimits.MAX_TIMEOUT_SECONDS.toLong())
+                        ?.toInt() ?: DEFAULT_JOB_TIMEOUT_SECONDS,
                     source.optLong("createdAt") ?: clock(),
                     source.optString("owner"),
                     source.optString("clientId"),
@@ -559,7 +561,7 @@ internal class ToolkitJobs internal constructor(
                         id,
                         record.optString("operation") ?: "unknown",
                         JsonObject(),
-                        300,
+                        DEFAULT_JOB_TIMEOUT_SECONDS,
                         record.optLong("createdAt") ?: clock(),
                         record.optString("owner"),
                         record.optString("clientId"),
@@ -681,6 +683,8 @@ internal class ToolkitJobs internal constructor(
     }
 
     companion object {
+        /** timeoutSeconds 未提供时的默认值（与历史行为一致；上界统一由 McpLimits.MAX_TIMEOUT_SECONDS 控制）。 */
+        const val DEFAULT_JOB_TIMEOUT_SECONDS = 300
         const val DEFAULT_MAX_ACTIVE = 4
         const val DEFAULT_RETENTION_WINDOW_MILLIS = 6L * 60L * 60L * 1000L
         const val DEFAULT_MAX_RETAINED_FINISHED = 64
