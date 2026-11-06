@@ -357,4 +357,86 @@ class ToolkitJobsTest {
         assertTrue(status.get("sessionId").isJsonNull)
         assertEquals("SUCCEEDED", status.get("state").asString)
     }
+
+    @Test
+    fun exportWritesExactRawResultAndMetadata() {
+        val folder = temp.newFolder("jobs")
+        val root = temp.newFolder("root")
+        val jobs = immediateJobs(folder, "abcdef")
+        val jobId = jobs.start(obj(
+            "operation" to "apk_search", "arguments" to ToolkitIo.json(), "timeoutSeconds" to 10,
+        )).get("jobId").asString
+        waitFinal(jobs, jobId)
+        val raw = jobs.result(obj("jobId" to jobId)).get("content").asString
+        val out = File(root, "archive.json")
+        val exported = jobs.export(root, obj("jobId" to jobId, "outPath" to "archive.json"))
+        assertEquals(raw, out.readText())
+        assertEquals(jobId, exported.get("jobId").asString)
+        assertEquals(out.path, exported.get("outPath").asString)
+        assertEquals(out.length().toLong(), exported.get("bytes").asLong)
+        assertEquals(raw.length, exported.get("chars").asInt)
+        assertEquals(ToolkitIo.sha(out), exported.get("sha256").asString)
+        assertFalse(exported.get("truncated").asBoolean)
+        assertTrue(exported.getAsJsonObject("retention").has("windowMillis"))
+    }
+
+    @Test
+    fun exportPagedLargeResultReassemblesExactly() {
+        val folder = temp.newFolder("jobs")
+        val root = temp.newFolder("root")
+        val expectedText = "x".repeat(50_000)
+        val jobs = ToolkitJobs(folder) { _, _ -> ToolkitIo.json("content" to expectedText) }
+        val jobId = jobs.start(obj(
+            "operation" to "apk_search", "arguments" to ToolkitIo.json(), "timeoutSeconds" to 10,
+        )).get("jobId").asString
+        waitFinal(jobs, jobId)
+        val full = jobs.result(obj("jobId" to jobId)).get("content").asString
+        val joined = StringBuilder()
+        var offset = 0
+        var pageIndex = 0
+        while (true) {
+            val page = jobs.export(root, obj(
+                "jobId" to jobId, "outPath" to "page-" + pageIndex + ".json",
+                "offset" to offset, "maxChars" to 1000,
+            ))
+            val part = File(root, "page-" + pageIndex + ".json").readText()
+            joined.append(part)
+            assertEquals(part.length, page.get("chars").asInt)
+            assertTrue(page.get("chars").asInt <= 1000)
+            if (!page.get("truncated").asBoolean) break
+            offset = page.get("nextOffset").asInt
+            assertTrue(offset > 0)
+            pageIndex++
+            assertTrue(pageIndex < 100)
+        }
+        assertTrue(pageIndex > 0)
+        assertEquals(full, joined.toString())
+    }
+
+    @Test
+    fun exportEvictedJobReportsTombstoneAndCreatesNoFile() {
+        val folder = temp.newFolder("jobs")
+        val root = temp.newFolder("root")
+        val jobs = immediateJobs(folder)
+        val jobId = jobs.start(obj(
+            "operation" to "apk_search", "arguments" to ToolkitIo.json(), "timeoutSeconds" to 10,
+        )).get("jobId").asString
+        waitFinal(jobs, jobId)
+        val kept = File(root, "kept.json")
+        jobs.export(root, obj("jobId" to jobId, "outPath" to "kept.json"))
+        val keptText = kept.readText()
+        assertTrue(kept.isFile)
+        // Reload with zero finished retention: constructor trim must evict the completed job.
+        val evicting = ToolkitJobs(
+            folder, { _, _ -> ToolkitIo.json() }, ToolkitJobs.DEFAULT_RETENTION_WINDOW_MILLIS, 0, 4,
+        ) { System.currentTimeMillis() }
+        val error = runCatching {
+            evicting.export(root, obj("jobId" to jobId, "outPath" to "evicted.json"))
+        }.exceptionOrNull()
+        assertEquals("JOB_EVICTED", codeOf(error))
+        assertFalse(File(root, "evicted.json").exists())
+        // The exported file is outside the jobs cache; eviction must not touch it.
+        assertTrue(kept.isFile)
+        assertEquals(keptText, kept.readText())
+    }
 }

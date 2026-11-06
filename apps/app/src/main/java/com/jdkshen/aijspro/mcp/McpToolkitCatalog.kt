@@ -76,6 +76,7 @@ internal object McpToolkitCatalog {
         "apk_job_list",
         "apk_job_status",
         "apk_job_result",
+        "apk_job_export",
         "apk_job_cancel",
         "apk_session_diff",
         "apk_session_checkpoint",

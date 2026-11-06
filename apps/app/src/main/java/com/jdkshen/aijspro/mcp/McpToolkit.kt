@@ -46,6 +46,7 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
         name=="apk_job_list"->ToolkitIo.ok(jobs.list(args))
         name=="apk_job_status"->ToolkitIo.ok(jobs.status(args))
         name=="apk_job_result"->ToolkitIo.ok(jobs.result(args))
+        name=="apk_job_export"->ToolkitIo.ok(jobs.export(root,args))
         name=="apk_job_cancel"->ToolkitIo.ok(jobs.cancel(args))
         name=="apk_component_status"->ToolkitIo.ok(runtime?.capabilities()?:ToolkitIo.json("available" to false,"reason" to "当前无Android组件后端"))
         name=="apk_component_remove"->ToolkitIo.ok(requireNotNull(runtime){"组件后端不可用"}.remove(args))

@@ -57,3 +57,23 @@ apk_job_list → count=67，其中 evicted(墓碑)=32
 3. Rhino 整数精度（`valueOf(42)` → `42.0`）与 Rhino `Array.set(int[],0,5)`。
 4. gadget `.so` 的 16 KiB 对齐**未修**（属上游产物；要修需替换为 16 KiB 对齐的 Gadget 构建并更新 LAN 组件）。
 5. `apk_job_result` 显式 `maxChars` 的 schema 上限仍是 200000（默认读取已 1 MiB，够用）。
+
+---
+
+## ⚠️ 更正（2026-11-06 当晚，由队友 ELF 调研推翻）
+
+本报告曾把 `apk_inject_gadget` 的 `verification.status=partial` 归因成「**注入的 gadget `.so` 不满足 16 KiB 页对齐**」。**这个归因是错的。**
+
+`docs/reports/2026-11-06_gadget-ELF-16KiB对齐调研.md` 逐段解析 ELF 后证明：
+
+| 结论 | 证据 |
+|---|---|
+| 那 5 条 `ELF_PT_LOAD_ALIGNMENT_16K` **来自目标 APK 自带的库** | `lib/arm64-v8a/libroot_automator.so`（段 2/3/4，`p_align=0x1000`，段 3/4 还不同余）+ `lib/arm64-v8a/libyj_aj_02_309.so`（段 2/3，`p_align=0x4000` 但不同余）|
+| **注入前后完全一致** | 对**未注入的**原包 `yj-orig.apk`（sha256 `ffe1365a…`）单独 `apk_verify` → **同样 5 条** |
+| **注入的 Gadget 没有新增告警** | `libaijsgadget.so`（只注 arm64）3 个 `PT_LOAD` 全部 `p_align=0x4000` 且同余 |
+| 上游 Gadget 的差异只在 **32 位** | arm64-v8a / x86_64：3/3 通过；armeabi-v7a / x86：3/3 失败（`p_align=0x1000`）|
+| 两台测试机都**不是** 16 KiB 页设备 | K40 `getconf PAGE_SIZE=4096`、`.4`（SDK 37）也 `=4096` |
+
+**为什么会误判**：`partialReasons` 当时只给了 `check=native` + 错误码，没给**具体是哪个文件**；我按"5 条 ≈ 4 ABI + 1"猜成了 gadget，并用它写了 note 与文档。**教训**：结构化诊断必须带 `entry`，否则"归因"就是猜。
+
+处置：① `partialReasons[]` 增加 `entry`/`scope(target|injected)`，`upstream:true` 只给注入的 Gadget；② note 与随包文档改写；③ 不改 Gadget 组件（官方 64 位已合规）。

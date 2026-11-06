@@ -147,7 +147,7 @@ internal class ToolkitJobs internal constructor(
             "evicted" to evicted,
             "filter" to ToolkitIo.json("owner" to owner, "clientId" to clientId, "sessionId" to sessionId),
             "nextActions" to JsonArray().apply {
-                add("要留档：apk_job_result 分段取回内容后立刻写到你自己的目录，不要依赖任务输出缓存")
+                add("要留档：apk_job_export{jobId,outPath} 立刻把结果原样原子导出到工具操作目录；结果只保留 6 小时或最多 64 条已完成任务，超出即删除输出缓存")
                 add("apk_job_list.evicted[] 是 JOB_EVICTED 墓碑；JOB_EVICTED 表示保留窗口/数量淘汰，不等于升级丢失的 SERVICE_RESTARTED")
             },
         )
@@ -210,6 +210,62 @@ internal class ToolkitJobs internal constructor(
             "sessionId" to job.sessionId,
             "lostByRestart" to job.lostByRestart,
             "retention" to retentionJson(),
+        )
+    }
+
+    /**
+     * 把任务结果缓存原样导出到工具目录内的 outPath（原子写）。
+     *
+     * 导出内容是 resultFile 的原始 JSON 文本，不是再次包一层 MCP JSON 的转义字符串；
+     * offset/maxChars 与 apk_job_result 一样按 UTF-16 字符分页，truncated 表示还有下一页。
+     * 保留窗口/墓碑仍是唯一来源：已被淘汰的任务继续报 JOB_EVICTED，重启丢失报 SERVICE_RESTARTED。
+     */
+    @Synchronized
+    fun export(root: File, args: JsonObject): JsonObject {
+        val job = find(args)
+        if (job.lostByRestart && !job.resultReady) {
+            throw ToolkitException("SERVICE_RESTARTED", restartLostMessage(job.id), "jobId")
+        }
+        require(job.resultReady) { "任务尚无结果，请读取状态" }
+        val file = resultFile(job.id)
+        require(file.isFile) { "任务结果缓存不存在，可能已被淘汰；请用 apk_job_list 对账" }
+        require(file.length() <= MAX_RESULT_BYTES) { "任务结果超过导出预算" }
+        val text = file.readText(Charsets.UTF_8)
+        val offset = args.tInt("offset", 0, 0, MAX_RESULT_BYTES.toInt())
+        require(offset <= text.length) { "结果偏移超出范围" }
+        require(
+            offset == 0 || offset == text.length || !Character.isLowSurrogate(text[offset]) ||
+                !Character.isHighSurrogate(text[offset - 1]),
+        ) { "结果offset不能切开UTF-16代理对，请使用nextOffset" }
+        // 未显式传 maxChars 时默认导出全部结果；显式分页时与 apk_job_result 同一 1 MiB 上限。
+        val max = if (args.has("maxChars") && !args.get("maxChars").isJsonNull) {
+            args.tInt("maxChars", DEFAULT_RESULT_CHARS, 1, MAX_RESULT_CHARS)
+        } else text.length
+        var end = minOf(text.length, offset + max)
+        if (end in (offset + 1) until text.length && Character.isHighSurrogate(text[end - 1]) &&
+            Character.isLowSurrogate(text[end])
+        ) end--
+        require(end > offset || offset == text.length) { "maxChars太小，不能容纳当前Unicode字符，请至少使用2" }
+        val chunk = text.substring(offset, end)
+        val target = ToolkitIo.resolve(root, args.tString("outPath"))
+        require(!target.isDirectory) { "outPath 必须是文件，不能是目录" }
+        val parent = target.parentFile
+        require(parent != null && (parent.isDirectory || parent.mkdirs())) {
+            "outPath 父目录不存在或无法创建：" + (parent?.path ?: "")
+        }
+        ToolkitIo.atomic(target) { it.writeText(chunk, Charsets.UTF_8) }
+        return ToolkitIo.json(
+            "jobId" to job.id,
+            "outPath" to target.path,
+            "bytes" to target.length(),
+            "chars" to chunk.length,
+            "sha256" to ToolkitIo.sha(target),
+            "truncated" to (end < text.length),
+            "retention" to retentionJson(),
+            "offset" to offset,
+            "nextOffset" to end,
+            "totalChars" to text.length,
+            "hasMore" to (end < text.length),
         )
     }
 

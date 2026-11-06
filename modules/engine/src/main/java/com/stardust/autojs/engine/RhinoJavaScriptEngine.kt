@@ -8,6 +8,7 @@ import com.stardust.autojs.engine.module.PathAwareRequire
 import com.stardust.autojs.engine.module.TemplateLiteralModuleSourceProvider
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.project.ScriptConfig
+import com.stardust.autojs.rhino.AijsNativeJavaClass
 import com.stardust.autojs.rhino.AndroidClassLoader
 import com.stardust.autojs.rhino.PreferIntJavaObject
 import com.stardust.autojs.rhino.ReflectiveMethodObject
@@ -242,17 +243,22 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
 
         override fun wrap(cx: Context, scope: Scriptable, obj: Any?, staticType: Class<*>?): Any? {
             return when {
+                obj is Class<*> -> AijsNativeJavaClass(scope, obj)
                 obj is String -> runtime.bridges.toString(obj.toString())
                 staticType == UiObjectCollection::class.java -> runtime.bridges.asArray(obj)
                 else -> super.wrap(cx, scope, obj, staticType)
             }
         }
 
+        override fun wrapJavaClass(cx: Context, scope: Scriptable, clazz: Class<*>): Scriptable =
+            AijsNativeJavaClass(scope, clazz)
+
         override fun wrapAsJavaObject(cx: Context?, scope: Scriptable, javaObject: Any?, staticType: Class<*>?): Scriptable? {
             //Log.d(LOG_TAG, "wrapAsJavaObject: java = " + javaObject + ", result = " + result + ", scope = " + scope);
             return when {
                 // Method.invoke(Object,Object...) 的桥接形参会把 JS 5 变成 Double；
                 // 用目标 Method 的真实形参类型收窄（三引擎共用 JavaReflectiveInvocation）。
+                javaObject is Class<*> -> AijsNativeJavaClass(scope, javaObject)
                 javaObject is java.lang.reflect.Method ->
                     ReflectiveMethodObject(scope, javaObject, staticType)
                 javaObject is View -> ViewExtras.getNativeView(scope, javaObject, staticType, runtime)

@@ -305,9 +305,10 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             }.getOrNull() ?: throw failure
             val reasons=gadgetPartialReasons(verification)
             if(reasons.size()==0) reasons.add(ToolkitIo.json("check" to "post_injection","status" to "failed",
-                "errorIssueCount" to 1,"upstream" to false,"impact" to "may-block-load","messages" to listOf(failure.message ?: failure.javaClass.simpleName)))
+                "errorIssueCount" to 1,"entry" to "","scope" to "target","owner" to "target",
+                "upstream" to false,"impact" to "may-block-load","messages" to listOf(failure.message ?: failure.javaClass.simpleName)))
             val schemes=runCatching{ToolkitSignatures.read(target).getAsJsonArray("schemes") ?: JsonArray()}.getOrDefault(JsonArray())
-            val note="可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载" + gadgetUpstreamNote(reasons)
+            val note="可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载" + gadgetPartialNote(reasons)
             if(detail=="summary") return gadgetSummary(target,info,signerLabel,schemes,true,true,note)
             return ToolkitIo.json(
                 "outputPath" to target.path, "path" to target.path, "size" to target.length(),
@@ -333,7 +334,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val note=if(partial)
             "已重签并可安装；静态验证 status=" + verificationStatus + "，详见 partialReasons/verification；只有 warning 的检查不会造成 partial"
         else "已重签并通过静态验证；安装/启动仍需实测"
-        val noteWithUpstream=note + gadgetUpstreamNote(partialReasons)
+        val noteWithUpstream=note + gadgetPartialNote(partialReasons)
         if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,noteWithUpstream)
         verification?.add("partialReasons",partialReasons)
         return info.apply {
@@ -370,40 +371,6 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "providerProcess" to info.get("providerProcess"), "providerProcessSource" to info.get("providerProcessSource"),
             "partial" to partial, "installable" to installable, "note" to note,
         )
-    private fun gadgetUpstreamNote(reasons:JsonArray):String {
-        val hasUpstream16k=reasons.any {
-            val r=it.asJsonObject
-            r.tString("check","")=="native" && r.tBool("upstream") &&
-                r.getAsJsonArray("errorCodes")?.any { code -> code.asString=="ELF_PT_LOAD_ALIGNMENT_16K" }==true
-        }
-        return if(hasUpstream16k)
-            "；partial 原因来自上游 Frida Gadget 预编译库的 PT_LOAD 页对齐（ELF_PT_LOAD_ALIGNMENT_16K）；实测不影响加载，但 16 KiB 页设备的上架/静态校验会判不合格；要消除需替换为 16 KiB 对齐的 Gadget 构建"
-        else ""
-    }
-    private fun gadgetPartialReasons(verification:JsonObject?):JsonArray {
-        val reasons=JsonArray()
-        if(verification==null) return reasons
-        val checks=verification.getAsJsonObject("checks")
-        checks?.entrySet()?.forEach { (name,value) ->
-            val status=value.asJsonObject.tString("status","")
-            if(status!="valid"){
-                val section=verification.getAsJsonObject(name)
-                val errors=section?.getAsJsonArray("issues")?.map{it.asJsonObject}?.filter{it.tString("severity","")=="error"} ?: emptyList()
-                val codes=errors.map{it.tString("code","")}.filter{it.isNotEmpty()}.distinct()
-                val upstream=name=="native" && "ELF_PT_LOAD_ALIGNMENT_16K" in codes
-                reasons.add(ToolkitIo.json("check" to name,"status" to status,
-                    "errorIssueCount" to errors.size,"warningOnly" to errors.isEmpty(),
-                    "upstream" to upstream,
-                    "impact" to if(upstream) "static-check-only" else "may-block-load",
-                    "errorCodes" to codes,
-                    "messages" to errors.map{it.tString("message","")}.filter{it.isNotEmpty()}.take(5)))
-            }
-        }
-        if(reasons.size()==0 && verification.tString("status","")!="valid")
-            reasons.add(ToolkitIo.json("check" to "verification","status" to verification.tString("status",""),
-                "warningOnly" to false,"upstream" to false,"impact" to "may-block-load"))
-        return reasons
-    }
     private fun radare(name:String,args:JsonObject,temp:File):JsonObject {
         val c=native("radare2");val input=stage(file(args),temp,"target.bin")
         fun query(command:String):JsonElement {
@@ -680,5 +647,75 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             zip.entries().asSequence().forEach{entry->ToolkitIo.ensureActive();ToolkitIo.entry(entry.name);require(names.add(entry.name)&&++count<=30000){"APK条目重复或过多"}
                 require(entry.size in 0..ToolkitIo.MAX_APK){"APK条目大小无效"};total+=entry.size;require(total<=ToolkitIo.MAX_APK){"APK展开超过512MiB"}}
         }
+    }
+}
+
+/**
+ * 把 verifier.native 的 issue 按 entry 拆成 partialReasons，避免把目标 APK 自带库误归因给注入 Gadget。
+ * 这里只做结构化与归因，不改变 verifier 的判定结果。
+ */
+internal fun gadgetPartialReasons(verification:JsonObject?):JsonArray {
+    val reasons=JsonArray()
+    if(verification==null) return reasons
+    val checks=verification.getAsJsonObject("checks")
+    checks?.entrySet()?.forEach { (name,value) ->
+        val status=value.asJsonObject.tString("status","")
+        if(status!="valid"){
+            val issues=verification.getAsJsonObject(name)?.getAsJsonArray("issues")?.map{it.asJsonObject} ?: emptyList()
+            val errors=issues.filter{it.tString("severity","")=="error"}
+            val selected=if(errors.isNotEmpty()) errors else issues.take(1)
+            if(selected.isEmpty()) reasons.add(gadgetPartialReason(name,status,null))
+            else selected.forEach { issue -> reasons.add(gadgetPartialReason(name,status,issue)) }
+        }
+    }
+    if(reasons.size()==0 && verification.tString("status","")!="valid")
+        reasons.add(gadgetPartialReason("verification",verification.tString("status",""),null))
+    return reasons
+}
+
+private fun gadgetPartialReason(check:String,status:String,issue:JsonObject?):JsonObject {
+    val entry=issue?.tString("entry","") ?: ""
+    val scope=if(gadgetEntryIsInjected(entry)) "injected" else "target"
+    val severity=issue?.tString("severity","") ?: ""
+    val code=issue?.tString("code","") ?: ""
+    val message=issue?.tString("message","") ?: ""
+    val reason=ToolkitIo.json(
+        "check" to check,
+        "status" to status,
+        "errorIssueCount" to if(issue!=null && severity=="error") 1 else 0,
+        "warningOnly" to (issue!=null && severity!="error"),
+        "entry" to entry,
+        "scope" to scope,
+        "owner" to scope,
+        "upstream" to (scope=="injected"),
+        "impact" to if(scope=="injected") "static-check-only" else "may-block-load",
+        "errorCodes" to if(code.isNotEmpty()) listOf(code) else emptyList<String>(),
+        "messages" to if(message.isNotEmpty()) listOf(message) else emptyList<String>(),
+    )
+    // 透传 verifier issue 已有结构化字段（segmentIndex/pAlign/fileOffset 等）；不覆盖归因字段。
+    issue?.entrySet()?.forEach { (key,value) -> if(!reason.has(key)) reason.add(key,value) }
+    return reason
+}
+
+private fun gadgetEntryIsInjected(entry:String):Boolean {
+    // 本工具注入的文件名固定为 libaijsgadget.so；目标 APK 自带的库即使也叫 frida-gadget 也不是我们注入的。
+    return entry.substringAfterLast('/').equals("libaijsgadget.so",ignoreCase=true)
+}
+
+/** full/summary 共用的 note；只对确实出现的 entry 追加说明，不把目标库甩锅给 Gadget。 */
+internal fun gadgetPartialNote(reasons:JsonArray):String {
+    fun is16k(r:JsonObject):Boolean =
+        r.tString("code","")=="ELF_PT_LOAD_ALIGNMENT_16K" ||
+            r.getAsJsonArray("errorCodes")?.any { it.asString=="ELF_PT_LOAD_ALIGNMENT_16K" }==true
+    val target=reasons.any { val r=it.asJsonObject; r.tString("scope","")=="target" && is16k(r) }
+    val injected=reasons.any { val r=it.asJsonObject; r.tString("scope","")=="injected" && is16k(r) }
+    return when {
+        target && !injected ->
+            "；partial 原因来自目标 APK 自带 native 库的 PT_LOAD 页对齐（见 partialReasons[].entry）；本工具注入的 Gadget（64 位 ABI）本次检测通过。当前测试机为 4096 页，实测不影响加载；16 KiB 页设备/上架校验会判不合格，需目标提供方重编该库"
+        target && injected ->
+            "；partial 原因同时来自目标 APK 自带 native 库和注入的 Gadget 库的 PT_LOAD 页对齐（见 partialReasons[].entry）；当前测试机为 4096 页，实测不影响加载；16 KiB 页设备/上架校验会判不合格，需对应提供方重编该库"
+        injected ->
+            "；partial 原因来自注入的 Frida Gadget 库的 PT_LOAD 页对齐（见 partialReasons[].entry）；当前测试机为 4096 页，实测不影响加载；16 KiB 页设备/上架校验会判不合格"
+        else -> ""
     }
 }

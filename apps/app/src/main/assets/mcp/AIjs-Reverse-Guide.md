@@ -1,7 +1,7 @@
 <!-- section:id=overview -->
 # AI.js Pro 逆向 MCP 自发现指南
 
-> 适用基线：**dev-1368**。本机公开 MCP 入口 **213 个**（**204 个规范名 + 9 个兼容别名**：status 3 · script 11 · workspace 10 · engine 5 · device 26 · terminal 11 · overlay 2 · asset 5 · toolkit 88 · reverse 43）。
+> 适用基线：**dev-1368**。本机公开 MCP 入口 **214 个**（**205 个规范名 + 9 个兼容别名**：status 3 · script 11 · workspace 10 · engine 5 · device 26 · terminal 11 · overlay 2 · asset 5 · toolkit 88 · reverse 43）。
 > 本指南部分细节段落写于 dev-1330 时代，若与 `tools/list` 或 [`AIjs-MCP-Guide.md`](AIjs-MCP-Guide.md) 的「dev-1368 行为变化」冲突，以后者为准。其中**逆向类工具现为 43 个**（本指南写于 dev-1330，下面这句列的是当时那 19 个已注册工具，名单已扩充）：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
 >
 > 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida使用免Root Gadget集成流程、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。

@@ -275,6 +275,7 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 - **`.4` 实测真因**：升级后看不到结果，实际是 64 条 finished + 3 条活跃触发了 `retentionLimit`（`apk_job_list` 返回 32 条墓碑），与升级清空无关；升级清空只会出现 `SERVICE_RESTARTED`。先看 `retention` 和 `evicted[]`，不要臆断。
 - **正确做法**：任务一到终态就立即 `apk_job_result` 把 `content` 取回，写入自己的项目目录（如 `<项目>/recovered/`），不要等几个小时或升级后再找；Playbook 的留档约定也点名这条。
+- **原样留档用 `apk_job_export`**：`apk_job_export {jobId,outPath}` 把结果原样原子导出到工具操作目录（outPath 父目录会自动创建；省略 offset/maxChars 时导出全部，显式 maxChars ≤1 MiB；同名文件覆盖）。导出后内容归用户，但**不会延长任务缓存的 6 小时/64 条保留**，所以仍要尽早导出。
 - `apk_job_result` 默认读取窗口 **1,048,576 字符**（dev-1378；旧版 16,384），大结果一次可拿回；响应里 `hasMore`/`nextOffset`/`totalChars`/`defaultMaxChars` 仍按分页语义。显式传 `maxChars` 时当前 schema 上限仍是 200000（不要传 1 MiB；要更大的结果用默认值 + `nextOffset` 续读）。
 
 **怎么验证**：调 `apk_job_list {}`，检查 `retention` 是否包含 `windowMillis/maxRetainedFinished/maxTombstones/maxResultBytes`；若有 `evicted[]`，确认 `code=JOB_EVICTED` 且 `reason=retentionLimit|retentionWindow`。对墓碑 jobId 调 `apk_job_result` 应报 `JOB_EVICTED`；对 `SERVICE_RESTARTED` 的 job 才说明是进程重启丢失。再跑一个 >16K 的后台结果（如反编译类），不传 `maxChars` 调 `apk_job_result`，检查 `content` 长度 >16384、`defaultMaxChars=1048576`、必要时 `hasMore/nextOffset`。
@@ -569,7 +570,7 @@ clang main.c -O2 -o hello
 
 **怎么验证**：先传一个父目录不存在的 `outPath` 复现错误；`file_create_directory` 返回 `created:true` 后再传同一路径（`outPath` 不能已存在）应成功。
 
-### apk_inject_gadget detail=summary 与 partialReasons（dev-1378）
+### apk_inject_gadget detail=summary 与 partialReasons（dev-1378 引入，dev-1379 更正归因）
 
 `apk_inject_gadget` 新增可选 `detail=full|summary`（默认 full，老调用不变）。摘要只回 `path/size/sha256/signed/signer/schemesApplied/providerProcess/providerProcessSource/partial/installable/note`；同一云镜样本实测 full 42 KB → summary 480 字符。**summary 不含 `partialReasons`**；要定位 partial 真因必须用 full（默认）或 `apk_verify`。
 
@@ -584,12 +585,21 @@ full 诊断示例：
 {"name":"apk_verify","arguments":{"path":"<输出APK>"}}
 ```
 
-**16 KiB 页对齐警告**：full 结果若 `verification.status="partial"`，先看 `partialReasons[]`。实测 `.4` 云镜样本注入的真因是 **native 检查 5× `ELF_PT_LOAD_ALIGNMENT_16K`**：组件里的预编译 Frida gadget `.so` 的 `PT_LOAD` 不满足 16 KiB 页对齐。该属性属于**组件预编译产物**，不是目标 APK 的改动；当前**不影响已实测的加载**（云镜样本注入后确实加载成功），但在 16 KiB 页设备/上架校验时会被判不合格。
+**16 KiB 页对齐告警的真实归因（dev-1379 更正）**：full 结果若 `verification.status="partial"`，先看 `partialReasons[].entry`/`scope`（`target`=目标包自带的库，`injected`=本工具注入的 Gadget；`upstream`/`impact` 是辅助字段）。**本次 K40 云镜样本的 5 条告警不是 Gadget 引入的**：
+
+- `lib/arm64-v8a/libroot_automator.so` 3 段（`p_align=0x1000`，其中 2 段还不同余）；
+- `lib/arm64-v8a/libyj_aj_02_309.so` 2 段（`p_align=0x4000` 但 offset/vaddr 不同余）；
+- 对**未注入的原包**单独 `apk_verify` 也是同样 5 条；注入的 `lib/arm64-v8a/libaijsgadget.so` 3 段全部通过。
+
+**三种情形**：
+1. **目标库不合规**：只能由目标 APK 提供方用 NDK r27+（`-Wl,-z,max-page-size=16384`）重编；我们不要直接改 `p_align`——32 位段不同余时要连带改 `p_vaddr/p_offset` 或重链接，风险高且不保证运行。
+2. **注入的 Gadget 不合规**：只有 32 位 ABI 会（上游 armeabi-v7a/x86 的 `p_align=0x1000`）；64 位 arm64/x86_64 的 Gadget 已合规。16 KiB 页设备是 arm64，32 位 Gadget 不会用于该场景，当前无需为它重编/替换。
+3. **4096 页设备上不影响加载**：K40 与 `.4` 实测 `getconf PAGE_SIZE=4096`，没有真实 16 KiB 加载失败证据；但真正的 16 KiB 页硬件仍需实测，不能把「4K 设备能加载」当成 16K 合格。
 
 **排查怎么验证**：
-1. 用 `detail=full` 注入同一 APK，读取顶层 `partialReasons[]`（full 的 `verification` 里也会带一份）；每项看 `check/status/errorIssueCount/errorCodes/messages`，若 `check=native` 且 `errorCodes=["ELF_PT_LOAD_ALIGNMENT_16K"]` 即上述组件问题。
-2. 对输出 APK 调 `apk_verify`，复核 native/ELF 对齐检查；`partial=true` 只表示静态验证未全过，不等于注入产物不可安装。
-3. 在 4 KiB 页设备（K40）安装打开、用 `frida_status`/logcat 确认 Gadget 加载；在 16 KiB 页设备必须重新验证，不能把当前“实测能加载”当成 16 KiB 合格。
+1. 用 `detail=full`（summary 不含 `partialReasons`）注入同一 APK，读取顶层 `partialReasons[]`（`verification` 里也会带一份）；每项看 `entry/scope/errorCodes/messages`。`scope=target` 即目标自有库；`scope=injected` 才是我们注入的 Gadget。若旧构建还没有 `entry/scope`，用 `upstream`/`impact` 辅助，并对原包/输出做 `apk_verify` 对照。
+2. **原包 vs 注入包对比**：对未注入的原包（本次样本为 `yj-orig.apk`）和注入输出各跑一次 `apk_verify`。native 的 `ELF_PT_LOAD_ALIGNMENT_16K` 条目在两边相同 ⇒ target-owned；只有注入后才多出的 `entry=lib/.../libaijsgadget.so` 才是 injected Gadget。
+3. 在设备终端跑 `terminal_exec {"command":"getconf PAGE_SIZE"}`（K40/`.4` 当前为 4096）；16 KiB 页设备另行实测，报告里要写清是静态检查还是真实加载结果。
 
 
 ### #13 `providerProcess` 已进 schema，省略时自动判定

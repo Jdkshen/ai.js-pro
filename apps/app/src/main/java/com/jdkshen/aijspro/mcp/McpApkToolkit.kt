@@ -181,6 +181,7 @@ internal class McpApkToolkit(
         "apk_job_list" -> "读取当前工具目录的后台任务和状态。"
         "apk_job_status" -> "读取后台任务状态/阶段；CANCELLING表示正在等待实际worker结束。SUCCEEDED_WITH_WARNINGS 表示完成但有反编译不完整（warningCode=DECOMPILE_INCOMPLETE，详见结果 decompileIncomplete/incompleteReason）。"
         "apk_job_result" -> "分块读取后台任务最终JSON结果，offset以返回nextOffset继续。"
+        "apk_job_export" -> "把后台任务结果原样原子导出到工具目录内的 outPath；省略 offset/maxChars 时导出全部，超大结果可用 offset/maxChars 分页。导出后内容归用户，任务缓存仍按保留策略淘汰。"
         "apk_job_cancel" -> "请求取消指定后台任务；直到worker真正结束才报告CANCELLED，已提交操作可能完成。"
         "apk_session_diff" -> "预览会话相对原快照的新增/修改/删除、摘要和小文本；不覆盖源文件。"
         "apk_session_checkpoint" -> "保存编辑会话检查点，复制变更条目以支持后续回退；最多8个、总量512MiB。"
