@@ -1,6 +1,8 @@
 package com.jdkshen.aijspro.mcp
 
 import android.content.Context
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
@@ -196,6 +198,176 @@ class McpWorkspaceStore private constructor(
             if (removable && dir.deleteRecursively()) removed++
         }
         return removed
+    }
+
+    /**
+     * 策略式工作区回收（默认 dryRun=true，只预览不动手）。
+     *
+     * 安全边界：只删除 ROLLED_BACK 与无修改的 OPEN。
+     * 以下一律保护并给出原因：APPLIED（protectApplied）、PENDING_APPROVAL/pendingApproval/saved（保存/待确认）、
+     * OPEN 有修改或 referenced（被引用/未保存）、元数据不可读或 owner 未知、最近 keepLatest 个、
+     * 未超过 olderThanHours、未知 state。
+     *
+     * dryRun=true 只计算 wouldDelete 与 reclaimedBytes（预估）；dryRun=false 才真删。
+     */
+    @Synchronized fun cleanupPolicy(
+        dryRun: Boolean = true,
+        keepLatest: Int = DEFAULT_CLEANUP_KEEP_LATEST,
+        olderThanHours: Int = 0,
+        protectApplied: Boolean = true,
+        keepAppliedHours: Int = 24,
+    ): JsonObject {
+        root.mkdirs()
+        val now = System.currentTimeMillis()
+        val keep = keepLatest.coerceIn(0, 10_000)
+        val olderHours = olderThanHours.coerceIn(0, 24 * 365)
+        val appliedHours = keepAppliedHours.coerceIn(0, 24 * 365)
+        val olderCutoff = if (olderHours > 0) now - olderHours.toLong() * 3_600_000L else Long.MAX_VALUE
+        val appliedCutoff = now - appliedHours.toLong() * 3_600_000L
+        val infos = root.listFiles().orEmpty().filter { it.isDirectory }.map { cleanupInfo(it) }
+        val keepIds = infos.sortedWith(compareByDescending<CleanupInfo> { it.updatedAt }.thenByDescending { it.id })
+            .take(keep).mapTo(HashSet<String>()) { it.id }
+        val protectedByReason = LinkedHashMap<String, Int>()
+        val protectedItems = ArrayList<Pair<CleanupInfo, String>>()
+        val candidates = ArrayList<CleanupInfo>()
+        infos.forEach { info ->
+            val reason = when {
+                !info.readable -> "unknown_metadata"
+                info.id in keepIds -> "keep_latest"
+                info.owner !in KNOWN_WORKSPACE_OWNERS -> "unknown_owner"
+                info.referenced -> "referenced"
+                info.saved -> "saved_pending_approval"
+                info.state == STATE_PENDING -> "saved_pending_approval"
+                info.state == STATE_APPLIED && protectApplied -> "applied_protected"
+                info.state == STATE_APPLIED && info.updatedAt > appliedCutoff -> "applied_rollback_window"
+                info.state == STATE_OPEN && info.changedFiles != 0 -> "open_modified"
+                info.state !in setOf(STATE_OPEN, STATE_ROLLED_BACK, STATE_APPLIED) -> "unknown_state"
+                info.updatedAt > olderCutoff -> "newer_than_older_than_hours"
+                else -> null
+            }
+            if (reason != null) {
+                protectedByReason[reason] = (protectedByReason[reason] ?: 0) + 1
+                if (protectedItems.size < CLEANUP_ITEM_LIMIT) protectedItems.add(info to reason)
+            } else {
+                candidates.add(info)
+            }
+        }
+        val wouldDeleteBytes = candidates.sumOf { it.bytes }
+        val deletedItems = ArrayList<CleanupInfo>()
+        val failedItems = ArrayList<CleanupInfo>()
+        var reclaimedBytes = 0L
+        if (!dryRun) {
+            candidates.forEach { info ->
+                if (info.dir.deleteRecursively()) {
+                    deletedItems.add(info)
+                    reclaimedBytes += info.bytes
+                } else {
+                    failedItems.add(info)
+                }
+            }
+        }
+        val protectedCount = protectedByReason.values.sum()
+        val remaining = root.listFiles().orEmpty().count { it.isDirectory }
+        return ToolkitIo.json(
+            "dryRun" to dryRun,
+            "policy" to ToolkitIo.json(
+                "keepLatest" to keep,
+                "olderThanHours" to olderHours,
+                "protectApplied" to protectApplied,
+                "keepAppliedHours" to appliedHours,
+            ),
+            "scanned" to infos.size,
+            "wouldDelete" to candidates.size,
+            "wouldDeleteItems" to cleanupItems(candidates),
+            "wouldDeleteTruncated" to (candidates.size > CLEANUP_ITEM_LIMIT),
+            "wouldDeleteBytes" to wouldDeleteBytes,
+            "deleted" to deletedItems.size,
+            "deletedItems" to cleanupItems(deletedItems),
+            "reclaimedBytes" to if (dryRun) wouldDeleteBytes else reclaimedBytes,
+            "protectedCount" to protectedCount,
+            "protected" to protectedArray(protectedItems),
+            "protectedTruncated" to (protectedCount > CLEANUP_ITEM_LIMIT),
+            "protectedByReason" to JsonObject().apply { protectedByReason.forEach { (key, count) -> addProperty(key, count) } },
+            "failedCount" to failedItems.size,
+            "failed" to cleanupItems(failedItems),
+            "remaining" to remaining,
+            "removed" to deletedItems.size,
+            "note" to if (dryRun) {
+                "dryRun=true：未删除任何目录；wouldDelete/reclaimedBytes 为按当前策略的预估值。确认后把 dryRun 改为 false。"
+            } else {
+                "只删除无修改 OPEN 与已回退工作区；applied/saved/被引用/未知 owner 已保护，详情见 protectedByReason。"
+            },
+        )
+    }
+
+    private data class CleanupInfo(
+        val dir: File,
+        val id: String,
+        val targetPath: String,
+        val state: String,
+        val changedFiles: Int,
+        val updatedAt: Long,
+        val bytes: Long,
+        val owner: String,
+        val saved: Boolean,
+        val referenced: Boolean,
+        val readable: Boolean,
+    )
+
+    private fun cleanupInfo(dir: File): CleanupInfo {
+        val meta = runCatching { readMeta(dir) }.getOrNull()
+        if (meta == null) {
+            return CleanupInfo(dir, dir.name, "", "UNKNOWN", -1, dir.lastModified(), directorySize(dir), "", false, false, false)
+        }
+        val changed = runCatching { changedCount(dir) }.getOrNull()
+        val state = meta.optString("state", "UNKNOWN")
+        val owner = meta.optString("owner", "").trim().ifBlank { "mcp-host" }
+        val saved = meta.optBoolean("saved", false) || meta.optBoolean("pendingApproval", false)
+        return CleanupInfo(
+            dir = dir,
+            id = meta.optString("id", dir.name).ifBlank { dir.name },
+            targetPath = meta.optString("targetPath", ""),
+            state = state,
+            changedFiles = changed ?: -1,
+            updatedAt = meta.optLong("updatedAt", dir.lastModified()),
+            bytes = directorySize(dir),
+            owner = owner,
+            saved = saved,
+            referenced = meta.optBoolean("referenced", false),
+            readable = changed != null,
+        )
+    }
+
+    private fun cleanupItems(items: List<CleanupInfo>): JsonArray = JsonArray().apply {
+        items.take(CLEANUP_ITEM_LIMIT).forEach { info ->
+            add(ToolkitIo.json(
+                "workspaceId" to info.id,
+                "targetPath" to info.targetPath,
+                "state" to info.state,
+                "changedFiles" to (info.changedFiles.takeIf { it >= 0 }),
+                "updatedAt" to info.updatedAt,
+                "bytes" to info.bytes,
+                "owner" to info.owner,
+            ))
+        }
+    }
+
+    private fun protectedArray(items: List<Pair<CleanupInfo, String>>): JsonArray = JsonArray().apply {
+        items.forEach { (info, reason) ->
+            add(ToolkitIo.json(
+                "workspaceId" to info.id,
+                "targetPath" to info.targetPath,
+                "state" to info.state,
+                "changedFiles" to (info.changedFiles.takeIf { it >= 0 }),
+                "owner" to info.owner,
+                "reason" to reason,
+            ))
+        }
+    }
+
+    private fun directorySize(dir: File): Long {
+        if (dir.isFile) return dir.length()
+        return dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
     }
 
     /** 在真实脚本目录下创建目录（需写入授权，由调用方校验）。 */
@@ -439,10 +611,24 @@ class McpWorkspaceStore private constructor(
             if (old.exists() && !file.exists()) old.renameTo(file)
         }
     }
+    /**
+     * 旧的 retention 自动清理：只处理超过保留天数的目录，但同样受安全边界约束——
+     * 只删已回退或没有修改的 OPEN；applied/pending/有修改/owner 未知/元数据不可读一律留下。
+     * 这样 list()/open() 不会绕过 cleanupPolicy 的保护策略。
+     */
     private fun cleanup() {
         root.mkdirs()
         val cutoff = System.currentTimeMillis() - retentionDays.toLong() * 86_400_000L
-        root.listFiles().orEmpty().filter { it.isDirectory && it.lastModified() < cutoff }.forEach { it.deleteRecursively() }
+        root.listFiles().orEmpty().filter { it.isDirectory && it.lastModified() < cutoff }.forEach { dir ->
+            val info = runCatching { cleanupInfo(dir) }.getOrNull() ?: return@forEach
+            if (!info.readable || info.owner !in KNOWN_WORKSPACE_OWNERS) return@forEach
+            val safe = when (info.state) {
+                STATE_ROLLED_BACK -> true
+                STATE_OPEN -> info.changedFiles == 0
+                else -> false
+            }
+            if (safe) dir.deleteRecursively()
+        }
     }
     companion object {
         /** JVM-test entry point; production callers must use the Context constructor. */
@@ -460,6 +646,12 @@ class McpWorkspaceStore private constructor(
         private const val MAX_TOTAL_BYTES = 4 * 1024 * 1024
         private const val MAX_DIFF_LINES = 1000
         private const val MAX_DIFF_CHARS = 128 * 1024
+        /** cleanupPolicy 默认保留最近 20 个工作区，避免一次清空。 */
+        internal const val DEFAULT_CLEANUP_KEEP_LATEST = 20
+        /** cleanup 返回的明细上限（计数仍是完整值）。 */
+        private const val CLEANUP_ITEM_LIMIT = 100
+        /** 脚本工作区默认归本机 MCP 宿主；其它 owner 视为未知并保护。 */
+        private val KNOWN_WORKSPACE_OWNERS = setOf("mcp-host", "local", "script-host")
         private val TEXT_EXTENSIONS = setOf("js", "json", "txt", "md", "xml", "css", "html")
         private fun sha256(bytes: ByteArray) = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
     }

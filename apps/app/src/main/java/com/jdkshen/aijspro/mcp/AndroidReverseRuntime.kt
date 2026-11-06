@@ -279,6 +279,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             addProperty("path",destination.path);addProperty("size",destination.length());addProperty("sha256",ToolkitIo.sha(destination))
             addProperty("signed",true);addProperty("originalSignaturePreserved",false);addProperty("installed",false)
             add("verification",verification)
+            // 只读对齐诊断（与 apk_build 同源：写入后 align、再由 verifier 复核本地头偏移）
+            add("alignment",alignmentDiagnosticsJson(verification,true))
             add("nextActions",ToolkitIo.json("install" to "安装输出APK；重签与原应用证书不同时不能直接覆盖，保留原数据再自行安排安装",
                 "launch" to "手动打开输出应用；Gadget只在应用默认进程中加载，不阻塞界面",
                 "check" to ToolkitIo.json("tool" to "frida_status","args" to ToolkitIo.json("endpoint" to tString("endpoint"),"token" to tString("token"))),
@@ -403,7 +405,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         }
         val destination=ToolkitIo.resolve(root,args.tString("outPath"))
         ToolkitIo.withFileLocks(listOf(destination)){require(!destination.exists()){"outPath 已存在，请使用新文件名"};ToolkitIo.atomic(destination){output.copyTo(it,true)}}
-        return ToolkitIo.json("path" to destination.path,"sha256" to ToolkitIo.sha(destination),"size" to destination.length(),"signed" to args.tBool("sign"),"verification" to verification,"backend" to "apktool","diagnostics" to result.text.takeLast(12000))
+        return ToolkitIo.json("path" to destination.path,"sha256" to ToolkitIo.sha(destination),"size" to destination.length(),"signed" to args.tBool("sign"),"verification" to verification,"alignment" to alignmentDiagnosticsJson(verification,true),"backend" to "apktool","diagnostics" to result.text.takeLast(12000))
     }
     /**
      * §10 会话工具：只做内存态登记、分页与清理，不冒充完成真实 attach。

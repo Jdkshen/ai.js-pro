@@ -221,7 +221,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("workspace_request_apply", "直接应用工作区到真实脚本；校验原文件、自动备份并支持历史回退（工具名为兼容保留）；示例：{\"workspaceId\":\"...\"}", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_mkdir", "在真实脚本目录下创建目录（含多级）", objSchema("path", required = arrayOf("path"))))
             add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
-            add(tool("workspace_cleanup", "清理无用的工作区私有副本：默认只删无修改的 OPEN 与已回退的；applied=true 时连已应用的也删（默认保留 keepAppliedHours=24 小时以便回退）", objSchema("applied", "olderThanHours", "keepAppliedHours")))
+            add(tool("workspace_cleanup", "策略式清理工作区私有副本：默认 dryRun=true 只预览不动手；keepLatest 保留最近 N 个，olderThanHours 只清理更旧的，protectApplied 默认保护已应用（可在历史页回退）。只删除无修改的 OPEN 与已回退；applied/saved/被引用/未知 owner 一律保护并列出原因。旧参数 applied/keepAppliedHours 仍兼容。示例：{\"dryRun\":false,\"keepLatest\":20,\"olderThanHours\":24,\"protectApplied\":true}", objSchema("dryRun", "keepLatest", "olderThanHours", "protectApplied", "applied", "keepAppliedHours")))
             add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需无障碍服务；示例：{\"maxNodes\":300,\"maxDepth\":64}", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
             add(tool("capture_screen", "截屏并返回 MCP 图像内容；mode 四种预设（MI8 1080×2160 实测）：fastest = 360 宽 + JPEG40（只够看有没有/大概在哪）；fast = 540 宽 + JPEG60，约 0.22~0.28s / 36KB（适合定位、轮询、先看一眼）；balanced = 原图 PNG，约 0.61~0.77s / 217KB（**与历史默认一致**）；quality = 原图 PNG + 更长超时，约 0.63~0.65s / 217KB（适合存档、像素级比对）。耗时主因是 PNG 编码（约 550ms），fast 靠缩小 + JPEG 把它省掉；显式传的 format/quality/maxWidth/timeoutMillis 覆盖预设；返回含 captureMs/encodeMs/totalMs/bytes/scale/effective，便于自己权衡质量与速度；region 可只截一块（[left,top,right,bottom] / \"[l,t][r,b]\" / {x,y,width,height}，越界自动夹取）——只截一块时**先裁后缩**，编码成本极低且保留 1:1 像素，比整屏缩小更清楚；缩小或裁剪后块内坐标 = 屏幕坐标 − 区域左上角，再乘 scale（返回里有 region/scale/regionNote）。**savePath（逐帧 CV 的关键）**：只要路径不要图像 —— 写入脚本目录内文件并只返回 {path,width,height,bytes,captureMs/encodeMs/writeMs/totalMs}，不回传 base64/JSON；saveFormat=raw 直接写 RGBA8888 原始像素（stride=width*4、无文件头，与 image.exportPixels 布局一致），省掉 PNG 编码（约 550ms）→ 适合逐帧循环；saveFormat 也可 auto（按扩展名）/png/jpg。需 Android 11+ 无障碍截图权限。示例：{\"mode\":\"fastest\"}、{\"savePath\":\"poker-recog/calib/live-6.png\",\"saveFormat\":\"raw\"}、{\"mode\":\"fast\"} / {\"mode\":\"quality\",\"maxWidth\":1080} / {\"mode\":\"fast\",\"region\":[0,1000,1080,1400]}", objSchema("mode", "format", "quality", "dataUri", "maxWidth", "timeoutMillis", "region", "savePath", "saveFormat")))
             add(tool("coordinate_convert", "截图/显示/浮窗三套坐标系的换算与标定：action=state 给出 panel（物理面板≈截图尺寸）、appDisplay（无障碍与浮窗同一套）、可选 measureScreenshot 实测截图尺寸，并给出仿射 dst=src*(scaleX,scaleY)+(offsetX,offsetY)；action=calibrate 传两组对应点（windowPoint1/screenshotPoint1[/2]）持久化标定值；action=convert 传 from/to/point|rect 换算；action=clear 清除标定。示例：{\"action\":\"state\",\"measureScreenshot\":true} 或 {\"action\":\"convert\",\"from\":\"window\",\"to\":\"screenshot\",\"rect\":[100,200,300,400]}", objSchema("action", "measureScreenshot", "windowPoint1", "screenshotPoint1", "windowPoint2", "screenshotPoint2", "from", "to", "point", "rect")))
@@ -327,7 +327,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 val pendingApprovals = workspaces.list().count { it.pendingApproval }
                 if (workspaceCount > WORKSPACE_ALERT_THRESHOLD || pendingApprovals > 0) {
                     add("nextActions", JsonArray().apply {
-                        add("工作区已有 $workspaceCount 个（阈值 $WORKSPACE_ALERT_THRESHOLD）：先跑 workspace_cleanup{dryRun:true} 看能回收多少，再决定是否真删")
+                        add("workspace_cleanup{\"dryRun\":true,\"keepLatest\":20,\"olderThanHours\":24,\"protectApplied\":true}")
                         if (pendingApprovals > 0) add("有 $pendingApprovals 个工作区等待确认：workspace_list 查看后在 App 内确认或回退")
                         add("APK 工作区另可用 apk_workspace_inventory / apk_workspace_gc 单独回收")
                     })
@@ -435,15 +435,15 @@ internal class McpTools(private val context: Context, private val event: (String
                 toolJson(JsonObject().apply { addProperty("path", created); addProperty("created", true) })
             }
             "workspace_cancel" -> toolJson(workspaceJson(workspaces.cancel(args.string("workspaceId"))))
-            "workspace_cleanup" -> toolJson(JsonObject().apply {
-                val removed = workspaces.purge(
-                    applied = args.booleanOr("applied", false),
-                    olderThanHours = args.intOr("olderThanHours", 0),
-                    keepAppliedHours = args.intOr("keepAppliedHours", 24)
-                )
-                addProperty("removed", removed)
-                addProperty("remaining", workspaces.list().size)
-            })
+            "workspace_cleanup" -> toolJson(workspaces.cleanupPolicy(
+                dryRun = args.booleanOr("dryRun", true),
+                keepLatest = args.intOr("keepLatest", McpWorkspaceStore.DEFAULT_CLEANUP_KEEP_LATEST),
+                olderThanHours = args.intOr("olderThanHours", 0),
+                // 旧参数 applied=true 仍表示“允许清已应用”，新参数 protectApplied 显式优先。
+                protectApplied = if (args.has("protectApplied")) args.booleanOr("protectApplied", true)
+                    else !args.booleanOr("applied", false),
+                keepAppliedHours = args.intOr("keepAppliedHours", 24),
+            ))
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url", "apk_install", "apk_uninstall" ->
                 toolJson(McpAppTools.handle(context, name, args) ?: throw McpInvalidParamsException("未知工具：$name"))
             in McpAppTraceTools.names -> toolJson(McpAppTraceTools.call(context, name, args))
