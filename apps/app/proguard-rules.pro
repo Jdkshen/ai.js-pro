@@ -297,3 +297,16 @@
 -keep class okio.** { public *; }
 -dontwarn okhttp3.**
 -dontwarn okio.**
+
+# ---------------------------------------------------------------------------
+# apksig 的**签名**侧入口。R8 只看到 ToolkitApkVerifier 用反射做验签诊断，
+# 于是把 com.android.apksig.ApkSigner$Builder 整个类、ApkSigner.sign() 都裁掉了——
+# 实测 dev-1360 的 classes.dex 里 ApkSigner 只剩 findCdRecord/getAndroidManifestFromApk。
+# 结果：想用 apksig 生成 V3 签名时「类在、方法没了」。这里保留签名入口（内部实现仍可被 R8 压缩/改名）。
+-keep class com.android.apksig.ApkSigner { public *; }
+-keep class com.android.apksig.ApkSigner$Builder { public *; }
+-keep class com.android.apksig.ApkSigner$SignerConfig { *; }
+-keep class com.android.apksig.ApkSignerEngine { *; }
+-keep class com.android.apksig.ApkSignerEngine$Builder { *; }
+-keep class com.android.apksig.DefaultApkSignerEngine { *; }
+-dontwarn com.android.apksig.**

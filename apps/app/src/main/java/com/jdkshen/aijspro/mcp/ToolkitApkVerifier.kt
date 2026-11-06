@@ -1,6 +1,8 @@
 package com.jdkshen.aijspro.mcp
 
 import com.android.apksig.ApkVerifier
+import com.jdkshen.aijspro.Pref
+import com.jdkshen.aijspro.autojs.build.sign.SigningOptions
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.reandroid.xml.XMLDocument
@@ -34,6 +36,8 @@ import java.util.zip.ZipFile
  */
 internal object ToolkitApkVerifier {
     private const val APKSIG_COORDINATE = "com.android.tools.build:apksig:8.6.1"
+    private const val APKSIG_SIGNER_CLASS = "com.android.apksig.ApkSigner"
+    private const val APKSIG_SIGNER_BUILDER_CLASS = "com.android.apksig.ApkSigner\$Builder"
     private const val STATUS_MEANING = "valid=所有已执行检查通过（含密码学签名）；partial=至少一项失败/跳过/不支持；unavailable=文件或检查后端不可用"
     private const val SCHEME_STATUS_MEANING =
         "签名方案状态：valid=该方案密码学验证通过；invalid=有签名者但验证失败；" +
@@ -146,6 +150,67 @@ internal object ToolkitApkVerifier {
         "zip64" to "explicitly_reported_unsupported",
         "signatureMetadataPolicy" to "仅使用 apksig 密码学结果；ToolkitSignatures 的证书元数据不作为验证通过依据"
     )
+
+    /**
+     * 只读签名能力诊断（供 McpBuildTools.get_build_tools 使用）。
+     *
+     * apksigAvailable 不是「依赖 jar 里有没有类」的静态结论，而是当前运行期反射可见且
+     * 能构成签名入口的 API：ApkSigner 类 + ApkSigner\$Builder + sign()/build() 方法。
+     * 当前 release 包若只保留验签辅助方法，会明确返回 false，不假装能签。
+     */
+    internal fun signingCapability(): JsonObject {
+        val signerClass = classOrNull(APKSIG_SIGNER_CLASS)
+        val builderClass = classOrNull(APKSIG_SIGNER_BUILDER_CLASS)
+        val signMethod = signerClass?.let { runCatching { it.getDeclaredMethod("sign") }.getOrNull() }
+        val buildMethod = builderClass?.let { runCatching { it.getDeclaredMethod("build") }.getOrNull() }
+        val apksigAvailable = signerClass != null && builderClass != null &&
+            signMethod != null && buildMethod != null
+        val detail = when {
+            apksigAvailable -> "ApkSigner/Builder/sign()/build() 反射可见"
+            signerClass == null -> "缺 " + APKSIG_SIGNER_CLASS + " 类"
+            builderClass == null && signMethod == null ->
+                "ApkSigner 类存在，但 " + APKSIG_SIGNER_BUILDER_CLASS + " 与 sign() 均缺失（只剩验签辅助方法）"
+            builderClass == null -> "ApkSigner 类与 sign() 存在，但 " + APKSIG_SIGNER_BUILDER_CLASS + " 缺失"
+            signMethod == null -> APKSIG_SIGNER_BUILDER_CLASS + " 存在，但 ApkSigner.sign() 缺失"
+            else -> APKSIG_SIGNER_BUILDER_CLASS + ".build() 缺失"
+        }
+        val keyStore = keyStoreFile()
+        val keyStoreConfigured = keyStore?.let { file ->
+            file.isFile && file.canRead() && runCatching {
+                SigningOptions.recordedPasswords(file).isNotEmpty()
+            }.getOrDefault(false)
+        } ?: false
+        val signerState = if (apksigAvailable) {
+            "apksig 签名 API 可用"
+        } else {
+            detail + "，不能直接用 apksig 签名"
+        }
+        val note = signerState + "；依赖坐标 " + APKSIG_COORDINATE +
+            "（依赖 jar 自带 ApkSigner，运行期是否保留以本字段为准）；" +
+            "schemes 为 apksig 目标 V1/V2/V3；当前 apk_build 仍使用 KeyStoreApkSigner（V1+V2），" +
+            "本诊断只读、不改签名行为；keystoreConfigured=true 表示默认密钥库已存在且记录过口令，" +
+            "首次 sign=true 可自动生成"
+        return ToolkitIo.json(
+            "apksigCoordinate" to APKSIG_COORDINATE,
+            "apksigAvailable" to apksigAvailable,
+            "keystoreConfigured" to keyStoreConfigured,
+            "keystorePath" to SigningOptions.DEFAULT_KEYSTORE_NAME,
+            "schemes" to listOf("V1", "V2", "V3"),
+            "note" to note
+        )
+    }
+
+    private fun classOrNull(name: String): Class<*>? = try {
+        Class.forName(name, false, ToolkitApkVerifier::class.java.classLoader)
+    } catch (_: Throwable) {
+        null
+    }
+
+    private fun keyStoreFile(): File? = try {
+        File(SigningOptions.keyStoreDir(Pref.getScriptDirPath()), SigningOptions.DEFAULT_KEYSTORE_NAME)
+    } catch (_: Throwable) {
+        null
+    }
 
     private val LIMITATIONS = listOf(
         "静态只读检查：未安装、未启动、未执行设备兼容性或业务行为测试。",

@@ -47,6 +47,7 @@ internal object McpBuildTools {
             })
             add("optionalComponents", backend.compilerComponents())
             add("apkComponents", backend.apkCompilerComponents())
+            add("signing", ToolkitApkVerifier.signingCapability())
             addProperty("note", "found 只表示 PATH 中可定位，未执行编译器。C/C++可通过aijs-toolchain显式下载可选组件，主APK不内嵌编译器；optionalComponents提供状态和安装命令。内置D8转换class/JAR→DEX，Smali汇编→DEX，均不编译Java源码；JDK/Gradle/完整Android SDK需另配。编译使用app后端，共享存储通常不能直接执行ELF。不会后台自动安装依赖。")
         }
     }

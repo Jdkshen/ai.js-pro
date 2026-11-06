@@ -867,6 +867,8 @@ internal class McpApkToolkit(
         val signature = ToolkitSignatures.read(output)
         val result = ToolkitIo.json("path" to output.path, "size" to output.length(), "sha256" to ToolkitIo.sha(output), "signed" to signing,
             "signatureSummary" to signature, "verification" to verification,
+            // 只读对齐诊断：不改变导出流程；计数来自最终 APK 的 verifier 报告（见对齐/签名路径）。
+            "alignment" to alignmentDiagnostics(verification, true),
             "signingIdentity" to if(signing) "AI.js Pro 本机身份，替换原签名" else "unsigned", "sourceUnchanged" to true)
         listOf("changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries").forEach {
             result.add(it, checked.get(it))
@@ -906,6 +908,61 @@ internal class McpApkToolkit(
         }
         ToolkitArchiveAlignment.align(target)
     }
+    /**
+     * 只读对齐诊断（任务 4B）：从最终 APK 的 [ToolkitApkVerifier] 报告中提取 ZIP 对齐计数。
+     *
+     * 不修改导出流程、不重写/重新签名 APK。当前 [writeUnsigned] 写出未签名 APK 后已经调用
+     * [ToolkitArchiveAlignment.align]（Stored 非目录 4B、Stored .so 16KiB）；签名路径再对齐并插入 V2，
+     * 最后由 build() 内的 verifier 复核。这里只把最终文件的真实偏移统计摊平给调用方，并明确
+     * “fixed=true”不等于“本次一定改动过字节”，因为 align 不返回逐条 padding 计数。
+     */
+    private fun alignmentDiagnostics(verification: JsonObject?, alignerApplied: Boolean): JsonObject {
+        val zip = verification?.get("zip")?.takeIf { it.isJsonObject }?.asJsonObject
+        val alignment = zip?.get("alignment")?.takeIf { it.isJsonObject }?.asJsonObject
+        if (zip == null || alignment == null) {
+            return ToolkitIo.json(
+                "checked" to false,
+                "misalignedEntries" to null,
+                "fixed" to false,
+                "alignerApplied" to alignerApplied,
+                "paddedEntries" to null,
+                "note" to "没有可用的最终 APK ZIP 验证报告，不能声称对齐；导出流程未变。",
+            )
+        }
+        val status = zip.tString("status", "unavailable")
+        fun count(name: String): Int? =
+            alignment.get(name)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
+        val storedMisaligned = count("storedEntriesMisaligned4Bytes")
+        val nativeMisaligned = count("nativeLibrariesMisaligned16Kb")
+        val checked = status == "valid"
+        val misaligned = if (checked) (storedMisaligned ?: 0) + (nativeMisaligned ?: 0) else null
+        val fixed = checked && alignerApplied && misaligned == 0
+        return ToolkitIo.json(
+            "checked" to checked,
+            "misalignedEntries" to misaligned,
+            "fixed" to fixed,
+            "alignerApplied" to alignerApplied,
+            "aligner" to "ToolkitArchiveAlignment.align",
+            "paddedEntries" to null,
+            "paddedEntriesNote" to "ToolkitArchiveAlignment.align 当前不返回逐条补 padding 计数；不伪造该数字",
+            "zipStatus" to status,
+            "requiredBytes" to alignment.get("requiredBytes"),
+            "storedEntriesChecked" to count("storedEntriesChecked"),
+            "storedEntriesMisaligned4Bytes" to storedMisaligned,
+            "deflatedEntryCount" to count("deflatedEntryCount"),
+            "nativeLibrariesChecked16Kb" to count("nativeLibrariesChecked16Kb"),
+            "nativeLibrariesMisaligned16Kb" to nativeMisaligned,
+            "nativeLibrariesCompressed" to count("nativeLibrariesCompressed"),
+            "note" to (if (!checked) {
+                "最终 APK ZIP 未完整通过解析（zipStatus=" + status + "），不能给对齐结论；详见 verification.zip.issues。"
+            } else {
+                "只读诊断：计数来自最终输出文件本地头的真实数据偏移（ToolkitApkVerifier）；" +
+                    "fixed=true 表示本次导出执行了对齐器且最终为 0 条 misaligned，不代表文件一定被改动过字节；" +
+                    "Stored 非目录要求 4B、Stored .so 要求 16KiB，Deflate 条目不参与对齐。"
+            }),
+        )
+    }
+
     private fun streamEntry(workspace: String, session: String, entry: String, consume: (InputStream) -> Unit) {
         if(session.isNotEmpty()) require(sessionInfo(workspace, session).getAsJsonArray("deleted").none { it.asString == entry }) { "条目已删除" }
         val changed = if(session.isEmpty()) null else sessionInfo(workspace, session).getAsJsonObject("changedEntries").get(entry)?.asString
