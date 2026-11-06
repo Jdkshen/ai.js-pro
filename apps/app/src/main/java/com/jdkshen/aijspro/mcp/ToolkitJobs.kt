@@ -172,7 +172,9 @@ internal class ToolkitJobs internal constructor(
         val file = resultFile(job.id)
         require(file.length() <= MAX_RESULT_BYTES) { "任务结果超过读取预算" }
         val offset = args.tInt("offset", 0, 0, MAX_RESULT_BYTES.toInt())
-        val max = args.tInt("maxChars", 16384, 1, 200000)
+        // 结果文件本身从不受 16 KiB 限制（writeResult 最多 24 MiB）；此前只读窗口默认 16 KiB，
+        // 会让一次 apk_job_result 看起来像“盘上只有 16 KiB”。默认提高到 1 MiB，分页字段/语义不变。
+        val max = args.tInt("maxChars", DEFAULT_RESULT_CHARS, 1, MAX_RESULT_CHARS)
         val text = file.readText(Charsets.UTF_8)
         require(offset <= text.length) { "结果偏移超出范围" }
         require(
@@ -192,6 +194,11 @@ internal class ToolkitJobs internal constructor(
             "nextOffset" to end,
             "hasMore" to (end < text.length),
             "totalChars" to text.length,
+            "resultChars" to text.length,
+            "maxChars" to max,
+            "defaultMaxChars" to DEFAULT_RESULT_CHARS,
+            "maxResultChars" to MAX_RESULT_CHARS,
+            "maxResultBytes" to MAX_RESULT_BYTES,
             "resultBytes" to job.resultBytes,
             "owner" to job.owner,
             "clientId" to job.clientId,
@@ -717,6 +724,10 @@ internal class ToolkitJobs internal constructor(
         const val DEFAULT_MAX_RETAINED_FINISHED = 64
         const val MAX_TOMBSTONES = 256
         const val MAX_RESULT_BYTES = 24L * 1024 * 1024
+        /** 单次结果读取默认窗口；不是落盘上限（落盘上限为 MAX_RESULT_BYTES）。 */
+        const val DEFAULT_RESULT_CHARS = 1_048_576
+        /** 单次结果读取可请求上限；分页 offset/nextOffset 语义不变。 */
+        const val MAX_RESULT_CHARS = 1_048_576
         const val MAX_LISTED_TOMBSTONES = 32
         const val INDEX_FILE = "jobs.index.json"
         const val REGISTRY_VERSION = 1

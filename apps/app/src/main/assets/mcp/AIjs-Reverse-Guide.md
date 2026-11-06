@@ -419,6 +419,19 @@ jadx, apk-resources, apktool, radare2, r2ghidra, yara, unicorn, frida
 
 **Java 伪代码不等于源码。** JADX 输出是反编译器的可读近似：可能丢泛型/注解/注释，可能把 `switch`、内联、合成类还原得和原工程不同，也可能根本不能编译。它不能直接喂给 `apk_build`；`apk_build` 只做 ZIP/条目/结构检查和重签，不做 Java 源码编译。需要修改时用 Smali/DEX 定位符 + `apk_edit_text`，并用 `apk_session_check` 验证；能通过检查也不等于原业务语义。
 
+**混淆类被 JADX 改名/内联时**：`apk_decompile_class` 仍可能报 `JADX未找到类`；这不是 locator 写错，JADX 无法为合成/内联类还原源码。两条可执行绕法：
+
+1. **从调用方找内联代码**：先用 `apk_dex_xref` 找 caller（`methodResolution:"dispatch"`、`limit:50`），再对 caller 调 `apk_decompile_method`，在伪代码/Smali 里搜目标常量、字符串或方法名；内联代码通常就在 caller 里。
+2. **直接读 Smali（首选，不依赖 JADX）**：用 `apk_read_text` 的 `dex_method:` 定位符读原方法，类被改名/内联也能看到真实字节码：
+```json
+{"jsonrpc":"2.0","id":46,"method":"tools/call","params":{"name":"apk_read_text","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"dex_method:Lcom/example/Foo;->bar(I)V","limit":500,"maxChars":49152,"startLine":0,"startColumn":0}}}
+```
+
+locator 从 `apk_dex_search_members`/`apk_dex_read_class_outline` 取；返回的 `data.text` 从 `.method` 到 `.end method`。需要 Java 可读伪代码时再用 `apk_decompile_class`，不要把 `JADX未找到类` 当成“方法不存在”。
+
+**怎么验证**：先用原 class locator 复现 `JADX未找到类`；再用同一方法 locator 的 `apk_read_text`，确认 `data.text` 以 `.method` 开头、以 `.end method` 结束并包含方法名/描述符；若是内联，在 caller 的 `apk_decompile_method` 或 Smali 里找到对应常量/调用。
+
+
 ### Apktool 工程路线
 
 `apk_decode_project` 可以直接把 APK 解成 Manifest/XML/Smali 工程；这是独立于 JADX 的路线：

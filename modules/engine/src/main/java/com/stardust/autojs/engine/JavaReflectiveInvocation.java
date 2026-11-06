@@ -152,6 +152,33 @@ public final class JavaReflectiveInvocation {
         return value;
     }
 
+    /** #14b: java.lang.reflect.Array.set/get 的数组元素类型收窄。 */
+    public static Object arraySet(Object array, Object rawIndex, Object value) {
+        if (array == null || !array.getClass().isArray()) {
+            throw new IllegalArgumentException("Array.set 的第一个参数必须是 Java 数组，实际："
+                    + (array == null ? "null" : array.getClass().getName()));
+        }
+        int index = (Integer) coerce(int.class, rawIndex, "index");
+        Class<?> component = array.getClass().getComponentType();
+        Object converted;
+        try {
+            converted = coerce(component, value, "value");
+        } catch (IllegalArgumentException error) {
+            throw new IllegalArgumentException("Array.set 元素类型不匹配：" + error.getMessage(), error);
+        }
+        Array.set(array, index, converted);
+        return null;
+    }
+
+    public static Object arrayGet(Object array, Object rawIndex) {
+        if (array == null || !array.getClass().isArray()) {
+            throw new IllegalArgumentException("Array.get 的第一个参数必须是 Java 数组，实际："
+                    + (array == null ? "null" : array.getClass().getName()));
+        }
+        int index = (Integer) coerce(int.class, rawIndex, "index");
+        return Array.get(array, index);
+    }
+
     private static boolean isIntegralTarget(Class<?> target) {
         return target == byte.class || target == Byte.class
                 || target == short.class || target == Short.class

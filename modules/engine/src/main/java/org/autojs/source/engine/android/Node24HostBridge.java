@@ -1616,6 +1616,22 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Object invokeMethod(Method method, Object target, Object[] args) throws Exception {
+        // lambda（onUi）只能捕获 effectively-final 变量；下面 Array.set/get 分支曾直接给 args 重新赋值，
+        // 会让 lambda 编译失败（Node24HostBridge.java:1654）。这里用 final 副本承载，行为不变。
+        final Object[] callArgs = args == null ? new Object[0] : args;
+        final Method callMethod = method;
+        final Object callTarget = target;
+        if (method.getDeclaringClass() == java.lang.reflect.Array.class
+                && ("set".equals(method.getName()) || "get".equals(method.getName()))) {
+            if ("set".equals(method.getName()) && callArgs.length == 3) {
+                return JavaReflectiveInvocation.arraySet(callArgs[0], callArgs[1], callArgs[2]);
+            }
+            if ("get".equals(method.getName()) && callArgs.length == 2) {
+                return JavaReflectiveInvocation.arrayGet(callArgs[0], callArgs[1]);
+            }
+            throw new IllegalArgumentException("java.lang.reflect.Array." + method.getName()
+                    + " 参数个数不匹配（set 需要 array,index,value；get 需要 array,index）");
+        }
         // Java 反射 Method.invoke(Object,Object...) 的形参是 Object/Object[]；普通桥接会把
         // JS 5 变成 Double，目标 int 形参随即报 "got java.lang.Double"。这里按目标方法
         // 的真实形参类型收窄，三引擎共用 JavaReflectiveInvocation。
@@ -1639,7 +1655,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         // Parameterless cached JSON calls skip handleJava; keep their UI scope.
         if (Looper.myLooper() != Looper.getMainLooper()
                 && (mUiThreadScope.isActive() || needsUiThread(target, method, args))) {
-            return onUi(() -> invokeMethod(method, target, args));
+            return onUi(() -> invokeMethod(callMethod, callTarget, callArgs));
         }
         try {
             method.setAccessible(true);

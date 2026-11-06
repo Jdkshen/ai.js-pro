@@ -192,7 +192,21 @@ console.log(JSON.stringify({position:w.getPosition(), size:w.getSize()}));
 ### Java 反射可变参数（R01）
 
 - `Class.getMethod(name)`（省略空参数数组）现在可用，与 `getMethod(name, [])` 行为一致；零个/一个/多个 varargs 均支持，基本类型按组件类型收窄，固定参数重载优先于 varargs。
-- **#14 已知坑（`.4` 实战，dev-1373 及之前）**：反射 `invoke` 传 JS Number 时不会自动收窄到 primitive `int`；`Math.abs.invoke(null, 5)` 会报 `argument 1 has type int, got java.lang.Double`。绕法：`invoke(null, new java.lang.Integer(5))`（其它 primitive 用对应包装类）。队友正在修，修好后可直接传 Number；以 build/实测为准。可复现脚本见 Playbook 坑表 #15。
+- **#14 反射示例（Rhino，dev-1374 起已修）**：Rhino **没有全局 `System`**（写 `java.lang.System`）；`Math.abs` 是 JS 函数，不是 `java.lang.reflect.Method`，所以 `Math.abs.invoke` 不是有效反射。必须从 `java.lang.Class.forName("java.lang.Math").getDeclaredMethods()` 里取 `abs(int)`，再 `.invoke(null, 5)`。dev-1374 起按目标形参收窄，直接传 Number 返回 `5`；dev-1373 及更早才需要 `new java.lang.Integer(5)` 包装。
+
+**#14 可跑示例（Rhino）**：
+```js
+var methods = java.lang.Class.forName("java.lang.Math").getDeclaredMethods();
+var abs = null;
+for (var i = 0; i < methods.length; i++) {
+  var m = methods[i];
+  if (m.getName() === "abs" && m.getParameterTypes().length === 1 &&
+      String(m.getParameterTypes()[0].getName()) === "int") { abs = m; break; }
+}
+if (!abs) throw new Error("Math.abs(int) not found");
+var result = abs.invoke(null, 5);   // dev-1374+ 预期 5
+console.log(result);
+```
 
 ### QuickJS 的 ui.inflate（R04）与边界
 
@@ -536,6 +550,13 @@ clang main.c -O2 -o hello
 预期：`interaction=script`、`scriptPath=/data/local/tmp/a.js`、`providerProcess=:remote`、`providerProcessSource=explicit`、`signed=true`，**结果里没有 `endpoint`/`token`**；`nextActions` 无 endpoint/token。安装打开后 Gadget 按 `scriptPath` 加载（不碰网络）。
 
 **怎么验证**：记录返回 JSON 的 `interaction/scriptPath/providerProcess/providerProcessSource`，确认 `endpoint`/`token` 不存在；安装后用 `frida_status`/logcat 确认 Gadget 加载，script 模式不找网络端口。
+**输出路径坑（dev-1374）**：`apk_inject_gadget.outPath` 必须是**父目录已存在的新文件**，工具不会建父目录；父目录不存在会报 `outPath 必须为父目录存在的新文件`。要写子目录先建目录再传绝对路径：
+```json
+{"name":"file_create_directory","arguments":{"path":"autojs_crack/_mcp_test"}}
+{"name":"apk_inject_gadget","arguments":{"path":"/storage/emulated/0/脚本/target.apk","outPath":"/storage/emulated/0/脚本/autojs_crack/_mcp_test/target-script.apk","interactionType":"script","scriptPath":"/data/local/tmp/a.js"}}
+```
+
+**怎么验证**：先传一个父目录不存在的 `outPath` 复现错误；`file_create_directory` 返回 `created:true` 后再传同一路径（`outPath` 不能已存在）应成功。
 
 ### #13 `providerProcess` 已进 schema，省略时自动判定
 
@@ -546,9 +567,11 @@ clang main.c -O2 -o hello
 {"name":"apk_inject_gadget","arguments":{"path":"<原APK>","outPath":"<新APK>","interactionType":"script","scriptPath":"/data/local/tmp/a.js"}}
 ```
 预期 `providerProcessSource` 为 `manifest` 或 `default`（取决于该 APK 入口/application 的 `android:process`）；显式传 `"providerProcess":":remote"` 时必须是 `:remote`/`explicit`。
-- 边界：K40 实测了**显式分支**；`manifest/default` 自动分支目前只在本地 harness 验证，需拿一个入口 `android:process` 的 APK 做真机复测（`.4` 反馈原意也是先确认自动判定）。
+- **真实样本实测（dev-1374）**：对 `.4` 的 `云镜快照样本-原件.apk`（真实 Auto.js 打包包，入口 activity 声明 `android:process=":script"`）省略 `providerProcess`，`apk_inject_gadget` 返回 `providerProcess=":script"`、`providerProcessSource="manifest"`；**不需要再手工把 Provider 挪到 `:script`**——工具新增独立 Provider 条目，不复制原 Provider 条目，也不会复制成两条。
+- 边界：显式分支和该真实 manifest 分支已实测；其它 APK 仍按上面的入口/application/default 规则判定；遇到入口和 application 都没有 `android:process` 的包返回 default，不要假设一定是 `:script`。
 
-**怎么验证**：省略 `providerProcess` 调一次，看返回 `providerProcess/providerProcessSource`；有带入口 `android:process` 的样本 APK 时确认 `manifest` 分支，没有则确认 `default` 是预期；显式传 `:remote` 确认 `explicit`。
+**怎么验证**：用该样本按下面命令省略 `providerProcess`，检查返回 `providerProcess=":script"`、`providerProcessSource="manifest"`；安装后看 `:script` 进程/日志是否加载 Gadget。显式传 `:remote` 时仍应返回 `:remote`/`explicit`。
+
 
 ### #18 `apk_build` 增加 `detail=summary`
 
@@ -558,7 +581,14 @@ clang main.c -O2 -o hello
 ```json
 {"name":"apk_build","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","overwrite":true,"sign":true,"detail":"summary"}}
 ```
+
 **怎么验证**：对同一编辑会话分别用 `detail=full`（默认）和 `detail=summary` 构建，比较返回键集合；summary 不应有完整 `verification`/`signatureSummary`，且 `path/sha256/signed` 必须与 full 一致。`detailNote` 会说明这是精简结果。
+
+**outputName 路径限制（dev-1374）**：`apk_build.outputName` 只接受**纯文件名或绝对路径**；带子目录的相对路径（如 `autojs_crack/_mcp_test/x.apk`）会被拒，报 `outputName 只接受文件名或绝对路径`。要输出到子目录：
+1. 先 `file_create_directory {"path":"autojs_crack/_mcp_test"}`（目录已存在时返回 `created:false`，可安全重试）；
+2. `apk_build` 用绝对路径 `outputName`：`/storage/emulated/0/脚本/autojs_crack/_mcp_test/x.apk`（必须在工具操作根内）。纯文件名会落在操作根，不要写 `../`/符号链接。
+
+**怎么验证**：先直接用相对子目录复现报错；建目录后改绝对路径应成功，返回的 `path` 与传入绝对路径一致。
 
 
 ## 常见错误与修法
@@ -591,6 +621,7 @@ clang main.c -O2 -o hello
 - 大任务：apk_job_start → apk_job_status → apk_job_result（分块拼接其 content，offset=nextOffset）；apk_job_cancel 请求取消，CANCELLING 仍在等待真实 worker 结束，已提交操作可能完成。进程重启后不自动重放写入任务。
 - 主 APK 不包含 JADX/AAPT2 负载。apk_component_status 只查询；apk_component_install 显式下载 jadx/apk-resources，manifestUrl 可指定清单。当前默认组件在局域网更新服务器的 components/ 下；不在该局域网时需给可访问的清单地址。
 - `apk_decompile_class/method` 使用可选 JADX，Java 仅供分析，不能承诺任意反编译代码能原样重建。offset/maxChars 分页，保留方法锚点。
+- 混淆类被 JADX 改名/内联时仍可能报 `JADX未找到类`；改用 `apk_read_text(locator="dex_method:…")` 直接读 Smali，或去调用方反编译结果里找内联代码；详见 `AIjs-Reverse-Guide.md` 的「Java 阅读流程」。
 - `android_resources_compile` 输入项目目录，自动读 project.json 的 androidResources，默认针对本机实际宿主 sourceDir 编译，原子写 project-res.apk 与 sidecar。自定义 hostApk 只能使用工具目录中的 APK。主机版本或资源变动后重编，不要手改 sidecar 摘要。
 - component_install、decompile、resources_compile 默认返回后台 jobId；确需同步时 background=false。首次生成组件的安装不代表本轮编译探测通过，能力表会标明 verified=false。
 

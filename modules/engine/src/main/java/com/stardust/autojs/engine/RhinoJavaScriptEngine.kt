@@ -210,6 +210,11 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         return topLevelScope
     }
 
+    // 说明：dev-1377 曾把 Packages/java/org/com/... 换成自定义的 AijsJavaPackage（为 `.class` 与任意类静态方法），
+    // 结果 Rhino 在**任何**脚本上都报 `Can't find top level scope for ClassCache.get` —— ClassCache 需要 Rhino
+    // 自己的 top-level package。该改动已回退（K40 dev-1377 实测复现）。需要 `.class` 时用
+    // `java.lang.Class.forName("全限定名")`；静态方法直接用 Rhino 原生的 `Packages.<类>.<方法>`。
+
     fun enterContext(): Context {
         val context = RhinoAndroidHelper(mAndroidContext).enterContext()
         setupContext(context)

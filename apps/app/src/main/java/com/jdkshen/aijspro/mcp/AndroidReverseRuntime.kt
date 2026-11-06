@@ -262,6 +262,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         }
     }
     private fun injectGadget(args:JsonObject,temp:File):JsonObject {
+        val detail=args.tString("detail","full").lowercase()
+        require(detail in setOf("full","summary")){"detail 必须为 full 或 summary"}
         val destination=ToolkitIo.resolve(root,args.tString("outPath"))
         require(!destination.exists()&&destination.parentFile?.isDirectory==true){"outPath 必须为父目录存在的新文件"}
         val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk")
@@ -276,9 +278,11 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         ToolkitArchiveAlignment.align(unsigned)
         val signed=File(temp,"gadget-signed.apk")
         var verification:JsonObject?=null
+        var signerLabel=""
         try {
             val signer=AutoSigningIdentity.signer(temp,"MCP免Root Gadget集成")
             require(signer is KeyStoreApkSigner){"当前签名身份不支持归档签名"}
+            signerLabel=(signer as? KeyStoreApkSigner)?.describe() ?: signer.javaClass.simpleName
             signer.signAlignedArchive(unsigned,signed)
             verification=ToolkitApkVerifier.inspect(signed,null,null)
             require(verification.getAsJsonObject("signature").tBool("verified")){"Gadget APK验签失败"}
@@ -299,23 +303,43 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 }
                 destination.takeIf{it.isFile}
             }.getOrNull() ?: throw failure
+            val reasons=gadgetPartialReasons(verification)
+            if(reasons.size()==0) reasons.add(ToolkitIo.json("check" to "post_injection","status" to "failed",
+                "errorIssueCount" to 1,"messages" to listOf(failure.message ?: failure.javaClass.simpleName)))
+            val schemes=runCatching{ToolkitSignatures.read(target).getAsJsonArray("schemes") ?: JsonArray()}.getOrDefault(JsonArray())
+            val note="可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载"
+            if(detail=="summary") return gadgetSummary(target,info,signerLabel,schemes,true,true,note)
             return ToolkitIo.json(
                 "outputPath" to target.path, "path" to target.path, "size" to target.length(),
                 "sha256" to runCatching{ToolkitIo.sha(target)}.getOrNull(),
                 "signed" to true, "installable" to true, "partial" to true,
+                "signer" to signerLabel, "schemesApplied" to schemes,
+                "partialReasons" to reasons,
                 "installed" to false, "originalSignaturePreserved" to false,
                 "interactionType" to interaction,
                 "providerProcess" to info.get("providerProcess"), "providerProcessSource" to info.get("providerProcessSource"),
-                "note" to ("可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载"),
+                "note" to note,
                 "errorCode" to (failure as? ToolkitException)?.code, "error" to failure.message,
                 "nextActions" to ToolkitIo.json(
                     "install" to "安装该 APK（重签证书与原应用不同，覆盖安装可能失败，必要时保留数据重装）",
                     "verify" to "安装后用 frida_status / logcat 确认 Gadget 是否加载；注入未验证不代表不能加载",
                 ))
         }
+        val partialReasons=gadgetPartialReasons(verification)
+        val verificationStatus=verification?.tString("status","") ?: "unavailable"
+        val onlyWarnings=partialReasons.size()>0 && partialReasons.all{it.asJsonObject.tBool("warningOnly")}
+        val partial=verificationStatus!="valid" && !onlyWarnings
+        val schemes=runCatching{ToolkitSignatures.read(destination).getAsJsonArray("schemes") ?: JsonArray()}.getOrDefault(JsonArray())
+        val note=if(partial)
+            "已重签并可安装；静态验证 status=" + verificationStatus + "，详见 partialReasons/verification；只有 warning 的检查不会造成 partial"
+        else "已重签并通过静态验证；安装/启动仍需实测"
+        if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,note)
+        verification?.add("partialReasons",partialReasons)
         return info.apply {
             addProperty("path",destination.path);addProperty("size",destination.length());addProperty("sha256",ToolkitIo.sha(destination))
-            addProperty("signed",true);addProperty("originalSignaturePreserved",false);addProperty("installed",false)
+            addProperty("signed",true);addProperty("installable",true);addProperty("partial",partial)
+            addProperty("originalSignaturePreserved",false);addProperty("installed",false)
+            addProperty("signer",signerLabel);add("schemesApplied",schemes);add("partialReasons",partialReasons);addProperty("note",note)
             add("verification",verification)
             // 只读对齐诊断（与 apk_build 同源：写入后 align、再由 verifier 复核本地头偏移）
             add("alignment",alignmentDiagnosticsJson(verification,true))
@@ -336,6 +360,33 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 ))
             }
         }
+    }
+    private fun gadgetSummary(apk:File,info:JsonObject,signer:String,schemes:JsonArray,partial:Boolean,installable:Boolean,note:String):JsonObject =
+        ToolkitIo.json(
+            "path" to apk.path, "size" to apk.length(),
+            "sha256" to runCatching{ToolkitIo.sha(apk)}.getOrNull(),
+            "signed" to true, "signer" to signer, "schemesApplied" to schemes,
+            "providerProcess" to info.get("providerProcess"), "providerProcessSource" to info.get("providerProcessSource"),
+            "partial" to partial, "installable" to installable, "note" to note,
+        )
+    private fun gadgetPartialReasons(verification:JsonObject?):JsonArray {
+        val reasons=JsonArray()
+        if(verification==null) return reasons
+        val checks=verification.getAsJsonObject("checks")
+        checks?.entrySet()?.forEach { (name,value) ->
+            val status=value.asJsonObject.tString("status","")
+            if(status!="valid"){
+                val section=verification.getAsJsonObject(name)
+                val errors=section?.getAsJsonArray("issues")?.map{it.asJsonObject}?.filter{it.tString("severity","")=="error"} ?: emptyList()
+                reasons.add(ToolkitIo.json("check" to name,"status" to status,
+                    "errorIssueCount" to errors.size,"warningOnly" to errors.isEmpty(),
+                    "errorCodes" to errors.map{it.tString("code","")}.filter{it.isNotEmpty()}.distinct(),
+                    "messages" to errors.map{it.tString("message","")}.filter{it.isNotEmpty()}.take(5)))
+            }
+        }
+        if(reasons.size()==0 && verification.tString("status","")!="valid")
+            reasons.add(ToolkitIo.json("check" to "verification","status" to verification.tString("status",""),"warningOnly" to false))
+        return reasons
     }
     private fun radare(name:String,args:JsonObject,temp:File):JsonObject {
         val c=native("radare2");val input=stage(file(args),temp,"target.bin")

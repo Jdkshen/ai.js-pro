@@ -36,6 +36,7 @@
 
 - 快照/会话：`apk_workspace_open` 建不可变快照（已有 APK 上下文可用 `aijs://current-apk` 取回，没有上下文时先按实际路径打开；已保存工作区用 `aijs://workspace/<id>` 且 `temporary=false`），`apk_session_create` 建写时复制会话。会话不会改源 APK。
 - 先读后改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；DEX 类/方法用 `apk_read_text` 的 `dex_*` 定位符读取文本；`apk_edit_text`/`apk_resource_edit` 原样传回。`apk_edit_text` 新建目标用 `targetVersion="missing"` + 单个 `write_target`。看到“内容已改变”重新读取，不要重试旧参数。
+- 输出路径坑（dev-1374）：`apk_build.outputName` 只接受**纯文件名或绝对路径**，相对子目录（如 `autojs_crack/_mcp_test/x.apk`）会被拒；`apk_inject_gadget.outPath` **不建父目录**，父目录必须已存在。先 `file_create_directory` 建目录，再传绝对路径；详见 Guide「dev-1373 已修」的 #18/#12。
 - 分页：列表/搜索/native/资源 xref 最多 200/页，返回 `nextCursor`，用 `apk_continue` 续页；游标 5 分钟过期且绑定会话 revision，编辑后必须重查。不能把两页拼成一份视图。
 - 检查/构建：先 `apk_session_check(runBuildChecks=true)`，再 `apk_build`；构建会再检查，失败不导出。默认未签名；`sign=true` 用本机 AI.js Pro 身份重签并移除原签名。`apk_read_signature` 只读 V1/V2/V3/V3.1 证书元数据，`verified=false`，不是验签。
 - 搜索/正则：搜索和文件替换使用 Java `java.util.regex`（支持环视/反向引用），每个 matcher 默认 750ms、最多 8M 字符访问，并受 3s/8s 总预算和中断检查约束；超预算报 `REGEX_BUDGET_EXCEEDED`。先加 prefix/缩小目标，别用灾难性回溯。
@@ -59,45 +60,61 @@
 | 9 | dex locator 被拒 | 本地 DEX 定位符需要 JVM 描述符 | `dex_class:Lcom/example/Foo;` |
 | 10 | 中文文件名变乱码 | JS 里逐字符拼 UTF-8 | `new java.lang.String(bytes,'UTF-8')` 或设备端 `cp` 改名 |
 | 11 | 文档里的长度/字节序对不上 | 旧文档未复核（如 64 vs 72 字节） | 先实测 |
-| 12 | try/catch 抓不到 Java `Error`（如 `UnsatisfiedLinkError`），脚本直接 FAILED（.4 实战反馈） | Java `Error` 经引擎桥接不保证变成可捕获的 JS 异常；Rhino 实测 catch 不执行 | 不要用 try/catch 探测可加载性；先 `files.exists/canRead`、ABI/依赖检查，再 `System.load`；失败让任务报错并记录原文 |
+| 12 | try/catch 抓不到 Java `Error`（旧版本 dev-1373 及之前，反馈 #16）；dev-1374 起已修 | 旧 Rhino 不捕获 Error；dev-1374 起在 Java 调用边界启用 feature13，普通异常和 Error 均可 catch（`OutOfMemoryError`/`ThreadDeath` 也会被放开） | 当前版本 catch 可用于记录；仍先 `files.exists`/`java.io.File` 检查、用 `java.lang.System.load(绝对路径)`，不要只用 catch 判断可加载性 |
 | 13 | `System.loadLibrary("foo")` 找不到自己拷进来的 SO（.4 实战反馈） | `loadLibrary` 只查系统/Java library path，不接受绝对路径；SO 需要绝对路径加载 | 用 `java.lang.System.load("/绝对路径/libfoo.so")`；文件放当前进程可读且 SELinux 允许执行的位置（`/data/local/tmp` 能否加载随 ROM，先验证；共享存储 `/sdcard` 通常不可执行），ABI 必须匹配 |
 | 14 | `pm install -r /storage/...apk` 报 `No packages staged`/读取失败（.4 实战反馈） | FUSE `/storage` 不能直接喂 PackageManager；app UID 也写不了 `/data/local/tmp` | 先用 `shell_capabilities` 确认 cp/pm 后端；用 shizuku/root shell 先 `cp` 到 `/data/local/tmp`，再 `pm install -r`；PC 用 `adb push`；详见 Guide「安装测试包」 |
-| 15 | 反馈 #14：`Math.abs.invoke(null, 5)` 报 `argument 1 has type int, got java.lang.Double`（dev-1373 及之前） | JS Number 是 `java.lang.Double`，反射 `invoke` 没自动收窄到 primitive `int` | 当前先传 `new java.lang.Integer(v)`（long/boolean/char 用对应包装类）；队友修复后可直接传 Number，以 `get_status.build`/实测为准 |
+| 15 | 反馈 #14：`Math.abs.invoke(null, 5)` 在 Rhino 里不是 Method（旧版还报 `argument 1 has type int, got java.lang.Double`） | Rhino 没有全局 `System`；`Math.abs` 是 JS 函数，不是 `Method`；dev-1373 及之前也没按形参收窄 | 用 `java.lang.Class.forName("java.lang.Math").getDeclaredMethods()` 取 `abs(int)`，再 `.invoke(null, 5)`；dev-1374+ 直接传 Number 返回 5；旧版才用 `new java.lang.Integer(5)`；不要写 `Math.abs.invoke` |
 
 > 注意：Java 的 `System.loadLibrary` 只接受库名、不接受路径；自定义 SO 必须用 `System.load(绝对路径)`。上面 12–15 是 `.4` 云镜实战要求补的已知坑。
 
 **怎么验证（.4 实战反馈条目 12–15；只做一次性探针，生产脚本不要靠 catch 兜底）：**
 
-- 12：一次性脚本执行 `try { java.lang.System.load("/data/local/tmp/__absent__.so"); } catch (e) { console.log("CAUGHT"); }` → 预期看不到 CAUGHT、任务 FAILED；记录 error 原文。正式流程先 `new java.io.File(path).isFile()` / `files.exists` 再加载。
+- 12：dev-1374+ 执行 `try { java.lang.System.load("/data/local/tmp/__absent__.so"); } catch (e) { console.log("CAUGHT class=" + e.getClass().getName()); }` → 预期 `CAUGHT class=java.lang.UnsatisfiedLinkError`；旧版 ≤dev-1373 不打印且任务 FAILED；去掉 try/catch 仍 FAILED。正式流程先 `new java.io.File(path).isFile()` / `files.exists` 再加载。
 - 13：把测试 SO 放到应用私有目录或已验证可加载的位置，`java.lang.System.load(绝对路径)` 后调用一个导出符号；再对比 `System.loadLibrary` 的报错，确认不是同名系统库。若 `/data/local/tmp` 被 SELinux 拒绝，改应用私有目录/资产解压路径，不要放 `/sdcard`。
 - 14：先复现 `pm install -r /storage/...` 失败；再按 Guide「安装测试包」用 `backend="shizuku"` 的 `cp` + `pm install -r /data/local/tmp/...` 成功，并用 `pm path`/`dumpsys package | grep versionName` 核对。
-- 15：在 Rhino/Node 里取 `java.lang.Math` 的 `abs(int)` Method，先 `invoke(null, 5)` 复现类型错误；再用 `invoke(null, new java.lang.Integer(5))` 成功。队友修复后重跑直接传 Number 的版本，确认是否可以去掉包装。
+- 15：在 Rhino 里用 `java.lang.Class.forName("java.lang.Math").getDeclaredMethods()` 找到参数为 `int` 的 `abs`，再 `abs.invoke(null, 5)`；dev-1374+ 预期输出 `5`（旧版 dev-1373 及之前才用 `new java.lang.Integer(5)` 包装）；`Math.abs.invoke` 会拿到 JS 函数，不是 Method。
+
+**#14 可跑骨架（Rhino，dev-1374+）：**
+```js
+var methods = java.lang.Class.forName("java.lang.Math").getDeclaredMethods();
+var abs = null;
+for (var i = 0; i < methods.length; i++) {
+  var m = methods[i];
+  if (m.getName() === "abs" && m.getParameterTypes().length === 1 &&
+      String(m.getParameterTypes()[0].getName()) === "int") { abs = m; break; }
+}
+if (!abs) throw new Error("Math.abs(int) not found");
+console.log(abs.invoke(null, 5)); // dev-1374+ 应为 5
+```
 
 ## #16 Java 异常 vs Java Error：try/catch 边界（.4 实战反馈）
 
-> 来源：`.4` 云镜会话要求写进已知坑。当前版本（dev-1373 实测）的边界如下，不要把「Java 异常能 catch」和「Java Error 也能 catch」混为一谈。
+> 来源：`.4` 云镜会话；dev-1374 已在 Rhino 修复 Error 捕获（不是全局放开 Java access，见下）。
 
-- **普通 Java 异常**（`NullPointerException`/`IllegalArgumentException`/`IOException` 等）可以被 JS `try/catch` 捕获，catch 里能正常拿到并继续。
-- **Java `Error`**（如 `UnsatisfiedLinkError`、`NoClassDefFoundError`、`StackOverflowError`）当前会**穿透** JS `try/catch`，脚本直接 FAILED；catch 分支不会执行，不要用 try/catch 探测 SO 能否加载。
-- 识别方法：任务 FAILED，error/log 出现 `java.lang.UnsatisfiedLinkError`（或其它 Error 类名），同时没有你自己的 catch 日志。
-- 规避：加载前先用 `java.io.File`/`files.exists` 检查路径、大小、ABI/依赖；真正加载用 `java.lang.System.load(绝对路径)`（`System.loadLibrary` 只接受库名，不接受路径）；失败就让任务报错并保留原文，不要假装 catch 到了。
+- **dev-1374 起**：普通 Java 异常（`NullPointerException`/`IllegalArgumentException`/`IOException` 等）可被 JS `try/catch` 捕获；`UnsatisfiedLinkError` 等 `Error` 也可被 catch（Rhino 会在 catch 里给出 `CAUGHT class=java.lang.UnsatisfiedLinkError`）。
+- **旧版本（dev-1373 及之前）**：`Error` 会穿透 try/catch，脚本直接 FAILED；若在旧版复现，别把“没进 catch”误判为参数错误。
+- **边界（dev-1374 取舍）**：Rhino 的 feature 是 Java 调用边界整体开关，`OutOfMemoryError`/`ThreadDeath` 也会变成可 catch；要单独排除需改 Rhino 内部，本轮未做。Node/QuickJS 是代码审计结论（本来可 catch），未单独真机验。
+- **规避**：不要只用 catch 判断 SO 能否加载；先 `java.io.File`/`files.exists` 检查路径、大小、ABI/依赖，再用 `java.lang.System.load(绝对路径)`（`System.loadLibrary` 只接受库名、不接受路径）；catch 只用于记录错误。Rhino 没有全局 `System`，必须写 `java.lang.System`。
 
-**怎么验证（一次性脚本，故意失败；生产脚本不要这样探测）：**
+**怎么验证（dev-1374 起）**：
 ```js
-// 1) 普通 Java 异常应当可被 catch
+// 1) 普通 Java 异常可 catch
 try { throw new java.lang.IllegalArgumentException("normal"); } catch (e) { console.log("EXCEPTION_CAUGHT: " + e); }
 
-// 2) Java Error 预期穿透：任务 FAILED，且看不到 ERROR_CAUGHT
-try { java.lang.System.load("/data/local/tmp/__absent__.so"); } catch (e) { console.log("ERROR_CAUGHT: " + e); }
+// 2) dev-1374 起 Error 可 catch；旧版这里不执行
+try { java.lang.System.load("/data/local/tmp/__absent__.so"); } catch (e) { console.log("CAUGHT class=" + e.getClass().getName()); }
+// 期望 dev-1374+ 看到 CAUGHT class=java.lang.UnsatisfiedLinkError
 
-// 3) 正确做法：先检查文件，再绝对路径加载
+// 3) 去掉 try/catch 仍应 FAILED（证明错误真实存在，只是可捕获）
+// java.lang.System.load("/data/local/tmp/__absent__.so");
+
+// 4) 正确做法：先检查文件，再绝对路径加载
 var f = new java.io.File("/data/local/tmp/libfoo.so");
 if (!f.isFile()) throw new Error("SO 不存在: " + f.getAbsolutePath());
 java.lang.System.load(f.getAbsolutePath());
 ```
 
-验证结果：第 1 段打印 `EXCEPTION_CAUGHT`；第 2 段不打印 `ERROR_CAUGHT`、任务 FAILED 并带 `UnsatisfiedLinkError`；第 3 段对真实存在的 SO 才继续执行。
-
+验证结果：dev-1374+ 第 1 段打印 `EXCEPTION_CAUGHT`、第 2 段打印 `CAUGHT class=java.lang.UnsatisfiedLinkError`；第 3 段不 catch 时任务 FAILED；第 4 段只对真实存在的 SO 继续执行。旧版（≤dev-1373）第 2 段不打印，任务 FAILED。
 
 ## 附录 B · 黄金流程：在外部进程里「借」目标 App 的解密函数
 

@@ -176,6 +176,20 @@ final class QuickJsJavaInterop {
         if (receiver instanceof Method && "invoke".equals(name)) {
             return callReflective((Method) receiver, rawArgs);
         }
+        if (receiver instanceof Class && "java.lang.reflect.Array".equals(((Class<?>) receiver).getName())
+                && ("set".equals(name) || "get".equals(name))) {
+            if ("set".equals(name) && rawArgs.size() == 3) {
+                JavaReflectiveInvocation.arraySet(reflectiveValue(rawArgs.get(0)),
+                        reflectiveValue(rawArgs.get(1)), reflectiveValue(rawArgs.get(2)));
+                return encode(null);
+            }
+            if ("get".equals(name) && rawArgs.size() == 2) {
+                return encode(JavaReflectiveInvocation.arrayGet(reflectiveValue(rawArgs.get(0)),
+                        reflectiveValue(rawArgs.get(1))));
+            }
+            throw new InvocationFailure("java.lang.reflect.Array." + name
+                    + " 参数个数不匹配（set 需要 array,index,value；get 需要 array,index）");
+        }
         List<Method> candidates = methodsNamed(type, name);
         if (candidates.isEmpty()) {
             Field field = findField(type, name);

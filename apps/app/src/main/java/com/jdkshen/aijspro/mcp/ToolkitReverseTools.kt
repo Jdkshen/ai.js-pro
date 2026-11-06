@@ -87,7 +87,8 @@ internal object ToolkitReverseTools {
             "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))
                 field("interactionType",ToolkitIo.json("type" to "string","enum" to listOf("listen","script"),"default" to "listen","description" to "listen=监听127.0.0.1端口并返回 endpoint/token；script=启动即加载脚本（不碰网络，跨UID SELinux 拦不到），返回 interaction=script + scriptPath，不生成 endpoint/token"))
                 field("scriptPath",str("script 模式下目标应用可读的脚本绝对路径"))
-                field("providerProcess",str("可选：显式指定注入 Provider 的 android:process。省略时自动读 MAIN+LAUNCHER 入口 activity/activity-alias 的 android:process；入口未声明则用 application 的 android:process；都没有=默认进程。返回 providerProcessSource=explicit|manifest|default"))}
+                field("providerProcess",str("可选：显式指定注入 Provider 的 android:process。省略时自动读 MAIN+LAUNCHER 入口 activity/activity-alias 的 android:process；入口未声明则用 application 的 android:process；都没有=默认进程。返回 providerProcessSource=explicit|manifest|default"))
+                field("detail",ToolkitIo.json("type" to "string","enum" to listOf("full","summary"),"default" to "full","description" to "返回体详细程度；可省略，省略时=full。summary 只回 path/size/sha256/signed/signer/schemesApplied/providerProcess/providerProcessSource/partial/installable/note；full 保留 verification/alignment/nextActions 等全部诊断"))}
             "artifact_fingerprint","native_analyze"->path()
             "native_functions"->{path();page()}
             "native_function_detail"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)

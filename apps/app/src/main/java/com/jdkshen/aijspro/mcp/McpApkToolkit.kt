@@ -480,8 +480,13 @@ internal class McpApkToolkit(
         val backend=runtime?:throw ToolkitException("COMPONENT_UNAVAILABLE","反编译组件后端未接入")
         val locator=args.tString("locator");val (_,dex)=dexFor(workspace,session,locator,args.tString("dexEntry",""));dex.find(locator)
         val input=if(session.isEmpty())snapshot(workspace)else File(sessionDir(workspace,session),"decompile-${ToolkitIo.fresh()}.apk")
+        // JADX 组件的 maxChars 默认只有 16 KiB；调用方不传时一次性只返回 16 KiB，
+        // 结果落盘也就只有这一段。这里在工具边界补足组件允许的最大窗口（200000），
+        // offset/nextOffset/hasMore 分页仍由组件和 apk_job_result 保持。
+        val effectiveArgs=args.deepCopy()
+        if(!effectiveArgs.has("maxChars")) effectiveArgs.addProperty("maxChars",200000)
         try{if(session.isNotEmpty())writeUnsigned(workspace,session,entries(workspace,session),input)
-            return backend.decompile(input,locator,args).apply{addProperty("revision",revision(workspace,session))}
+            return backend.decompile(input,locator,effectiveArgs).apply{addProperty("revision",revision(workspace,session))}
         }finally{if(session.isNotEmpty())input.delete()}
     }
     private fun listAvailable(args: JsonObject): JsonObject {
