@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.mcp
 
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 
 /**
@@ -27,6 +28,14 @@ internal object McpLimits {
         addProperty("maxProjectEntries", MAX_PROJECT_ENTRIES)
         addProperty("maxProjectBytes", MAX_PROJECT_BYTES)
         addProperty("childHeapMb", CHILD_HEAP_MB)
+        // 用户反馈（dev-1365 §三.6）：jadx 实测撞在 OutOfMemoryError: target footprint 268435456（256MB），
+        // 与这里报的 2048 不一致 —— 因为该值只代表**本应用拼装子进程命令时传入的 -Xmx**，
+        // 子工具若自己再起一个 JVM / 自带脚本覆盖 -Xmx，实际堆就不是这个数。用 appliesTo + 观测值说清，
+        // 不要让人以为“所有子进程都是 2048m”。
+        add("childHeapMbAppliesTo", JsonArray().apply { add("apktool"); add("jadx（app_process 直接加载时的命令行 -Xmx）") })
+        addProperty("childHeapMbNote", "这是本应用传给子进程的 -Xmx（VM 选项，放在 /system/bin 之前）。" +
+            "若子工具自行再启动 JVM 或用自带脚本覆盖 -Xmx，实际堆可能更小 —— 已知观测：jadx 曾以 268435456（256MB）为上限报 OutOfMemoryError。")
+        add("observedChildHeapBytes", JsonObject().apply { addProperty("jadx", 268435456L) })
         addProperty("maxTimeoutSeconds", MAX_TIMEOUT_SECONDS)
         addProperty("note", "工程文件数/展开字节/子进程堆/逆向工具超时上限；改这些常量后重建即可生效，可用本字段核对")
     }

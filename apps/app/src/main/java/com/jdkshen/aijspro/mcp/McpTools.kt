@@ -124,6 +124,11 @@ internal class McpTools(private val context: Context, private val event: (String
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
             if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "工具调用失败", true))
             else rpcError(id, -32602, e.message ?: "Invalid params")
+        } catch (e: ToolkitException) {
+            // 必须先于 IllegalArgumentException 捕获（ToolkitException 是它的子类），否则 code 会被丢成纯文本。
+            event("$eventName · 失败 · ${e.code} · ${e.message.orEmpty().take(100)}")
+            if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "工具调用失败", true, errorCode = e.code, argument = e.argument))
+            else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalArgumentException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
             if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "参数或工作区状态无效", true))
@@ -178,6 +183,9 @@ internal class McpTools(private val context: Context, private val event: (String
             "- wait 超时返回 timedOut=true，任务仍可能在跑：用 wait_execution/get_execution 继续，不要当成成功。",
             "- 脚本工程修改：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply。独立文件工具 file_* 通过 targetVersion 防旧写，直接作用于操作目录；APK 工具先建不可变快照/编辑会话，再导出新包。",
             "- 文件与APK工具全部由 AI.js Pro 自己实现，不需要 MT。先 toolkit_status；文件/ZIP用 file_*/zip_*，APK先 apk_list_available_apks → apk_workspace_open → apk_session_create。读取后用返回的 locator/targetVersion 修改，apk_session_check 后再 apk_build；有 nextCursor 用 apk_continue，修改后重查。签名读取是元数据，不是密码学验签。旧 mt_* 名称仅为本地兼容别名；多架构汇编按需安装终端 C/C++ 组件，能力与限制见 toolkit_status 和本指南。",
+            "- locator 必须带命名空间前缀，缺前缀会被拒：zip_entry:（ZIP 条目）、dex_class:（类）、dex_method:（方法，原始 descriptor）、resource:（资源）。示例：zip_entry:assets/project/main.js、dex_method:LVShell;->open([BLjava/lang/String;Ljava/lang/String;)[B。跨 DEX 同名类用返回的 uniqueLocator（形如 dex_entry:classes.dex!dex_class:…）。apk_workspace_open 只接受 APK 结构（ZIP 魔数 + AndroidManifest.xml）；独立 DEX/SO/ELF/APKS 用 artifact_open（会建 syntheticContainer，artifactType=dex/elf）。",
+            "- job 层错误码：JOB_NOT_FOUND（registry 无该记录）、JOB_EVICTED（结果因保留窗口被淘汰，清单见 apk_job_list.evicted[]，带 code/reason/recordedAt）；service.restarted + service.previousInstance 可直接判定服务是否换过实例，lostByRestart 表示结果因此丢失；tombstoneCount/retention{…} 说明保留策略；storage.metadataAndResultSeparated 表示输出缓存与元数据分开存放。errorCode/errorHint 只在基础设施级失败时填——操作级失败（如 Frida 连不上）时它们为 null，真原因在 reason 字段里，不要因为 errorCode=null 就当成功。",
+            "- 以下返回失败是保护机制生效，不是工具坏了：file_edit_text/file_patch_bytes 的 targetVersion/expectedHex 不一致会直接拒绝写入；binary_transform 的 expectMagic/expectCrc32 不通过会回 verified=false（只说明证据不足，不等于算法或密钥被证伪）；apk_verify 对未签名产出回 verdict=invalid 是预期结果；file_access_diagnose 在无法区分“不存在/不可见”时回 UNCERTAIN 并给 uncertainty 文本，不要当成结论。",
             "- 读取控件/截图需无障碍服务；capture_screen 缩小后坐标按 sourceWidth/scale 换算。",
             "- 手机终端：terminal_exec（backend 默认 app，可选 shizuku）→ terminal_read(offset=nextOffset) → terminal_write/terminal_stop；shell_rish 是 Shizuku 后端的异步兼容入口，同样返回 jobId，不阻塞等待。app 为普通应用 UID，shizuku 需服务已运行并授权且不回退；两者共用同一任务表。先 get_build_tools 确认工具链，非 PTY。",
             "- 冷进程：换 .so / 做对照实验前先停止自己拥有的执行；全部停止需用户任务范围包含其他运行任务。脚本进程会复用，已 dlopen 的库和 isAvailable() 结果会粘住；不要在其他任务运行时擅自重启整个应用。",
@@ -396,7 +404,9 @@ internal class McpTools(private val context: Context, private val event: (String
                 toolJson(terminals.write(args.string("jobId"), if (args.has("input")) args.string("input") else "", eof))
             }
             "terminal_stop" -> toolJson(terminals.stop(args.string("jobId")))
-            "terminal_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { terminals.list().forEach { add(it) } }) })
+            // 反馈 #8：terminal_* 之前没有 job 层错误码/保留/所有权语义。
+            // listReport() 带 retention / evicted[] / tombstoneCount / ownershipEnforced / service（旧 list() 仍在，供 get_status 计数用）。
+            "terminal_list" -> toolJson(terminals.listReport())
             "shell_rish" -> {
                 requireExecution()
                 require(!args.has("backend")) { "shell_rish 固定使用 shizuku 后端；如需 app 后端请用 terminal_exec" }
@@ -1119,9 +1129,12 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) =
         McpToolSchema.objectSchema(*names, required = required)
     private fun toolJson(json: JsonObject) = toolResult(json.toString()).apply { add("structuredContent", json) }
-    private fun toolResult(text: String, error: Boolean = false) = JsonObject().apply {
+    private fun toolResult(text: String, error: Boolean = false, errorCode: String? = null, argument: String? = null) = JsonObject().apply {
         add("content", JsonArray().apply { add(JsonObject().apply { addProperty("type", "text"); addProperty("text", text) }) })
         if (error) addProperty("isError", true)
+        // 反馈 #8/#11：结构化错误码不能只在正文里；让调用方在不解析文本的情况下也能判定失败类型。
+        if (errorCode != null) addProperty("errorCode", errorCode)
+        if (argument != null) addProperty("argument", argument)
     }
     private fun rpcResult(id: JsonElement?, result: JsonObject) = JsonObject().apply { addProperty("jsonrpc", "2.0"); add("id", id ?: JsonNull.INSTANCE); add("result", result) }
     private fun rpcError(id: JsonElement?, code: Int, message: String) = JsonObject().apply { addProperty("jsonrpc", "2.0"); add("id", id ?: JsonNull.INSTANCE); add("error", JsonObject().apply { addProperty("code", code); addProperty("message", message) }) }

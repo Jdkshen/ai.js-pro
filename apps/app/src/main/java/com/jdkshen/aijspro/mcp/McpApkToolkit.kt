@@ -22,10 +22,27 @@ internal class McpApkToolkit(
     private data class Page(val workspace: String, val session: String, val revision: String, val items: List<JsonObject>, var offset: Int,
                             val kind: String, val metadata: JsonObject, val truncated: Boolean, val limitMax: Int = 200, val at: Long = System.currentTimeMillis())
     private val gson = Gson()
+    /** #5：locator 前缀清单与跨 DEX uniqueLocator 的统一提示；错误和 inputSchema 共用。 */
+    private val locatorHint = "locator 前缀：zip_entry:（如 zip_entry:assets/project/main.js）、" +
+        "dex_class:（如 dex_class:Lcom/example/Foo;）、" +
+        "dex_method:（如 dex_method:Lcom/example/Foo;->bar()V）、" +
+        "resource:（如 resource:0x7f010001）；" +
+        "跨 DEX 同名类请使用搜索结果返回的 uniqueLocator（格式 dex_entry:classes.dex!dex_class:Lcom/example/Foo;）。"
     init { require(store.isDirectory || store.mkdirs()) { "无法创建 APK 工作区目录" } }
     fun definitions(): JsonArray = JsonArray().apply {
         schemas.entrySet().forEach { (name, schema) -> add(ToolkitIo.json("name" to name, "category" to "toolkit", "categoryTitle" to "文件与APK工具",
-            "description" to description(name), "inputSchema" to schema)) }
+            "description" to description(name), "inputSchema" to schemaWithLocatorHint(schema))) }
+    }
+    /** 给含 locator 参数的 inputSchema 补前缀说明；只加 description，不改 type/required/其它约束。 */
+    private fun schemaWithLocatorHint(schema: JsonElement): JsonElement {
+        if (!schema.isJsonObject) return schema
+        val copy = schema.deepCopy()
+        val obj = copy.asJsonObject
+        val locator = obj.getAsJsonObject("properties")?.get("locator")?.takeIf { it.isJsonObject }?.asJsonObject ?: return copy
+        val old = locator.get("description")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: ""
+        if (!old.contains("uniqueLocator")) locator.addProperty("description", if (old.isBlank()) locatorHint else old + "；" + locatorHint)
+        if (!obj.has("description")) obj.addProperty("description", locatorHint)
+        return copy
     }
     fun call(name: String, args: JsonObject): JsonObject {
         val key=args.tString("workspaceId","").ifEmpty { if(name=="apk_continue") pages[args.tString("nextCursor","")]?.workspace?:"catalog" else "catalog" }
@@ -62,7 +79,12 @@ internal class McpApkToolkit(
                 if (session.isNotEmpty()) sessionDir(workspace, session)
                 when (name) {
                     "apk_session_create" -> ToolkitIo.ok(createSession(workspace))
-                    "apk_session_diff" -> page(workspace,session,ToolkitApkSessions.diff(snapshot(workspace),sessionDir(workspace,requiredSession(session))),args.tInt("limit",50,1,200))
+                    "apk_session_diff" -> {
+                        val required = requiredSession(session); val beforeRevision = revision(workspace, required)
+                        val result = page(workspace, required, ToolkitApkSessions.diff(snapshot(workspace), sessionDir(workspace, required)), args.tInt("limit", 50, 1, 200))
+                        result.getAsJsonObject("data").withRevision(workspace, required, beforeRevision)
+                        result
+                    }
                     "apk_session_checkpoint" -> ToolkitIo.ok(ToolkitApkSessions.checkpoint(sessionDir(workspace,requiredSession(session)),args))
                     "apk_session_checkpoints" -> ToolkitIo.ok(ToolkitApkSessions.checkpoints(sessionDir(workspace,requiredSession(session))))
                     "apk_session_rollback" -> ToolkitIo.ok(ToolkitApkSessions.rollback(sessionDir(workspace,requiredSession(session)),args))
@@ -175,6 +197,8 @@ internal class McpApkToolkit(
         "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。"
         "apk_native_disassemble", "apk_native_xref", "apk_native_analyze_control_flow" -> "有界直接指令分析：原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），否则回退 AArch64 常见指令子集；未知指令明确标出，间接引用与完整数据流不作成功保证。"
         "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64、ARM/Thumb、x86/x86-64 指令，expectedHex 防旧数据。常见指令可直接处理，一般汇编可通过可选 C/C++ 组件完成。"
+        "apk_read_text", "apk_read_bytes", "apk_edit_text", "apk_delete_target", "apk_patch_bytes", "apk_copy_entry" ->
+            "读取/编辑 APK 条目、DEX 或资源；$locatorHint"
         else -> "AI.js Pro 本地 APK 工具：${name.removePrefix("apk_").replace('_', ' ')}；使用 tools/list 参数定义，locator 来自列表/搜索，不依赖 MT。"
     }
     /** task-250：当前进程内可用于 GC 保护的活动引用。 */
@@ -486,6 +510,13 @@ internal class McpApkToolkit(
     }
     private fun sessionInfo(workspace: String, session: String) = JsonParser().parse(File(sessionDir(workspace, session), "session.json").readText()).asJsonObject
     private fun revision(workspace: String, session: String): String = if (workspace.isEmpty()) "catalog" else if (session.isEmpty()) workspace(workspace).tString("sha256") else sessionInfo(workspace, session).tString("revision")
+    /** #4：成功返回统一补当前 revision；revisionChanged 表示本次调用后是否与调用前不同（只读工具为 false）。 */
+    private fun JsonObject.withRevision(workspace: String, session: String, before: String): JsonObject {
+        val current = revision(workspace, session)
+        addProperty("revision", current)
+        addProperty("revisionChanged", current != before)
+        return this
+    }
     private fun entries(workspace: String, session: String): List<String> {
         val names = ZipFile(snapshot(workspace)).use { zip -> zip.entries().asSequence().filter { !it.isDirectory }.map { it.name }.toMutableSet() }
         if (session.isNotEmpty()) {
@@ -544,10 +575,13 @@ internal class McpApkToolkit(
     private fun dexes(workspace: String, session: String): Sequence<Pair<String,ToolkitDex>> = entries(workspace, session).asSequence().filter { ToolkitApkTargets.isDex(it) }.map { it to ToolkitDex(raw(workspace, session, it)) }
     private fun dexFor(workspace: String, session: String, locator: String, requestedDex:String=""): Pair<String,ToolkitDex> {
         val found = dexes(workspace, session).filter { (entry, _) -> requestedDex.isEmpty() || requestedDex==entry }.filter { (_, dex) -> dex.classes.any { it.type == dex.type(locator) } }.toList()
-        require(found.size == 1) { if(found.isEmpty()) "DEX 类不存在" else "多个 DEX 含同名类，暂不支持此定位符" }; return found.single()
+        require(found.size == 1) {
+            if(found.isEmpty()) "DEX 类不存在（收到：$locator）。$locatorHint"
+            else "多个 DEX 含同名类（" + found.joinToString { it.first } + "），无法仅凭裸 locator 消歧；$locatorHint"
+        }; return found.single()
     }
     private fun entryLocator(locator: String): String {
-        require(locator.startsWith("zip_entry:")) { "需要 zip_entry: 定位符" }
+        require(locator.startsWith("zip_entry:")) { "需要带命名空间前缀的 locator（收到：$locator）。$locatorHint" }
         return ToolkitIo.entry(locator.removePrefix("zip_entry:")).also { require(!it.endsWith('/')) { "目录不是普通文件目标" } }
     }
     private fun text(workspace: String, session: String, locator: String): String = when {
@@ -692,6 +726,7 @@ internal class McpApkToolkit(
         write(workspace, session, mapOf("resources.arsc" to resources.bytes())); return ToolkitIo.json("items" to results, "results" to results, "savedToSession" to true)
     }
     private fun editText(workspace: String, session: String, args: JsonObject): JsonObject {
+        val beforeRevision = revision(workspace, session)
         val locator = args.tString("locator"); val version = args.tString("targetVersion")
         require(!locator.startsWith("dex_field:")) { "dex_field 只读" }
         val names = entries(workspace, session)
@@ -726,8 +761,10 @@ internal class McpApkToolkit(
         write(workspace, session, changes, classChange = if(dexTarget) locator.substringAfter(':').substringBefore("->") to if(missing) "added" else "changed" else null)
         return ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "locator" to locator,
             "targetVersion" to next, "newTargetVersion" to next, "savedToSession" to true)
+            .withRevision(workspace, session, beforeRevision)
     }
     private fun deleteTarget(workspace: String, session: String, args: JsonObject): JsonObject {
+        val beforeRevision = revision(workspace, session)
         val locator = args.tString("locator")
         if(locator.startsWith("dex_")) {
             val (entry, dex) = dexFor(workspace, session, locator)
@@ -742,8 +779,10 @@ internal class McpApkToolkit(
             write(workspace, session, emptyMap(), setOf(entry))
         }
         return ToolkitIo.json("deleted" to true, "locator" to locator)
+            .withRevision(workspace, session, beforeRevision)
     }
     private fun patchBytes(workspace: String, session: String, args: JsonObject): JsonObject {
+        val beforeRevision = revision(workspace, session)
         val entry = entryLocator(args.tString("locator")); val bytes = raw(workspace, session, entry)
         ToolkitApkTargets.ordinary(entry, bytes)
         val patches = args.getAsJsonArray("patches") ?: error("缺少 patches"); require(patches.size() in 1..200)
@@ -752,7 +791,9 @@ internal class McpApkToolkit(
             require(before.isNotEmpty() && before.size == after.size && before.size <= bytes.size - start) { "原始字节补丁必须等长且不越界" }
             val range = start until start + before.size; require(ranges.none { it.first <= range.last && range.first <= it.last }) { "补丁范围重叠" }; ranges.add(range)
             require(bytes.copyOfRange(start, start + before.size).contentEquals(before)) { "原始字节不匹配" }; after.copyInto(bytes, start)
-        }; write(workspace, session, mapOf(entry to bytes)); return ToolkitIo.json("locator" to "zip_entry:$entry", "targetVersion" to ToolkitIo.version(bytes), "patched" to true)
+        }; write(workspace, session, mapOf(entry to bytes))
+        return ToolkitIo.json("locator" to "zip_entry:$entry", "targetVersion" to ToolkitIo.version(bytes), "patched" to true)
+            .withRevision(workspace, session, beforeRevision)
     }
     private fun elf(workspace: String, session: String, args: JsonObject) = ToolkitElf(raw(workspace, session, entryLocator(args.tString("locator"))))
     private fun patchNativeString(workspace: String, session: String, args: JsonObject): JsonObject {
@@ -794,6 +835,7 @@ internal class McpApkToolkit(
         return page(workspace, session, items, args.tInt("limit", 50, 1, 200), partial)
     }
     private fun check(workspace: String, session: String, run: Boolean): JsonObject {
+        val beforeRevision = revision(workspace, session)
         val info = sessionInfo(workspace, session); val changed = info.getAsJsonObject("changedEntries").keySet().toSet(); val failures = ArrayList<JsonObject>()
         val names = entries(workspace, session).toSet()
         val base = ZipFile(snapshot(workspace)).use { it.entries().asSequence().map { entry -> entry.name }.toSet() }
@@ -837,6 +879,7 @@ internal class McpApkToolkit(
             "classCountsComplete" to completeCounts, "addedZipEntries" to changed.filter { it !in base },
             "changedZipEntries" to changed.filter { it in base }, "deletedZipEntries" to deleted,
             "note" to "所有语义编辑先编译再原子保存；结构检查不保证应用业务行为、安装性或原签名兼容")
+            .withRevision(workspace, session, beforeRevision)
     }
     private fun build(workspace: String, session: String, args: JsonObject): JsonObject {
         require(workspace(workspace).tString("artifactType","apk")=="apk") { "此工作区不是APK；独立文件使用artifact_export，分包请先选择成员" }
@@ -1056,6 +1099,7 @@ internal class McpApkToolkit(
         else ZipFile(snapshot(workspace)).use { zip -> val item = zip.getEntry(entry) ?: error("条目不存在"); zip.getInputStream(item).use(consume) }
     }
     private fun copyEntry(workspace: String, session: String, args: JsonObject): JsonObject {
+        val beforeRevision = revision(workspace, session)
         val entry = entryLocator(args.tString("locator")); val local = ToolkitIo.resolve(root, args.tString("localPath")); val overwrite = args.tBool("overwrite")
         when(args.tString("direction")) {
             "workspace_to_local" -> {
@@ -1079,6 +1123,7 @@ internal class McpApkToolkit(
             }
             else -> error("复制方向无效")
         }; return ToolkitIo.json("copied" to true, "locator" to "zip_entry:$entry", "localPath" to local.path)
+            .withRevision(workspace, session, beforeRevision)
     }
     private fun prefix(workspace: String, session: String, entry: String, max: Int): ByteArray {
         var value = byteArrayOf()

@@ -3,6 +3,8 @@ package com.jdkshen.aijspro.mcp
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.jdkshen.aijspro.Pref
+import com.stardust.app.GlobalAppContext
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
@@ -23,6 +25,8 @@ import kotlin.concurrent.withLock
  * - runtime:0x1234 / runtime_address:0x1234 / r:0x1234：runtime
  *
  * 分析覆盖层只用于分析（analysisOnly=true），不得流入构建产物或回写源文件。
+ * open 会先读取 sourcePath 的实际 SHA-256；与入参不一致直接抛 ANALYSIS_STALE_INPUT 且不建会话。
+ * close 把 statePath 归档为 archive-<sessionId>.json；同 sha256 重开时恢复 functions/types/noreturns/overlays。
  * 同一 sourceSha256 可复用上下文；同一 sourcePath 输入哈希变化时旧会话标记 stale，
  * 任何旧地址/状态操作抛 ANALYSIS_STALE_INPUT。
  *
@@ -120,40 +124,55 @@ internal class ToolkitNativeAnalysis(
         abi: String?,
         requestedSession: String? = null,
     ): JsonObject = lock.withLock {
-        val path = normalizeSourcePath(sourcePath)
-        val sha = normalizeSha(sourceSha256)
+        // #2：先对真实文件算哈希，再决定是否建/复用会话；绝不能把入参当实测值回显。
+        val input = resolveSourceFile(sourcePath)
+        val expectedSha = normalizeSha(sourceSha256)
+        val actualSha = readFileSha(input)
+        if (actualSha != expectedSha) throw staleHash(expectedSha, actualSha)
+        val path = input.path
         val safeAbi = normalizeAbi(abi)
         val requested = requestedSession?.let { normalizeSessionId(it) }
         ensureIndex()
-        invalidateChangedSource(path, sha, requested)
+        invalidateChangedSource(path, actualSha, requested)
+
         val requestedEntry = requested?.let { index[it] }
-        if (requestedEntry != null) {
-            val existing = loadSessionLocked(requestedEntry.sessionId)
-            if (existing.sourceSha256 != sha) {
-                throw staleInput(requestedEntry.sessionId)
-            }
-            if (safeAbi != null && existing.abi != null && existing.abi != safeAbi) {
-                throw ToolkitException(
-                    "ANALYSIS_ABI_MISMATCH",
-                    "会话 " + existing.sessionId + " 的 ABI 为 " + existing.abi + "，与请求的 " + safeAbi + " 不一致",
-                    "abi",
-                )
-            }
+        if (requested != null && requestedEntry != null) {
+            val existing = loadSessionLocked(requested)
+            if (existing.sourceSha256 != actualSha) throw staleInput(requested)
+            requireAbi(existing, safeAbi)
             existing.sourcePath = path
             touch(existing)
             return openJson(existing, reused = true)
         }
 
+        // #3：close 后索引已移除，但 statePath 归档保留；按哈希读回，而不是静默新建。
+        if (requested != null && requestedEntry == null) {
+            val archive = listOf(stateFile(actualSha.take(16), requested), archiveFile(actualSha.take(16), requested))
+                .firstOrNull { it.isFile }
+            if (archive != null) {
+                try {
+                    val restored = restoreSession(archive, actualSha, requested)
+                    requireAbi(restored, safeAbi)
+                    promoteArchive(archive, actualSha.take(16), restored.sessionId)
+                    restored.sourcePath = path
+                    touch(restored)
+                    return openJson(restored, reused = true, restored = true, restoredFrom = archive.path)
+                } catch (failure: Exception) {
+                    return createNewSession(path, actualSha, safeAbi, requested, failure.message)
+                }
+            }
+        }
+
         if (requested == null) {
             val now = clock()
             val reusable = index.values
-                .filter { it.state == "open" && it.expiresAt > now && it.sourceSha256 == sha &&
+                .filter { it.state == "open" && it.expiresAt > now && it.sourceSha256 == actualSha &&
                     (safeAbi == null || it.abi == safeAbi) }
                 .sortedByDescending { it.lastAccessAt }
                 .firstOrNull()
             if (reusable != null) {
                 val existing = loadSessionLocked(reusable.sessionId)
-                if (existing.sourceSha256 == sha) {
+                if (existing.sourceSha256 == actualSha) {
                     existing.sourcePath = path
                     touch(existing)
                     return openJson(existing, reused = true)
@@ -161,6 +180,26 @@ internal class ToolkitNativeAnalysis(
             }
         }
 
+        val archived = if (requested == null) findArchivedSession(actualSha, safeAbi)
+            else ArchiveLookup(null, null, null)
+        if (archived.session != null) {
+            val restored = archived.session
+            archived.file?.let { promoteArchive(it, actualSha.take(16), restored.sessionId) }
+            restored.sourcePath = path
+            touch(restored)
+            return openJson(restored, reused = true, restored = true, restoredFrom = archived.file?.path)
+        }
+
+        return createNewSession(path, actualSha, safeAbi, requested, archived.error)
+    }
+
+    private fun createNewSession(
+        path: String,
+        sha: String,
+        abi: String?,
+        requestedSession: String?,
+        restoreError: String?,
+    ): JsonObject {
         purgeExpiredSilently()
         val now = clock()
         val liveCount = index.values.count { it.state == "open" && it.expiresAt > now }
@@ -171,18 +210,18 @@ internal class ToolkitNativeAnalysis(
                 "maxSessions",
             )
         }
-        val sessionId = requested ?: ToolkitIo.fresh()
+        val sessionId = requestedSession ?: ToolkitIo.fresh()
         val session = Session(
             sessionId = sessionId,
             sourcePath = path,
             sourceSha256 = sha,
             sha16 = sha.take(16),
-            abi = safeAbi,
+            abi = abi,
             createdAt = now,
             lastAccessAt = now,
         )
         persistLocked(session)
-        return openJson(session, reused = false)
+        return openJson(session, reused = false, restored = false, restoreError = restoreError)
     }
 
     fun status(sessionId: String): JsonObject = lock.withLock {
@@ -324,19 +363,35 @@ internal class ToolkitNativeAnalysis(
         val entry = index[id] ?: throw sessionNotFound(id)
         cache.remove(id)
         index.remove(id)
-        val file = stateFile(entry.sha16, id)
-        val releasedBytes = if (file.isFile) file.length() else 0L
-        if (file.exists() && !file.delete()) {
-            throw ToolkitException("ANALYSIS_CLOSE_FAILED", "无法删除会话文件：" + file.path, "sessionId")
-        }
         persistIndexLocked()
+        val file = stateFile(entry.sha16, id)
+        val archive = archiveFile(entry.sha16, id)
+        val releasedBytes = if (file.isFile) file.length() else 0L
+        var archived = false
+        if (file.isFile) {
+            archive.delete()
+            archived = file.renameTo(archive)
+            if (!archived) {
+                // 跨文件系统/异常回退到复制；原 statePath 仍删除，releasedBytes 保持旧语义。
+                file.inputStream().use { input ->
+                    archive.outputStream().use { output -> input.copyTo(output) }
+                }
+                if (!file.delete()) throw ToolkitException("ANALYSIS_CLOSE_FAILED", "无法删除会话文件：" + file.path, "sessionId")
+                archived = true
+            }
+        }
         cleanupSourceDir(entry.sha16)
+        // #3：close 后仍保留归档供同 sha256 重开恢复；旧字段 releasedBytes 仍是原 statePath 字节数，
+        // 新增 archived/archivePath/retainedStateBytes，不改变旧调用方的字段形状。
         return ToolkitIo.json(
             "sessionId" to id,
             "closed" to true,
+            "archived" to archived,
             "analysisOnly" to true,
             "statePath" to file.path,
+            "archivePath" to archive.path,
             "releasedBytes" to releasedBytes,
+            "retainedStateBytes" to if (archived) archive.length() else 0L,
         )
     }
 
@@ -529,6 +584,35 @@ internal class ToolkitNativeAnalysis(
     private fun stateFile(sha16: String, sessionId: String): File =
         File(File(root, sha16), "analysis-" + sessionId + ".json")
 
+    private fun archiveFile(sha16: String, sessionId: String): File =
+        File(File(root, sha16), "archive-" + sessionId + ".json")
+
+    private fun sessionIdFromStateFile(file: File): String? {
+        val name = file.name
+        return when {
+            name.startsWith("analysis-") && name.endsWith(".json") ->
+                name.removePrefix("analysis-").removeSuffix(".json")
+            name.startsWith("archive-") && name.endsWith(".json") ->
+                name.removePrefix("archive-").removeSuffix(".json")
+            else -> null
+        }
+    }
+
+    private fun promoteArchive(file: File, sha16: String, sessionId: String) {
+        if (!file.name.startsWith("archive-")) return
+        val target = stateFile(sha16, sessionId)
+        if (target.exists() && !target.delete()) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "无法清理旧 statePath：" + target.path)
+        }
+        if (file.renameTo(target)) return
+        file.inputStream().use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+        if (!file.delete()) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "无法提升归档：" + file.path)
+        }
+    }
+
     private fun sessionJson(session: Session): JsonObject {
         val functions = JsonArray()
         for (entry in session.functions.values.sortedBy { it.address.value }) {
@@ -582,6 +666,10 @@ internal class ToolkitNativeAnalysis(
     }
 
     private fun parseSession(value: JsonObject): Session {
+        val schema = value.get("schemaVersion")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt ?: 0
+        if (schema != 1) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "不支持的 state schemaVersion=" + schema + "（支持 1）")
+        }
         val id = value.get("sessionId")?.takeIf { it.isJsonPrimitive }?.asString
             ?: throw ToolkitException("ANALYSIS_STATE_INVALID", "会话状态缺少 sessionId")
         val path = value.get("sourcePath")?.takeIf { it.isJsonPrimitive }?.asString ?: ""
@@ -798,6 +886,105 @@ internal class ToolkitNativeAnalysis(
     private fun expiresAt(session: Session): Long = session.lastAccessAt + ttlMillis
     private fun autoName(address: Address): String = "fcn_" + address.value.removePrefix("0x")
 
+    private fun staleHash(expected: String, actual: String): ToolkitException = ToolkitException(
+        "ANALYSIS_STALE_INPUT",
+        "sourceSha256 与文件实际哈希不一致：expected=" + expected.take(16) +
+            "…，actual=" + actual.take(16) + "…；请先用 artifact_fingerprint 取真实哈希后重试",
+        "sha256",
+    )
+
+    private fun requireAbi(session: Session, requestedAbi: String?) {
+        if (requestedAbi != null && session.abi != null && session.abi != requestedAbi) {
+            throw ToolkitException(
+                "ANALYSIS_ABI_MISMATCH",
+                "会话 " + session.sessionId + " 的 ABI 为 " + session.abi + "，与请求的 " + requestedAbi + " 不一致",
+                "abi",
+            )
+        }
+    }
+
+    private fun resolveSourceFile(value: String): File {
+        val path = normalizeSourcePath(value)
+        val candidate = try {
+            if (File(path).isAbsolute) File(path) else ToolkitIo.resolve(defaultOperationRoot(), path)
+        } catch (failure: Exception) {
+            throw ToolkitException("ANALYSIS_INPUT_INVALID", "sourcePath 解析失败：" +
+                (failure.message ?: failure.javaClass.simpleName), "path")
+        }
+        val canonical = try {
+            candidate.canonicalFile
+        } catch (failure: Exception) {
+            throw ToolkitException("ANALYSIS_INPUT_INVALID", "sourcePath 规范化失败：" +
+                (failure.message ?: failure.javaClass.simpleName), "path")
+        }
+        if (!canonical.isFile || !canonical.canRead()) {
+            throw ToolkitException("ANALYSIS_INPUT_INVALID", "sourcePath 不是可读文件：" + path, "path")
+        }
+        return canonical
+    }
+
+    /** 生产环境用与 McpTools 相同的 operation root；绝对路径不触发这里，保持 JVM 测试可注入临时文件。 */
+    private fun defaultOperationRoot(): File {
+        val scriptRoot = File(Pref.getScriptDirPath())
+        val operation = runCatching { McpSettings.operationPath(GlobalAppContext.get()) }.getOrDefault("")
+        return (if (operation.isBlank()) scriptRoot else File(scriptRoot, operation)).canonicalFile
+    }
+
+    private fun readFileSha(file: File): String = try {
+        ToolkitIo.sha(file)
+    } catch (failure: Exception) {
+        throw ToolkitException("ANALYSIS_INPUT_INVALID", "无法读取 sourcePath 哈希：" +
+            (failure.message ?: failure.javaClass.simpleName), "path")
+    }
+
+    private class ArchiveLookup(val session: Session?, val file: File?, val error: String?)
+
+    private fun restoreSession(file: File, expectedSha: String, expectedId: String?): Session {
+        val parsed = try {
+            JsonParser().parse(file.readText(Charsets.UTF_8)).asJsonObject
+        } catch (failure: Exception) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "状态归档不是有效 JSON：" + file.name)
+        }
+        val session = parseSession(parsed)
+        if (session.sourceSha256 != expectedSha) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "状态归档哈希与当前输入不一致：" + file.name)
+        }
+        if (session.stale) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "状态归档已 stale，不能恢复：" + file.name)
+        }
+        if (expectedId != null && session.sessionId != expectedId) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "状态归档 sessionId 不匹配：" + file.name)
+        }
+        val expectedFileId = sessionIdFromStateFile(file)
+        if (expectedFileId == null || expectedFileId != session.sessionId) {
+            throw ToolkitException("ANALYSIS_STATE_INVALID", "状态归档文件名与 sessionId 不匹配：" + file.name)
+        }
+        return session
+    }
+
+    private fun findArchivedSession(sha: String, safeAbi: String?): ArchiveLookup {
+        val dir = File(root, sha.take(16))
+        val files = dir.listFiles { file ->
+            file.isFile && (file.name.startsWith("analysis-") || file.name.startsWith("archive-")) &&
+                file.name.endsWith(".json")
+        }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        var firstError: String? = null
+        for (file in files) {
+            try {
+                val id = sessionIdFromStateFile(file)
+                    ?: throw ToolkitException("ANALYSIS_STATE_INVALID", "状态归档文件名非法：" + file.name)
+                if (!SESSION_ID.matches(id)) throw ToolkitException("ANALYSIS_STATE_INVALID",
+                    "状态归档 sessionId 非法：" + file.name)
+                val session = restoreSession(file, sha, id)
+                if (safeAbi != null && session.abi != safeAbi) continue
+                return ArchiveLookup(session, file, null)
+            } catch (failure: Exception) {
+                if (firstError == null) firstError = failure.message ?: failure.javaClass.simpleName
+            }
+        }
+        return ArchiveLookup(null, null, firstError)
+    }
+
     private fun normalizeSourcePath(value: String): String {
         val path = value.trim()
         if (path.isEmpty() || path.length > MAX_SOURCE_PATH || path.contains('\u0000') ||
@@ -863,9 +1050,18 @@ internal class ToolkitNativeAnalysis(
     // JSON 输出
     // ------------------------------------------------------------------
 
-    private fun openJson(session: Session, reused: Boolean): JsonObject = ToolkitIo.json(
+    private fun openJson(
+        session: Session,
+        reused: Boolean,
+        restored: Boolean = false,
+        restoredFrom: String? = null,
+        restoreError: String? = null,
+    ): JsonObject = ToolkitIo.json(
         "sessionId" to session.sessionId,
         "reused" to reused,
+        "restored" to restored,
+        "restoredFrom" to restoredFrom,
+        "restoreError" to restoreError,
         "status" to "open",
         "state" to "open",
         "sourcePath" to session.sourcePath,
@@ -880,6 +1076,11 @@ internal class ToolkitNativeAnalysis(
         "maxSessions" to maxSessions,
         "maxFunctions" to maxFunctions,
         "maxOverlayBytes" to maxOverlayBytes,
+        "functionCount" to session.functions.size,
+        "typeCount" to session.types.size,
+        "noreturnCount" to session.noreturns.values.count { it.noreturn },
+        "overlayCount" to session.overlays.size,
+        "overlayBytes" to session.overlayBytes,
         "analysisOnly" to true,
         "buildSafe" to false,
         "buildOutputAllowed" to false,

@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.mcp
 
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import java.util.regex.Pattern
 
@@ -7,27 +8,54 @@ import java.util.regex.Pattern
 internal class ToolkitApkSearch(private val entries: List<String>, private val read: (String) -> ByteArray,
     private val resourceTable: () -> ToolkitResources?, private val dexes: () -> Sequence<Pair<String, ToolkitDex>>) {
     data class Result(val hits: List<JsonObject>, val partial: Boolean, val metadata: JsonObject)
+
+    private data class MatchSpec(
+        val mode: String,
+        val pattern: Pattern,
+        val exact: Boolean,
+        val caseSensitive: Boolean,
+        val hint: String,
+    )
+
+    private val TARGETS = listOf("overview", "files", "resource_table_names", "resource_table_values",
+        "resource_table_file_paths", "dex_names", "dex_strings", "dex_string_members", "smali",
+        "native_symbols", "native_strings")
+    private val OVERVIEW_TARGETS = TARGETS.filter { it != "overview" }
+    private val OVERVIEW_TOTAL_MILLIS = 8_000_000_000L
+    private val OVERVIEW_TARGET_MILLIS = 700_000_000L
+    private val OVERVIEW_TARGET_SCANNED = 40_000
+    private val OVERVIEW_TARGET_HITS = 1_500
+    private val OVERVIEW_TOTAL_HITS = 10_000
     fun search(args: JsonObject): Result {
         val target = args.tString("target", "overview")
-        val targets = listOf("overview", "files", "resource_table_names", "resource_table_values", "resource_table_file_paths",
-            "dex_names", "dex_strings", "dex_string_members", "smali", "native_symbols", "native_strings")
-        require(target in targets) { "搜索范围无效" }
+        require(target in TARGETS) { "不支持的搜索 target：$target；支持：" + TARGETS.filter { it != "overview" }.joinToString(",") }
         val query = args.tString("query"); require(query.isNotEmpty() && query.length <= 16384) { "搜索词长度必须为1..16384" }
-        val queryType = args.tString("queryType", "literal"); require(queryType in listOf("literal", "regex"))
-        val matchMode = args.tString("matchMode", "contains"); require(matchMode in listOf("contains", "exact"))
-        require(target != "smali" || matchMode != "exact") { "smali 不支持 exact" }
+        val spec = matchSpec(args, query)
+        require(target != "smali" || !spec.exact) { "smali 不支持 exact" }
         val prefix = args.tString("prefix", ""); require(target != "overview" || prefix.isEmpty()) { "overview 的 prefix 必须为空" }
+        if(target == "overview") return searchOverview(args, spec)
+        return searchSingle(target, args, spec)
+    }
+
+    private fun searchSingle(
+        target: String,
+        args: JsonObject,
+        spec: MatchSpec,
+        deadlineNanos: Long = System.nanoTime() + 8_000_000_000L,
+        maxHits: Int = 10_000,
+        maxScanned: Int = 300_000,
+    ): Result {
+        require(target != "smali" || !spec.exact) { "smali 不支持 exact" }
+        val prefix = args.tString("prefix", "")
         val snippet = args.tInt("snippetMaxChars", 240, 0, 1000)
         val offsets = args.tBool("includeMatchOffsets")
-        val pattern = ToolkitRegex.compile(if(queryType == "literal") Pattern.quote(query) else query,
-            if(args.tBool("caseSensitive")) 0 else Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
+        val pattern = spec.pattern
         val hits = arrayListOf<JsonObject>(); val skipped = arrayListOf<JsonObject>()
         val delivered = linkedMapOf<String, JsonObject>()
         val notSearched = linkedSetOf<String>()
         var scanned = 0; var partial = false
-        val deadline = System.nanoTime() + 8_000_000_000L
         fun available(): Boolean {
-            if(hits.size >= 10000 || scanned >= 300000 || System.nanoTime() > deadline || Thread.currentThread().isInterrupted) {
+            if(hits.size >= maxHits || scanned >= maxScanned || System.nanoTime() > deadlineNanos || Thread.currentThread().isInterrupted) {
                 partial = true; return false
             }
             return true
@@ -37,7 +65,7 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
             if(!available()) return
             scanned++
             val matcher = ToolkitRegex.matcher(pattern, text)
-            val matched = if(matchMode == "exact") ToolkitRegex.matches(matcher) else ToolkitRegex.find(matcher)
+            val matched = if(spec.exact) ToolkitRegex.matches(matcher) else ToolkitRegex.find(matcher)
             if(!matched) return
             val identity = item.tString("locator") + "|" + scope + "|" + matchKind + "|" +
                 (item.get("variant")?.asString ?: "") + "|" + (item.get("nativeLocation")?.toString() ?: "")
@@ -230,7 +258,114 @@ internal class ToolkitApkSearch(private val entries: List<String>, private val r
             }
         }
         if(partial && notSearched.isEmpty()) notSearched.add(target)
-        return Result(hits, partial, ToolkitIo.json("notSearchedTargets" to notSearched, "skippedScopes" to skipped,
-            "filterHint" to ToolkitIo.json("code" to if(hits.isEmpty() && prefix.isNotEmpty()) "PREFIX_FILTER" else "", "message" to if(prefix.isEmpty()) "" else "prefix 按目标类型过滤候选")))
+        val metadata = ToolkitIo.json(
+            "notSearchedTargets" to notSearched,
+            "skippedScopes" to skipped,
+            "filterHint" to ToolkitIo.json("code" to if(hits.isEmpty() && prefix.isNotEmpty()) "PREFIX_FILTER" else "",
+                "message" to if(prefix.isEmpty()) "" else "prefix 按目标类型过滤候选"),
+            "searchedTargets" to listOf(target),
+            "skippedTargets" to emptyList<String>(),
+            "partialTargets" to if(partial) listOf(target) else emptyList<String>(),
+            "matchModeUsed" to spec.mode,
+            "caseSensitiveUsed" to spec.caseSensitive,
+            "exactMatch" to spec.exact,
+            "matchModeHint" to spec.hint,
+        )
+        return Result(hits, partial, metadata)
+    }
+    /** New explicit modes: literal (default/legacy contains), literalWord, regex. Legacy contains/exact stay accepted. */
+    private fun matchSpec(args: JsonObject, query: String): MatchSpec {
+        val queryType = args.tString("queryType", "literal")
+        require(queryType in listOf("literal", "regex")) { "queryType 必须为 literal|regex" }
+        val requested = if (args.has("matchMode")) args.tString("matchMode")
+            else if (queryType == "regex") "regex" else "literal"
+        require(requested in listOf("literal", "literalWord", "regex", "contains", "exact")) {
+            "matchMode 必须为 literal|literalWord|regex（兼容 contains|exact）"
+        }
+        val exact = requested == "exact"
+        val mode = when (requested) {
+            "literal", "literalWord", "regex" -> requested
+            "contains" -> if (queryType == "regex") "regex" else "literal"
+            "exact" -> if (queryType == "regex") "regex" else "literal"
+            else -> "literal"
+        }
+        val caseSensitive = args.tBool("caseSensitive")
+        val source = when (mode) {
+            "literal" -> Pattern.quote(query)
+            "literalWord" -> "\\b" + Pattern.quote(query) + "\\b"
+            else -> query
+        }
+        val pattern = ToolkitRegex.compile(source,
+            if (caseSensitive) 0 else Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
+        val hint = if (!caseSensitive && mode == "literal")
+            "字面量子串匹配会命中 FRIDAY/friday/blackfriday 这类包含关系；要按标识符匹配请用 matchMode=literalWord"
+        else ""
+        return MatchSpec(mode, pattern, exact, caseSensitive, hint)
+    }
+
+    /** Overview: run every semantic target with its own small budget, then aggregate. */
+    private fun searchOverview(args: JsonObject, spec: MatchSpec): Result {
+        val hits = arrayListOf<JsonObject>()
+        val searched = ArrayList<String>()
+        val skipped = ArrayList<String>()
+        val partialTargets = ArrayList<String>()
+        val skippedScopes = JsonArray()
+        val targetCounts = JsonObject()
+        val overallDeadline = System.nanoTime() + OVERVIEW_TOTAL_MILLIS
+        var partial = false
+        for ((index, target) in OVERVIEW_TARGETS.withIndex()) {
+            if (hits.size >= OVERVIEW_TOTAL_HITS || System.nanoTime() >= overallDeadline) {
+                skipped.addAll(OVERVIEW_TARGETS.subList(index, OVERVIEW_TARGETS.size))
+                partial = true
+                break
+            }
+            val perDeadline = minOf(System.nanoTime() + OVERVIEW_TARGET_MILLIS, overallDeadline)
+            val subArgs = args.deepCopy().apply { addProperty("target", target) }
+            val result = try {
+                searchSingle(target, subArgs, spec, perDeadline, OVERVIEW_TARGET_HITS, OVERVIEW_TARGET_SCANNED)
+            } catch (failure: Exception) {
+                partial = true
+                skipped.add(target)
+                skippedScopes.add(ToolkitIo.json("scope" to target,
+                    "message" to (failure.message ?: failure.javaClass.simpleName)))
+                continue
+            }
+            searched.add(target)
+            targetCounts.addProperty(target, result.hits.size)
+            if (result.partial) { partial = true; partialTargets.add(target) }
+            var added = 0
+            for (hit in result.hits) {
+                if (hits.size >= OVERVIEW_TOTAL_HITS) { partial = true; break }
+                hits.add(hit)
+                added++
+            }
+            if (added < result.hits.size && !partialTargets.contains(target)) partialTargets.add(target)
+            result.metadata.getAsJsonArray("skippedScopes")?.forEach { skippedScopes.add(it) }
+        }
+        if (searched.isEmpty()) {
+            error("overview 未执行任何搜索目标：查词/预算/线程状态不允许继续，请缩小查询或改用具体 target")
+        }
+        if (skipped.isNotEmpty()) partial = true
+        val metadata = ToolkitIo.json(
+            "notSearchedTargets" to skipped,
+            "skippedScopes" to skippedScopes,
+            "filterHint" to ToolkitIo.json("code" to "", "message" to ""),
+            "searchedTargets" to searched,
+            "skippedTargets" to skipped,
+            "partialTargets" to partialTargets,
+            "targetHitCounts" to targetCounts,
+            "overviewLimits" to ToolkitIo.json(
+                "overallMillis" to OVERVIEW_TOTAL_MILLIS / 1_000_000L,
+                "perTargetMillis" to OVERVIEW_TARGET_MILLIS / 1_000_000L,
+                "perTargetScanned" to OVERVIEW_TARGET_SCANNED,
+                "perTargetHits" to OVERVIEW_TARGET_HITS,
+                "totalHits" to OVERVIEW_TOTAL_HITS,
+            ),
+            "matchModeUsed" to spec.mode,
+            "caseSensitiveUsed" to spec.caseSensitive,
+            "exactMatch" to spec.exact,
+            "matchModeHint" to spec.hint,
+        )
+        return Result(hits, partial, metadata)
     }
 }

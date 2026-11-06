@@ -25,7 +25,14 @@ internal object ToolkitPathDiagnostics {
     const val BACKEND_APP = "app"
     const val BACKEND_SHIZUKU = "shizuku"
 
-    const val ACCESSIBLE = "ACCESSIBLE"
+    /**
+     * 修正后的语义：stat/存在性探测成功只证明“存在且可 stat”，不证明可读/可列目录。
+     * 旧常量 ACCESSIBLE 保留为兼容别名（值也改为 STAT_ONLY），避免既有测试/调用方
+     * 继续把 stat 当成完整可访问；旧字符串值见 LEGACY_ACCESSIBLE。
+     */
+    const val STAT_ONLY = "STAT_ONLY"
+    const val ACCESSIBLE = STAT_ONLY
+    const val LEGACY_ACCESSIBLE = "ACCESSIBLE"
     const val INVISIBLE_TO_APP = "INVISIBLE_TO_APP"
     const val PERMISSION_DENIED = "PERMISSION_DENIED"
     const val UNCERTAIN = "UNCERTAIN"
@@ -73,6 +80,10 @@ internal object ToolkitPathDiagnostics {
         val visibleTo: List<String>,
         val invisibleTo: List<String>,
         val notes: List<String>,
+        /** 本轮 read/write 探测状态：not_probed/eacces/read_probe_ok 等；不是结论本身。 */
+        val probeStatus: String? = null,
+        /** 旧版本在同等证据下会给出的 conclusion，保留给兼容观察，不参与新判定。 */
+        val legacyConclusion: String? = null,
     )
 
     @Volatile
@@ -288,15 +299,7 @@ internal object ToolkitPathDiagnostics {
                 )
             }
             if (shizukuProbe.exists == true) {
-                return Decision(
-                    ACCESSIBLE,
-                    "以 shizuku 授权身份检查：目标可见。",
-                    false,
-                    null,
-                    visibleTo,
-                    invisibleTo,
-                    notes,
-                )
+                return statOnlyDecision(BACKEND_SHIZUKU, shizukuProbe, visibleTo, invisibleTo, notes)
             }
             return Decision(
                 UNCERTAIN,
@@ -321,15 +324,7 @@ internal object ToolkitPathDiagnostics {
             )
         }
         if (appProbe.exists == true) {
-            return Decision(
-                ACCESSIBLE,
-                "app UID 检查：目标可见。",
-                true,
-                null,
-                visibleTo,
-                invisibleTo,
-                notes,
-            )
+            return statOnlyDecision(BACKEND_APP, appProbe, visibleTo, invisibleTo, notes)
         }
         val comparable = compareWithShizuku && shizukuProbe?.executed == true
         if (!comparable && compareWithShizuku) {
@@ -403,6 +398,51 @@ internal object ToolkitPathDiagnostics {
         )
     }
 
+    /**
+     * stat/存在性探测成功：只给 STAT_ONLY，不再把“可见”说成 ACCESSIBLE。
+     * readable/writable 是 access(2)/test -r/-w 的附加探测，不是实际 open/列目录；
+     * 因此即使探测为 true，也只描述探测状态，不升级成完整可访问。
+     */
+    private fun statOnlyDecision(
+        backend: String,
+        probe: Probe,
+        visibleTo: List<String>,
+        invisibleTo: List<String>,
+        baseNotes: List<String>,
+    ): Decision {
+        val readable = probe.readable
+        val writable = probe.writable
+        val probeStatus = when {
+            readable == false -> "eacces"
+            readable == true -> "read_probe_ok"
+            writable == false -> "eacces"
+            readable == null && writable == null -> "not_probed"
+            else -> "not_probed"
+        }
+        val probeText = when (probeStatus) {
+            "eacces" -> "readable/writable 探测返回不可读（readable=" + readable + ", writable=" + writable + "，EACCES/不可读）"
+            "read_probe_ok" -> "readable 探测通过（readable=true），但未实际读取内容/列目录"
+            else -> "readable/writable 未执行探测（null，not_probed）"
+        }
+        val notes = ArrayList(baseNotes)
+        notes.add(
+            "conclusion 已从 ACCESSIBLE 收紧为 STAT_ONLY：stat 成功只证明存在/可 stat；" +
+                probeText + "；旧版 ACCESSIBLE 只代表 stat 通过，不能当作完整可访问。",
+        )
+        return Decision(
+            STAT_ONLY,
+            "只证明存在/可 stat（backend=" + backend + "）；未证明可列目录或实际可读：" + probeText +
+                "。旧版 ACCESSIBLE 只代表 stat 通过，语义过强；需要实际读取/列目录请用对应操作验证。",
+            true,
+            null,
+            visibleTo,
+            invisibleTo,
+            notes,
+            probeStatus = probeStatus,
+            legacyConclusion = LEGACY_ACCESSIBLE,
+        )
+    }
+
     /** 组装 file_access_diagnose 的返回数据（不含外层 ok/data/nextActions）。 */
     fun report(
         root: File,
@@ -445,8 +485,15 @@ internal object ToolkitPathDiagnostics {
             addProperty("compareWithShizuku", compareWithShizuku)
             addProperty("conclusion", decision.conclusion)
             addProperty("conclusionDetail", decision.detail)
+            addProperty("conclusionNote", if (decision.conclusion == STAT_ONLY) {
+                "conclusion=STAT_ONLY：只证明存在/可 stat，不证明可列目录/实际可读；旧版 ACCESSIBLE 仅代表 stat 通过（legacyConclusion 保留旧值语义）。"
+            } else null)
             addProperty("distinguishable", decision.distinguishable)
             addProperty("uncertainty", decision.uncertainty)
+            addProperty("probeStatus", decision.probeStatus)
+            addProperty("legacyConclusion", decision.legacyConclusion)
+            addProperty("readable", primary?.readable)
+            addProperty("writable", primary?.writable)
             addProperty("uid", primary?.uid)
             addProperty("scopedStorageLikely", scoped.likely)
             add("scopedStorageReasons", JsonArray().apply { scoped.reasons.forEach { add(it) } })

@@ -108,7 +108,7 @@
       },
       "queryType": {
         "type": "string",
-        "description": "regex 使用 Java java.util.regex（支持环视/反向引用），受时间/字符访问预算限制。",
+        "description": "regex 使用 Java java.util.regex（支持环视/反向引用），受时间/字符访问预算限制。等价于 matchMode=regex；新调用建议直接用 matchMode。",
         "enum": [
           "literal",
           "regex"
@@ -120,8 +120,11 @@
       },
       "matchMode": {
         "type": "string",
-        "description": "contains 为子串/正则查找；exact 要求整个候选文本匹配。smali 不支持 exact。",
+        "description": "匹配方式。literal=字面量子串（默认，旧 contains 语义；注意 caseSensitive:false 时会命中 FRIDAY 这类包含关系）；literalWord=按词/标识符边界匹配（frida 不会命中 FRIDAY/friday/blackfriday）；regex=Java 正则；contains/exact 为旧值仍兼容（contains=literal；exact 要求整个候选文本匹配，smali 不支持 exact）。返回值里 matchModeUsed 会告诉你这次实际用了哪种。",
         "enum": [
+          "literal",
+          "literalWord",
+          "regex",
           "contains",
           "exact"
         ]
@@ -153,7 +156,6 @@
       "query",
       "queryType",
       "caseSensitive",
-      "matchMode",
       "prefix",
       "includeMatchOffsets",
       "limit",

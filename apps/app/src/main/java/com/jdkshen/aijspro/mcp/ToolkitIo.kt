@@ -59,8 +59,18 @@ internal object ToolkitIo {
             value.split('/').none { it == ".." || it == "." } && !value.contains(':')) { "ZIP 条目路径无效" }
         return value
     }
-    fun id(value: String): String {
-        require(value.matches(Regex("[0-9a-f]{8}-[0-9a-f-]{27}"))) { "工作区或会话 ID 无效" }; return value
+    /**
+     * 校验 UUID 形状的标识符。
+     *
+     * [label] 决定报错里点名的对象：这里历史上写死了“工作区或会话 ID”，于是 **jobId** 形状不对时
+     * 也会被说成工作区/会话（用户反馈 dev-1365 bug#10）。调用方应按实际对象传 label。
+     */
+    fun id(value: String, label: String = "工作区或会话 ID"): String {
+        require(value.matches(Regex("[0-9a-f]{8}-[0-9a-f-]{27}"))) {
+            label + " 无效：需要 UUID 形状（8-4-4-4-12 十六进制），本次收到 \"" + value.take(64) + "\"。" +
+                "jobId 请用 apk_job_list 或上一次调用返回的完整 id；工作区/会话 id 请用 apk_workspace_open / apk_session_create 的返回值。"
+        }
+        return value
     }
     fun fresh() = UUID.randomUUID().toString()
     private class FileLock { val lock=java.util.concurrent.locks.ReentrantLock();var users=0 }

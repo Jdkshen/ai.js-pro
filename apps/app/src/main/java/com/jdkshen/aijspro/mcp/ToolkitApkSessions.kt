@@ -60,7 +60,12 @@ internal object ToolkitApkSessions {
     }
     private fun read(folder:File)=JsonParser().parse(File(folder,"session.json").readText(Charsets.UTF_8)).asJsonObject
     private fun expected(info:JsonObject,args:JsonObject,required:Boolean){
-        val revision=args.tString("expectedRevision","");require(!required||revision.isNotEmpty()){"回退必须提供expectedRevision"}
-        require(revision.isEmpty()||revision==info.tString("revision")){"会话已变更，请先重新读取版本"}
+        val expected=args.tString("expectedRevision","")
+        val current=info.tString("revision")
+        val detail="当前 revision=" + current + "；你传的 expectedRevision=" + (if(expected.isEmpty()) "(未提供)" else expected)
+        val next="下一步：调用 apk_session_check(workspaceId,editSessionId) 取最新 revision；" +
+            "apk_session_diff/apk_edit_text/apk_patch_bytes/apk_copy_entry/apk_delete_target 的成功返回也会带 revision"
+        require(!required||expected.isNotEmpty()){"回退必须提供expectedRevision。$detail；$next"}
+        require(expected.isEmpty()||expected==current){"会话已变更（$detail）。$next；然后用新 revision 重试 apk_session_checkpoint/apk_session_rollback"}
     }
 }

@@ -11,10 +11,16 @@ internal object McpToolSchema {
     private val integerParams = setOf(
         "offset", "limit", "maxBytes", "afterId", "timeoutSeconds",
         "olderThanHours", "keepAppliedHours", "maxNodes", "maxDepth", "windowId", "timeoutMillis",
-        "quality", "maxWidth", "maxChars", "waitMillis", "x", "y", "x1", "y1", "x2", "y2", "durationMillis", "index", "intervalMillis", "maxResults"
+        "quality", "maxWidth", "maxChars", "waitMillis", "x", "y", "x1", "y1", "x2", "y2", "durationMillis", "index", "intervalMillis", "maxResults",
+        // 同类漏网（本次审计发现）：pid 是整数、keepLatest 是整数，之前都落进 string。
+        "pid", "keepLatest"
     )
     private val booleanParams = setOf("wait", "create", "recursive", "applied", "dataUri", "includeInherited", "eof", "includeSystem", "exact",
-        "measureScreenshot")
+        "measureScreenshot",
+        // 反馈 bug#1：withLogs 之前不在本表里 → 被默认声明成 string，客户端传布尔直接被拒，整个功能不可用。
+        "withLogs",
+        // 同类漏网（本次审计发现）：workspace_cleanup 的两个开关。
+        "dryRun", "protectApplied")
 
     fun terminalSchema(): JsonObject = terminalCommandSchema(includeBackend = true)
     fun shellRishSchema(): JsonObject = terminalCommandSchema(includeBackend = false)

@@ -1,6 +1,9 @@
 package com.jdkshen.aijspro.mcp
 
+import com.google.gson.JsonArray
+import com.google.gson.JsonNull
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import java.io.Closeable
 import java.io.File
 import java.util.UUID
@@ -8,12 +11,18 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /** Asynchronous pipe terminals. No Android dependencies: lifecycle/races are tested on the JVM. */
-internal class McpTerminalJobs(
+// 反馈 #8 给构造函数加了带默认值的新参数；Kotlin 的默认参数**不会**为 Java 调用方生成重载，
+// 于是 ui/terminal/EmbeddedTerminalActivity.java 的 5 参调用直接编译失败。@JvmOverloads 保住旧调用形状。
+internal class McpTerminalJobs @JvmOverloads constructor(
     private val root: File,
     private val launcher: (String, File, Map<String, String>) -> RunningCommand,
     private val maxRunning: Int = 3,
     private val maxRetained: Int = 16,
-    private val outputCapacity: Int = 256 * 1024
+    private val outputCapacity: Int = 256 * 1024,
+    /** 保留窗口；与 apk_job 的 6h 默认一致。 */
+    private val retentionWindowMillis: Long = DEFAULT_RETENTION_WINDOW_MILLIS,
+    /** 墓碑上限；与 apk_job 的 MAX_TOMBSTONES 一致。 */
+    private val maxTombstones: Int = MAX_TOMBSTONES,
 ) : Closeable {
     class RunningCommand(val process: Process, val terminate: () -> Unit)
 
@@ -51,6 +60,18 @@ internal class McpTerminalJobs(
         val input = Executors.newSingleThreadExecutor { r -> Thread(r, "mcp-terminal-input").apply { isDaemon = true } }
     }
 
+    /** 与 apk_job 同构的墓碑：job 被保留窗口/数量淘汰，或服务换实例后输出不可恢复。 */
+    private data class Tombstone(
+        val jobId: String,
+        val code: String,
+        val reason: String,
+        val command: String?,
+        val backend: String?,
+        val createdAt: Long,
+        val finishedAt: Long,
+        val recordedAt: Long,
+    )
+
     private val jobs = LinkedHashMap<String, Job>()
     private val workers = Executors.newFixedThreadPool(maxRunning) { r ->
         Thread(r, "mcp-terminal-job").apply { isDaemon = true }
@@ -61,7 +82,18 @@ internal class McpTerminalJobs(
     private val timer = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "mcp-terminal-timeout").apply { isDaemon = true }
     }
+    private val tombstones = LinkedHashMap<String, Tombstone>()
+    private val registryFile = File(root, REGISTRY_FILE)
+    private val serviceInstance = UUID.randomUUID().toString()
+    private val serviceStartedAt = System.currentTimeMillis()
+    private var previousServiceInstance: String? = null
     private var closed = false
+
+    init {
+        recoverRegistry()
+        trim()
+        persistRegistry()
+    }
 
     @JvmOverloads
     @Synchronized
@@ -79,14 +111,16 @@ internal class McpTerminalJobs(
         }
         val directory = McpPathRules.resolve(root, workingDirectory)
         require(directory.isDirectory) { "workingDirectory 目录不存在" }
+        trim()
         check(jobs.values.count { synchronized(it.lock) { it.finishedAt == 0L } } < maxRunning) { "终端任务已满（最多 $maxRunning 个），请先读取或停止任务" }
         while (jobs.size >= maxRetained) {
             val old = jobs.values.firstOrNull { synchronized(it.lock) { it.finishedAt != 0L } }
                 ?: error("终端任务已满")
-            jobs.remove(old.id)
+            evict(old.id, "retentionLimit")
         }
         val job = Job("terminal-${UUID.randomUUID()}", command, directory, backend)
         jobs[job.id] = job
+        persistRegistry()
         // The launcher receives the internal backend marker in its env. User-supplied env is
         // rejected above, so a caller cannot forge shizuku/app state; the real child environment
         // is rebuilt by McpAndroidTerminal after it strips this key.
@@ -142,6 +176,7 @@ internal class McpTerminalJobs(
                     job.running = null
                     job.lock.notifyAll()
                 }
+                persistRegistry()
             }
         }
         return snapshot(job, 0, 16384, 0)
@@ -188,11 +223,211 @@ internal class McpTerminalJobs(
         return snapshot(job, 0, 16384, 0)
     }
 
-    @Synchronized fun list(): List<JsonObject> = jobs.values.map { job ->
-        snapshot(job, Long.MAX_VALUE, 1, 0).apply { remove("output") }
+    /** 兼容旧调用：只返回当前任务；terminal_list 的结构化元数据用 listReport()。 */
+    @Synchronized fun list(): List<JsonObject> {
+        trim()
+        return jobs.values.map { job -> snapshot(job, Long.MAX_VALUE, 1, 0).apply { remove("output") } }
     }
 
-    @Synchronized private fun find(id: String) = jobs[id] ?: throw IllegalArgumentException("找不到终端任务：$id（服务重启后任务不保留）")
+    /**
+     * terminal_list 的结构化响应（与 apk_job_list 同构）。
+     *
+     * 保留旧的 list(): List<JsonObject> 是为了不破坏既有调用方；Lead 接线
+     * terminal_list 时改为返回本对象即可拿到 evicted/retention/tombstoneCount。
+     */
+    @Synchronized fun listReport(): JsonObject {
+        trim()
+        val items = JsonArray()
+        jobs.values.forEach { job -> items.add(snapshot(job, Long.MAX_VALUE, 1, 0).apply { remove("output") }) }
+        val evicted = JsonArray()
+        tombstones.values.sortedByDescending { it.recordedAt }.take(MAX_LISTED_TOMBSTONES).forEach { evicted.add(tombstoneJson(it)) }
+        return ToolkitIo.json(
+            "items" to items,
+            "count" to jobs.size,
+            "activeJobs" to jobs.values.count { synchronized(it.lock) { it.finishedAt == 0L } },
+            "retention" to retentionJson(),
+            "evicted" to evicted,
+            "tombstoneCount" to tombstones.size,
+            "ownershipEnforced" to false,
+            "ownerFilterSupported" to false,
+            "owner" to null,
+            "clientId" to null,
+            "ownershipNote" to "terminal_* 目前没有 owner/clientId 参数，也没有跨调用方隔离；owner/clientId 仅作为兼容字段返回 null，不应当作安全边界。",
+            "service" to serviceJson(),
+        )
+    }
+
+    @Synchronized private fun find(id: String): Job {
+        trim()
+        jobs[id]?.let { return it }
+        val tombstone = tombstones[id]
+        if (tombstone != null) {
+            val prefix = if (tombstone.code == SERVICE_RESTARTED) {
+                "终端任务在服务重启后已丢失"
+            } else {
+                "终端任务已被保留策略淘汰"
+            }
+            throw ToolkitException(
+                tombstone.code,
+                prefix + "：$id（code=" + tombstone.code + "，reason=" + tombstone.reason + "）；terminal 输出只在内存，已不可恢复，请重新执行。",
+                "jobId",
+            )
+        }
+        throw ToolkitException(
+            JOB_NOT_FOUND,
+            "$JOB_NOT_FOUND：找不到终端任务：$id。job registry 中没有该 id 的记录；若服务刚重启，旧任务应报 SERVICE_RESTARTED；可调用 terminal_list 查看当前任务与 evicted 记录。",
+            "jobId",
+        )
+    }
+
+    private fun tombstoneJson(tombstone: Tombstone): JsonObject = ToolkitIo.json(
+        "jobId" to tombstone.jobId,
+        "code" to tombstone.code,
+        "reason" to tombstone.reason,
+        "command" to tombstone.command,
+        "backend" to tombstone.backend,
+        "createdAt" to tombstone.createdAt,
+        "finishedAt" to tombstone.finishedAt,
+        "recordedAt" to tombstone.recordedAt,
+    )
+
+    private fun retentionJson(): JsonObject = ToolkitIo.json(
+        "windowMillis" to retentionWindowMillis,
+        "maxRetainedFinished" to maxRetained,
+        "maxActive" to maxRunning,
+        "maxTombstones" to maxTombstones,
+        "maxListedTombstones" to MAX_LISTED_TOMBSTONES,
+        "tombstoneCount" to tombstones.size,
+    )
+
+    private fun serviceJson(): JsonObject = ToolkitIo.json(
+        "instance" to serviceInstance,
+        "startedAt" to serviceStartedAt,
+        "previousInstance" to previousServiceInstance,
+        "restarted" to (previousServiceInstance != null && previousServiceInstance != serviceInstance),
+    )
+
+    /** 清理超过保留窗口或数量的已完成任务；只淘汰 finished job，运行中的永不淘汰。 */
+    @Synchronized private fun trim() {
+        if (retentionWindowMillis >= 0L) {
+            val now = System.currentTimeMillis()
+            val expired = jobs.values.filter { job ->
+                synchronized(job.lock) { job.finishedAt > 0L && now - job.finishedAt > retentionWindowMillis }
+            }.map { it.id }
+            expired.forEach { evict(it, "retentionWindow") }
+        }
+        while (maxRetained >= 0 && jobs.size > maxRetained) {
+            val old = jobs.values.firstOrNull { job -> synchronized(job.lock) { job.finishedAt != 0L } } ?: break
+            evict(old.id, "retentionLimit")
+        }
+        pruneTombstones()
+        persistRegistry()
+    }
+
+    private fun evict(id: String, reason: String) {
+        val job = jobs.remove(id) ?: return
+        val now = System.currentTimeMillis()
+        val tombstone = synchronized(job.lock) {
+            Tombstone(
+                jobId = job.id,
+                code = JOB_EVICTED,
+                reason = reason,
+                command = job.command,
+                backend = job.backend,
+                createdAt = job.createdAt,
+                finishedAt = job.finishedAt,
+                recordedAt = now,
+            )
+        }
+        addTombstone(tombstone)
+    }
+
+    private fun addTombstone(tombstone: Tombstone) {
+        tombstones[tombstone.jobId] = tombstone
+        pruneTombstones()
+    }
+
+    private fun pruneTombstones() {
+        while (tombstones.size > maxTombstones) {
+            val oldest = tombstones.values.minByOrNull { it.recordedAt } ?: break
+            tombstones.remove(oldest.jobId)
+        }
+    }
+
+    /**
+     * 从上次实例的 registry 恢复「已知 jobId」的墓碑；terminal 输出只在内存，
+     * 所以服务换实例后旧 id 一律报 SERVICE_RESTARTED，而不是 JOB_NOT_FOUND。
+     */
+    private fun recoverRegistry() {
+        if (!registryFile.isFile || registryFile.length() > MAX_REGISTRY_BYTES) return
+        val source = runCatching { registryFile.readText(Charsets.UTF_8) }.getOrNull() ?: return
+        val root = runCatching { JsonParser().parse(source).asJsonObject }.getOrNull() ?: return
+        previousServiceInstance = root.get("serviceInstance")?.takeIf { it.isJsonPrimitive }?.asString
+        val priorTombstones = root.get("tombstones")?.takeIf { it.isJsonArray }?.asJsonArray
+        priorTombstones?.forEach { element ->
+            if (!element.isJsonObject) return@forEach
+            val item = element.asJsonObject
+            val id = item.get("jobId")?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
+            val code = item.get("code")?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
+            if (code != JOB_EVICTED && code != SERVICE_RESTARTED) return@forEach
+            addTombstone(Tombstone(
+                jobId = id,
+                code = code,
+                reason = item.get("reason")?.takeIf { it.isJsonPrimitive }?.asString ?: "registry tombstone",
+                command = item.get("command")?.takeIf { it.isJsonPrimitive }?.asString,
+                backend = item.get("backend")?.takeIf { it.isJsonPrimitive }?.asString,
+                createdAt = item.get("createdAt")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                finishedAt = item.get("finishedAt")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                recordedAt = item.get("recordedAt")?.takeIf { it.isJsonPrimitive }?.asLong ?: System.currentTimeMillis(),
+            ))
+        }
+        val priorJobs = root.get("jobs")?.takeIf { it.isJsonArray }?.asJsonArray
+        priorJobs?.forEach { element ->
+            if (!element.isJsonObject) return@forEach
+            val item = element.asJsonObject
+            val id = item.get("jobId")?.takeIf { it.isJsonPrimitive }?.asString ?: return@forEach
+            if (tombstones.containsKey(id)) return@forEach
+            addTombstone(Tombstone(
+                jobId = id,
+                code = SERVICE_RESTARTED,
+                reason = "终端服务实例已更换；terminal 任务/输出只在内存，旧任务不恢复",
+                command = item.get("command")?.takeIf { it.isJsonPrimitive }?.asString,
+                backend = item.get("backend")?.takeIf { it.isJsonPrimitive }?.asString,
+                createdAt = item.get("createdAt")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                finishedAt = item.get("finishedAt")?.takeIf { it.isJsonPrimitive }?.asLong ?: 0L,
+                recordedAt = System.currentTimeMillis(),
+            ))
+        }
+    }
+
+    @Synchronized private fun persistRegistry() {
+        val jobsArray = JsonArray()
+        jobs.values.forEach { job ->
+            synchronized(job.lock) {
+                jobsArray.add(ToolkitIo.json(
+                    "jobId" to job.id,
+                    "command" to job.command,
+                    "backend" to job.backend,
+                    "createdAt" to job.createdAt,
+                    "finishedAt" to job.finishedAt,
+                    "state" to job.status,
+                ))
+            }
+        }
+        val tombstonesArray = JsonArray()
+        tombstones.values.forEach { tombstonesArray.add(tombstoneJson(it)) }
+        val payload = ToolkitIo.json(
+            "version" to REGISTRY_VERSION,
+            "serviceInstance" to serviceInstance,
+            "previousServiceInstance" to previousServiceInstance,
+            "startedAt" to serviceStartedAt,
+            "jobs" to jobsArray,
+            "tombstones" to tombstonesArray,
+        )
+        runCatching {
+            ToolkitIo.atomic(registryFile) { file -> file.writeText(payload.toString(), Charsets.UTF_8) }
+        }
+    }
 
     private fun append(job: Job, text: String) = synchronized(job.lock) {
         job.output.append(text)
@@ -238,6 +473,8 @@ internal class McpTerminalJobs(
             addProperty("routingRequirement", job.routingRequirement)
             addProperty("routingHint", job.routingHint)
             addProperty("status", job.status); addProperty("running", job.status in ACTIVE)
+            add("owner", JsonNull.INSTANCE); add("clientId", JsonNull.INSTANCE)
+            addProperty("ownershipEnforced", false)
             addProperty("processActive", job.running != null || job.finishedAt == 0L)
             addProperty("createdAt", job.createdAt); addProperty("finishedAt", job.finishedAt)
             job.exitCode?.let { addProperty("exitCode", it) }
@@ -275,6 +512,7 @@ internal class McpTerminalJobs(
         Thread({ workers.awaitTermination(10, TimeUnit.SECONDS); readers.shutdown() }, "mcp-terminal-close")
             .apply { isDaemon = true; start() }
         timer.shutdownNow()
+        persistRegistry()
     }
 
     companion object {
@@ -319,6 +557,17 @@ internal class McpTerminalJobs(
             val hint = (values["routingHint"] ?: values["hint"] ?: suffixHint).trim()
             return RoutingInfo(routed, requested, effective, requirement, hint)
         }
+
+        /** 与 apk_job 对齐：6h 保留窗口、256 个墓碑、最多列 32 个淘汰项。 */
+        const val DEFAULT_RETENTION_WINDOW_MILLIS = 6L * 60L * 60L * 1000L
+        const val MAX_TOMBSTONES = 256
+        const val MAX_LISTED_TOMBSTONES = 32
+        const val JOB_NOT_FOUND = "JOB_NOT_FOUND"
+        const val JOB_EVICTED = "JOB_EVICTED"
+        const val SERVICE_RESTARTED = "SERVICE_RESTARTED"
+        private const val REGISTRY_FILE = ".mcp-terminal-jobs.json"
+        private const val REGISTRY_VERSION = 1
+        private const val MAX_REGISTRY_BYTES = 4L * 1024L * 1024L
 
         private val ACTIVE = setOf("STARTING", "RUNNING")
     }

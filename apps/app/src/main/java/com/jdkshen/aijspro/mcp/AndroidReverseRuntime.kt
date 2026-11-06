@@ -231,7 +231,13 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                         "原始错误："+failure.message,
                     "endpoint")
             }
-            throw failure
+            // 反馈 #11：把 Frida 失败分类成结构化码（CONNECT_FAILED / SERVER_MISSING / COMPONENT_MISSING），
+            // 否则 job 层拿到的 errorCode 是 null，调用方只能从 reason 文本里猜（apk_job_list 里就出现过）。
+            throw ToolkitException(
+                ToolkitFridaDiagnosis.errorCodeForReason(failure.message ?: ""),
+                failure.message ?: "Frida 执行失败",
+                failure.argument
+            )
         }
         return response.apply{
             if(name=="frida_eval"){

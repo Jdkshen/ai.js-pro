@@ -27,6 +27,12 @@ internal object ToolkitFridaDiagnosis {
     const val CLASSIFICATION_CONNECTION_REFUSED = "connection_refused"
     const val CLASSIFICATION_UNKNOWN = "unknown"
 
+    /** #11：frida_status 失败时给 job/工具层使用的结构化错误码；reason 仍保留原文。 */
+    const val FRIDA_CONNECT_FAILED = "FRIDA_CONNECT_FAILED"
+    const val FRIDA_SERVER_MISSING = "FRIDA_SERVER_MISSING"
+    const val FRIDA_COMPONENT_MISSING = "FRIDA_COMPONENT_MISSING"
+    const val FRIDA_UNKNOWN = "FRIDA_UNKNOWN"
+
     const val TCP_STATE_ESTABLISHED = "01"
     const val TCP_STATE_SYN_SENT = "02"
     const val TCP_STATE_TIME_WAIT = "06"
@@ -44,6 +50,12 @@ internal object ToolkitFridaDiagnosis {
         "(?i)(not found|no such file|command not found|cannot find|ENOENT|missing (?:frida|component)|component.*(?:not installed|missing))",
     )
     private val REFUSED_PATTERN = Regex("(?i)(connection refused|econnrefused|reset by peer|\\brst\\b)")
+    private val SERVER_MISSING_PATTERN = Regex(
+        "(?i)(frida[- ]?server.*(?:not found|no such file|missing|not running|not started|not installed)|(?:not found|no such file|not running).*(?:frida[- ]?server))",
+    )
+    private val CONNECT_FAILED_PATTERN = Regex(
+        "(?i)(unable to connect|failed to connect|cannot connect|connection refused|econnrefused|connection reset|timed? out|timeout|operation was cancelled|ehostunreach|enetunreach)",
+    )
 
     private const val NOT_COMPONENT_MISSING =
         "connect 超时/SYN_SENT 不能直接当成「组件没装」：超时是连接层现象；若已看到 SYN_SENT，说明客户端存在并成功发出了 connect，只是 SYN 被静默丢弃。"
@@ -133,6 +145,8 @@ internal object ToolkitFridaDiagnosis {
             "rstOrRefusedObserved" to refusedObserved,
             "componentVerdict" to componentVerdict,
             "evidenceConflict" to evidenceConflict,
+            "errorCode" to errorCodeForClassification(classification),
+            "reasonCode" to errorCodeForClassification(classification),
             "reason" to reason,
             "wordingGuidance" to NOT_COMPONENT_MISSING,
             "evidence" to ToolkitIo.json(
@@ -144,6 +158,47 @@ internal object ToolkitFridaDiagnosis {
             ),
             "nextActions" to actionsFor(classification),
             "evidenceCommands" to defaultEvidenceCommands(),
+        )
+    }
+
+    /** 把 connect 失败分类映射成 #11 的结构化 errorCode；未知分类保守归为 CONNECT_FAILED。 */
+    fun errorCodeForClassification(classification: String): String = when (classification) {
+        CLASSIFICATION_COMPONENT_MISSING -> FRIDA_COMPONENT_MISSING
+        else -> FRIDA_CONNECT_FAILED
+    }
+
+    /**
+     * #11：按 frida_status 的 reason 文本给结构化 errorCode。
+     *
+     * 顺序：frida-server 明确缺失 → 客户端/命令缺失 → connect 失败 → 未知。
+     * “Unable to connect to remote frida-server” 归 FRIDA_CONNECT_FAILED（文本没有证明 server 文件缺失，
+     * 不能把 connect 失败说成 server 未安装）；只有文本明确 “server not found/not running” 才归 FRIDA_SERVER_MISSING。
+     */
+    fun errorCodeForReason(reason: String): String {
+        val text = reason.trim()
+        if (text.isEmpty()) return FRIDA_UNKNOWN
+        return when {
+            SERVER_MISSING_PATTERN.containsMatchIn(text) -> FRIDA_SERVER_MISSING
+            COMPONENT_MISSING_PATTERN.containsMatchIn(text) -> FRIDA_COMPONENT_MISSING
+            CONNECT_FAILED_PATTERN.containsMatchIn(text) -> FRIDA_CONNECT_FAILED
+            else -> FRIDA_CONNECT_FAILED
+        }
+    }
+
+    /**
+     * #11 失败信封：给 frida_status 失败结果（以及 job 层失败项）一个可直接合并的结构。
+     * 保留 reason 原文；error 对象同时带 code，兼容只看 error.code 的调用方。
+     */
+    fun failureEnvelope(reason: String, classification: String? = null): JsonObject {
+        val code = if (classification != null) errorCodeForClassification(classification) else errorCodeForReason(reason)
+        return ToolkitIo.json(
+            "ok" to false,
+            "errorCode" to code,
+            "reasonCode" to code,
+            "reason" to reason,
+            "classification" to classification,
+            "error" to ToolkitIo.json("code" to code, "message" to reason),
+            "note" to "errorCode 按 reason/classification 分类；reason 保留原文。job 层若只展示状态，需要把该字段写入 job 状态/结果（见 ToolkitJobs.status）。",
         )
     }
 

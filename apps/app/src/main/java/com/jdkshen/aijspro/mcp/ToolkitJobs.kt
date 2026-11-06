@@ -54,6 +54,8 @@ internal class ToolkitJobs internal constructor(
         @Volatile var started = 0L
         @Volatile var finished = 0L
         @Volatile var reason = ""
+        // 反馈 #11：失败原因的结构化码要能在 apk_job_status/list 里看到，而不是只藏在结果正文。
+        @Volatile var errorCode: String? = null
         @Volatile var resultReady = false
         @Volatile var resultBytes = 0L
         @Volatile var lostByRestart = false
@@ -230,6 +232,7 @@ internal class ToolkitJobs internal constructor(
             val typed = failure as? ToolkitException
             val code = if (job.state == "CANCELLED") "CANCELLED"
             else typed?.code ?: if (failure is IllegalArgumentException) "INVALID_ARGUMENT" else "TOOL_FAILED"
+            job.errorCode = code
             writeResult(
                 job,
                 ToolkitIo.json(
@@ -294,8 +297,11 @@ internal class ToolkitJobs internal constructor(
             "clientId" to job.clientId,
             "sessionId" to job.sessionId,
             "lostByRestart" to job.lostByRestart,
-            "errorCode" to if (lost) "SERVICE_RESTARTED" else null,
-            "errorHint" to if (lost) "任务因工具进程重启丢失，未自动重放；请确认需要后重新提交" else null,
+            // 反馈 #11：以前只在 lostByRestart 时填 errorCode，操作级失败（如 Frida 连不上）虽然记了 code 却不暴露，
+            // 调用方只能从 reason 里猜。现在统一暴露：丢失优先 SERVICE_RESTARTED，否则用本次失败捕获到的码。
+            "errorCode" to if (lost) "SERVICE_RESTARTED" else job.errorCode,
+            "errorHint" to if (lost) "任务因工具进程重启丢失，未自动重放；请确认需要后重新提交"
+                else job.errorCode?.let { "任务失败的结构化码；详细原因见 reason 与 apk_job_result 正文" },
             "metadataFromIndex" to job.metadataFromIndex,
             "retention" to ToolkitIo.json(
                 "windowMillis" to retentionWindowMillis,
@@ -319,7 +325,8 @@ internal class ToolkitJobs internal constructor(
     // ------------------------------------------------------------------
 
     private fun find(args: JsonObject): Job {
-        val id = ToolkitIo.id(args.tString("jobId"))
+        // 这是 jobId，不是工作区/会话 id：必须传 label，否则形状不对时文案会串位（反馈 bug#10）。
+        val id = ToolkitIo.id(args.tString("jobId"), "jobId")
         val job = jobs[id] ?: throw missingJob(id)
         requireIdentity(job, args)
         return job
@@ -516,7 +523,7 @@ internal class ToolkitJobs internal constructor(
             runCatching {
                 val source = JsonParser().parse(file.readText(Charsets.UTF_8)).asJsonObject
                 val id = source.optString("jobId") ?: return@runCatching
-                ToolkitIo.id(id)
+                ToolkitIo.id(id, "jobId")
                 val job = Job(
                     id,
                     source.optString("operation") ?: return@runCatching,
@@ -552,7 +559,7 @@ internal class ToolkitJobs internal constructor(
                 val record = element.asJsonObject
                 val id = record.optString("jobId") ?: return@runCatching
                 if (jobs.containsKey(id) || tombstones.containsKey(id)) return@runCatching
-                ToolkitIo.id(id)
+                ToolkitIo.id(id, "jobId")
                 val result = resultFile(id)
                 val resultBytes = if (result.isFile) result.length() else 0L
                 if (resultBytes > 0L) {
