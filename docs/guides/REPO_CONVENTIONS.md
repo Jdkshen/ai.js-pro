@@ -133,6 +133,40 @@ Get-ChildItem C:\Users\18101\Documents\ai-js-pro\.artifacts -Recurse -File |
 
 **不要**把 `.artifacts/`、`output/`、`.codegraph/` 提交进 git（已在 `.gitignore`）。
 
+### 2026-11-07 C 盘反复被吃满 → 把开发缓存搬到 E:（**已生效的环境变量**）
+
+上面那套清理只是「回到安全水位」，**不解决每次都长回来**：实测 7 次清理后，
+C: 仍在 17 小时内从 11.4 GB 掉到 **0.74 GB（100%）**。
+
+根因是这几个目录的**默认位置就在 C 盘**，每次开发必涨：
+
+| 增长源 | 每轮增长 | 环境变量 | 现状 |
+|---|---:|---|---|
+| Gradle 依赖缓存 + `transforms` | 2–3 GB | `GRADLE_USER_HOME` | **`E:\dev-cache\gradle`** |
+| 各类临时文件 | 5–7 GB | `TEMP`/`TMP` | **`E:\dev-cache\temp`** |
+| Codex 会话 + 任务暂存 | 曾累积到 9 GB | `CODEX_HOME` | **`E:\dev-cache\codex`** |
+| npm / pip 缓存 | 0.3 GB | `npm_config_cache` / `PIP_CACHE_DIR` | **`E:\dev-cache\{npm,pip}`** |
+
+**排查时容易漏掉的**：`~\.codex`（默认不在 `AppData` 下，前几轮扫描都没覆盖）。
+它的 `tmp\<任务名>-<日期>\` 是**过期任务的构建暂存**（如
+`aijs-node-widget-release-20261030` 2.7 GB），可删；`sessions\` 是会话日志，
+删 30 天前的；`arg0`/`arg0-windows` 是**运行时 shim，不要删**。
+
+**验收（迁移后必须做）**：
+
+```powershell
+$env:GRADLE_USER_HOME = 'E:\dev-cache\gradle'
+. .\tools\jdk17.ps1
+.\gradlew.bat --version          # 应打印 Gradle 8.9
+.\gradlew.bat :app:tasks --all   # 应 BUILD SUCCESSFUL（会解析 AGP 插件与全部依赖）
+```
+
+**回滚**（环境变量 + 缓存搬回）：见
+[`docs/reports/2026-11-07_C盘优化与开发缓存迁移E盘.md`](../reports/2026-11-07_C盘优化与开发缓存迁移E盘.md) §六。
+
+⚠️ 两条注意：① 改的是**用户级注册表变量**，只有**新启动的进程**读到 —— VS Code 要完全退出重开；
+② E: 从此是构建依赖，别把 E: 拔了/清空。
+
 ## 八、常见坑速查
 
 | 坑 | 结论 |

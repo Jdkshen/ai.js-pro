@@ -96,6 +96,11 @@
 
 > 选取口径：reports/ 中日期最新的 20 篇（2026-11-04～11-06，按日期倒序；同日按标题）。每条 2~3 行，只摘「做了什么 / 证据与边界」；完整内容点链接。
 
+**2026-11-07 · C 盘优化与开发缓存迁移 E 盘（环境改动，非产品代码）** · [原文](<reports/2026-11-07_C盘优化与开发缓存迁移E盘.md>)
+- 现象：C: 反复被吃满，7 次清理后 17 小时内再掉到 **0.74 GB（100%）**；新定位到前几轮没扫到的 `~\.codex` **9.16 GB**（其中 `tmp` 4.76 GB 是 10-30 的任务暂存）。
+- 修复：清 `.codex\tmp\aijs-*`、30 天前会话、仓库 build 产物等约 10 GB；再用 `robocopy /MOVE` 把 `~\.gradle`(2.88 GB)/`~\.codex`(2.70 GB) 搬到 `E:\dev-cache\`，并设用户级 `GRADLE_USER_HOME`/`CODEX_HOME`/`TEMP`/`TMP`/`npm_config_cache`/`PIP_CACHE_DIR`。
+- 验证：`gradlew --version` 与 `:app:tasks --all` 均 **BUILD SUCCESSFUL**（AGP 插件与依赖从 E: 解析，169 个依赖组无需重下）；C: 0.74→**17.34 GB**。边界：仓库 `build/` 仍在 C:（未改仓库构建配置）、现有进程需重启才生效、WinSxS 未清。**回滚命令见报告 §六**。
+
 **2026-11-06 · 按交付包《MCP-改造-checklist.md》落实（dev-1360）** · [原文](<reports/2026-11-06_按交付包落实MCP改造清单（dev-1360）.md>)
 - 逐条对账交付包《MCP-改造-checklist.md》（基于反汇编 dev-1359）：工程复制上限 30000→200000、展开字节 512MiB→2GiB；apktool/jadx 子进程 `-Xmx2048m` 放到 `/system/bin` 前；超时 300→1800 并同步四处下游旧上限。
 - K40/MI8 真机验证 31,001 文件工程 147s 的失败文案、`get_status.limits` 可诊断、apksig keep 后可用；内置 apksigner/zipalign、分片/流式构建、工作区自动回收、真实 5.7 万文件样本未做。
