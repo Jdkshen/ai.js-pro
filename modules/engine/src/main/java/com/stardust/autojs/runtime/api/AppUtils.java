@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import androidx.annotation.Keep;
 import androidx.annotation.Nullable;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
@@ -17,8 +18,11 @@ import com.stardust.util.IntentUtil;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 
+import org.mozilla.javascript.Scriptable;
+
 import java.lang.ref.WeakReference;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Created by Stardust on 2017/4/2.
@@ -265,6 +269,55 @@ public class AppUtils {
         if (path == null)
             throw new NullPointerException("path == null");
         IntentUtil.viewFile(mContext, path, mFileProviderAuthority);
+    }
+
+    /**
+     * app.viewFile(path, {fresh:true}) 的 Rhino 入口。
+     *
+     * <p>无第二参时仍走上面的旧方法；带 options 时返回 ViewerResult：
+     * Rhino 可读 getter（viewerKey/fallback/fallbackReason/opened/path），复制失败会回退原路径并标记。
+     */
+    @Keep
+    @ScriptInterface
+    public IntentUtil.ViewerResult viewFile(String path, Object options) {
+        if (path == null)
+            throw new NullPointerException("path == null");
+        boolean fresh = parseFreshOption(options);
+        return IntentUtil.viewFileResult(mContext, path, null, mFileProviderAuthority, fresh);
+    }
+
+    private static boolean parseFreshOption(Object options) {
+        if (options == null) {
+            throw new IllegalArgumentException("app.viewFile 第二参 options 必须是对象，例如 {fresh:true}");
+        }
+        Object value = null;
+        if (options instanceof Scriptable) {
+            Scriptable scriptable = (Scriptable) options;
+            value = ScriptableObjectGet(scriptable, "fresh");
+            if (value == null || value == Scriptable.NOT_FOUND) {
+                return false;
+            }
+        } else if (options instanceof Map) {
+            Map<?, ?> map = (Map<?, ?>) options;
+            if (!map.containsKey("fresh")) {
+                return false;
+            }
+            value = map.get("fresh");
+        } else {
+            throw new IllegalArgumentException("app.viewFile 第二参 options 必须是对象，例如 {fresh:true}");
+        }
+        if (!(value instanceof Boolean)) {
+            throw new IllegalArgumentException("app.viewFile 的 options.fresh 必须是布尔值");
+        }
+        return (Boolean) value;
+    }
+
+    private static Object ScriptableObjectGet(Scriptable scriptable, String key) {
+        try {
+            return org.mozilla.javascript.ScriptableObject.getProperty(scriptable, key);
+        } catch (Throwable ignored) {
+            return Scriptable.NOT_FOUND;
+        }
     }
 
     @ScriptInterface

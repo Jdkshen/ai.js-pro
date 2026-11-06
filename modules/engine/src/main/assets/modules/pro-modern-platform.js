@@ -309,7 +309,42 @@
         },
         uninstall(packageName) { activity(makeIntent({ action: 'DELETE', data: 'package:' + packageName })); },
         openUrl(url) { activity(makeIntent({ action: 'VIEW', data: String(url) })); },
-        viewFile(file) { openFile(file, 'VIEW'); },
+        viewFile(file, options) {
+            if (options !== undefined) {
+                if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+                    throw new TypeError('app.viewFile 第二参 options 必须是对象，例如 {fresh:true}');
+                }
+                const fresh = options.fresh === undefined ? false : options.fresh;
+                if (typeof fresh !== 'boolean') throw new TypeError('app.viewFile 的 options.fresh 必须是布尔值');
+                if (fresh) {
+                    const fullPath = filePath(file);
+                    try {
+                        const ctx = context();
+                        const authority = String(ctx.getPackageName()) + '.fileprovider';
+                        const json = java('com.stardust.util.IntentUtil')
+                            .viewFileResultJson(ctx, fullPath, authority, true);
+                        return JSON.parse(String(json));
+                    } catch (error) {
+                        // Java 复制/打开意外失败：回退旧路径打开，并明确返回 fallback。
+                        try {
+                            openFile(fullPath, 'VIEW');
+                            return {
+                                opened: true, fresh: false, fallback: true, viewerKey: null,
+                                path: fullPath, fallbackReason: String(error && error.message ? error.message : error)
+                            };
+                        } catch (fallbackError) {
+                            return {
+                                opened: false, fresh: false, fallback: true, viewerKey: null,
+                                path: fullPath,
+                                fallbackReason: String(error && error.message ? error.message : error)
+                                    + ' / fallback: ' + String(fallbackError && fallbackError.message ? fallbackError.message : fallbackError)
+                            };
+                        }
+                    }
+                }
+            }
+            openFile(file, 'VIEW');
+        },
         editFile(file) { openFile(file, 'EDIT'); },
         sendEmail(options) {
             options = options || {};
@@ -517,4 +552,22 @@
         'Project directories, WorkManager scheduling, V8 handler, projectConfig/projectDir and V8-specific lifecycle facilities are unavailable.',
         'execScriptFile starts QuickJS, with workingDirectory and serialized arguments; no Node package/runtime emulation.'
     ]);
+
+    // QuickJS 的 global app 来自 C++ bootstrap；若 global 属性可写，则把 modern app.viewFile（带 fresh）
+    // 以原型/自有属性兼容层挂到 global app 上；不可写时保持 C++ 旧实现（不抛错、不破坏启动）。
+    try {
+        const originalGlobalApp = g.app;
+        if (originalGlobalApp && typeof originalGlobalApp.viewFile === 'function') {
+            const appCompat = Object.create(null);
+            Object.getOwnPropertyNames(originalGlobalApp).forEach(function (key) {
+                try { appCompat[key] = originalGlobalApp[key]; } catch (_) { }
+            });
+            appCompat.viewFile = function (file, viewOptions) {
+                // 无第二参保持 QuickJS C++ global 的旧返回值/旧行为；只有 {fresh:...} 走 modern 分支。
+                if (viewOptions === undefined) return originalGlobalApp.viewFile(file);
+                return app.viewFile(file, viewOptions);
+            };
+            g.app = Object.freeze(appCompat);
+        }
+    } catch (_) { /* leave C++ global app untouched */ }
 })(globalThis);

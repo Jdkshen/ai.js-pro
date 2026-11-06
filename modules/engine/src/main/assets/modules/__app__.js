@@ -18,6 +18,9 @@ module.exports = function (runtime, global) {
         return result;
     }
 
+    // app.viewFile(path, {fresh:true}) 不需要 JS 包装：AppUtils 已有 viewFile(String,Object) 重载（返回 ViewerResult）。
+    // 曾经在这里赋值覆盖 Java 方法 → Rhino 报 `Java method "viewFile" cannot be assigned to`（K40 实测 dev-1372）。
+
     app.intent = function (i) {
         var intent = new android.content.Intent();
         if (i.className && i.packageName) {

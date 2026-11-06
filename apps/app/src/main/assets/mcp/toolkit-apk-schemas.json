@@ -1135,6 +1135,11 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "detail": {
+        "type": "string",
+        "enum": ["full","summary"],
+        "description": "full（默认）返回完整 verification/alignment 诊断；summary 只回 path/size/sha256/signed/signer/schemes/changed* 等关键字段，适合轮询或大包。"
+      },
       "workspaceId": {
         "type": "string"
       },

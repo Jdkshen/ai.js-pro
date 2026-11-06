@@ -354,6 +354,41 @@ jadx, apk-resources, apktool, radare2, r2ghidra, yara, unicorn, frida
 - 普通条目：`zip_entry:path/in/apk`；AXML：`axml:AndroidManifest.xml`；资源：`resource:...`。
 - locator 来自 `apk_dex_search_members`、`apk_dex_read_class_outline`、`apk_list` 或搜索结果，不要手写猜的描述符。
 
+### 首选：apk_read_text 直接读方法 Smali（.4 实战反馈）
+
+> 来源：`.4` 的 MCP反馈-云镜逆向会话：「`apk_read_text(locator="dex_method:…")` 直接给方法 smali 是本次破案的关键（`.packed-switch` 表就是 opcode→语义），建议文档里重点写」。这是首选路径：先读 Smali，不要一上来就用 JADX。
+
+**为什么首选**：`apk_read_text` 对 `dex_method:` 定位符返回 baksmali 的完整方法体（从 `.method` 到 `.end method`），保留 `.packed-switch`/`.sparse-switch` 表、寄存器编号和真实 opcode；不经过反编译近似，也不会被 JADX 展平成 if/else。
+
+**步骤 1：先拿精确方法 locator**（重载必须带完整参数描述符）：
+
+```json
+{"jsonrpc":"2.0","id":35,"method":"tools/call","params":{"name":"apk_dex_search_members","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","query":"${METHOD_OR_SYMBOL}","queryType":"literal","matchMode":"contains","caseSensitive":false,"scope":"method","prefix":"${PACKAGE_PREFIX}","limit":50,"snippetMaxChars":200,"includeMatchOffsets":true}}}
+```
+
+搜索结果里取 `locator`（跨 DEX 同名类用 `uniqueLocator`/`dexEntry`）；不要手写猜测的 `dex_method:`。
+
+**步骤 2：直接读方法 Smali**（当前 schema 仍要求带分页参数；先传默认 500/49152/0/0）：
+
+```json
+{"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"apk_read_text","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"dex_method:Lcom/example/Foo;->bar(I)V","limit":500,"maxChars":49152,"startLine":0,"startColumn":0}}}
+```
+
+返回的 `data.text` 就是方法 Smali；`data.locator`/`targetVersion`/`editable` 原样保留。方法大于一页时看 `hasMore`/`nextLine`/`nextColumn`，用 `startLine`/`startColumn` 续读（不要用 `offset` 猜码点）。
+
+**步骤 3：在 Smali 里读 switch 表和 opcode**：
+
+- 搜 `data.text` 里的 `.packed-switch` / `.sparse-switch`：其后的标签顺序就是 case 索引→目标标签；再用 `apk_dex_read_class_outline`/`apk_dex_call_graph` 补充类和调用关系。
+- 需要修改时，拿着 `targetVersion` 调 `apk_edit_text`（`matchText` 必须唯一），再用 `apk_session_check`；Smali 能编译通过不等于业务语义正确。
+- `apk_decompile_method`/JADX 仅在需要 Java 可读伪代码时作为补充；伪代码不能当源码，也不能反推 `.packed-switch` 的精确表。
+
+**怎么验证**：
+1. `apk_dex_search_members` 返回的 `locator` 与读取时 `data.locator` 一致；
+2. `data.text` 以 `.method` 开头、以 `.end method` 结束，且包含你搜索的方法名/描述符；
+3. 在同一 `targetVersion` 下用 `apk_decompile_method`（可选 JADX）对照方法签名/常量；若 JADX 展开 switch 而 Smali 有 `.packed-switch`，以 Smali 的表为准；
+4. 修改后 `apk_session_check(runBuildChecks=true)` 成功且 `apk_build(sign=true)` 产物可安装；回读 `apk_read_text` 确认改动落盘。
+
+
 ### 精确搜索
 
 ```json

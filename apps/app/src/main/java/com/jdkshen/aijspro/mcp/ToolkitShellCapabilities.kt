@@ -149,7 +149,23 @@ internal object ToolkitShellCapabilities {
                 "不同设备 busybox/ROM 能力可能不同；矩阵是实测基线，不是所有设备保证",
                 "遇到 unrecognized option/not found/inaccessible 先用 classifyFailure() 分类，不要猜",
                 "优先使用 MCP 文件/压缩工具，减少 shell 引号与转义问题",
+                "pm install 不能直接吃 /storage/emulated/0（FUSE 上下文）：先把 APK cp 到 /data/local/tmp，再 pm install -r /data/local/tmp/<file>.apk。",
             ),
+            "installPitfalls" to JsonArray().apply {
+                add(ToolkitIo.json(
+                    "id" to "pm_install_fuse_storage",
+                    "symptom" to "pm install /storage/emulated/0/...apk 报 Can't open file 或安装失败；文件本身存在且路径正确。",
+                    "cause" to "system_server 不能直接打开 FUSE 挂载的 /storage/emulated/0 上下文中的 APK，必须先复制到 /data/local/tmp 这类可被安装器读取的位置。",
+                    "wrong" to "pm install /storage/emulated/0/脚本/app.apk",
+                    "correctSequence" to jsonArray(
+                        "cp /storage/emulated/0/脚本/app.apk /data/local/tmp/app.apk",
+                        "chmod 644 /data/local/tmp/app.apk",
+                        "pm install -r /data/local/tmp/app.apk",
+                    ),
+                    "requiresBackend" to "shizuku 或 ADB shell（pm install 通常不能由普通 app UID 执行）",
+                    "note" to "cp 的源路径按实际文件替换；安装完成后可保留或删除 /data/local/tmp/app.apk。",
+                ))
+            },
             "probeHint" to "可先运行 get_shell_capabilities（接线后的 MCP 工具）或 terminal_exec 的 help 输出核对本机能力",
         )
     }

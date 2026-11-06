@@ -1214,9 +1214,42 @@
       appCall('startActivity', [toWire(pkg)]);
       return true;
     },
-    viewFile: function (path) {
+    viewFile: function (path, options) {
       // 与 image 一致：相对路径按入口脚本目录解析，宿主只接收绝对路径。
       var absolute = resolveImagePath(path, 'app.viewFile 路径');
+      if (options !== undefined) {
+        if (options === null || typeof options !== 'object' || Array.isArray(options)) {
+          throw hostError('app.viewFile 第二参 options 必须是对象，例如 {fresh:true}');
+        }
+        var hasFresh = Object.prototype.hasOwnProperty.call(options, 'fresh');
+        var fresh = hasFresh ? options.fresh : false;
+        if (typeof fresh !== 'boolean') {
+          throw hostError('app.viewFile 的 options.fresh 必须是布尔值');
+        }
+        if (fresh) {
+          try {
+            var context = autojs && autojs.androidContext;
+            if (!context) { throw new Error('Android context 不可用'); }
+            var authority = String(context.getPackageName()) + '.fileprovider';
+            var util = javaApi.findClass('com.stardust.util.IntentUtil');
+            var json = util.viewFileResultJson(context, absolute, authority, true);
+            if (typeof json !== 'string') {
+              throw new Error('viewFileResultJson 返回非字符串');
+            }
+            return JSON.parse(json);
+          } catch (error) {
+            // 复制/Java 调用意外失败：仍尝试旧入口打开原路径，并把 fallback 明确返回给调用方。
+            var fallback = appCall('viewFile', [absolute]);
+            if (typeof fallback !== 'boolean') {
+              throw hostError('app.viewFile 返回值非法（期望 boolean）：' + String(fallback));
+            }
+            return {
+              opened: fallback, fresh: false, fallback: true, viewerKey: null,
+              path: absolute, fallbackReason: String(error && error.message ? error.message : error)
+            };
+          }
+        }
+      }
       var value = appCall('viewFile', [absolute]);
       if (typeof value !== 'boolean') {
         throw hostError('app.viewFile 返回值非法（期望 boolean）：' + String(value));

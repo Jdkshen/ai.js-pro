@@ -954,6 +954,30 @@ internal class McpApkToolkit(
         listOf("changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries").forEach {
             result.add(it, checked.get(it))
         }
+        // 云镜反馈：apk_build 返回太大，调用方常只要路径/哈希/签名/改动计数。detail=summary 只留关键字段（默认 full，老调用不变）。
+        if (args.tString("detail", "full").equals("summary", true)) {
+            val keep = listOf("path", "size", "sha256", "signed", "signer", "signerFallbackReason", "schemesApplied", "schemesVerified",
+                "changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries",
+                "signingIdentity", "sourceUnchanged")
+            val summary = com.google.gson.JsonObject()
+            keep.forEach { key -> result.get(key)?.let { value -> summary.add(key, value) } }
+            result.getAsJsonObject("signature")?.let { signature ->
+                summary.add("signature", com.google.gson.JsonObject().apply {
+                    addProperty("verified", signature.tBool("verified"))
+                    add("schemes", signature.get("schemes"))
+                })
+            }
+            result.getAsJsonObject("alignment")?.let { alignment ->
+                summary.add("alignment", com.google.gson.JsonObject().apply {
+                    addProperty("checked", alignment.tBool("checked"))
+                    add("misalignedEntries", alignment.get("misalignedEntries"))
+                    addProperty("zipStatus", alignment.tString("zipStatus", ""))
+                })
+            }
+            summary.addProperty("detail", "summary")
+            summary.addProperty("detailNote", "detail=summary 只回关键字段；要 verification/alignment 全量诊断请用 detail=full（默认）")
+            return summary
+        }
         return result
     }
     /**

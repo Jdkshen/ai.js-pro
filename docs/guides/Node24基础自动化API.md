@@ -269,7 +269,8 @@ viewFile('./screenshot.png');
 
 - `image.findImage` / `findImageSync` / `Image.findImage`：真实 OpenCV 模板定位，支持 region、threshold、weakThreshold、level；逐帧使用后请回收截图。
 - `ocr.createOCR({backend:'mlkit'|'ppocr'})`：内置离线 OCR，会话用完 `release()`；截图来源由 `media_projection` 提供。
-- `matchTemplate`（多结果）、透明掩膜和特征匹配仍未接入 Node24。
+- `matchTemplate`（多结果）/`matchTemplateMulti`（多模板）/`matchMany`（批量）**已接入 Node24**（K40 实测 `matchTemplateMulti` 3 模板一次调用 ~48ms，见 `docs/reports/2026-10-20_Node新增API示例与K40验证.md`）；透明掩膜与特征匹配（SIFT 一类）仍未接入。
+  ⚠️ 判断「某 API 到底有没有接」不要只看文档：用 `list_engine_api` 的 `documented`/`documentedItems` 字段看索引覆盖，再用 `probe_engine_api`（存在性）与 `call_engine_api`/`run_script`（真跑，内置示例 `多模板匹配(matchTemplateMulti).js`）确认。**`documented:false` 只代表索引里没写，不代表没实现**（本条原文就是反例，2026-11-06 由 `.4` 实战反馈纠正）。
 - 控件选择器、UiObject 遍历和节点文字输入见 [Node24 控件选择器 API](Node24控件选择器API.md)；本页主要说明基础动作与截图。
 - 无障碍事件订阅与完整 `automator` 模块尚未覆盖。
 - `app` 仅提供最小方法面（含本页的 `viewFile`），不是完整的 Pro `app` API。

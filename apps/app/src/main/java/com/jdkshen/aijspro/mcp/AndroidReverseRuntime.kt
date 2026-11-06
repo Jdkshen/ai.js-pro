@@ -265,22 +265,53 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val destination=ToolkitIo.resolve(root,args.tString("outPath"))
         require(!destination.exists()&&destination.parentFile?.isDirectory==true){"outPath 必须为父目录存在的新文件"}
         val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk")
+        val interaction=args.tString("interactionType","listen")
         val unsigned=File(temp,"gadget-unsigned.apk")
         val info=ToolkitGadget.prepare(input,unsigned,temp,component("frida-gadget"),args.tInt("port",27042,1024,65535),
             android.os.Build.SUPPORTED_ABIS.firstOrNull()?:"unknown",
-            args.tString("interactionType","listen"),
-            args.tString("scriptPath","").ifEmpty{null})
+            interaction,
+            args.tString("scriptPath","").ifEmpty{null},
+            // 反馈接线：schema 收了 providerProcess，调用方必须真传，否则逃生口/显式指定形同虚设。
+            args.tString("providerProcess","").ifEmpty{null})
         ToolkitArchiveAlignment.align(unsigned)
         val signed=File(temp,"gadget-signed.apk")
-        val signer=AutoSigningIdentity.signer(temp,"MCP免Root Gadget集成")
-        require(signer is KeyStoreApkSigner){"当前签名身份不支持归档签名"}
-        signer.signAlignedArchive(unsigned,signed)
-        val verification=ToolkitApkVerifier.inspect(signed,null,null)
-        require(verification.getAsJsonObject("signature").tBool("verified")){"Gadget APK验签失败"}
-        require(signed.length()<=ToolkitIo.MAX_APK){"输出APK超过512MiB"}
-        ToolkitIo.withFileLocks(listOf(destination)) {
-            require(!destination.exists()){"outPath 已存在，请使用新文件名"}
-            ToolkitIo.atomic(destination){signed.copyTo(it,true)}
+        var verification:JsonObject?=null
+        try {
+            val signer=AutoSigningIdentity.signer(temp,"MCP免Root Gadget集成")
+            require(signer is KeyStoreApkSigner){"当前签名身份不支持归档签名"}
+            signer.signAlignedArchive(unsigned,signed)
+            verification=ToolkitApkVerifier.inspect(signed,null,null)
+            require(verification.getAsJsonObject("signature").tBool("verified")){"Gadget APK验签失败"}
+            require(signed.length()<=ToolkitIo.MAX_APK){"输出APK超过512MiB"}
+            ToolkitIo.withFileLocks(listOf(destination)) {
+                require(!destination.exists()){"outPath 已存在，请使用新文件名"}
+                ToolkitIo.atomic(destination){signed.copyTo(it,true)}
+            }
+        } catch (failure: Throwable) {
+            if (failure is VirtualMachineError) throw failure
+            // 反馈诉求：「失败也返回 {outputPath,signed,sha256} 并把"可安装"写清」。
+            // 只有签名产物真的写出来了才这么回；否则原样抛出，不假装成功。
+            val candidate=signed.takeIf{it.isFile&&it.length()>0}
+            if (candidate==null) throw failure
+            val target=runCatching{
+                ToolkitIo.withFileLocks(listOf(destination)) {
+                    if(!destination.exists()) ToolkitIo.atomic(destination){candidate.copyTo(it,true)}
+                }
+                destination.takeIf{it.isFile}
+            }.getOrNull() ?: throw failure
+            return ToolkitIo.json(
+                "outputPath" to target.path, "path" to target.path, "size" to target.length(),
+                "sha256" to runCatching{ToolkitIo.sha(target)}.getOrNull(),
+                "signed" to true, "installable" to true, "partial" to true,
+                "installed" to false, "originalSignaturePreserved" to false,
+                "interactionType" to interaction,
+                "providerProcess" to info.get("providerProcess"), "providerProcessSource" to info.get("providerProcessSource"),
+                "note" to ("可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载"),
+                "errorCode" to (failure as? ToolkitException)?.code, "error" to failure.message,
+                "nextActions" to ToolkitIo.json(
+                    "install" to "安装该 APK（重签证书与原应用不同，覆盖安装可能失败，必要时保留数据重装）",
+                    "verify" to "安装后用 frida_status / logcat 确认 Gadget 是否加载；注入未验证不代表不能加载",
+                ))
         }
         return info.apply {
             addProperty("path",destination.path);addProperty("size",destination.length());addProperty("sha256",ToolkitIo.sha(destination))
@@ -288,10 +319,22 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             add("verification",verification)
             // 只读对齐诊断（与 apk_build 同源：写入后 align、再由 verifier 复核本地头偏移）
             add("alignment",alignmentDiagnosticsJson(verification,true))
-            add("nextActions",ToolkitIo.json("install" to "安装输出APK；重签与原应用证书不同时不能直接覆盖，保留原数据再自行安排安装",
-                "launch" to "手动打开输出应用；Gadget只在应用默认进程中加载，不阻塞界面",
-                "check" to ToolkitIo.json("tool" to "frida_status","args" to ToolkitIo.json("endpoint" to tString("endpoint"),"token" to tString("token"))),
-                "processes" to "frida_processes传相同endpoint/token，再用实际返回pid调用frida_eval；Java API需要打包frida-java-bridge"))
+            // 反馈：script 模式不构建 endpoint/token，nextActions 也不能再引用它们（否则调用方拿到空值去连）。
+            if(interaction=="script"){
+                add("nextActions",ToolkitIo.json(
+                    "install" to "安装输出APK；重签与原应用证书不同时不能直接覆盖，保留原数据再自行安排安装",
+                    "launch" to "手动打开输出应用；script 模式不碰网络，加载后按 scriptPath 执行，不阻塞界面",
+                    "check" to ToolkitIo.json("tool" to "frida_status","note" to "script 模式无 endpoint/token；用 frida_status 判断组件/服务状态即可"),
+                    "script" to "确认 scriptPath 指向目标应用可读的文件（如 /data/local/tmp/a.js），否则不会执行",
+                ))
+            } else {
+                add("nextActions",ToolkitIo.json(
+                    "install" to "安装输出APK；重签与原应用证书不同时不能直接覆盖，保留原数据再自行安排安装",
+                    "launch" to "手动打开输出应用；Gadget只在应用默认进程中加载，不阻塞界面",
+                    "check" to ToolkitIo.json("tool" to "frida_status","args" to ToolkitIo.json("endpoint" to tString("endpoint"),"token" to tString("token"))),
+                    "processes" to "frida_processes传相同endpoint/token，再用实际返回pid调用frida_eval；Java API需要打包frida-java-bridge",
+                ))
+            }
         }
     }
     private fun radare(name:String,args:JsonObject,temp:File):JsonObject {

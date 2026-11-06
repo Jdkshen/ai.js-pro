@@ -207,7 +207,11 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("get_status", "读取 MCP、脚本目录、任务和工作区状态"))
             add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）；示例：{\"path\":\"\",\"recursive\":true}", objSchema("path", "offset", "limit", "recursive")))
             add(tool("read_script", "分块读取脚本目录中的文本文件；示例：{\"path\":\"main.js\",\"maxBytes\":65536}", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
-            add(tool("search_scripts", "递归搜索脚本文件名与内容，结果可继续分页", objSchema("query", "path", "limit", required = arrayOf("query"))))
+            add(tool("search_scripts", "递归搜索脚本文件名与内容；截断时返回 scanCursor（可传回本工具继续扫描）和分页 cursor（用于继续分页取出已返回的 items）", objSchema("query", "path", "limit", "scanCursor", "resumeCursor", "cursor", required = arrayOf("query")).apply {
+                getAsJsonObject("properties").getAsJsonObject("scanCursor").addProperty("description", "上一次返回的 scanCursor；原样传回即可从已扫位置继续，query/path 必须一致；不要传分页 cursor。省略=从头扫描。")
+                getAsJsonObject("properties").getAsJsonObject("resumeCursor").addProperty("description", "scanCursor 的别名；原样传回即可从已扫位置继续。")
+                getAsJsonObject("properties").getAsJsonObject("cursor").addProperty("description", "scanCursor 的兼容别名（只接受 scan1- 开头的续扫游标；分页 cursor 请用 continue_result）。")
+            }))
             add(tool("continue_result", "使用 cursor 继续获取搜索或大结果的下一页", objSchema("cursor", "limit", required = arrayOf("cursor"))))
             add(tool("list_samples", "列出内置示例", objSchema("path", "offset", "limit")))
             add(tool("read_sample", "分块读取内置示例", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
@@ -343,7 +347,8 @@ internal class McpTools(private val context: Context, private val event: (String
             })
             "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
             "read_script" -> toolJson(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
-            "search_scripts" -> toolJson(searchScripts(args.string("query"), args.stringOr("path", ""), args.intOr("limit", 50)))
+            "search_scripts" -> toolJson(searchScripts(args.string("query"), args.stringOr("path", ""), args.intOr("limit", 50),
+                args.stringOr("scanCursor", args.stringOr("resumeCursor", args.stringOr("cursor", "")))))
             "continue_result" -> toolJson(continueResult(args.string("cursor"), args.intOr("limit", 50)))
             "list_samples" -> toolJson(listAssets(args.stringOr("path", "sample"), args.intOr("offset", 0), args.intOr("limit", 100)))
             "read_sample" -> toolJson(readAsset(args.string("path"), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
@@ -882,56 +887,151 @@ internal class McpTools(private val context: Context, private val event: (String
         }
     }
 
-    private fun searchScripts(query: String, path: String, limit: Int): JsonObject {
+    private fun searchScripts(query: String, path: String, limit: Int, scanCursor: String = ""): JsonObject {
         val needle = query.trim()
         if (needle.isEmpty()) throw ToolError("搜索词不能为空")
         if (needle.length > 200) throw ToolError("搜索词过长")
         val start = resolveScript(path)
         if (!start.isDirectory) throw ToolError("搜索目录不存在")
-        val hits = mutableListOf<JsonObject>()
+        val startPath = start.relativeTo(root).invariantSeparatorsPath
+        val resume = scanCursor.takeIf { it.isNotEmpty() }?.let { decodeScanCursor(it, startPath, needle) }
+        val nextFileIndex = resume?.nextFileIndex ?: 0
+        if (nextFileIndex > MAX_SCAN_WALK_FILES) invalidScanCursor("扫描位置超过本次上限")
+        val walkLimit = if (resume == null) MAX_SEARCH_FILES + 1
+            else (nextFileIndex + MAX_SEARCH_FILES + 1).coerceAtMost(MAX_SCAN_WALK_FILES)
         // 枚举统一走 ScriptRepository.walkFiles；过滤在计数之前（与 filter{take(n)} 同语义）。
-        val candidates = ScriptRepository.walkFiles(start, MAX_SEARCH_FILES + 1) { _, name ->
+        val candidates = ScriptRepository.walkFiles(start, walkLimit) { _, name ->
             name.substringAfterLast('.', "").lowercase() in TEXT_EXTENSIONS
         }.map { File(it.path) }
-        val truncatedFiles = candidates.size > MAX_SEARCH_FILES
+        if (resume != null) {
+            if (candidates.size < resume.prefixCount) invalidScanCursor("扫描目录内容已变化（文件数减少）")
+            if (scanGeneration(candidates, resume.prefixCount) != resume.generation)
+                invalidScanCursor("扫描代次已变化（目录或文件内容已变）")
+        }
+        val hits = mutableListOf<JsonObject>()
+        var fileIndex = nextFileIndex
+        var lineIndex = resume?.nextLine ?: 0
+        var nameChecked = resume?.nameChecked ?: false
         var scanned = 0
-        candidates.take(MAX_SEARCH_FILES).forEach { file ->
-            if (hits.size >= MAX_SEARCH_HITS) return@forEach
-            scanned++
+        var scannedBytes = 0L
+        var lastScannedPath: String? = null
+        var hitLimitReached = false
+        var fileLimitReached = false
+        while (fileIndex < candidates.size && scanned < MAX_SEARCH_FILES && hits.size < MAX_SEARCH_HITS) {
+            val file = candidates[fileIndex]
             val relative = file.relativeTo(root).invariantSeparatorsPath
-            if (file.name.contains(needle, ignoreCase = true)) hits += JsonObject().apply {
-                addProperty("path", relative); addProperty("kind", "name"); addProperty("line", 0); addProperty("preview", file.name)
+            lastScannedPath = relative
+            if (!nameChecked) {
+                scanned++; scannedBytes += file.length()
+                if (file.name.contains(needle, ignoreCase = true)) hits += JsonObject().apply {
+                    addProperty("path", relative); addProperty("kind", "name"); addProperty("line", 0); addProperty("preview", file.name)
+                }
+                nameChecked = true
+                if (hits.size >= MAX_SEARCH_HITS) { hitLimitReached = true; break }
             }
             if (file.length() <= MAX_SEARCH_FILE_BYTES) {
-                runCatching { file.useLines(Charsets.UTF_8) { lines -> lines.forEachIndexed { index, line ->
-                    if (hits.size < MAX_SEARCH_HITS && line.contains(needle, ignoreCase = true)) hits += JsonObject().apply {
-                        addProperty("path", relative); addProperty("kind", "content"); addProperty("line", index + 1)
-                        addProperty("preview", line.trim().take(240))
+                runCatching { file.useLines(Charsets.UTF_8) { lines ->
+                    var current = 0
+                    for (line in lines) {
+                        if (current < lineIndex) { current++; continue }
+                        if (hits.size >= MAX_SEARCH_HITS) break
+                        if (line.contains(needle, ignoreCase = true)) hits += JsonObject().apply {
+                            addProperty("path", relative); addProperty("kind", "content"); addProperty("line", current + 1)
+                            addProperty("preview", line.trim().take(240))
+                        }
+                        current++; lineIndex = current
+                        if (hits.size >= MAX_SEARCH_HITS) break
                     }
-                } } }
+                    if (hits.size < MAX_SEARCH_HITS) lineIndex = current
+                } }
             }
+            if (hits.size >= MAX_SEARCH_HITS) { hitLimitReached = true; break }
+            fileIndex++; lineIndex = 0; nameChecked = false
         }
-        val hitLimitReached = hits.size >= MAX_SEARCH_HITS
-        val truncated = truncatedFiles || hitLimitReached
+        if (!hitLimitReached && scanned >= MAX_SEARCH_FILES && fileIndex < candidates.size) fileLimitReached = true
+        val walkLimitReached = !hitLimitReached && !fileLimitReached && fileIndex >= candidates.size && candidates.size >= walkLimit
+        val truncated = hitLimitReached || fileLimitReached || walkLimitReached
         val stopReason = when {
             hitLimitReached -> "hit_limit_reached"
-            truncatedFiles -> "file_scan_limit_reached"
+            fileLimitReached -> "file_scan_limit_reached"
+            walkLimitReached -> "walk_limit_reached"
             else -> "completed"
         }
+        val prefixCount = if (hitLimitReached) (fileIndex + 1).coerceAtMost(candidates.size) else fileIndex.coerceAtMost(candidates.size)
+        val cursor = if (truncated) encodeScanCursor(startPath, needle, fileIndex, lineIndex, nameChecked, prefixCount,
+            scanGeneration(candidates, prefixCount)) else ""
+        val stoppedAt = if (truncated) ToolkitIo.json("path" to lastScannedPath,
+            "line" to lineIndex.takeIf { it > 0 }, "reason" to stopReason) else null
         return firstPage(hits, limit).apply {
             addProperty("scannedFiles", scanned)
+            addProperty("scannedEntries", scanned)
+            addProperty("scannedBytes", scannedBytes)
             addProperty("truncatedScan", truncated)
+            addProperty("hasMoreScan", truncated)
+            add("stoppedAt", stoppedAt)
             // P1-8：截断时必须能区分「扫完没有」和「没扫完」，否则 total=0 会被误读成「项目里没有」。
             addProperty("stopReason", stopReason)
             add("scanLimits", JsonObject().apply {
                 addProperty("maxFiles", MAX_SEARCH_FILES); addProperty("maxHits", MAX_SEARCH_HITS)
-                addProperty("scannedFiles", scanned); addProperty("hits", hits.size)
+                addProperty("scannedFiles", scanned); addProperty("scannedEntries", scanned)
+                addProperty("scannedBytes", scannedBytes); addProperty("hits", hits.size)
             })
             if (truncated) {
-                addProperty("warning", "扫描未完成（stopReason=$stopReason）：**不能据此判定「不存在」**；请用 path 缩小范围后重搜")
-                addProperty("resumeHint", "已扫 $scanned 个文件（上限 $MAX_SEARCH_FILES）；把 path 指到子目录（例如 path=poker-recog）即可完整扫描")
+                addProperty("scanCursor", cursor)
+                addProperty("resumeCursor", cursor)
+                addProperty("warning", "扫描未完成（stopReason=$stopReason）：**未扫完≠不存在，不能据此判定「不存在」**；可用 scanCursor 继续")
+                addProperty("resumeHint", "把返回的 scanCursor 原样传给 search_scripts（query/path 保持不变），从已扫位置继续；不要用它推断剩余内容为空")
             }
         }
+    }
+    private data class ScanResume(
+        val nextFileIndex: Int,
+        val nextLine: Int,
+        val nameChecked: Boolean,
+        val prefixCount: Int,
+        val generation: String,
+    )
+    private fun invalidScanCursor(reason: String): Nothing =
+        throw ToolError("扫描游标失效：$reason。请不带 scanCursor 重新开始（保留原 query/path）")
+    private fun scanGeneration(candidates: List<File>, count: Int): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        for (i in 0 until count.coerceAtMost(candidates.size)) {
+            val file = candidates[i]; val relative = file.relativeTo(root).invariantSeparatorsPath
+            digest.update(relative.toByteArray(Charsets.UTF_8)); digest.update(0.toByte())
+            digest.update(file.length().toString().toByteArray(Charsets.UTF_8)); digest.update(0.toByte())
+            digest.update(file.lastModified().toString().toByteArray(Charsets.UTF_8)); digest.update(0.toByte())
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+    private fun encodeScanCursor(startPath: String, query: String, nextFileIndex: Int, nextLine: Int,
+                                 nameChecked: Boolean, prefixCount: Int, generation: String): String {
+        val payload = ToolkitIo.json("v" to 1, "root" to root.canonicalPath, "path" to startPath,
+            "query" to query, "nextFileIndex" to nextFileIndex, "nextLine" to nextLine,
+            "nameChecked" to nameChecked, "prefixCount" to prefixCount, "generation" to generation)
+        return SCAN_CURSOR_PREFIX + ToolkitIo.hex(payload.toString().toByteArray(Charsets.UTF_8)).lowercase()
+    }
+    private fun decodeScanCursor(raw: String, startPath: String, query: String): ScanResume {
+        if (raw.length > 4096 || !raw.startsWith(SCAN_CURSOR_PREFIX)) invalidScanCursor("格式不正确")
+        val bytes = try { ToolkitIo.unhex(raw.removePrefix(SCAN_CURSOR_PREFIX)) }
+            catch (_: IllegalArgumentException) { invalidScanCursor("编码损坏") }
+        val payload = try { com.google.gson.JsonParser().parse(bytes.toString(Charsets.UTF_8)).asJsonObject }
+            catch (_: Exception) { invalidScanCursor("内容损坏") }
+        fun text(key: String): String = payload.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+            ?: invalidScanCursor("缺少 $key")
+        fun number(key: String): Int = payload.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
+            ?: invalidScanCursor("缺少 $key")
+        if (number("v") != 1) invalidScanCursor("版本不支持")
+        if (text("root") != root.canonicalPath) invalidScanCursor("脚本根路径已变化")
+        if (text("path") != startPath) invalidScanCursor("搜索根路径已变化")
+        if (text("query") != query) invalidScanCursor("query 已变化（续扫必须使用同一搜索词）")
+        val nextFileIndex = number("nextFileIndex"); val nextLine = number("nextLine")
+        val prefixCount = number("prefixCount")
+        if (nextFileIndex < 0 || nextLine < 0 || prefixCount < 0 || prefixCount < nextFileIndex) invalidScanCursor("位置字段非法")
+        val nameChecked = payload.get("nameChecked")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+            ?: invalidScanCursor("缺少 nameChecked")
+        val generation = text("generation")
+        if (generation.isEmpty()) invalidScanCursor("缺少代次")
+        return ScanResume(nextFileIndex, nextLine, nameChecked, prefixCount, generation)
     }
 
     @Synchronized private fun firstPage(items: List<JsonObject>, limit: Int): JsonObject {
@@ -1154,6 +1254,8 @@ internal class McpTools(private val context: Context, private val event: (String
         private const val MAX_SEARCH_HITS = 2000
         private const val MAX_SEARCH_FILE_BYTES = 512L * 1024
         private const val MAX_CURSORS = 16
+        private const val SCAN_CURSOR_PREFIX = "scan1-"
+        private const val MAX_SCAN_WALK_FILES = 200_000
         /** P2-10：工作区超过这个数就在 get_status 里直接给清理建议。 */
         private const val WORKSPACE_ALERT_THRESHOLD = 50
         private const val CURSOR_TTL_MS = 10 * 60 * 1000L

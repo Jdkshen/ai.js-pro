@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.mcp
 
 import com.google.gson.JsonObject
 import com.reandroid.arsc.chunk.xml.ResXmlDocument
+import com.reandroid.arsc.chunk.xml.ResXmlElement
 import org.jf.smali.Smali
 import org.jf.smali.SmaliOptions
 import java.io.ByteArrayInputStream
@@ -15,12 +16,19 @@ import java.util.zip.ZipOutputStream
 
 /** Rootless APK instrumentation. Existing resource tables and DEX files are copied byte for byte. */
 internal object ToolkitGadget {
+    internal data class ManifestPatch(
+        val bytes: ByteArray,
+        val packageName: String,
+        val providerProcess: String,
+        val providerProcessSource: String,
+    )
     const val MARKER = "assets/aijs-gadget.json"
     const val LIBRARY = "aijsgadget"
     val ABIS = setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 
     fun prepare(input: File, output: File, scratch: File, component: File, port: Int, defaultAbi: String,
-                interactionType: String = "listen", scriptPath: String? = null): JsonObject {
+                interactionType: String = "listen", scriptPath: String? = null,
+                providerProcess: String? = null): JsonObject {
         require(interactionType == "listen" || interactionType == "script") { "interactionType 只能是 listen 或 script" }
         if (interactionType == "script") {
             // 跨 UID 的 loopback 可能被 SELinux 静默 DROP（实测停在 SYN_SENT），script 模式不碰网络。
@@ -30,7 +38,7 @@ internal object ToolkitGadget {
             require(port in 1024..65535) { "Gadget port 必须为1024..65535" }
         }
         require(!output.exists() && output.parentFile?.isDirectory == true) { "必须输出到父目录存在的新文件" }
-        val token = ToolkitIo.hex(ByteArray(24).also { SecureRandom().nextBytes(it) }).lowercase()
+        val token = if (interactionType == "listen") ToolkitIo.hex(ByteArray(24).also { SecureRandom().nextBytes(it) }).lowercase() else null
         val suffix = ToolkitIo.fresh().replace("-", "")
         val provider = "com.aijs.instrumentation.GadgetProvider$suffix"
         val info: JsonObject
@@ -46,7 +54,7 @@ internal object ToolkitGadget {
             require(zip.getEntry(MARKER) == null && entries.none { it.name.endsWith("/lib$LIBRARY.so") || it.name.endsWith("/lib$LIBRARY.config.so") }) { "此APK已包含AI.js Gadget，请从原APK重新生成" }
             val manifestEntry = zip.getEntry("AndroidManifest.xml") ?: error("缺少AndroidManifest.xml")
             val manifest = zip.getInputStream(manifestEntry).use { ToolkitIo.read(it, 4 * 1024 * 1024) }
-            val patched = patchManifest(manifest, provider, suffix)
+            val patched = patchManifest(manifest, provider, suffix, providerProcess)
             val nativeAbis = entries.filter { it.name.matches(Regex("lib/[^/]+/[^/]+\\.so")) }.map { it.name.split('/')[1] }.toSet()
             require(nativeAbis.all { it in ABIS }) { "不支持的目标ABI：${nativeAbis - ABIS}" }
             val abis = nativeAbis.ifEmpty { setOf(defaultAbi) }
@@ -60,18 +68,23 @@ internal object ToolkitGadget {
             val dexName = if (nextDex == 1) "classes.dex" else "classes$nextDex.dex"
             val dex = compileProvider(provider, scratch)
             info = ToolkitIo.json("schemaVersion" to 1, "mode" to "rootless-gadget", "requiresRoot" to false,
-                "packageName" to patched.second, "providerClass" to provider, "providerProcess" to "application-default-process",
-                "interactionType" to interactionType,
-                "endpoint" to if (interactionType == "listen") "127.0.0.1:$port" else null,
-                "scriptPath" to scriptPath,
-                "token" to if (interactionType == "listen") token else null, "onLoad" to "resume", "portConflict" to "fail",
+                "packageName" to patched.packageName, "providerClass" to provider,
+                "providerProcess" to patched.providerProcess, "providerProcessSource" to patched.providerProcessSource,
+                "interactionType" to interactionType, "interaction" to interactionType,
+                "onLoad" to "resume", "portConflict" to "fail",
                 "fridaVersion" to "17.25.2", "abis" to abis.sorted(), "dexEntry" to dexName, "minimumRuntimeSdk" to 21,
                 "originalSha256" to ToolkitIo.sha(input), "resourceTableRecompiled" to false)
+            // script 模式不构建 endpoint/token；只暴露 interaction=script + scriptPath。
+            if (interactionType == "script") info.addProperty("scriptPath", scriptPath)
+            else {
+                info.addProperty("endpoint", "127.0.0.1:$port")
+                info.addProperty("token", token ?: error("listen 模式缺少令牌"))
+            }
             val config = ToolkitIo.json("interaction" to if (interactionType == "script") {
                 ToolkitIo.json("type" to "script", "path" to scriptPath, "on_load" to "resume")
             } else {
                 ToolkitIo.json("type" to "listen", "address" to "127.0.0.1", "port" to port,
-                    "on_port_conflict" to "fail", "on_load" to "resume", "token" to token)
+                    "on_port_conflict" to "fail", "on_load" to "resume", "token" to (token ?: error("listen 模式缺少令牌")))
             }).toString().toByteArray(Charsets.UTF_8)
             ZipOutputStream(output.outputStream()).use { out ->
                 fun add(name: String, data: ByteArray) { out.putNextEntry(ZipEntry(name)); out.write(data); out.closeEntry() }
@@ -90,7 +103,7 @@ internal object ToolkitGadget {
                     }
                     out.closeEntry()
                 }
-                add("AndroidManifest.xml", patched.first); add(dexName, dex); add(MARKER, info.toString().toByteArray(Charsets.UTF_8))
+                add("AndroidManifest.xml", patched.bytes); add(dexName, dex); add(MARKER, info.toString().toByteArray(Charsets.UTF_8))
                 libraries.forEach { (abi, library) ->
                     out.putNextEntry(ZipEntry("lib/$abi/lib$LIBRARY.so"))
                     library.inputStream().use { source -> val buffer=ByteArray(65536);while(true){ToolkitIo.ensureActive();val n=source.read(buffer);if(n<0)break;out.write(buffer,0,n)} };out.closeEntry()
@@ -135,6 +148,12 @@ internal object ToolkitGadget {
     }
 
     internal fun patchManifest(bytes: ByteArray, provider: String, suffix: String): Pair<ByteArray, String> {
+        val patched = patchManifest(bytes, provider, suffix, null)
+        return patched.bytes to patched.packageName
+    }
+
+    internal fun patchManifest(bytes: ByteArray, provider: String, suffix: String,
+                               requestedProviderProcess: String?): ManifestPatch {
         require(ToolkitResources.isBinaryXml(bytes)) { "输入APK的Manifest必须为二进制AXML" }
         val xml = ResXmlDocument().apply { readBytes(ByteArrayInputStream(bytes)) }
         val manifest = xml.documentElement ?: error("Manifest根节点不存在")
@@ -147,6 +166,7 @@ internal object ToolkitGadget {
         require(app.searchAttributeByName("isSplitRequired")?.valueAsBoolean != true) { "应用依赖分包，需要完整单APK" }
         require(app.searchAttributeByName("requiredSplitTypes")?.valueAsString.isNullOrEmpty()&&manifest.searchAttributeByName("requiredSplitTypes")?.valueAsString.isNullOrEmpty()){ "应用声明必需分包，需要完整单APK" }
         require(app.searchAttributeByName("enabled")?.valueAsBoolean != false) { "application已禁用" }
+        val processChoice = resolveProviderProcess(app, requestedProviderProcess)
         app.getOrCreateAndroidAttribute("extractNativeLibs", 0x010104ea).setValueAsBoolean(true)
         app.getOrCreateAndroidAttribute("hasCode", 0x0101000c).setValueAsBoolean(true)
         // Secondary DEX loading and the official Gadget require Android 5+. Make the output honest.
@@ -159,14 +179,49 @@ internal object ToolkitGadget {
         }
         app.newElement("provider").apply {
             getOrCreateAndroidAttribute("name", 0x01010003).setValueAsString(provider)
+            if (processChoice.second != "default") getOrCreateAndroidAttribute("process", 0x01010011).setValueAsString(processChoice.first)
             getOrCreateAndroidAttribute("authorities", 0x01010018).setValueAsString("$packageName.aijs.gadget.$suffix")
             getOrCreateAndroidAttribute("exported", 0x01010010).setValueAsBoolean(false)
             getOrCreateAndroidAttribute("enabled", 0x0101000e).setValueAsBoolean(true)
             getOrCreateAndroidAttribute("initOrder", 0x0101001a).apply { setType(0x10.toByte()); data = Int.MAX_VALUE }
         }
         xml.refreshFull()
-        return xml.bytes to packageName
+        return ManifestPatch(xml.bytes, packageName, processChoice.first, processChoice.second)
     }
+
+    private fun resolveProviderProcess(app: ResXmlElement, requested: String?): Pair<String, String> {
+        explicitProcess(requested)?.let { return it to "explicit" }
+        val launcher = (app.listElements("activity") + app.listElements("activity-alias")).firstOrNull { isLauncherComponent(it) }
+        val inherited = processOf(launcher) ?: processOf(app)
+        if (inherited != null) return inherited to "manifest"
+        return DEFAULT_PROVIDER_PROCESS to "default"
+    }
+
+    private fun isLauncherComponent(component: ResXmlElement): Boolean =
+        component.listElements("intent-filter").any { filter ->
+            filter.listElements("action").any { it.searchAttributeByName("name")?.valueAsString == "android.intent.action.MAIN" } &&
+                filter.listElements("category").any { it.searchAttributeByName("name")?.valueAsString == "android.intent.category.LAUNCHER" }
+        }
+
+    private fun processOf(element: ResXmlElement?): String? {
+        if (element == null) return null
+        val raw = element.searchAttributeByName("process")?.valueAsString?.trim().orEmpty()
+        return raw.takeIf { it.isNotEmpty() && isValidProcessName(it) }
+    }
+
+    private fun explicitProcess(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        val process = value.trim()
+        require(process.length <= 256 && !process.contains('\u0000') && isValidProcessName(process)) {
+            "providerProcess 无效：需要应用进程名（包名、:私有进程或 包名:后缀），长度≤256"
+        }
+        return process
+    }
+
+    private fun isValidProcessName(value: String): Boolean =
+        value.matches(Regex(":?[A-Za-z_][A-Za-z0-9_.]*(:[A-Za-z_][A-Za-z0-9_.]*)?"))
+
+    private const val DEFAULT_PROVIDER_PROCESS = "application-default-process"
 
     private fun compileProvider(name: String, scratch: File): ByteArray {
         val type = "L${name.replace('.', '/')};"

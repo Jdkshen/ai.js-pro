@@ -18,7 +18,7 @@ internal object ToolkitReverseTools {
         "native_xrefs" to "radare2 查询到指定 address 的引用；raw axtj 默认不解析重定位，0 条引用不能当作没有调用者；可选 relocsApply=true 先设置 e bin.relocs.apply=true；需要 pdg 或 relocs.apply=true 补 adrp/add 引用。offset/limit 分页，需 radare2，后台 jobId。",
         "native_compare" to "比较两个二进制 path/otherPath 的有界字节变化，附 radare2 元数据。返回变化范围与截断标记；不把相同大小当成语义相同。后台 jobId。",
         "artifact_fingerprint" to "读取 path 的 SHA256、格式和 APK 库/壳/框架线索。内置启发式指纹，明确证据与置信度；不是完整 APKiD，不执行目标。路径只接受工具目录内的路径（相对路径或工具目录内的绝对路径）；/system/lib64/** 等工具目录外文件会 INVALID_ARGUMENT，不能用它取外部文件哈希。后台 jobId。",
-        "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。默认 interactionType=listen 返回 endpoint/token，用 frida_status/processes/eval 连接；但 listen 跨 UID 可能被 SELinux 静默 DROP（实测停在 SYN_SENT，不是组件问题），此时改用 interactionType=script + scriptPath（启动即加载脚本，不碰网络）。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
+        "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。默认 interactionType=listen 返回 endpoint/token，用 frida_status/processes/eval 连接；listen 跨 UID 可能被 SELinux 静默 DROP（实测停在 SYN_SENT，不是组件问题），此时改用 interactionType=script + scriptPath（启动即加载脚本，不碰网络）：script 返回 interaction=script + scriptPath，不再生成 endpoint/token。providerProcess 可选：显式指定 Provider 的 android:process；省略时自动按 MAIN+LAUNCHER 入口 activity/activity-alias 的 android:process 判定，读不到再用 application 的 android:process，仍无则默认进程并返回 providerProcessSource=manifest|explicit|default。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
         "yara_scan" to "使用 yara 组件按 rulesPath 扫描 path；规则≤1MiB，输入≤64MiB，扫描≤30秒，禁用 include。返回规则命中/偏移及截断；不是自动恶意性结论。后台 jobId。",
         "native_emulate" to "Unicorn 隔离模拟 codeHex 原始机器码，可选 dataHex 与 registers；arm64/arm/thumb/x86/x86_64。代码≤64KiB、数据≤4096B、指令≤100000、时间≤1000ms，不提供完整 Android/ELF/JNI 环境。后台 jobId。",
         "frida_status" to "检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。注意：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT/超时，不是组件没装）；传入 portListening/synSentObserved/sameUid 可获得 connectDiagnosis，返回里另有 listenModeLimits 与 gadgetScriptMode（推荐改用 script 模式，不碰网络）。本版还会自动读取 /proc/net/tcp[6]（读不到时用 tcpText/tcp6Text 传入原文）解析 LISTEN(0A)/SYN_SENT(02) 作为证据；sameUid 无法从 tcp 文件推断，仍需比较目标/客户端 UID。后台 jobId。",
@@ -85,8 +85,9 @@ internal object ToolkitReverseTools {
                     "description" to "true=在工程目录原地构建（省掉整树复制；会校验源树未变）；false=复制到临时目录再构建"))}
             "apk_install_framework"->{path();field("tag",str())}
             "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))
-                field("interactionType",ToolkitIo.json("type" to "string","enum" to listOf("listen","script"),"default" to "listen","description" to "listen=监听127.0.0.1端口；script=启动即加载脚本（不碰网络，跨UID SELinux 拦不到）"))
-                field("scriptPath",str("script 模式下目标应用可读的脚本绝对路径"))}
+                field("interactionType",ToolkitIo.json("type" to "string","enum" to listOf("listen","script"),"default" to "listen","description" to "listen=监听127.0.0.1端口并返回 endpoint/token；script=启动即加载脚本（不碰网络，跨UID SELinux 拦不到），返回 interaction=script + scriptPath，不生成 endpoint/token"))
+                field("scriptPath",str("script 模式下目标应用可读的脚本绝对路径"))
+                field("providerProcess",str("可选：显式指定注入 Provider 的 android:process。省略时自动读 MAIN+LAUNCHER 入口 activity/activity-alias 的 android:process；入口未声明则用 application 的 android:process；都没有=默认进程。返回 providerProcessSource=explicit|manifest|default"))}
             "artifact_fingerprint","native_analyze"->path()
             "native_functions"->{path();page()}
             "native_function_detail"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)

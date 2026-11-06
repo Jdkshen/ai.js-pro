@@ -43,6 +43,17 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 - 详细条目可用 `category="API 详解与实践"` 查询。搜索结果带 `sectionTitles` / `exampleCount`；`read_api_doc` 可传 `section` 精确读取“参数”“返回值”“权限与前置条件”等目录项，省略则读全文。返回 `sections` 目录和 `examples:[{language,code}]` 原文代码数组；只在内容未分页时返回完整 examples，分段时 `examplesOmittedReason=paged_content`。只读说明可设 `includeExamples=false`，必须是 JSON 布尔值。高亮色与 HTML 装饰只供人看，MCP 始终读取纯 Markdown/原文代码。
 - 每项返回 `kind/source/engines`，`supportEvidence=documentation_only`。`guide` 是现行使用手册/Node 专题，`legacy` 是传统 Rhino 原文，不能推断 QuickJS/Node 支持。真实导出/成员用 `list_engine_api` / `probe_engine_api` 探测；同名函数的行为仍需目标引擎验证。
 - 文档工具是只读能力，不需要脚本执行/写入权限。示例工程仍通过 `list_samples` / `read_sample` 读取；没有搜索结果时不要凭空编造接口。
+### 文档与实现不一致：先看 list_engine_api.documented（.4 实战反馈：matchTemplateMulti）
+
+> 来源：`.4` 的 poker-recog 反馈：旧文档把 `matchTemplateMulti` 写成「仍未接入 Node24」，但 `list_engine_api` 里本来就有，真机实测 21ms 可用。以下是对账方法，不要再用旧文档反推实现不存在。
+
+- **`documented` 的含义**：`list_engine_api {"engine":"nodejs","module":"image"}` 每项带 `documented`/`documentedItems`/`build`；`documented:false` 只表示当前离线索引没有逐成员记录（标题/指南启发式），不是运行时能力判定。`build` 告诉你索引对应版本。
+- **三步实测**：
+  1. `probe_engine_api {"engine":"nodejs","module":"image","name":"matchTemplateMulti"}` 看导出类型/arity；
+  2. `run_script {"engine":"nodejs","path":"<示例根>/图片与颜色处理/多模板匹配(matchTemplateMulti).js","wait":true,"timeoutSeconds":60}`（示例名用 `list_samples` 查找），预期 `ok:true`、`api:Image.matchTemplateMulti`；
+  3. 需要组合参数时用 `call_engine_api` 直接调用并记录耗时/返回；只有 probe 与 run_script 都明确不存在/报未实现，才写「未接入」，并附 `build` 和错误原文。
+- 旧文档源（当前定位到 `docs/guides/Node24基础自动化API.md` §3.3）仍有同类『matchTemplate（多结果）…仍未接入』的过期句子（与 `.4` 反馈的 `matchTemplateMulti` 在同一段/同一批结论）；已报告维护者修源并重建索引。本页只改随包 `assets/mcp` 文档，`search_api_docs` 若读到旧句子，以上面的实测为准。
+
 
 ## 高级版兼容入口
 
@@ -97,6 +108,63 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 ```
 
 节点匹配是精确匹配（text/contentDesc/className；className 也接受简单名）；坐标以屏幕像素计。动作失败会返回 success=false 和原因，不要把它当成功。仅遍历当前活动窗口，不覆盖其它窗口/输入法。无障碍截图仍用 capture_screen；先截图+ui_find，再点击，坐标按 sourceWidth/scale 换算。
+## Node floating_window 坐标系与根布局（.4 实战反馈）
+
+> 来源：`.4` poker-recog 反馈：「浮窗坐标系目前完全没有文档，建议写清『根 View 的 layout_* 会被 WindowManager 无视、必须 match_parent + 子 View 固定 px』这类已经验证过的结论」。下面按已验证结论写成可执行步骤。
+>
+> 本节只讲 **Node** 的 `floating_window`；Rhino/QuickJS 用 `floaty`，API、坐标参数和根布局规则不是同一套，不要互相套用。
+
+### 坐标系与换算
+
+- `floating_window` 的 `setPosition(x,y)` / `setSize(w,h)` / `getPosition()` / `getSize()` 使用 **WindowManager 窗口坐标（Android px）**；不是截图像素、不是 dp。
+- 同一台设备可能有 `panel`（物理面板）与 `appDisplay`/`windowBounds` 差异（挖孔、虚拟显示、缩放）。先量：
+
+```json
+{"name":"coordinate_convert","arguments":{"action":"state","measureScreenshot":true}}
+```
+
+返回里的 `spaces.panel`、`spaces.appDisplay`、`spaces.windowBounds`、`spaces.screenshot` 与 `affine` 要先核对。两者不一致时用两点 `calibrate`，不要把截图坐标直接当窗口坐标：
+
+```json
+{"name":"coordinate_convert","arguments":{"action":"convert","from":"window","to":"screenshot","point":[100,200]}}
+```
+
+### 根布局（已验证结论）
+
+- **根 View 的 `layout_width`/`layout_height`/其它 `layout_*` 会被 WindowManager 的窗口参数覆盖/无视**；在根上写 `w="400"`、`h="200"` 不能决定窗口大小。
+- 根必须 `match_parent` + `match_parent`；窗口大小用 `setSize(w,h)` 或 `createWindow({initialSize:{width,height}})` 控制。
+- 子 View 用固定 px（或按 density 换算出的 px）；`match_parent` 只用于根，子控件不要依赖根的 `layout_*` 撑开。
+- 位置/尺寸改变后用 `getPosition()`/`getSize()` 记录真实值；需要截图对位时用 `coordinate_convert` 换算，不要用截图缩放比反推窗口位置。
+
+```js
+const fw = require("floating_window");
+if (!fw.canDrawOverlays()) { fw.manageDrawOverlays(); throw new Error("请先授权悬浮窗"); }
+const w = fw.createWindow({initialPosition:{x:100,y:200}, touchable:true});
+w.setViewFromXml(
+  '<frame w="match_parent" h="match_parent">' +
+  '<vertical w="360" h="120"><text id="t" text="demo"/></vertical>' +
+  '</frame>'
+);
+w.show();
+w.setSize(360, 120); // 窗口大小由 setSize/initialSize 控制；不要依赖根 layout_*
+console.log(JSON.stringify({position:w.getPosition(), size:w.getSize()}));
+```
+
+### 常见坑与验证
+
+| 症状 | 根因 | 正确做法 |
+|---|---|---|
+| 根写 `w="400"` 但窗口仍全屏/0 尺寸 | WindowManager 覆盖根 `layout_*` | 根 `match_parent`，用 `setSize`/`initialSize` 定窗口大小，子 View 定 px |
+| 点击位置偏左/偏上 | 用截图坐标直接 `setPosition`（两者可能不同空间） | 先 `coordinate_convert state`；不一致就 `calibrate`，再 `convert` |
+| `setPosition` 后 `getPosition` 对但画面没动 | 窗口还没 `show()`，或宿主的窗口参数未更新 | 先 `show()` 再 `setPosition`；重新 `getPosition/getSize` 并截图复核 |
+| 子 View 挤在一起/被裁 | 子 View 用了 `match_parent` 或 dp/px 混用 | 子 View 固定 px；dp 先按 density 换算；根只负责窗口 |
+
+**怎么验证**（`.4` dev-1359 已返回过同样的 hint）：
+1. 先调 `coordinate_convert{action:"state",measureScreenshot:true}`，记录 `windowBounds` 与 `screenshot`；
+2. 运行上面的脚本，创建 360×120 窗口在 (100,200)，记录 `getPosition/getSize`；
+3. `capture_screen` 后对 (100,200) 调 `coordinate_convert{action:"convert",from:"window",to:"screenshot",point:[100,200]}`，确认窗口左上角与截图位置一致；
+4. 再把根改成固定 `w/h` 重复一次；若窗口大小仍由 `setSize` 决定（而不是根属性），说明已验证结论成立；若相反，说明宿主实现变了，记录版本后报告。
+
 
 ## dev-1294 后的节点 API 变化（MCP 相关）
 
@@ -237,6 +305,43 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 4. 先读取再修改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；编辑时原样传回。DEX 类/方法先用 `apk_read_text` 的 `dex_class:`/`dex_method:` 定位符读取文本，再编辑。`apk_edit_text` 新建目标用 `targetVersion="missing"` 加唯一 `write_target`（可新建 DEX 类或普通文本条目）。
 5. 修改后调用 `apk_session_check(runBuildChecks=true)`；`apk_build` 会再检查一次，失败不导出。构建默认不签名；`sign=true` 使用本机 AI.js Pro 身份重签并移除原签名，不能沿原作者签名。
 6. 保留条目保护：普通 `zip_entry:` 的 `apk_patch_bytes` 不能处理 `classes*.dex`、`resources.arsc`、二进制 AXML/Manifest；`apk_delete_target` 不能删除 `classes*.dex`/`resources.arsc`，源码包中这些保留条目被移除时 `apk_session_check` 也会失败。DEX 用 `dex_class:`/`dex_method:`，资源用 `apk_resource_*`，AXML 文本用 `axml:` 定位符。
+### 改打包版应用资源（.4 实战反馈：解包→改资源→回编→重签→安装）
+
+> 来源：`.4` 的 MCP反馈-云镜逆向会话要求把「改打包版应用资源」写成可执行一节；如果以后有「装探针包」类工具，应把 clear + 授权 + 启动串成一步（当前没有该工具，下面是手动步骤）。
+
+**适用**：改已打包 APK 里的字符串/布局/资源表，再覆盖安装做验证；不是改源码工程。先 `apk_component_status` 看 `apktool`/`apk-resources`，缺组件就用 `apk_component_install` 装。
+
+**路线 A：Apktool 工程（完整解包 → 改 → 回编）**
+1. 解包：
+```json
+{"name":"apk_decode_project","arguments":{"path":"<源 APK>","outDir":"<新工程目录>","decodeResources":true,"background":true,"timeoutSeconds":300}}
+```
+2. 在返回的 `PROJECT_DIR` 改 `res/values/strings.xml`、`res/layout/*.xml` 等；用 `terminal_exec` 的 `sed`/`perl`/`cp` 或 `file_*` 工具写回。不要手改 `apktool.yml`、签名文件或二进制 `resources.arsc`。
+3. 回编 + 重签：
+```json
+{"name":"apk_build_project","arguments":{"projectDir":"<PROJECT_DIR>","outPath":"<新 APK>","sign":true,"background":true,"timeoutSeconds":300}}
+```
+4. 用 `apk_verify` 检查输出并记录 SHA-256；日志与组件版本一起留档。
+5. 安装：**不要直接 `pm install /storage/...`**，先按下一节「安装测试包」`cp` 到 `/data/local/tmp` 再安装。
+6. 启动前按需 `pm clear`（仅测试包，会清数据/运行时权限）→ `pm grant` 需要的运行时权限 → `am start -W -n <pkg>/.<Activity>`；以 `pm path`/`dumpsys package`/logcat 确认。
+
+**路线 B：MCP 编辑会话（无 Apktool 工程，直接重打包）**
+```text
+apk_workspace_open → apk_session_create → apk_resource_read（拿 targetVersion）
+  → apk_resource_edit（edits[] 带 locator/variant/targetVersion/valueXml）
+  → apk_session_check(runBuildChecks=true) → apk_build(overwrite=true, sign=true, outputName="...")
+```
+- 只改资源值/AXML 时可用这条；`apk_resource_edit` 的 `edits[]` 必须带 `locator`/`variant`/`targetVersion`/`valueXml`，不要用普通 `zip_entry:` 改 `resources.arsc` 或 Manifest。
+- `apk_build` 默认不签名；`sign=true` 用本机 AI.js Pro 身份并移除原签名，**不能沿用原作者签名**。覆盖安装要求同证书，否则报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`；测试包可先卸载（会丢数据）。
+- 回编/构建失败时保留 stderr、组件版本和实际输出路径；不要把 `apk_build_project` 的结构检查通过当成业务可启动。
+
+
+**怎么验证**：
+- 构建：`apk_verify` 检查输出并记录 SHA-256；`apk_build_project`/`apk_build` 的 `signed`/`signer`/`schemes` 与日志一起留档。
+- 安装：`pm path <pkg>` + `dumpsys package <pkg> | grep versionName` 与本次构建版本一致；启动用 `am start -W -n ...` 看 `Status`/`LaunchState`，`logcat` 无新 FATAL。
+- 资源：安装后重新 `apk_workspace_open` 快照，或直接看 UI/截图确认改后的字符串/布局出现；同时用 `apk_resource_read` 读回对应 `variant`/值，确认不是只改了本地工程目录。
+- 覆盖安装失败（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）先核对签名是否同证书；不同证书只能卸载旧包（会丢数据）或重新用同证书签名，不要把未安装成功写成通过。
+
 
 ### 搜索与定位
 
@@ -334,6 +439,29 @@ CLASSPATH="$AIJS_APK" app_process /system/bin "$AIJS_BUILD_MAIN" smali assemble 
 ```
 
 终端本身不等于完整工具链。主 APK 没有预装 clang、JDK/javac、完整 Android SDK/NDK/Gradle；C/C++、Java 源码、完整 Android 项目需另行配置手机 ABI/Android 兼容工具链。电脑 SDK/NDK 的 Windows/Linux 主机可执行文件不能直接在手机运行，`./gradlew assembleDebug` 也要求兼容 Java 和资源编译器。Android 共享存储通常不能执行 ELF；普通应用还受到可执行文件存储和 SELinux 规则限制。大型工具链应走可选插件，不往主 APK 塞整套 SDK。
+### 安装测试包：pm install 不能直接读 /storage（.4 实战反馈 FUSE 坑）
+
+> 来源：`.4` 云镜会话/安装测试要求：FUSE 路径喂 install 会失败；先拷到 `/data/local/tmp` 再 `pm install`。`.4` 的 Android 16/17 也要求这样处理。
+
+- 症状：`pm install -r /storage/emulated/0/脚本/xxx.apk` 读取失败或 `No packages staged`；`/sdcard`/FUSE 路径可能被 SELinux 拒读，`pm install-write` 不能直接拿 FUSE 路径当源。
+- 正确：用 **shizuku/root shell**（`terminal_exec backend="shizuku"` 或 `rish`）先 `cp` 到 `/data/local/tmp`，再安装。**app UID 不能写/列 `/data/local/tmp`**，不要用默认 app backend 做这两步。
+```sh
+cp /storage/emulated/0/脚本/build/app-signed.apk /data/local/tmp/app-signed.apk
+chmod 644 /data/local/tmp/app-signed.apk
+pm install -r /data/local/tmp/app-signed.apk
+```
+PC 侧等价：`adb push <apk> /data/local/tmp/app-signed.apk`，再 `adb shell pm install -r /data/local/tmp/app-signed.apk`。
+
+- 不确定当前后端能做什么时先调 `shell_capabilities`：app 与 shizuku 的 `cp`/`pm` 能力不同，不要假设 app backend 能 `pm install`。
+- 安装后按测试需要清数据/授权/启动（仅测试包；`pm clear` 会清数据，运行时权限通常也要重新授予）：
+```sh
+pm clear com.example.pkg
+pm grant com.example.pkg android.permission.READ_EXTERNAL_STORAGE  # 按实际声明/需求
+am start -W -n com.example.pkg/.MainActivity
+```
+- 验证：`pm path com.example.pkg`、`dumpsys package com.example.pkg | grep versionName`、`am start -W` 的 Status/LaunchState、`logcat` 无新 FATAL；覆盖安装失败先核对签名是否相同。
+- 如果以后做「装探针包」工具，建议把 `cp`→`pm install`→`pm clear`→按需 `pm grant`→`am start` 串成一步，并在返回里给实际包名/版本/启动结果；当前没有该工具，不要假装有。
+
 
 ### C/C++ 按需下载组件
 

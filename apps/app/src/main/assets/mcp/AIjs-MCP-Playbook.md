@@ -29,6 +29,7 @@
 - 相对路径相对「操作目录」（脚本根 `/storage/emulated/0/脚本`），不要写 `/sdcard` 绝对路径；先 `list_scripts` 看清根目录。
 - 需要 shell（uid=2000，可 `pm`/`am`/`dumpsys`）时用设备上的 rish（`terminal_exec backend="shizuku"` 或 `shell_rish`）；terminal 默认是应用 UID，跑不了 `pm`。
 - 文件/APK 工具全部本地实现：先 `toolkit_status`；APK 按 `apk_list_available_apks` → `apk_workspace_open` → `apk_session_create` → 读取/搜索 → 修改 → `apk_session_check` → `apk_build`。旧 `mt_*` 名称只是 dispatch 兼容别名；公开写法和 URI 用 `aijs://current-apk` / `aijs://workspace/<id>`，不需要另装 MT。
+- 浮窗：Node 用 `require("floating_window")`；坐标/根布局看 Guide「Node floating_window 坐标系与根布局（.4 实战反馈）」——根 `layout_*` 会被 WindowManager 无视，根 `match_parent`，窗口大小用 `setSize`/`initialSize`。
 - 外部 MT 管理器 MCP 只作历史对照，不是本机工具链依赖。APK 工具用于静态查看和编辑，不执行目标 APK 的代码；脚本和终端由各自工具管理。
 
 ## 文件与 APK 工具：读取 → 修改 → 检查 → 构建
@@ -58,6 +59,17 @@
 | 9 | dex locator 被拒 | 本地 DEX 定位符需要 JVM 描述符 | `dex_class:Lcom/example/Foo;` |
 | 10 | 中文文件名变乱码 | JS 里逐字符拼 UTF-8 | `new java.lang.String(bytes,'UTF-8')` 或设备端 `cp` 改名 |
 | 11 | 文档里的长度/字节序对不上 | 旧文档未复核（如 64 vs 72 字节） | 先实测 |
+| 12 | try/catch 抓不到 Java `Error`（如 `UnsatisfiedLinkError`），脚本直接 FAILED（.4 实战反馈） | Java `Error` 经引擎桥接不保证变成可捕获的 JS 异常；Rhino 实测 catch 不执行 | 不要用 try/catch 探测可加载性；先 `files.exists/canRead`、ABI/依赖检查，再 `System.load`；失败让任务报错并记录原文 |
+| 13 | `System.loadLibrary("foo")` 找不到自己拷进来的 SO（.4 实战反馈） | `loadLibrary` 只查系统/Java library path，不接受绝对路径；SO 需要绝对路径加载 | 用 `java.lang.System.load("/绝对路径/libfoo.so")`；文件放当前进程可读且 SELinux 允许执行的位置（`/data/local/tmp` 能否加载随 ROM，先验证；共享存储 `/sdcard` 通常不可执行），ABI 必须匹配 |
+| 14 | `pm install -r /storage/...apk` 报 `No packages staged`/读取失败（.4 实战反馈） | FUSE `/storage` 不能直接喂 PackageManager；app UID 也写不了 `/data/local/tmp` | 先用 `shell_capabilities` 确认 cp/pm 后端；用 shizuku/root shell 先 `cp` 到 `/data/local/tmp`，再 `pm install -r`；PC 用 `adb push`；详见 Guide「安装测试包」 |
+
+> 注意：Java 的 `System.loadLibrary` 只接受库名、不接受路径；自定义 SO 必须用 `System.load(绝对路径)`。上面 12–14 是 `.4` 云镜实战要求补的已知坑。
+
+**怎么验证（.4 实战反馈条目 12–14；只做一次性探针，生产脚本不要靠 catch 兜底）：**
+
+- 12：一次性脚本执行 `try { java.lang.System.load("/data/local/tmp/__absent__.so"); } catch (e) { console.log("CAUGHT"); }` → 预期看不到 CAUGHT、任务 FAILED；记录 error 原文。正式流程先 `new java.io.File(path).isFile()` / `files.exists` 再加载。
+- 13：把测试 SO 放到应用私有目录或已验证可加载的位置，`java.lang.System.load(绝对路径)` 后调用一个导出符号；再对比 `System.loadLibrary` 的报错，确认不是同名系统库。若 `/data/local/tmp` 被 SELinux 拒绝，改应用私有目录/资产解压路径，不要放 `/sdcard`。
+- 14：先复现 `pm install -r /storage/...` 失败；再按 Guide「安装测试包」用 `backend="shizuku"` 的 `cp` + `pm install -r /data/local/tmp/...` 成功，并用 `pm path`/`dumpsys package | grep versionName` 核对。
 
 ## 附录 B · 黄金流程：在外部进程里「借」目标 App 的解密函数
 
