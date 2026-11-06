@@ -122,12 +122,12 @@ internal class McpZipToolkit(private val root: File) {
         ))
         add(definition(
             "zip_create", "创建 ZIP",
-            "从本地文件或目录创建 ZIP（Stored 或 Deflate），支持隐藏文件和空目录。输出不能位于源目录内，也不能同时作为输入。password 为空字符串时不加密；非空时文件条目使用 AES-256 加密，目录条目保持不加密。",
+            "从本地文件或目录创建 ZIP（Stored 或 Deflate），支持隐藏文件和空目录。输出不能位于源目录内，也不能同时作为输入。password 为空字符串或省略时不加密；非空时文件条目使用 AES-256 加密，目录条目保持不加密。",
             createSchema(), readOnly = false,
         ))
         add(definition(
             "zip_update", "修改 ZIP",
-            "按原始 ZIP 中的名称增加、删除或重命名条目，操作无序且不可形成链、交换或竞争目标。写入同目录临时文件；未改与重命名条目保留原压缩/加密原始字节与密码，新增/替换条目按 password 使用 AES-256 或明文。targetVersion 是可选扩展：传入时校验，省略时仍按当前版本操作并在写入期间检查源未变化。失败时保留原档。不执行 APK 签名。",
+            "按原始 ZIP 中的名称增加、删除或重命名条目，操作无序且不可形成链、交换或竞争目标。写入同目录临时文件；未改与重命名条目保留原压缩/加密原始字节与密码，新增/替换条目按可选 password 使用 AES-256 或明文（省略=明文）。targetVersion 是可选扩展：传入时校验，省略时仍按当前版本操作并在写入期间检查源未变化。失败时保留原档。不执行 APK 签名。",
             updateSchema(), readOnly = false,
         ))
     }
@@ -155,34 +155,37 @@ internal class McpZipToolkit(private val root: File) {
         "simple" to bool("true 只返回相对名称；false 返回大小/加密/名称"),
         "cursor" to str("首页传空字符串；续页传返回的分页游标"),
         "limit" to int("每页条目数", 1, 1000),
-        required = arrayOf("path", "entryPath", "recursive", "simple", "cursor", "limit"),
+        // 审计修正：只有 path 是必需的；entryPath 空=ZIP 根，recursive/simple/cursor/limit 都有缺省。
+        required = arrayOf("path"),
     )
 
     private fun readTextSchema(): JsonObject = schema(
         "path" to str("ZIP 文件路径，root 相对或 root 内绝对路径"),
-        "password" to str("条目密码；未加密条目传空字符串。支持 AES-256 与 ZipCrypto，密码错误时拒绝读取"),
+        "password" to str("可选；未加密条目传空字符串或省略。支持 AES-256 与 ZipCrypto，密码错误时拒绝读取"),
         "entryPath" to str("ZIP 内完整文件路径；与 zip_list 的 entryPath + relativePath 直接拼接"),
         "encoding" to str("文本编码，空字符串自动识别；如 utf-8、utf-8-bom、utf-16le、gb18030"),
         "startLine" to long("从 0 开始的逻辑行号", 0, MAX_SAFE_INTEGER),
         "startColumn" to long("从 0 开始的 Unicode 码点列号", 0, MAX_SAFE_INTEGER),
         "limit" to int("最多触碰的逻辑行数", 1, 2000),
         "maxChars" to int("最多返回的 Unicode 码点数，CRLF 作为一个换行整体", 2, 131072),
-        required = arrayOf("path", "password", "entryPath", "encoding", "startLine", "startColumn", "limit", "maxChars"),
+        // 审计修正：encoding 空=自动识别，startLine/startColumn=0，limit/maxChars 有缺省；只需要 path+entryPath。
+        required = arrayOf("path", "entryPath"),
     )
 
     private fun readBytesSchema(): JsonObject = schema(
         "path" to str("ZIP 文件路径，root 相对或 root 内绝对路径"),
-        "password" to str("条目密码；未加密条目传空字符串。支持 AES-256 与 ZipCrypto，密码错误时拒绝读取"),
+        "password" to str("可选；未加密条目传空字符串或省略。支持 AES-256 与 ZipCrypto，密码错误时拒绝读取"),
         "entryPath" to str("ZIP 内完整文件路径"),
         "byteOffset" to long("从 0 开始的未压缩字节偏移", 0, MAX_SAFE_INTEGER),
         "maxBytes" to int("单页最大字节数", 1, 65536),
-        required = arrayOf("path", "password", "entryPath", "byteOffset", "maxBytes"),
+        // 审计修正：byteOffset 默认 0、maxBytes 有缺省；只需要 path+entryPath。
+        required = arrayOf("path", "entryPath"),
     )
 
     private fun testSchema(): JsonObject = schema(
         "path" to str("ZIP 文件路径，root 相对或 root 内绝对路径"),
-        "password" to str("统一密码；未加密 ZIP 传空字符串。AES-256 条目同时校验 HMAC，ZipCrypto 校验 CRC"),
-        required = arrayOf("path", "password"),
+        "password" to str("可选；未加密 ZIP 传空字符串或省略。AES-256 条目同时校验 HMAC，ZipCrypto 校验 CRC"),
+        required = arrayOf("path"),
     )
 
     private fun extractSchema(): JsonObject = schema(
@@ -201,9 +204,9 @@ internal class McpZipToolkit(private val root: File) {
                 add("required", JsonArray().apply { add("entryPath"); add("destinationPath") })
             })
         },
-        "password" to str("统一密码；未加密条目传空字符串。支持 AES-256 与 ZipCrypto"),
+        "password" to str("可选；未加密条目传空字符串或省略。支持 AES-256 与 ZipCrypto"),
         "overwrite" to bool("是否允许替换已存在的普通目标文件"),
-        required = arrayOf("path", "entries", "password", "overwrite"),
+        required = arrayOf("path", "entries", "overwrite"),
     )
 
     private fun createSchema(): JsonObject = schema(
@@ -224,8 +227,8 @@ internal class McpZipToolkit(private val root: File) {
         },
         "overwrite" to bool("是否允许替换已存在的普通输出文件"),
         "level" to int("0 仅存储；1..9 使用 Deflate，数字越大压缩越强", 0, 9),
-        "password" to str("空字符串不加密；非空时文件条目使用 AES-256 加密"),
-        required = arrayOf("outputPath", "sources", "overwrite", "level", "password"),
+        "password" to str("可选；空字符串或省略不加密；非空时文件条目使用 AES-256 加密"),
+        required = arrayOf("outputPath", "sources", "overwrite", "level"),
     )
 
     private fun updateSchema(): JsonObject = schema(
@@ -244,9 +247,9 @@ internal class McpZipToolkit(private val root: File) {
                 })
             })
         },
-        "password" to str("新增/替换条目的统一密码；空字符串不加密，非空时使用 AES-256。未改/重命名条目保留原加密与密码"),
+        "password" to str("可选；空字符串或省略不加密，非空时新增/替换条目使用 AES-256。未改/重命名条目保留原加密与密码"),
         "targetVersion" to str("可选扩展。传入时先调用 zip_list/zip_test 取得 version 并校验；省略时仍按当前 ZIP 版本操作，写入期间检测源未变化"),
-        required = arrayOf("path", "operations", "password"),
+        required = arrayOf("path", "operations"),
     )
 
     private fun updateAddSchema(): JsonObject = objectFields(
@@ -373,11 +376,12 @@ internal class McpZipToolkit(private val root: File) {
 
     private fun zipList(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
-        val entryPath = args.requiredString("entryPath")
-        val recursive = args.requiredBoolean("recursive")
-        val simple = args.requiredBoolean("simple")
-        val cursor = args.requiredString("cursor")
-        val limit = args.requiredInt("limit", 1, 1000)
+        // 审计修正：entryPath 空=ZIP 根；recursive/simple/cursor/limit 均有缺省。
+        val entryPath = args.optionalString("entryPath")
+        val recursive = args.optionalBoolean("recursive")
+        val simple = args.optionalBoolean("simple")
+        val cursor = args.optionalString("cursor")
+        val limit = args.optionalInt("limit", 1, 1000, 1000)
         if (entryPath.isNotEmpty() && !entryPath.endsWith("/")) {
             throw IllegalArgumentException("entryPath 必须是空字符串或以 / 结尾的目录路径")
         }
@@ -437,13 +441,13 @@ internal class McpZipToolkit(private val root: File) {
 
     private fun zipReadText(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
-        val password = args.requiredString("password")
+        val password = args.optionalString("password")
         val entryPath = args.requiredString("entryPath")
-        val encoding = args.requiredString("encoding")
-        val startLine = args.requiredLong("startLine", 0, MAX_SAFE_INTEGER)
-        val startColumn = args.requiredLong("startColumn", 0, MAX_SAFE_INTEGER)
-        val lineLimit = args.requiredInt("limit", 1, 2000)
-        val maxChars = args.requiredInt("maxChars", 2, 131072)
+        val encoding = args.optionalString("encoding")
+        val startLine = args.optionalLong("startLine", 0, MAX_SAFE_INTEGER, 0)
+        val startColumn = args.optionalLong("startColumn", 0, MAX_SAFE_INTEGER, 0)
+        val lineLimit = args.optionalInt("limit", 1, 2000, 2000)
+        val maxChars = args.optionalInt("maxChars", 2, 131072, 49152)
 
         val archive = openArchive(rawPath)
         return archive.use {
@@ -489,10 +493,11 @@ internal class McpZipToolkit(private val root: File) {
 
     private fun zipReadBytes(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
-        val password = args.requiredString("password")
+        val password = args.optionalString("password")
         val entryPath = args.requiredString("entryPath")
-        val byteOffset = args.requiredLong("byteOffset", 0, MAX_SAFE_INTEGER)
-        val maxBytes = args.requiredInt("maxBytes", 1, 65536)
+        // 审计修正：byteOffset 缺省 0（从条目头部读）；给了值仍校验范围。
+        val byteOffset = args.optionalLong("byteOffset", 0, MAX_SAFE_INTEGER, 0)
+        val maxBytes = args.optionalInt("maxBytes", 1, 65536, 65536)
 
         val archive = openArchive(rawPath)
         return archive.use {
@@ -534,7 +539,7 @@ internal class McpZipToolkit(private val root: File) {
 
     private fun zipTest(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
-        val password = args.requiredString("password")
+        val password = args.optionalString("password")
         val archive = openArchive(rawPath)
         return archive.use {
             val files = archive.entries.filter { !it.directory }
@@ -626,7 +631,7 @@ internal class McpZipToolkit(private val root: File) {
     private fun zipExtract(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
         val mappingsJson = args.requiredArray("entries")
-        val password = args.requiredString("password")
+        val password = args.optionalString("password")
         val overwrite = args.requiredBoolean("overwrite")
         if (mappingsJson.size() == 0) throw IllegalArgumentException("entries 不能为空")
         val mappings = mappingsJson.map { element ->
@@ -889,7 +894,7 @@ internal class McpZipToolkit(private val root: File) {
         val sourcesJson = args.requiredArray("sources")
         val overwrite = args.requiredBoolean("overwrite")
         val level = args.requiredInt("level", 0, 9)
-        val password = args.requiredString("password")
+        val password = args.optionalString("password")
         if (sourcesJson.size() == 0) throw IllegalArgumentException("sources 不能为空")
 
         val output = resolvePath(rawOutput, "outputPath")
@@ -1071,7 +1076,7 @@ internal class McpZipToolkit(private val root: File) {
     private fun zipUpdate(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
         val operationsJson = args.requiredArray("operations")
-        val password = args.requiredString("password")
+        val password = args.optionalString("password")
         // targetVersion is an optional extension. Omitting it must remain a normal MT-contract
         // call; an empty string is treated as omitted for clients that serialize optionals that way.
         val targetElement = args.get("targetVersion")
@@ -3366,11 +3371,29 @@ internal class McpZipToolkit(private val root: File) {
     private fun JsonObject.optionalString(key: String): String =
         get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: ""
 
+    /** 审计修正：可选整数（缺省/类型不符 → [default]；给了值仍按范围校验）。 */
+    private fun JsonObject.optionalInt(key: String, min: Int, max: Int, default: Int): Int {
+        val element = get(key) ?: return default
+        if (!element.isJsonPrimitive || !element.asJsonPrimitive.isNumber) return default
+        val value = element.asInt
+        require(value in min..max) { "参数 $key 必须在 $min..$max 之间" }
+        return value
+    }
+
     private fun JsonObject.optionalBoolean(key: String): Boolean =
         get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: false
 
     private fun JsonObject.optionalLong(key: String): Long =
         try { get(key)?.asLong ?: 0L } catch (_: Exception) { 0L }
+
+    /** 审计修正：可选长整数（缺省/类型不符 → [default]；给了值仍按范围校验）。 */
+    private fun JsonObject.optionalLong(key: String, min: Long, max: Long, default: Long): Long {
+        val element = get(key) ?: return default
+        if (!element.isJsonPrimitive || !element.asJsonPrimitive.isNumber) return default
+        val value = element.asLong
+        require(value in min..max) { "参数 $key 必须在 $min..$max 之间" }
+        return value
+    }
 
     private fun JsonElement.asObject(label: String): JsonObject {
         if (!isJsonObject) throw IllegalArgumentException("$label 必须是对象")

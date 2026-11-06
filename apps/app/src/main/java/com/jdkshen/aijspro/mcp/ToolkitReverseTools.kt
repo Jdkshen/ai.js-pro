@@ -17,7 +17,7 @@ internal object ToolkitReverseTools {
         "native_decompile" to "r2ghidra 返回指定 address 的伪代码；需 radare2 和 r2ghidra 组件。伪代码用于分析，不保证可重编译；缺插件明确报错，后台 jobId。",
         "native_xrefs" to "radare2 查询到指定 address 的引用；raw axtj 默认不解析重定位，0 条引用不能当作没有调用者；可选 relocsApply=true 先设置 e bin.relocs.apply=true；需要 pdg 或 relocs.apply=true 补 adrp/add 引用。offset/limit 分页，需 radare2，后台 jobId。",
         "native_compare" to "比较两个二进制 path/otherPath 的有界字节变化，附 radare2 元数据。返回变化范围与截断标记；不把相同大小当成语义相同。后台 jobId。",
-        "artifact_fingerprint" to "读取 path 的 SHA256、格式和 APK 库/壳/框架线索。内置启发式指纹，明确证据与置信度；不是完整 APKiD，不执行目标。后台 jobId。",
+        "artifact_fingerprint" to "读取 path 的 SHA256、格式和 APK 库/壳/框架线索。内置启发式指纹，明确证据与置信度；不是完整 APKiD，不执行目标。路径只接受工具目录内的路径（相对路径或工具目录内的绝对路径）；/system/lib64/** 等工具目录外文件会 INVALID_ARGUMENT，不能用它取外部文件哈希。后台 jobId。",
         "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。默认 interactionType=listen 返回 endpoint/token，用 frida_status/processes/eval 连接；但 listen 跨 UID 可能被 SELinux 静默 DROP（实测停在 SYN_SENT，不是组件问题），此时改用 interactionType=script + scriptPath（启动即加载脚本，不碰网络）。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
         "yara_scan" to "使用 yara 组件按 rulesPath 扫描 path；规则≤1MiB，输入≤64MiB，扫描≤30秒，禁用 include。返回规则命中/偏移及截断；不是自动恶意性结论。后台 jobId。",
         "native_emulate" to "Unicorn 隔离模拟 codeHex 原始机器码，可选 dataHex 与 registers；arm64/arm/thumb/x86/x86_64。代码≤64KiB、数据≤4096B、指令≤100000、时间≤1000ms，不提供完整 Android/ELF/JNI 环境。后台 jobId。",
@@ -28,7 +28,7 @@ internal object ToolkitReverseTools {
         "frida_session_read" to "按 offset/limit 分页读取会话消息（seq/时间戳/截断标记）。会话过期或不存在时明确报错，不静默返回空列表。",
         "frida_session_close" to "显式停止会话并返回真实清理计数（releasedMessages/releasedSessions）；不存在或已过期返回 state=not_found/expired，不抛异常。",
         "frida_session_list" to "列出当前进程内的观测会话（TTL、上限、重复策略）；过期会话在此真实清理。",
-        "native_analysis_open" to "按输入文件 SHA-256 打开/复用 native 分析上下文（有状态、可持久化）。源文件哈希变化会让旧地址与旧状态失效（ANALYSIS_STALE_INPUT）；不启动任何进程，r2 命令只生成不执行。",
+        "native_analysis_open" to "按输入文件 SHA-256 打开/复用 native 分析上下文（有状态、可持久化）。path 默认允许工具目录内相对路径，以及只读绝对根 /system、/vendor、/apex、/data/local/tmp、/storage/emulated/0 与工具操作根下的绝对路径；其它绝对路径会被 ANALYSIS_PATH_FORBIDDEN 拒绝，确需分析时显式传 allowOutsideOperationRoot=true（绕过白名单）。artifact_fingerprint/file_stat 只接受工具目录内路径，不能用于读取外部文件；工具目录外路径请直接用报错 actual 的全量 SHA-256 重试。源文件哈希变化会让旧地址与旧状态失效（ANALYSIS_STALE_INPUT）；不启动任何进程，r2 命令只生成不执行。",
         "native_analysis_status" to "返回分析会话的计数与限制（functions/types/noreturns/overlays/TTL/状态文件路径）。",
         "native_analysis_define_function" to "补充函数起点/长度/名称（用户指定边界优先，不把符号范围当成完整函数）。",
         "native_analysis_set_type" to "补充目标（函数/变量）参数、返回值或结构体类型。",
@@ -120,7 +120,7 @@ internal object ToolkitReverseTools {
             "native_resident_batch"->{field("sessionId",str(),true);field("commands",ToolkitIo.json("type" to "array","items" to ToolkitIo.json("type" to "string")));field("timeoutMillis",num(1,McpLimits.MAX_TIMEOUT_SECONDS * 1000,30000))}
             "native_resident_close"->field("sessionId",str(),true)
             "native_resident_list"->Unit
-            "native_analysis_open"->{path();field("sha256",str("输入文件 SHA-256；可先用 artifact_fingerprint 取得"),true);field("abi",str());field("sessionId",str())}
+            "native_analysis_open"->{field("path",str("源文件路径：相对路径在工具目录内解析；绝对路径默认只允许 /system、/vendor、/apex、/data/local/tmp、/storage/emulated/0 与工具操作根，canonical 后判定；其它绝对路径需 allowOutsideOperationRoot=true"),true);field("sha256",str("输入文件 SHA-256；工具目录内可先用 artifact_fingerprint/file_stat 取得，外部允许根用报错 actual 全量哈希或终端 sha256sum"),true);field("abi",str());field("sessionId",str());field("allowOutsideOperationRoot",ToolkitIo.json("type" to "boolean","default" to false,"description" to "仅当确实要分析允许根之外的文件时传 true；会绕过只读白名单（默认 false）"))}
             "native_analysis_list"->Unit
             "native_analysis_status","native_analysis_save","native_analysis_close","native_analysis_r2_commands"->field("sessionId",str(),true)
             "native_analysis_define_function"->{field("sessionId",str(),true);field("address",str(),true);field("size",num(0,16777216,0));field("name",str())}

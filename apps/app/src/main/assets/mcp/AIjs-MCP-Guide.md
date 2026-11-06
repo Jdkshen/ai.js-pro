@@ -242,7 +242,7 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 `apk_search` 的 `target` 覆盖：`overview`（ZIP 路径、解码后的 AXML 文本、资源名/值、DEX 类/字段/方法/字符串）、`files`（ZIP 路径及 AXML 文本）、`resource_table_names/values/file_paths`（`file_paths` 单独使用）、`dex_names`（类名、字段/方法；`prefix` 可用 Java 包名前缀）、`dex_strings`（字段常量、注解和指令字符串）、`dex_string_members`、`smali`（完整 Smali 类）、`native_symbols/native_strings`（仅 native 目标扫描 .so）。
 
-- `queryType=literal|regex`；正则使用 Java `java.util.regex`，支持环视/反向引用。`prefix` 按目标类型过滤（DEX 可用 Java 包名，资源可用名称或 0x ID，ZIP/native 用路径；`overview` 时必须为空）；`matchMode=contains|exact`，`smali` 只支持 contains。
+- `queryType=literal|regex`；正则使用 Java `java.util.regex`，支持环视/反向引用。`prefix` 按目标类型过滤（DEX 可用 Java 包名，资源可用名称或 0x ID，ZIP/native 用路径；`overview` 时必须为空）；`matchMode=literal|literalWord|regex|contains|exact`（`literal`=子串，默认；`literalWord`=按词/标识符边界，搜 `frida` 不会命中 `FRIDAY/friday/blackfriday`；`regex`=Java 正则；`contains/exact` 为兼容旧值），`smali` 只支持 contains。`caseSensitive=false` 时是**子串**匹配，要按标识符匹配请显式用 `literalWord`；返回 `matchModeUsed/caseSensitiveUsed/matchModeHint` 自证匹配方式。`overview` 现在**真执行**：对每个 target 跑小预算并聚合，返回 `searchedTargets/skippedTargets/partialTargets/targetHitCounts/overviewLimits`，不要因为 `total=0` 就当成没搜。
 - `snippetMaxChars` 默认 240，设 0 不返回 snippet；`includeMatchOffsets=true` 返回 Java UTF-16 `start/end` 偏移和 `matchOffset`，不是 Unicode 码点偏移。结果同时放在 `items` 和 `hits`，并带 `nextCursor`/`hasMore`。
 - 扫描是预算内的部分搜索：`truncated=true` 或出现 `notSearchedTargets`/`skippedScopes` 时不能当作“没有匹配”或全量结果；缩小 `prefix` 或目标后重试。
 
@@ -252,7 +252,7 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 
 ### ZIP：AES/ZipCrypto 与预算
 
-`zip_list/read_text/read_bytes/test/extract/create/update` 都支持未加密条目；读取支持 **ZipCrypto 和 AES**（AES 条目必须有合法 0x9901 extra，压缩方式只能是 Stored/Deflate），加密条目必须传非空 `password`。写入只生成 **AES-256** 或明文：`zip_create`/`zip_update` 的非空 `password` 使新增/替换文件条目用 AES-256，目录条目不加密；不新写 ZipCrypto。`zip_update` 对未改/重命名条目保留原始压缩/加密字节与密码，失败保留原档，且不做 APK 签名。
+`zip_list/read_text/read_bytes/test/extract/create/update` 都支持未加密条目；读取支持 **ZipCrypto 和 AES**（AES 条目必须有合法 0x9901 extra，压缩方式只能是 Stored/Deflate），**加密条目**才必须传非空 `password`；`password` 是可选项，未加密条目省略或传空字符串皆可（dev-1368 起不再强制）。写入只生成 **AES-256** 或明文：`zip_create`/`zip_update` 的非空 `password` 使新增/替换文件条目用 AES-256，目录条目不加密；不新写 ZipCrypto。`zip_update` 对未改/重命名条目保留原始压缩/加密字节与密码，失败保留原档，且不做 APK 签名。
 
 - `zip_read_text`：每页 1..2000 行、2..131072 码点；`startLine/startColumn` 从 0 开始，续页沿用返回的 `encoding`。预览不校验整个条目，完整性用 `zip_test`。
 - `zip_read_bytes`：每页 1..65536 字节，`byteOffset` 是未压缩偏移；同样只是预览。
@@ -369,6 +369,27 @@ clang main.c -O2 -o hello
 编译不需要 Shizuku；Shizuku 身份通常不能读取应用私有编译目录。源码可来自共享存储，可执行产物应放私有目录。Android 对 target29+ 应用执行私有目录下载文件有限制；入口会报告不支持，不更改 targetSdk 绕过。卸载组件前先结束使用它的任务，再执行 `aijs-toolchain remove cpp`；项目源码不放组件目录，卸载不会主动删除项目目录。该管理入口不代表 Node 原生 child_process 已自动注入终端函数。
 
 应用内终端同步增加实时输出、输入与停止，退出界面会清理自己的命令；其默认执行期限为 1 小时，界面仅保留最近 64Ki 字符。
+
+## dev-1368 行为变化（相对 dev-1365，改前请对照）
+
+这一批按用户反馈修了 11 条工具行为；**调用方按下列新语义写代码**：
+
+| 工具/字段 | 现在的行为 |
+|---|---|
+| `app_trace_start.withLogs` | **布尔**（以前 schema 错写成 string，任何客户端都传不进去）。同批修正的还有 `workspace_cleanup.dryRun/protectApplied`（布尔）、`pid/keepLatest`（整数） |
+| `native_analysis_open` | **会真校验文件 SHA-256**：与入参不一致直接报 `ANALYSIS_STALE_INPUT`（写盘前拦截，不再落 `native-analysis/0000000000000000/`）；`sourceSha256` 是实测值 |
+| `native_analysis_close` / `open` | `close` 把状态**归档**为 `archive-<sessionId>.json`（返回 `archived/archivePath/retainedStateBytes`）；同 sha 再 `open` 会恢复 `functions/types/noreturns/overlays` 并返回 `reused=true/restored=true/restoredFrom`；坏归档回 `restored=false + restoreError`，不静默归零 |
+| `apk_session_check/diff/edit_text/patch_bytes/delete_target/copy_entry` | 成功返回新增 **`revision` + `revisionChanged`**：编辑后用新 `revision` 调 `apk_session_checkpoint` 才能通过；跨版本报错会给出当前值与你传的值 |
+| locator 报错 | 直接列出前缀清单与示例（`zip_entry:` / `dex_class:` / `dex_method:` / `resource:`，跨 DEX 用 `uniqueLocator`） |
+| `apk_search` | `target=overview` 真执行（见「搜索与定位」）；新增 `matchMode=literal|literalWord|regex` |
+| `terminal_read/write/stop/list` | 结构化错误码 **`JOB_NOT_FOUND` / `JOB_EVICTED` / `SERVICE_RESTARTED`**；`terminal_list` 返回 `retention{…}`、`evicted[]`（含 code/reason/recordedAt）、`tombstoneCount`、`ownershipEnforced:false`、`service{…}` |
+| MCP 错误体 | 工具抛出的结构化错误现在带 **`errorCode` 与 `argument`**（以前被折叠成纯文本）；`errorCode` 只在基础设施级失败时填，操作级失败看 `reason` |
+| `file_access_diagnose` | `conclusion` 从 `ACCESSIBLE` 改为 **`STAT_ONLY`**（只证明存在/可 stat），新增 `probeStatus`（`not_probed`/`eacces`/`read_probe_ok`）与 `legacyConclusion`；可读性以 errno/notes 为准 |
+| `apk_job_status/list` | 失败任务现在给出 **`errorCode` + `errorHint`**（例如 Frida 失败会给 `FRIDA_CONNECT_FAILED`/`SERVER_MISSING`/`COMPONENT_MISSING`） |
+| `apk_build_project` | 新增 **`buildInPlace`**（默认 false）：工程在工具目录内且可写时可**原地构建**，跳过整树复制；会前后各算一次工程树 SHA-256，不一致报 `IN_PLACE_SOURCE_MODIFIED`。返回 `stagingMode`（copy/in_place）、`copyMs`、`copiedEntries/skippedEntries/skippedBytes`、`sourceTreeUnchanged` |
+| `get_status.limits` | 新增 `childHeapMbAppliesTo`（该 `-Xmx` 只对我们拼装的 apktool/jadx 子进程生效）与 `observedChildHeapBytes`（已知 jadx 实测 256MB）；`maxProjectEntries/maxProjectBytes/maxTimeoutSeconds` 不变 |
+
+> `apk_build_project` 的顶层 `alignment` 只读诊断：未签名导出时 `checked=false`（没有 verifier 报告就不声称对齐），签名导出时为 `checked=true` 并给 `storedEntriesChecked/storedEntriesMisaligned4Bytes/nativeLibrariesMisaligned16Kb` 等。
 
 ## 常见错误与修法
 

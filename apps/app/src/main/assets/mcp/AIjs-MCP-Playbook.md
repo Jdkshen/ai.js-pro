@@ -12,6 +12,7 @@
 
 ## 大输出与文件传输
 
+- `terminal_*` 现在有结构化错误码：`JOB_NOT_FOUND`（registry 无记录）/`JOB_EVICTED`（结果被保留窗口淘汰，清单见 `terminal_list.evicted[]`）/`SERVICE_RESTARTED`（服务换过实例）；`terminal_list` 另给 `retention/tombstoneCount/ownershipEnforced:false`。
 - terminal 只保留最近一段：`terminal_exec` 拿 `jobId` → `terminal_read(offset=上次 nextOffset, maxChars≤65536, waitMillis≤10000)` 轮询到 `running=false` 且 `nextOffset==outputEnd`。
 - `workspace_open/write/request_apply` 只支持部分文本类型（`.mjs`/`.so` 会被拒）；二进制或 `.mjs` 用 `terminal_exec` + base64（分块 8KB echo 追加后 `base64 -d`）。
 - 设备端之间优先 `cp`，不要经 PC 中转；中文文件名交给设备端 shell，别在 JS 里逐字符拼（会乱码）。
@@ -37,7 +38,7 @@
 - 分页：列表/搜索/native/资源 xref 最多 200/页，返回 `nextCursor`，用 `apk_continue` 续页；游标 5 分钟过期且绑定会话 revision，编辑后必须重查。不能把两页拼成一份视图。
 - 检查/构建：先 `apk_session_check(runBuildChecks=true)`，再 `apk_build`；构建会再检查，失败不导出。默认未签名；`sign=true` 用本机 AI.js Pro 身份重签并移除原签名。`apk_read_signature` 只读 V1/V2/V3/V3.1 证书元数据，`verified=false`，不是验签。
 - 搜索/正则：搜索和文件替换使用 Java `java.util.regex`（支持环视/反向引用），每个 matcher 默认 750ms、最多 8M 字符访问，并受 3s/8s 总预算和中断检查约束；超预算报 `REGEX_BUDGET_EXCEEDED`。先加 prefix/缩小目标，别用灾难性回溯。
-- ZIP：读取支持 ZipCrypto/AES，写入只生成 AES-256 或明文；`zip_test` 才做完整 CRC/HMAC 校验，`zip_read_*` 只是预览。大包先看 50k 条目/512MiB 扫描预算、250:1 压缩比和 2GiB 创建预算；加密条目必须传非空 `password`。
+- ZIP：读取支持 ZipCrypto/AES，写入只生成 AES-256 或明文；`zip_test` 才做完整 CRC/HMAC 校验，`zip_read_*` 只是预览。大包先看 50k 条目/512MiB 扫描预算、250:1 压缩比和 2GiB 创建预算；**加密**条目才必须传非空 `password`（未加密条目可省略或传空字符串，dev-1368 起不再强制）。
 - 资源：`apk_resource_read` 每项独立错误，默认 `variant=default`；`maxValueXmlChars` 超预算时 `valueXml=null`，不要写回半截 XML；`resolveDepth=1` 只解析一级直接引用。AXML/资源 XML 的写入/编辑拒绝 DOCTYPE/ENTITY。
 - 原生：指令分析在原生库可用时用 Capstone 覆盖 AArch64/ARM/Thumb/x86/x86-64，不可用时只回退有界 AArch64 子集。指令补丁支持四架构，但内置汇编器只有 AArch64 常见子集；ARM/Thumb/x86/x86-64 或内置未覆盖形式要可选 clang（`aijs-toolchain install cpp`）。字符串增长只利用已有 NUL/空格 padding，不改长度/指针/重定位。
 - 容量：APK 快照单包 512MiB、总量 1GiB；单条分析 64MiB、文本 10MiB；单工作区 8 会话、2000 变更条目/512MiB。旧 `mt_*` 名称不注册为规范工具。

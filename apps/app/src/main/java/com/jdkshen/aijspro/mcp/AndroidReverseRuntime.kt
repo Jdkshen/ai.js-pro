@@ -147,7 +147,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "native_session_query"->r2Sessions.query(args.tString("sessionId"),args.tString("command"),args.tInt("timeoutSeconds",60,1,McpLimits.MAX_TIMEOUT_SECONDS))
             "native_session_close"->r2Sessions.close(args.tString("sessionId"))
             "native_session_list"->r2Sessions.list()
-            "native_analysis_open"->nativeAnalysis.open(args.tString("path"),args.tString("sha256"),optionalString(args,"abi"),optionalString(args,"sessionId"))
+            // 末位 allowOutsideOperationRoot：不接线的话 schema 收了、调用方却丢掉，逃生口形同虚设（队友 A2 报的 blocker）。
+            "native_analysis_open"->nativeAnalysis.open(args.tString("path"),args.tString("sha256"),optionalString(args,"abi"),optionalString(args,"sessionId"),args.tBool("allowOutsideOperationRoot",false))
             "native_analysis_status"->nativeAnalysis.status(args.tString("sessionId"))
             "native_analysis_define_function"->nativeAnalysis.defineFunction(args.tString("sessionId"),args.tString("address"),
                 if(args.has("size"))args.tInt("size",0,0,16*1024*1024)else null,optionalString(args,"name"))

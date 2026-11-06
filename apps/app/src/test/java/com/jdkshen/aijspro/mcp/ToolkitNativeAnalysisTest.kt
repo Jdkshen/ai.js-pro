@@ -52,7 +52,7 @@ class ToolkitNativeAnalysisTest {
         val sha = sha(file)
         val analysis = ToolkitNativeAnalysis(store, { now })
 
-        val first = analysis.open(file.path, sha, "arm64", "sess-a")
+        val first = analysis.open(file.path, sha, "arm64", "sess-a", true)
         assertFalse(first.get("reused").asBoolean)
         assertFalse(first.get("restored").asBoolean)
         assertTrue(first.get("analysisOnly").asBoolean)
@@ -63,7 +63,7 @@ class ToolkitNativeAnalysisTest {
         val id = first.get("sessionId").asString
 
         now += 10
-        val second = analysis.open(file.path, sha, "arm64")
+        val second = analysis.open(file.path, sha, "arm64", null, true)
         assertTrue(second.get("reused").asBoolean)
         assertEquals(id, second.get("sessionId").asString)
         assertEquals(sha, second.get("sourceSha256").asString)
@@ -80,7 +80,7 @@ class ToolkitNativeAnalysisTest {
         val wrong = "0".repeat(64)
         val analysis = ToolkitNativeAnalysis(store, { 1_700_000_000_000L })
 
-        val rejected = failure { analysis.open(file.path, wrong, "arm64") }
+        val rejected = failure { analysis.open(file.path, wrong, "arm64", null, true) }
         assertEquals("ANALYSIS_STALE_INPUT", rejected.code)
         assertTrue("错误应带 expected 前 16 位",
             rejected.message.orEmpty().contains("expected=" + wrong.take(16)))
@@ -100,16 +100,16 @@ class ToolkitNativeAnalysisTest {
         val file = input("stale.so", "one")
         val firstSha = sha(file)
         val analysis = ToolkitNativeAnalysis(store, { now })
-        val oldId = analysis.open(file.path, firstSha, "arm64", "old").get("sessionId").asString
+        val oldId = analysis.open(file.path, firstSha, "arm64", "old", true).get("sessionId").asString
 
         file.writeText("two", Charsets.UTF_8)
         val secondSha = sha(file)
         now += 1
-        val second = analysis.open(file.path, secondSha, "arm64")
+        val second = analysis.open(file.path, secondSha, "arm64", null, true)
         assertNotEquals(oldId, second.get("sessionId").asString)
         assertEquals("ANALYSIS_STALE_INPUT", errorCode { analysis.status(oldId) })
         assertEquals("ANALYSIS_STALE_INPUT", errorCode {
-            analysis.open(file.path, secondSha, "arm64", requestedSession = oldId)
+            analysis.open(file.path, secondSha, "arm64", requestedSession = oldId, allowOutsideOperationRoot = true)
         })
     }
 
@@ -119,7 +119,7 @@ class ToolkitNativeAnalysisTest {
         val file = input("libx.so", "mutations")
         val sha = sha(file)
         val analysis = ToolkitNativeAnalysis(store, { now })
-        val id = analysis.open(file.path, sha, "aarch64").get("sessionId").asString
+        val id = analysis.open(file.path, sha, "aarch64", null, true).get("sessionId").asString
 
         val function = analysis.defineFunction(id, "0x1000", 32, "sub_1000")
         val address = function.getAsJsonObject("address")
@@ -149,7 +149,7 @@ class ToolkitNativeAnalysisTest {
         val store = temp.newFolder("overlay")
         val file = input("o.so", "overlay")
         val analysis = ToolkitNativeAnalysis(store, { 1_700_000_000_000L })
-        val id = analysis.open(file.path, sha(file), "arm64").get("sessionId").asString
+        val id = analysis.open(file.path, sha(file), "arm64", null, true).get("sessionId").asString
         val result = analysis.overlay(id, "runtime:0x2000", "01020304", "probe")
         assertEquals(4, result.get("bytes").asInt)
         assertEquals(4L, result.get("overlayBytes").asLong)
@@ -171,7 +171,7 @@ class ToolkitNativeAnalysisTest {
         val first = input("limit.so", "limit-first")
         val second = input("second.so", "limit-second")
         val third = input("third.so", "limit-third")
-        val id = analysis.open(first.path, sha(first), "arm64").get("sessionId").asString
+        val id = analysis.open(first.path, sha(first), "arm64", null, true).get("sessionId").asString
         analysis.defineFunction(id, "0x1", null, null)
         analysis.defineFunction(id, "0x2", null, null)
         assertEquals("ANALYSIS_FUNCTION_LIMIT", errorCode { analysis.defineFunction(id, "0x3", null, null) })
@@ -180,9 +180,9 @@ class ToolkitNativeAnalysisTest {
         analysis.overlay(id, "0x11", "0304", null)
         assertEquals("ANALYSIS_OVERLAY_LIMIT", errorCode { analysis.overlay(id, "0x12", "05", null) })
 
-        analysis.open(second.path, sha(second), "arm64")
+        analysis.open(second.path, sha(second), "arm64", null, true)
         assertEquals("ANALYSIS_SESSION_LIMIT", errorCode {
-            analysis.open(third.path, sha(third), "arm64")
+            analysis.open(third.path, sha(third), "arm64", null, true)
         })
 
         now += 1001
@@ -195,7 +195,7 @@ class ToolkitNativeAnalysisTest {
         val file = input("resume.so", "resume")
         val sha = sha(file)
         val first = ToolkitNativeAnalysis(store, { now })
-        val id = first.open(file.path, sha, "arm64", "resume").get("sessionId").asString
+        val id = first.open(file.path, sha, "arm64", "resume", true).get("sessionId").asString
         first.defineFunction(id, "0x1000", 12, "resume_fn")
         first.setType(id, "0x1000", "char *")
         first.setNoreturn(id, "0x1000", true)
@@ -219,7 +219,7 @@ class ToolkitNativeAnalysisTest {
         val file = input("close.so", "close-restore")
         val sha = sha(file)
         val first = ToolkitNativeAnalysis(store, { now })
-        val id = first.open(file.path, sha, "arm64", "close-me").get("sessionId").asString
+        val id = first.open(file.path, sha, "arm64", "close-me", true).get("sessionId").asString
         first.defineFunction(id, "0x1000", 12, "kept_fn")
         first.setType(id, "0x1000", "int")
         first.setNoreturn(id, "0x1000", true)
@@ -242,7 +242,7 @@ class ToolkitNativeAnalysisTest {
 
         now += 100
         val second = ToolkitNativeAnalysis(store, { now })
-        val reopened = second.open(file.path, sha, "arm64")
+        val reopened = second.open(file.path, sha, "arm64", null, true)
         assertTrue(reopened.get("reused").asBoolean)
         assertTrue(reopened.get("restored").asBoolean)
         assertEquals(archive.canonicalPath, File(reopened.get("restoredFrom").asString).canonicalPath)
@@ -262,13 +262,13 @@ class ToolkitNativeAnalysisTest {
         val file = input("close-requested.so", "close-requested")
         val sha = sha(file)
         val first = ToolkitNativeAnalysis(store, { 1_700_000_000_000L })
-        val id = first.open(file.path, sha, "arm64", "requested-close").get("sessionId").asString
+        val id = first.open(file.path, sha, "arm64", "requested-close", true).get("sessionId").asString
         first.defineFunction(id, "0x2000", 8, "requested_fn")
         first.save(id)
         first.close(id)
 
         val second = ToolkitNativeAnalysis(store, { 1_700_000_000_100L })
-        val reopened = second.open(file.path, sha, "arm64", requestedSession = id)
+        val reopened = second.open(file.path, sha, "arm64", requestedSession = id, allowOutsideOperationRoot = true)
         assertTrue(reopened.get("reused").asBoolean)
         assertTrue(reopened.get("restored").asBoolean)
         assertEquals(1, reopened.get("functionCount").asInt)
@@ -287,7 +287,7 @@ class ToolkitNativeAnalysisTest {
         )
         val analysis = ToolkitNativeAnalysis(store, { 1_700_000_000_000L })
 
-        val opened = analysis.open(file.path, sha, "arm64")
+        val opened = analysis.open(file.path, sha, "arm64", null, true)
         assertFalse(opened.get("restored").asBoolean)
         assertFalse("坏归档不能静默恢复", opened.get("restoreError").isJsonNull)
         assertTrue(opened.get("restoreError").asString.contains("schemaVersion"))
@@ -302,8 +302,8 @@ class ToolkitNativeAnalysisTest {
         val one = input("one.so", "list-one")
         val two = input("two.so", "list-two")
         val analysis = ToolkitNativeAnalysis(store, { 1_700_000_000_000L }, maxSessions = 3, maxFunctions = 10)
-        val first = analysis.open(one.path, sha(one), "arm64").get("sessionId").asString
-        analysis.open(two.path, sha(two), "x86_64")
+        val first = analysis.open(one.path, sha(one), "arm64", null, true).get("sessionId").asString
+        analysis.open(two.path, sha(two), "x86_64", null, true)
         analysis.defineFunction(first, "0x10", null, null)
         analysis.overlay(first, "0x10", "ff", null)
         val listed = analysis.list()

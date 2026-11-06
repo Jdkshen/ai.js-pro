@@ -131,7 +131,7 @@
       },
       "prefix": {
         "type": "string",
-        "description": "按目标类型过滤候选：DEX 可用 Java 包名或 JVM 描述符，资源可用 type/name 或 0x ID，ZIP/native 用路径前缀；overview 的 prefix 必须为空。"
+        "description": "按目标类型过滤候选：DEX 可用 Java 包名或 JVM 描述符，资源可用 type/name 或 0x ID，ZIP/native 用路径前缀；overview 的 prefix 必须为空。可省略，省略时为空字符串。"
       },
       "includeMatchOffsets": {
         "type": "boolean",
@@ -156,7 +156,6 @@
       "query",
       "queryType",
       "caseSensitive",
-      "prefix",
       "includeMatchOffsets",
       "limit",
       "snippetMaxChars"
@@ -333,28 +332,28 @@
       },
       "maxValueChars": {
         "type": "integer",
-        "description": "value 的最大码点数，超出后截断并标记 valueTruncated。",
+        "description": "value 的最大码点数，超出后截断并标记 valueTruncated。可省略，省略时=4096。",
         "default": 4096,
         "minimum": 1,
         "maximum": 32768
       },
       "maxValueXmlChars": {
         "type": "integer",
-        "description": "valueXml 的最大字符数；超出时不返回 XML（null），并标记 valueXmlTruncated，不能写回半截 XML。整批结果另受 8MiB 预算。",
+        "description": "valueXml 的最大字符数；超出时不返回 XML（null），并标记 valueXmlTruncated，不能写回半截 XML。整批结果另受 8MiB 预算。可省略，省略时=32768。",
         "default": 32768,
         "minimum": 1,
         "maximum": 1048576
       },
       "maxItemsPerValue": {
         "type": "integer",
-        "description": "复杂资源最多返回的子项数；0 只返回 itemCount/itemsTruncated。",
+        "description": "复杂资源最多返回的子项数；0 只返回 itemCount/itemsTruncated。可省略，省略时=50。",
         "default": 50,
         "minimum": 0,
         "maximum": 2000
       },
       "resolveDepth": {
         "type": "integer",
-        "description": "0 不解析引用；1 只解析一级直接引用（优先同配置，其次默认配置），不递归。",
+        "description": "0 不解析引用；1 只解析一级直接引用（优先同配置，其次默认配置），不递归。可省略，省略时=0。",
         "default": 0,
         "minimum": 0,
         "maximum": 1
@@ -363,11 +362,7 @@
     "required": [
       "workspaceId",
       "editSessionId",
-      "reads",
-      "maxValueChars",
-      "maxValueXmlChars",
-      "maxItemsPerValue",
-      "resolveDepth"
+      "reads"
     ]
   },
   "apk_resource_xref": {
@@ -1148,7 +1143,7 @@
       },
       "outputName": {
         "type": "string",
-        "description": "输出文件名，或工具目录内的绝对路径；不能覆盖源 APK。为空时使用源文件名 + _mcp_<session>_<sign|unsigned>.apk。"
+        "description": "输出文件名，或工具目录内的绝对路径；不能覆盖源 APK。可省略，省略时自动使用源文件名 + _mcp_<session>_<sign|unsigned>.apk。"
       },
       "overwrite": {
         "type": "boolean",
@@ -1162,7 +1157,6 @@
     "required": [
       "workspaceId",
       "editSessionId",
-      "outputName",
       "overwrite",
       "sign"
     ]

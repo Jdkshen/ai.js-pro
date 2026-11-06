@@ -1,7 +1,8 @@
 <!-- section:id=overview -->
 # AI.js Pro 逆向 MCP 自发现指南
 
-> 适用基线：**dev1330-1**。本机公开 MCP 入口 **170 个**（**161 个规范名 + 9 个兼容别名**）。其中 19 个逆向工具已全部注册：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
+> 适用基线：**dev-1368**。本机公开 MCP 入口 **213 个**（**204 个规范名 + 9 个兼容别名**：status 3 · script 11 · workspace 10 · engine 5 · device 26 · terminal 11 · overlay 2 · asset 5 · toolkit 88 · reverse 43）。
+> 本指南部分细节段落写于 dev-1330 时代，若与 `tools/list` 或 [`AIjs-MCP-Guide.md`](AIjs-MCP-Guide.md) 的「dev-1368 行为变化」冲突，以后者为准。其中**逆向类工具现为 43 个**（本指南写于 dev-1330，下面这句列的是当时那 19 个已注册工具，名单已扩充）：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
 >
 > 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida使用免Root Gadget集成流程、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。
 
@@ -30,6 +31,8 @@ reverse_plan(goal=<goal>)       # 取机读 steps；组件和工具状态明确
 - **Frida免Root**：先 `apk_inject_gadget` 生成重签APK，安装打开后用返回的 `endpoint/token` 连接；无需Root或Server。
 - **Unicorn** 只模拟 `codeHex` 原始机器码，不是 Android/ELF/JNI 运行时；不接受 so 路径。
 - `artifact_fingerprint` 是内置启发式指纹，**不是完整 APKiD**，不能宣称做了 APKiD 检测或给出 APKiD 规则结论。
+- `native_analysis_open` 从 dev-1368 起**会真校验文件 SHA-256**：与入参不一致直接报 `ANALYSIS_STALE_INPUT`，并在错误里给出**完整 64 位** expected/actual（可直接拿 actual 重试）。
+  路径策略：它接受工具目录内相对路径与**允许的只读根**（`/system`、`/vendor`、`/apex`、`/data/local/tmp`、`/storage/emulated/0`）；`artifact_fingerprint`/`file_stat` **只接受工具目录内**路径，对 `/system` 会拒绝——外部文件请直接用报错里的 actual 全量哈希。
 - `apk_component_status` 只接受 `{}`，**没有** `component` 字段；逐个组件看返回的 `data.components[]`。
 - 所有逆向操作默认 `background=true`，返回 `jobId`；必须 `apk_job_status` 到终态，再 `apk_job_result` 分页。**任务登记不代表组件已安装，也不代表授权已取得。**
 
@@ -602,7 +605,7 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 - `apk_workspace_open` 返回快照 `sha256`，适合固定“这份字节”。
 - `apk_verify` 做密码学验签、ZIP/ELF 对齐和 Manifest 结构检查；失败项看 `checks`/`issues`。
 - `apk_read_signature` 只读证书/方案元数据；`verified` 始终 false。
-- `zip_test` 做完整 CRC/HMAC 校验；未加密 ZIP 传空 `password`，加密条目才传非空密码。
+- `zip_test` 做完整 CRC/HMAC 校验；`password` 是**可选**项（dev-1368 起），未加密 ZIP 省略或传空字符串皆可，**加密条目**才必须传非空密码。
 
 ```json
 {"jsonrpc":"2.0","id":81,"method":"tools/call","params":{"name":"yara_scan","arguments":{"path":"${ARTIFACT_PATH}","rulesPath":"${RULES_PATH}","scanTimeoutSeconds":20,"includeOffsets":true,"background":true,"timeoutSeconds":60}}}

@@ -242,11 +242,11 @@ internal class McpFileToolkit(private val root: File) {
                 "按深度优先顺序列出 root 内目录；path 为空表示 root。包含隐藏项，不跟随符号链接。" +
                     "分页 cursor 绑定目录、递归开关与页大小，不能跨目录复用。",
                 schema(
-                    listOf("path", "recursive", "cursor", "limit"),
+                    listOf("recursive", "limit"),
                     props(
-                        "path" to stringField("绝对路径或相对 root 的目录；空字符串表示 root。"),
+                        "path" to stringField("绝对路径或相对 root 的目录；省略或空字符串表示 root。"),
                         "recursive" to boolField("是否递归进入可读子目录。"),
-                        "cursor" to stringField("第一页传空字符串；后续原样复制上一页返回的 cursor。"),
+                        "cursor" to stringField("省略或空字符串表示第一页；后续原样复制上一页返回的 cursor。"),
                         "limit" to intField("每页条目数，1..1000。", 1, MAX_LIST_LIMIT.toLong(), null),
                     ),
                 ),
@@ -267,15 +267,15 @@ internal class McpFileToolkit(private val root: File) {
                 "严格按 UTF-8 / UTF-8 BOM / UTF-16LE / UTF-16BE 解码，保留真实 CRLF、LF、CR。" +
                     "位置与 maxChars 都按 Unicode 码点计，单页不会把 CRLF 拆开。",
                 schema(
-                    listOf("path", "encoding", "targetVersion", "limit", "maxChars", "startLine", "startColumn"),
+                    listOf("path"),
                     props(
                         "path" to stringField("非空绝对路径或相对 root 的路径。"),
-                        "encoding" to stringField("空字符串自动识别；否则使用上次返回的精确小写编码令牌。"),
-                        "targetVersion" to stringField("首读传空字符串；续读原样复制上一页返回值。"),
-                        "limit" to intField("本页最多触及的逻辑行数，1..2000。", 1, 2000, 500),
-                        "maxChars" to intField("本页最多返回的 Unicode 码点数，2..131072。", 2, 131072, 49152),
-                        "startLine" to intField("0 起始逻辑行号。", 0, MAX_SAFE_INTEGER, 0),
-                        "startColumn" to intField("0 起始 Unicode 码点列号。", 0, MAX_SAFE_INTEGER, 0),
+                        "encoding" to stringField("空字符串或省略时自动识别；否则使用上次返回的精确小写编码令牌。"),
+                        "targetVersion" to stringField("首读可省略或传空字符串；续读原样复制上一页返回值。"),
+                        "limit" to intField("本页最多触及的逻辑行数，1..2000；省略时=500。", 1, 2000, 500),
+                        "maxChars" to intField("本页最多返回的 Unicode 码点数，2..131072；省略时=49152。", 2, 131072, 49152),
+                        "startLine" to intField("0 起始逻辑行号；省略时=0。", 0, MAX_SAFE_INTEGER, 0),
+                        "startColumn" to intField("0 起始 Unicode 码点列号；省略时=0。", 0, MAX_SAFE_INTEGER, 0),
                     ),
                 ),
             )
@@ -285,12 +285,12 @@ internal class McpFileToolkit(private val root: File) {
                 "读取普通文件的原始字节页，返回大写十六进制和整文件 SHA-256。" +
                     "targetVersion 非空时必须与当前文件一致，避免拼接不同版本。",
                 schema(
-                    listOf("path", "targetVersion", "byteOffset", "maxBytes"),
+                    listOf("path"),
                     props(
                         "path" to stringField("非空绝对路径或相对 root 的路径。"),
-                        "targetVersion" to stringField("首读传空字符串；续读原样复制上一页返回值。"),
-                        "byteOffset" to intField("0 起始字节偏移。", 0, MAX_SAFE_INTEGER, 0),
-                        "maxBytes" to intField("每页字节数，1..65536。", 1, MAX_BYTE_PAGE.toLong(), 256),
+                        "targetVersion" to stringField("首读可省略或传空字符串；续读原样复制上一页返回值。"),
+                        "byteOffset" to intField("0 起始字节偏移；省略时=0。", 0, MAX_SAFE_INTEGER, 0),
+                        "maxBytes" to intField("每页字节数，1..65536；省略时=256。", 1, MAX_BYTE_PAGE.toLong(), 256),
                     ),
                 ),
             )
@@ -404,26 +404,25 @@ internal class McpFileToolkit(private val root: File) {
                     "不跟随符号链接。每页有节点与时间预算，结果显式返回 truncated/stopReason，并给出继续 cursor。",
                 schema(
                     listOf(
-                        "path", "recursive", "namePattern", "namePatternType", "nameMatchMode",
-                        "nameCaseSensitive", "minSize", "maxSize", "minModifiedAt", "maxModifiedAt",
-                        "contentPattern", "contentPatternType", "contentCaseSensitive", "cursor", "limit"
+                        "path", "recursive", "namePatternType", "nameMatchMode",
+                        "nameCaseSensitive", "contentPatternType", "contentCaseSensitive"
                     ),
                     props(
                         "path" to stringField("绝对或相对 root 的目录；用 . 表示 root，空字符串无效。"),
                         "recursive" to boolField("是否递归搜索子目录。"),
-                        "namePattern" to stringField("匹配文件名（含扩展名）；空字符串禁用名称过滤，* 不是通配符。", maxLength = MAX_SEARCH_PATTERN_CHARS),
+                        "namePattern" to stringField("匹配文件名（含扩展名）；省略或空字符串=禁用名称过滤，* 不是通配符。", maxLength = MAX_SEARCH_PATTERN_CHARS),
                         "namePatternType" to stringField("名称表达式类型。", enumValues = listOf("literal", "regex")),
                         "nameMatchMode" to stringField("exact 全名匹配；contains 子串或正则查找。", enumValues = listOf("exact", "contains")),
                         "nameCaseSensitive" to boolField("名称是否大小写敏感。"),
-                        "minSize" to intField("包含下界字节数；-1 禁用。", -1, MAX_SAFE_INTEGER),
-                        "maxSize" to intField("不包含上界字节数；-1 禁用。", -1, MAX_SAFE_INTEGER),
-                        "minModifiedAt" to stringField("包含下界修改时间，ISO-8601（Z 或时区偏移，最多毫秒）；空禁用。"),
-                        "maxModifiedAt" to stringField("不包含上界修改时间，ISO-8601；空禁用。"),
-                        "contentPattern" to stringField("内容匹配表达式；空禁用。", maxLength = MAX_SEARCH_PATTERN_CHARS),
+                        "minSize" to intField("包含下界字节数；省略或 -1 禁用。", -1, MAX_SAFE_INTEGER),
+                        "maxSize" to intField("不包含上界字节数；省略或 -1 禁用。", -1, MAX_SAFE_INTEGER),
+                        "minModifiedAt" to stringField("包含下界修改时间，ISO-8601（Z 或时区偏移，最多毫秒）；省略或空=禁用。"),
+                        "maxModifiedAt" to stringField("不包含上界修改时间，ISO-8601；省略或空=禁用。"),
+                        "contentPattern" to stringField("内容匹配表达式；省略或空=禁用。", maxLength = MAX_SEARCH_PATTERN_CHARS),
                         "contentPatternType" to stringField("内容表达式类型。", enumValues = listOf("literal", "regex")),
                         "contentCaseSensitive" to boolField("内容是否大小写敏感。"),
-                        "cursor" to stringField("第一页传空字符串；续页原样复制上一页 cursor；过滤器必须保持不变。"),
-                        "limit" to intField("每页最多返回的匹配数，1..1000。", 1, MAX_SEARCH_LIMIT.toLong(), 200),
+                        "cursor" to stringField("省略或空字符串表示第一页；续页原样复制上一页 cursor；过滤器必须保持不变。"),
+                        "limit" to intField("每页最多返回的匹配数，1..1000；省略时=200。", 1, MAX_SEARCH_LIMIT.toLong(), 200),
                     ),
                 ),
             )
@@ -499,21 +498,18 @@ internal class McpFileToolkit(private val root: File) {
                 "按行搜索一个已有文本文件，返回 1 起始行号、匹配行和前后文。" +
                     "cursor 绑定文件路径、SHA-256、编码和全部检索参数，文件变化后必须重开搜索。",
                 schema(
-                    listOf(
-                        "path", "encoding", "pattern", "patternType", "caseSensitive",
-                        "contextBefore", "contextAfter", "limit", "maxChars", "cursor"
-                    ),
+                    listOf("path", "pattern", "patternType", "caseSensitive"),
                     props(
                         "path" to stringField("非空已有普通文件路径。"),
-                        "encoding" to stringField("首搜可传空字符串自动识别；续搜传解析后的精确令牌。"),
+                        "encoding" to stringField("首搜可省略或传空字符串自动识别；续搜传解析后的精确令牌。"),
                         "pattern" to stringField("非空字面量或正则（逐行匹配），最多 16384 UTF-16 单元。", maxLength = MAX_SEARCH_PATTERN_CHARS),
                         "patternType" to stringField("表达式类型。", enumValues = listOf("literal", "regex")),
                         "caseSensitive" to boolField("是否大小写敏感。"),
-                        "contextBefore" to intField("匹配行前文行数，0..100。", 0, MAX_SEARCH_TEXT_CONTEXT.toLong(), 10),
-                        "contextAfter" to intField("匹配行后文行数，0..100。", 0, MAX_SEARCH_TEXT_CONTEXT.toLong(), 20),
-                        "limit" to intField("本页最多新匹配行数，1..200。", 1, MAX_SEARCH_TEXT_LIMIT.toLong(), 50),
-                        "maxChars" to intField("本页最多返回的原文码点数，1024..131072。", 1024, 131072, 32768),
-                        "cursor" to stringField("首搜传空字符串；续搜原样复制上一页 cursor。"),
+                        "contextBefore" to intField("匹配行前文行数，0..100；省略时=10。", 0, MAX_SEARCH_TEXT_CONTEXT.toLong(), 10),
+                        "contextAfter" to intField("匹配行后文行数，0..100；省略时=20。", 0, MAX_SEARCH_TEXT_CONTEXT.toLong(), 20),
+                        "limit" to intField("本页最多新匹配行数，1..200；省略时=50。", 1, MAX_SEARCH_TEXT_LIMIT.toLong(), 50),
+                        "maxChars" to intField("本页最多返回的原文码点数，1024..131072；省略时=32768。", 1024, 131072, 32768),
+                        "cursor" to stringField("省略或空字符串表示首搜；续搜原样复制上一页 cursor。"),
                     ),
                 ),
             )
@@ -524,10 +520,10 @@ internal class McpFileToolkit(private val root: File) {
                     "扩展名只作加分项：.apk.1、.bak、无扩展名、临时缓存名都能命中。扫描有深度/条目/探测数/字节/时间预算，" +
                     "结果显式返回 truncated/skipped/stopReason，部分结果不能当成全部未找到。path 可为目录（扫描）或单个文件（只探测该文件）。",
                 schema(
-                    listOf("path", "recursive"),
+                    listOf("path"),
                     props(
                         "path" to stringField("绝对/相对 root 的目录，或单个文件路径；空字符串表示 root。"),
-                        "recursive" to boolField("目录扫描时是否递归子目录。", true),
+                        "recursive" to boolField("目录扫描时是否递归子目录；省略时=true。", true),
                         "maxDepth" to intField("递归最大深度，0..32。", 0, 32, 8),
                         "maxEntries" to intField("最多访问的文件/目录条目数。", 1, 200000, 20000),
                         "maxProbes" to intField("最多探测的文件数。", 1, 20000, 2000),
@@ -1539,9 +1535,9 @@ internal class McpFileToolkit(private val root: File) {
     }
 
     private fun listFiles(args: JsonObject): ToolResult {
-        val rawPath = args.requiredString("path")
+        val rawPath = args.optionalString("path")
         val recursive = args.requiredBoolean("recursive")
-        val cursor = args.requiredString("cursor")
+        val cursor = args.optionalString("cursor")
         val limit = args.requiredInt("limit")
         checkRange(limit.toLong(), "limit", 1, MAX_LIST_LIMIT.toLong())
 
@@ -1702,9 +1698,9 @@ internal class McpFileToolkit(private val root: File) {
 
     private fun readBytes(args: JsonObject): ToolResult {
         val path = requireExistingFile(resolvePath(args.requiredString("path"), allowEmpty = false))
-        val targetVersion = args.requiredString("targetVersion")
-        val byteOffset = args.requiredLong("byteOffset")
-        val maxBytes = args.requiredInt("maxBytes")
+        val targetVersion = args.optionalString("targetVersion")
+        val byteOffset = args.optionalLong("byteOffset", 0L)
+        val maxBytes = args.optionalInt("maxBytes", 256)
         checkRange(byteOffset, "byteOffset", 0, MAX_SAFE_INTEGER)
         checkRange(maxBytes.toLong(), "maxBytes", 1, MAX_BYTE_PAGE.toLong())
         if (targetVersion.isNotEmpty()) checkVersionToken(targetVersion, allowMissing = false)
@@ -1757,12 +1753,12 @@ internal class McpFileToolkit(private val root: File) {
 
     private fun readText(args: JsonObject): ToolResult {
         val path = requireExistingFile(resolvePath(args.requiredString("path"), allowEmpty = false))
-        val encodingToken = args.requiredString("encoding")
-        val targetVersion = args.requiredString("targetVersion")
-        val limit = args.requiredInt("limit")
-        val maxChars = args.requiredInt("maxChars")
-        val startLine = args.requiredLong("startLine")
-        val startColumn = args.requiredLong("startColumn")
+        val encodingToken = args.optionalString("encoding")
+        val targetVersion = args.optionalString("targetVersion")
+        val limit = args.optionalInt("limit", 500)
+        val maxChars = args.optionalInt("maxChars", 49152)
+        val startLine = args.optionalLong("startLine", 0L)
+        val startColumn = args.optionalLong("startColumn", 0L)
         checkRange(limit.toLong(), "limit", 1, 2000)
         checkRange(maxChars.toLong(), "maxChars", 2, 131072)
         checkRange(startLine, "startLine", 0, MAX_SAFE_INTEGER)
@@ -1829,7 +1825,7 @@ internal class McpFileToolkit(private val root: File) {
      */
     private fun discoverApk(args: JsonObject): ToolResult {
         val rawPath = args.requiredString("path")
-        val recursive = args.requiredBoolean("recursive")
+        val recursive = args.optionalBoolean("recursive", true)
         val maxDepth = args.optionalInt("maxDepth", 8)
         val maxEntries = args.optionalInt("maxEntries", 20000)
         val maxProbes = args.optionalInt("maxProbes", 2000)
@@ -2900,19 +2896,19 @@ internal class McpFileToolkit(private val root: File) {
         val rawPath = args.requiredString("path")
         if (rawPath.isEmpty()) throw IllegalArgumentException("path 不能为空；搜索 root 请用 .")
         val recursive = args.requiredBoolean("recursive")
-        val namePattern = args.requiredString("namePattern")
+        val namePattern = args.optionalString("namePattern")
         val namePatternType = args.requiredString("namePatternType")
         val nameMatchMode = args.requiredString("nameMatchMode")
         val nameCaseSensitive = args.requiredBoolean("nameCaseSensitive")
-        val minSize = args.requiredLong("minSize")
-        val maxSize = args.requiredLong("maxSize")
-        val minModifiedText = args.requiredString("minModifiedAt")
-        val maxModifiedText = args.requiredString("maxModifiedAt")
-        val contentPattern = args.requiredString("contentPattern")
+        val minSize = args.optionalLong("minSize", -1L)
+        val maxSize = args.optionalLong("maxSize", -1L)
+        val minModifiedText = args.optionalString("minModifiedAt")
+        val maxModifiedText = args.optionalString("maxModifiedAt")
+        val contentPattern = args.optionalString("contentPattern")
         val contentPatternType = args.requiredString("contentPatternType")
         val contentCaseSensitive = args.requiredBoolean("contentCaseSensitive")
-        val cursor = args.requiredString("cursor")
-        val limit = args.requiredInt("limit")
+        val cursor = args.optionalString("cursor")
+        val limit = args.optionalInt("limit", 200)
 
         checkRange(limit.toLong(), "limit", 1, MAX_SEARCH_LIMIT.toLong())
         if (namePatternType !in setOf("literal", "regex")) throw IllegalArgumentException("namePatternType 无效")
@@ -3235,18 +3231,18 @@ internal class McpFileToolkit(private val root: File) {
 
     private fun searchText(args: JsonObject): ToolResult {
         val path = requireExistingFile(resolvePath(args.requiredString("path"), allowEmpty = false))
-        val encodingArg = args.requiredString("encoding")
+        val encodingArg = args.optionalString("encoding")
         val patternText = args.requiredString("pattern")
         if (patternText.isEmpty()) throw IllegalArgumentException("pattern 不能为空")
         if (patternText.length > MAX_SEARCH_PATTERN_CHARS) throw IllegalArgumentException("pattern 过长")
         val patternType = args.requiredString("patternType")
         if (patternType !in setOf("literal", "regex")) throw IllegalArgumentException("patternType 无效")
         val caseSensitive = args.requiredBoolean("caseSensitive")
-        val contextBefore = args.requiredInt("contextBefore")
-        val contextAfter = args.requiredInt("contextAfter")
-        val limit = args.requiredInt("limit")
-        val maxChars = args.requiredInt("maxChars")
-        val cursor = args.requiredString("cursor")
+        val contextBefore = args.optionalInt("contextBefore", 10)
+        val contextAfter = args.optionalInt("contextAfter", 20)
+        val limit = args.optionalInt("limit", 50)
+        val maxChars = args.optionalInt("maxChars", 32768)
+        val cursor = args.optionalString("cursor")
         checkRange(contextBefore.toLong(), "contextBefore", 0, MAX_SEARCH_TEXT_CONTEXT.toLong())
         checkRange(contextAfter.toLong(), "contextAfter", 0, MAX_SEARCH_TEXT_CONTEXT.toLong())
         checkRange(limit.toLong(), "limit", 1, MAX_SEARCH_TEXT_LIMIT.toLong())

@@ -30,7 +30,11 @@ import kotlin.concurrent.withLock
  * 同一 sourceSha256 可复用上下文；同一 sourcePath 输入哈希变化时旧会话标记 stale，
  * 任何旧地址/状态操作抛 ANALYSIS_STALE_INPUT。
  *
- * 主要错误码：ANALYSIS_STALE_INPUT、ANALYSIS_SESSION_NOT_FOUND、ANALYSIS_TTL_EXPIRED、
+ * 路径策略：绝对路径默认只允许只读根 /system、/vendor、/apex、/data/local/tmp、/storage/emulated/0
+ * 与工具操作根；其它绝对路径（/data/data、/data/user、/proc、应用私有目录等）拒绝，除非显式
+ * allowOutsideOperationRoot=true。相对路径仍只解析到工具操作根。
+ *
+ * 主要错误码：ANALYSIS_PATH_FORBIDDEN、ANALYSIS_STALE_INPUT、ANALYSIS_SESSION_NOT_FOUND、ANALYSIS_TTL_EXPIRED、
  * ANALYSIS_SESSION_LIMIT、ANALYSIS_FUNCTION_LIMIT、ANALYSIS_OVERLAY_LIMIT、
  * ANALYSIS_ADDRESS_INVALID、ANALYSIS_INPUT_INVALID、ANALYSIS_ABI_MISMATCH。
  */
@@ -57,6 +61,9 @@ internal class ToolkitNativeAnalysis(
         private val TYPE_NAME = Regex("""[A-Za-z0-9_*()\[\], .:-]{1,256}""")
         private val ADDRESS = Regex("(?i)(0x[0-9a-f]{1,16}|[0-9]{1,20})")
     }
+
+    /** 只读允许根；绝对路径必须落在这些根或工具操作根内（canonical 后判断）。 */
+    private val ALLOWED_READ_ONLY_ROOTS = listOf("/system", "/vendor", "/apex", "/data/local/tmp", "/storage/emulated/0")
 
     private data class Address(val value: String, val kind: String, val abi: String) {
         fun toJson(): JsonObject = ToolkitIo.json("value" to value, "kind" to kind, "abi" to abi)
@@ -123,9 +130,10 @@ internal class ToolkitNativeAnalysis(
         sourceSha256: String,
         abi: String?,
         requestedSession: String? = null,
+        allowOutsideOperationRoot: Boolean = false,
     ): JsonObject = lock.withLock {
         // #2：先对真实文件算哈希，再决定是否建/复用会话；绝不能把入参当实测值回显。
-        val input = resolveSourceFile(sourcePath)
+        val input = resolveSourceFile(sourcePath, allowOutsideOperationRoot)
         val expectedSha = normalizeSha(sourceSha256)
         val actualSha = readFileSha(input)
         if (actualSha != expectedSha) throw staleHash(expectedSha, actualSha)
@@ -888,8 +896,11 @@ internal class ToolkitNativeAnalysis(
 
     private fun staleHash(expected: String, actual: String): ToolkitException = ToolkitException(
         "ANALYSIS_STALE_INPUT",
-        "sourceSha256 与文件实际哈希不一致：expected=" + expected.take(16) +
-            "…，actual=" + actual.take(16) + "…；请先用 artifact_fingerprint 取真实哈希后重试",
+        "sourceSha256 与文件实际哈希不一致：expected=" + expected +
+            "，actual=" + actual +
+            "（前16位 expected=" + expected.take(16) + "…，actual=" + actual.take(16) + "…）。" +
+            "路径策略：artifact_fingerprint/file_stat 只接受工具目录内的路径；如果 sourcePath 在工具目录外（如 /system/lib64/**），" +
+            "它们会拒绝，请直接用上面的 actual 全量哈希作为 sourceSha256 重试 native_analysis_open。",
         "sha256",
     )
 
@@ -903,10 +914,11 @@ internal class ToolkitNativeAnalysis(
         }
     }
 
-    private fun resolveSourceFile(value: String): File {
+    private fun resolveSourceFile(value: String, allowOutsideOperationRoot: Boolean = false): File {
         val path = normalizeSourcePath(value)
+        val original = File(path)
         val candidate = try {
-            if (File(path).isAbsolute) File(path) else ToolkitIo.resolve(defaultOperationRoot(), path)
+            if (original.isAbsolute) original else ToolkitIo.resolve(defaultOperationRoot(), path)
         } catch (failure: Exception) {
             throw ToolkitException("ANALYSIS_INPUT_INVALID", "sourcePath 解析失败：" +
                 (failure.message ?: failure.javaClass.simpleName), "path")
@@ -917,10 +929,46 @@ internal class ToolkitNativeAnalysis(
             throw ToolkitException("ANALYSIS_INPUT_INVALID", "sourcePath 规范化失败：" +
                 (failure.message ?: failure.javaClass.simpleName), "path")
         }
+        // 符号链接已在 canonical 中解析；绝对路径再按 canonical 结果做只读白名单判定。
+        if (original.isAbsolute && !allowOutsideOperationRoot) {
+            val roots = allowedReadOnlyRoots()
+            if (roots.none { within(canonical, it) }) {
+                throw ToolkitException(
+                    "ANALYSIS_PATH_FORBIDDEN",
+                    "sourcePath 在只读允许根之外：" + canonical.path +
+                        "；允许根：" + allowedReadOnlyRootLabels().joinToString("，") +
+                        "；如确需分析允许根之外的文件，请显式传 allowOutsideOperationRoot=true（会绕过白名单，只在确需时使用）",
+                    "path",
+                )
+            }
+        }
         if (!canonical.isFile || !canonical.canRead()) {
             throw ToolkitException("ANALYSIS_INPUT_INVALID", "sourcePath 不是可读文件：" + path, "path")
         }
         return canonical
+    }
+
+    /** 只读允许根 + 当前工具操作根；全部 canonical，避免用相对段/链接绕过。 */
+    private fun allowedReadOnlyRoots(): List<File> {
+        val paths = LinkedHashSet<String>()
+        for (raw in ALLOWED_READ_ONLY_ROOTS) {
+            runCatching { File(raw).canonicalFile.path }.getOrNull()?.let { paths.add(it) }
+        }
+        runCatching { ToolkitIo.resolve(defaultOperationRoot(), "", true).path }.getOrNull()?.let { paths.add(it) }
+        return paths.map { File(it) }
+    }
+
+    /** 错误文案使用配置的原始根名（Android 上即 /system 等），操作根用 canonical 路径。 */
+    private fun allowedReadOnlyRootLabels(): List<String> {
+        val labels = LinkedHashSet(ALLOWED_READ_ONLY_ROOTS)
+        runCatching { ToolkitIo.resolve(defaultOperationRoot(), "", true).path }.getOrNull()?.let { labels.add(it) }
+        return labels.toList()
+    }
+
+    private fun within(path: File, root: File): Boolean {
+        val target = path.path
+        val base = root.path.trimEnd(File.separatorChar)
+        return target == base || target.startsWith(base + File.separator)
     }
 
     /** 生产环境用与 McpTools 相同的 operation root；绝对路径不触发这里，保持 JVM 测试可注入临时文件。 */
