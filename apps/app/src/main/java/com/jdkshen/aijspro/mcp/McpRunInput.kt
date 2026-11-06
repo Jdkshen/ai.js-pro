@@ -56,7 +56,7 @@ internal class McpRunInput(args: JsonObject) {
         wait = args.get("wait")?.let {
             require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) { "wait 必须是 boolean" }; it.asBoolean
         } ?: false
-        timeoutSeconds = integer(args, "timeoutSeconds", 60, 1..600)
+        timeoutSeconds = parseWaitTimeout(args)
         delay = integer(config, "delay", 0, 0..600000)
         interval = integer(config, "interval", 0, 0..600000)
         loopTimes = integer(config, "loopTimes", 1, 0..100000)
@@ -67,6 +67,27 @@ internal class McpRunInput(args: JsonObject) {
         ?.map { it.asString }.orEmpty()
 
     companion object {
+        /** MCP 的一次等待上限，不是脚本生命周期；与 waitFor() 的 coerceIn 保持一致。 */
+        const val WAIT_TIMEOUT_MIN_SECONDS = 1
+        const val WAIT_TIMEOUT_MAX_SECONDS = 600
+        /** Node 宿主 path 脚本自身的执行上限（Node24JavaScriptEngine.DEFAULT_TIMEOUT_MILLIS）。 */
+        const val NODE_PATH_SCRIPT_TIMEOUT_SECONDS = 3_600
+        const val WAIT_TIMEOUT_DESCRIPTION =
+            "MCP 等待上限（秒），不是脚本生命周期：1..600，默认 60。path 脚本在 Node 宿主可运行最长 1 小时；" +
+                "要等更久请 wait=false 后轮询 wait_execution/get_execution。"
+
+        private fun parseWaitTimeout(args: JsonObject): Int = try {
+            integer(args, "timeoutSeconds", 60, WAIT_TIMEOUT_MIN_SECONDS..WAIT_TIMEOUT_MAX_SECONDS)
+        } catch (error: IllegalArgumentException) {
+            throw IllegalArgumentException(
+                "timeoutSeconds 是 MCP 等待上限，范围 1..$WAIT_TIMEOUT_MAX_SECONDS 秒；不是脚本运行上限。" +
+                    "path 脚本在 Node 宿主可运行最长 1 小时（$NODE_PATH_SCRIPT_TIMEOUT_SECONDS 秒）；" +
+                    "等待更久请 wait=false 后用 wait_execution/get_execution 继续。收到值：" +
+                    args.get("timeoutSeconds"),
+                error
+            )
+        }
+
         private fun string(obj: JsonObject, key: String): String? = obj.get(key)?.let {
             require(it.isJsonPrimitive && it.asJsonPrimitive.isString) { "$key 必须是 string" }; it.asString
         }

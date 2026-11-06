@@ -169,7 +169,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
         add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) });add("resources",JsonObject());add("prompts",JsonObject()) })
-        add("serverInfo", JsonObject().apply { addProperty("name", "AI.js Pro Script MCP"); addProperty("version", "1.9.0") })
+        add("serverInfo", McpServerMetadata.toJson())
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
             "逆向任务首次连接：reverse_guide({topic:index}) → reverse_capabilities({}) → reverse_plan({goal:inspect|decode|rebuild|native|dynamic|fingerprint|emulate|compare})。指南与步骤也可通过 resources/list/read、prompts/list/get 发现；URI aijs://reverse/guide、aijs://reverse/workflows。",
@@ -179,7 +179,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "- JSON 的布尔/数字用原生类型（true / 100，不要字符串 \"true\" / \"100\"）。",
             "- 写代码前先 search_api_docs(query,engine) 查接口，再 read_api_doc(id,indexSha256) 读参数/兼容范围/示例；与 App API 文档共用离线索引。传统 Rhino 参考不能当作 QuickJS/Node 的支持证明。",
             "- path 是相对操作目录的路径，不要写 /sdcard 绝对路径；先用 list_scripts 查看。",
-            "- run_script 的 path/file/source 三选一；要结果和错误日志必须 wait:true，timeoutSeconds 建议 30~120。",
+            "- run_script 的 path/file/source 三选一；要结果和错误日志必须 wait:true。timeoutSeconds 是 MCP 等待上限（1..600 秒），不是脚本生命周期：path 脚本在 Node 宿主可运行最长 1 小时；等待超过 600 秒请 wait:false 后用 wait_execution/get_execution 继续。",
             "- wait 超时返回 timedOut=true，任务仍可能在跑：用 wait_execution/get_execution 继续，不要当成成功。",
             "- 脚本工程修改：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply。独立文件工具 file_* 通过 targetVersion 防旧写，直接作用于操作目录；APK 工具先建不可变快照/编辑会话，再导出新包。",
             "- 文件与APK工具全部由 AI.js Pro 自己实现，不需要 MT。先 toolkit_status；文件/ZIP用 file_*/zip_*，APK先 apk_list_available_apks → apk_workspace_open → apk_session_create。读取后用返回的 locator/targetVersion 修改，apk_session_check 后再 apk_build；有 nextCursor 用 apk_continue，修改后重查。签名读取是元数据，不是密码学验签。旧 mt_* 名称仅为本地兼容别名；多架构汇编按需安装终端 C/C++ 组件，能力与限制见 toolkit_status 和本指南。",
@@ -219,7 +219,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("get_execution", "读取任务状态、结果、异常或运行日志", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据；示例：{\"executionId\":\"mcp-1\",\"timeoutSeconds\":60}", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
-            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一；source 传源码字符串）；需要结果/错误日志时 wait=true。示例：{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}", McpToolSchema.runSchema()))
+            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一；source 传源码字符串）；需要结果/错误日志时 wait=true。timeoutSeconds 是 MCP 等待上限（1..600 秒，默认 60），不是脚本生命周期：path 脚本在 Node 宿主最长 1 小时；超过 600 秒请 wait=false 后轮询 wait_execution/get_execution。Node 执行池并发上限 3 个、最多排队 5 个/30 秒，超过会返回带「并发上限 3 个」的启动失败，请串行或错峰。示例：{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}", McpToolSchema.runSchema()))
             add(tool("list_engine_api", "枚举三引擎实际全局或 require(module) 的 API；Node 同时返回实际内置模块目录。**每项还会给出 documented 对账**：原 items 保持不变，另附 documentedItems[{name,documented}] 与 documentedCount/undocumentedCount/build/note（文档是否提到该导出；文档落后于构建时这里会直接暴露）", objSchema("engine", "module")))
             add(tool("probe_engine_api", "按 descriptor/shape 探测三引擎 API 的 present/accessor/missing/unverified、成员和函数 arity；module 可选，includeInherited 默认 true；探针不执行 getter（call_engine_api 才真实求值与调用）", objSchema("engine", "module", "name", "includeInherited", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比三个引擎的全局 API；保留旧 Rhino/QuickJS 字段，增加 Node 与三引擎交集"))
@@ -293,6 +293,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 "MCP 工具定义与公开目录不一致"
             }
         })
+        add("serverInfo", McpServerMetadata.toJson())
     }
 
     private fun call(invocation: McpToolCall): JsonObject {

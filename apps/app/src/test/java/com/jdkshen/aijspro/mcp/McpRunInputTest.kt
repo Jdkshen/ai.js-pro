@@ -51,6 +51,18 @@ class McpRunInputTest {
         val json = JsonParser().parse("""{"nested":[1e500]}""")
         assertTrue(runCatching { McpRunInput.argumentValue(json) }.exceptionOrNull() is IllegalArgumentException)
     }
+    @Test fun mcpWaitTimeoutIsBoundedAndSeparateFromNodeScriptLifetime() {
+        assertEquals(60, parse("""{"source":""}""").timeoutSeconds)
+        assertEquals(600, parse("""{"source":"","timeoutSeconds":600}""").timeoutSeconds)
+        listOf(0, 601, 3600).forEach { value ->
+            val error = runCatching { parse("""{"source":"","timeoutSeconds":$value}""") }.exceptionOrNull()
+            assertTrue(error is IllegalArgumentException)
+            val message = error?.message.orEmpty()
+            assertTrue(message, message.contains("MCP 等待上限"))
+            assertTrue(message, message.contains("1 小时"))
+        }
+    }
+
     @Test fun supportsSearchPathArrayAndRejectsOversizedSource() {
         assertEquals(listOf("lib", "nested"), parse("""{"source":"","config":{"path":["lib","nested"]}}""").searchPaths())
         val json = com.google.gson.JsonObject().apply { addProperty("source", "x".repeat(256 * 1024 + 1)) }

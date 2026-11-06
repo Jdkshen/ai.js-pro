@@ -50,6 +50,17 @@ class McpToolSchemaTest {
         assertFalse(rish.get("additionalProperties").asBoolean)
     }
 
+    @Test fun runScriptPublishesMcpWaitBoundsSeparateFromNodeScriptLifetime() {
+        val timeout = McpToolSchema.runSchema().getAsJsonObject("properties").getAsJsonObject("timeoutSeconds")
+        assertEquals(1, timeout.get("minimum").asInt)
+        assertEquals(600, timeout.get("maximum").asInt)
+        assertEquals(60, timeout.get("default").asInt)
+        val description = timeout.get("description").asString
+        assertTrue(description.contains("MCP 等待上限"))
+        assertTrue(description.contains("1 小时"))
+        assertTrue(description.contains("不是脚本生命周期"))
+    }
+
     @Test
     fun recursiveListingAndCleanupPublishTheTypesTheirHandlersAccept() {
         val properties = McpToolSchema.objectSchema(

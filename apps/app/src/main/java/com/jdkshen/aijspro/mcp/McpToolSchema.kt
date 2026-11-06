@@ -86,6 +86,12 @@ internal object McpToolSchema {
     fun runSchema(): JsonObject = objectSchema(
         "path", "file", "source", "engine", "wait", "timeoutSeconds", "name", "workingDirectory"
     ).apply {
+        getAsJsonObject("properties").getAsJsonObject("timeoutSeconds").apply {
+            addProperty("minimum", McpRunInput.WAIT_TIMEOUT_MIN_SECONDS)
+            addProperty("maximum", McpRunInput.WAIT_TIMEOUT_MAX_SECONDS)
+            addProperty("default", 60)
+            addProperty("description", McpRunInput.WAIT_TIMEOUT_DESCRIPTION)
+        }
         add("oneOf", JsonArray().apply {
             listOf("path", "file", "source").forEach { key ->
                 add(JsonObject().apply { add("required", JsonArray().apply { add(key) }) })

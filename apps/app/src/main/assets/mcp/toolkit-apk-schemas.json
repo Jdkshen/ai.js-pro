@@ -1646,7 +1646,40 @@
   "apk_job_list": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "operation": {
+        "type": "string",
+        "description": "按后台操作名精确过滤，例如 apk_decompile_class。"
+      },
+      "state": {
+        "type": "string",
+        "description": "按任务状态精确过滤：QUEUED/RUNNING/CANCELLING/SUCCEEDED/SUCCEEDED_WITH_WARNINGS/FAILED/CANCELLED/INTERRUPTED。"
+      },
+      "owner": {
+        "type": "string",
+        "description": "按 owner 过滤；不传则不过滤。"
+      },
+      "clientId": {
+        "type": "string"
+      },
+      "sessionId": {
+        "type": "string"
+      },
+      "locator": {
+        "type": "string",
+        "description": "按 locator 过滤；同 locator 的最新任务见 items[].latestForLocator 与 latestByLocator。"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "description": "显式分页大小；省略时返回全部，保持旧行为。"
+      },
+      "cursor": {
+        "type": "string",
+        "description": "分页游标，使用上一次返回的 nextCursor；不要自己构造。"
+      }
+    }
   },
   "apk_job_status": {
     "type": "object",

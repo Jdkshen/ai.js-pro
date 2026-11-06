@@ -12,7 +12,10 @@ import android.util.Log;
 public final class Node24Pool {
     private static final String TAG = "Node24Pool";
     private static final int SLOTS = 3;
-    private static final long ACQUIRE_TIMEOUT_MS = 8000L;
+    /** B7：允许短暂排队，但必须有界；超过队列/等待时间就明确失败，绝不无界等待。 */
+    private static final int MAX_WAITERS = 5;
+    private static final long ACQUIRE_TIMEOUT_MS = 30_000L;
+    private static int sWaiters;
     private static final Class<?>[] SERVICE_CLASSES = {
             Node24PoolService1.class, Node24PoolService2.class, Node24PoolService3.class
     };
@@ -27,7 +30,7 @@ public final class Node24Pool {
         public int index() { return index; }
     }
 
-    /** 槽位已满（3/3 运行中）且等待超时；调用方不得把它当成池启动失败去回退 legacy。 */
+    /** 槽位已满（3/3 运行中）且排队已满/等待超时；调用方不得把它当成池启动失败去回退 legacy。 */
     public static final class PoolBusyException extends IllegalStateException {
         public PoolBusyException(String message) { super(message); }
     }
@@ -44,33 +47,53 @@ public final class Node24Pool {
 
     private Node24Pool() { }
 
-    /** 分配一个空闲槽；全部忙时等待释放（≤8s），超时给明确中文错误。 */
+    /**
+     * 分配一个空闲槽。B7：全部忙时进入有界队列，最多等待 {@link #acquireTimeoutMillis()}
+     * 且最多 {@link #maxWaiters()} 个等待者；队列满或等待超时返回带并发上限的明确错误。
+     * 这是进程内调度队列，不是无界线程池；调用方仍应在 MCP 层串行/错峰。
+     */
     public static synchronized Slot acquire(Context context) throws Exception {
         if (Thread.currentThread().isInterrupted()) {
             throw new PoolInterruptedException("等待 Node 执行槽已被取消");
         }
         long deadline = System.currentTimeMillis() + ACQUIRE_TIMEOUT_MS;
-        while (true) {
-            for (Slot slot : sSlots) {
-                if (!slot.busy) {
-                    if (slot.client == null || !slot.client.isAlive()) {
-                        closeQuietly(slot.client);
-                        slot.client = new Node24Client(context, SERVICE_CLASSES[slot.index]);
+        boolean queued = false;
+        try {
+            while (true) {
+                for (Slot slot : sSlots) {
+                    if (!slot.busy) {
+                        if (slot.client == null || !slot.client.isAlive()) {
+                            closeQuietly(slot.client);
+                            slot.client = new Node24Client(context, SERVICE_CLASSES[slot.index]);
+                        }
+                        slot.busy = true;
+                        slot.lastUsed = System.currentTimeMillis();
+                        Log.i(TAG, "acquire slot=" + slot.index + " waiters=" + sWaiters);
+                        return slot;
                     }
-                    slot.busy = true;
-                    slot.lastUsed = System.currentTimeMillis();
-                    Log.i(TAG, "acquire slot=" + slot.index);
-                    return slot;
+                }
+                long remain = deadline - System.currentTimeMillis();
+                if (remain <= 0) {
+                    throw new PoolBusyException(waitTimeoutMessage());
+                }
+                if (!queued) {
+                    if (!hasQueueCapacity(sWaiters)) {
+                        throw new PoolBusyException(queueFullMessage());
+                    }
+                    sWaiters++;
+                    queued = true;
+                    Log.i(TAG, "queue waiters=" + sWaiters + "/" + MAX_WAITERS);
+                }
+                try { Node24Pool.class.wait(Math.min(remain, 250L)); }
+                catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new PoolInterruptedException("等待 Node 执行槽被取消");
                 }
             }
-            long remain = deadline - System.currentTimeMillis();
-            if (remain <= 0) {
-                throw new PoolBusyException("Node 执行槽已满（" + SLOTS + " 个），请先停止一个 Node 脚本");
-            }
-            try { Node24Pool.class.wait(Math.min(remain, 250L)); }
-            catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw new PoolInterruptedException("等待 Node 执行槽被取消");
+        } finally {
+            if (queued) {
+                sWaiters--;
+                if (sWaiters < 0) sWaiters = 0;
             }
         }
     }
@@ -78,6 +101,38 @@ public final class Node24Pool {
     /** 池容量（诊断/测试用）。 */
     public static int capacity() {
         return SLOTS;
+    }
+
+    /** B7 排队策略：等待队列上限（不含 3 个正在运行的槽）。 */
+    public static int maxWaiters() {
+        return MAX_WAITERS;
+    }
+
+    /** B7 排队策略：池满后最长等待时间。 */
+    public static long acquireTimeoutMillis() {
+        return ACQUIRE_TIMEOUT_MS;
+    }
+
+    /** 纯策略函数，便于 JVM 单测；等待者达到上限即不再排队。 */
+    public static boolean hasQueueCapacity(int waiting) {
+        return waiting >= 0 && waiting < MAX_WAITERS;
+    }
+
+    /** 队列已满时的稳定错误文案（MCP 返回体会原样带出）。 */
+    public static String queueFullMessage() {
+        return "Node 执行槽已满（并发上限 " + SLOTS + " 个），排队队列已满（最多 " + MAX_WAITERS
+                + " 个）；请串行执行或先停止一个 Node 脚本";
+    }
+
+    /** 池满且排队超时的稳定错误文案。 */
+    public static String waitTimeoutMessage() {
+        return "Node 执行槽已满（并发上限 " + SLOTS + " 个），已排队等待 " + (ACQUIRE_TIMEOUT_MS / 1000L)
+                + "s 仍无空闲槽；请串行执行或先停止一个 Node 脚本";
+    }
+
+    /** 当前进程内正在排队的请求数（诊断/测试用；跨进程不可见）。 */
+    public static synchronized int waitingCount() {
+        return sWaiters;
     }
 
     /**

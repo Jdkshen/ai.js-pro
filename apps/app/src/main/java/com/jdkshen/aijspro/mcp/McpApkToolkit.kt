@@ -178,7 +178,7 @@ internal class McpApkToolkit(
         "apk_component_install" -> "显式下载并校验可选APK/逆向组件（含免Root frida-gadget）；默认后台jobId，manifestUrl可指定发布清单。"
         "apk_component_remove" -> "卸载指定可选APK组件，保留源工程和其他组件。"
         "apk_job_start" -> "后台运行指定APK分析/编译操作，立即返回jobId；任务有超时，失败不自动重放。"
-        "apk_job_list" -> "读取当前工具目录的后台任务和状态。"
+        "apk_job_list" -> "读取当前工具目录的后台任务和状态；支持 operation/state/owner/locator 过滤与 limit/cursor 分页（默认全部）。latestByLocator/items[].latestForLocator 指向同一 locator 的最新任务；effectiveConcurrency=1，maxActive 只是排队/登记上限。"
         "apk_job_status" -> "读取后台任务状态/阶段；CANCELLING表示正在等待实际worker结束。SUCCEEDED_WITH_WARNINGS 表示完成但有反编译不完整（warningCode=DECOMPILE_INCOMPLETE，详见结果 decompileIncomplete/incompleteReason）。"
         "apk_job_result" -> "分块读取后台任务最终JSON结果，offset以返回nextOffset继续。"
         "apk_job_export" -> "把后台任务结果原样原子导出到工具目录内的 outPath；省略 offset/maxChars 时导出全部，超大结果可用 offset/maxChars 分页。导出后内容归用户，任务缓存仍按保留策略淘汰。"
@@ -327,8 +327,22 @@ internal class McpApkToolkit(
             "旧记录 owner=null 时必须带 includeUnknownOwner=true；新记录 owner=mcp-host/ownerSource=server-default。"
 
     private fun directory(id: String) = File(store, ToolkitIo.id(id))
-    private fun snapshot(id: String): File = File(directory(id), "base.apk").also { require(it.isFile) { "APK 工作区不存在" } }
-    private fun workspace(id: String): JsonObject = JsonParser().parse(File(directory(id), "workspace.json").readText()).asJsonObject
+    private fun snapshot(id: String): File = File(directory(id), "base.apk").also {
+        if (!it.isFile) throw workspaceExpired(id)
+    }
+    private fun workspace(id: String): JsonObject {
+        val file = File(directory(id), "workspace.json")
+        if (!file.isFile) throw workspaceExpired(id)
+        return JsonParser().parse(file.readText()).asJsonObject
+    }
+
+    private fun workspaceExpired(id: String): ToolkitException = ToolkitException(
+        "WORKSPACE_EXPIRED",
+        "APK 工作区不存在或已被回收（WORKSPACE_EXPIRED）：$id。临时工作区被 GC/删除后旧 workspaceId 不能复用；" +
+            "请先 apk_workspace_open {path:...}（或 artifact_open）重新打开，并用返回的新 workspaceId；" +
+            "当前工作区可用 apk_workspace_list / apk_workspace_inventory 查看。",
+        "workspaceId",
+    )
     private fun workspaces(): List<JsonObject> = store.listFiles()?.filter { it.isDirectory && File(it, "workspace.json").isFile }?.mapNotNull { runCatching { workspace(it.name) }.getOrNull() } ?: emptyList()
     private fun sessionDir(workspace: String, session: String): File = File(File(directory(workspace), "sessions"), ToolkitIo.id(session)).also { require(File(it, "session.json").isFile) { "会话不存在或不属于该工作区" } }
     private fun requiredSession(session: String) = session.also { require(it.isNotEmpty()) { "此操作必须在编辑会话中执行" } }
@@ -581,10 +595,24 @@ internal class McpApkToolkit(
     private fun dexes(workspace: String, session: String): Sequence<Pair<String,ToolkitDex>> = entries(workspace, session).asSequence().filter { ToolkitApkTargets.isDex(it) }.map { it to ToolkitDex(raw(workspace, session, it)) }
     private fun dexFor(workspace: String, session: String, locator: String, requestedDex:String=""): Pair<String,ToolkitDex> {
         val found = dexes(workspace, session).filter { (entry, _) -> requestedDex.isEmpty() || requestedDex==entry }.filter { (_, dex) -> dex.classes.any { it.type == dex.type(locator) } }.toList()
-        require(found.size == 1) {
-            if(found.isEmpty()) "DEX 类不存在（收到：$locator）。$locatorHint"
-            else "多个 DEX 含同名类（" + found.joinToString { it.first } + "），无法仅凭裸 locator 消歧；$locatorHint"
-        }; return found.single()
+        if (found.isEmpty()) {
+            throw ToolkitException(
+                "LOCATOR_NOT_FOUND",
+                "DEX 类不存在（收到：$locator）。这是定位符/参数问题，不是反编译失败；" +
+                    "正确形状示例：dex_class:Lcom/example/Foo;、dex_method:Lcom/example/Foo;->bar()V；" +
+                    "跨 DEX 同名类请使用搜索结果里的 uniqueLocator（dex_entry:classes.dex!dex_class:...）。$locatorHint",
+                "locator",
+            )
+        }
+        if (found.size > 1) {
+            throw ToolkitException(
+                "LOCATOR_AMBIGUOUS",
+                "多个 DEX 含同名类（" + found.joinToString { it.first } + "），无法仅凭裸 locator 消歧；" +
+                    "请传 dexEntry，或使用搜索结果里的 uniqueLocator（dex_entry:classes.dex!dex_class:...）。$locatorHint",
+                "locator",
+            )
+        }
+        return found.single()
     }
     private fun entryLocator(locator: String): String {
         require(locator.startsWith("zip_entry:")) { "需要带命名空间前缀的 locator（收到：$locator）。$locatorHint" }
@@ -698,6 +726,18 @@ internal class McpApkToolkit(
     private fun search(workspace: String, session: String, args: JsonObject): JsonObject {
         val result = ToolkitApkSearch(entries(workspace, session), { raw(workspace, session, it) },
             { optionalResources(workspace, session) }, { dexes(workspace, session) }).search(args)
+        // B16：axml: 是搜索结果的预览 locator；真正读取 AXML 条目要用 zip_entry:。
+        // locator 保持原语义，只增加可直接喂给 apk_read_text/apk_read_bytes 的 readLocator。
+        result.hits.forEach { hit ->
+            val locator = hit.tString("locator")
+            if (locator.startsWith("axml:")) {
+                val entry = locator.removePrefix("axml:")
+                hit.addProperty("readLocator", "zip_entry:" + entry)
+                hit.addProperty("locatorNote", "locator 是 AXML 预览定位符，不能直接用于 apk_read_text/apk_read_bytes；请改用 readLocator（zip_entry:$entry），或把 locator 换成 zip_entry:$entry。")
+            } else {
+                hit.addProperty("readLocator", locator)
+            }
+        }
         return page(workspace, session, result.hits, args.tInt("limit", 50, 1, 200), result.partial, "search", result.metadata)
     }
     private fun readResources(workspace: String, session: String, args: JsonObject): JsonObject {

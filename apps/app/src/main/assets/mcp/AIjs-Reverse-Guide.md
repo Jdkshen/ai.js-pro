@@ -268,7 +268,7 @@ radare2 系列 `native_*` 工具直接读手机路径，不读 APK 快照 locato
 {"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"apk_job_result","arguments":{"jobId":"${JOB_ID}","offset":0,"maxChars":16000}}}
 ```
 
-返回 `content`、`nextOffset`、`hasMore`、`totalChars`。下一页把 `offset` 设为上次 `nextOffset`，不要按行号或字节数自己算。结果文件上限 24 MiB，`maxChars` 上限 200000。
+返回 `content`、`nextOffset`、`hasMore`、`totalChars`。下一页把 `offset` 设为上次 `nextOffset`，不要按行号或字节数自己算。结果文件上限 24 MiB；`apk_job_result.maxChars` 默认/上限 **1 MiB**（dev-1380；旧版 200000）。
 
 **终止条件只有一个：`hasMore=false`。** 不要写成 `while (hasMore || nextOffset)`，也不要在 `hasMore=false` 后继续读；`nextOffset` 只是下一页位置，不是“还有内容”的独立信号。
 
@@ -431,6 +431,8 @@ locator 从 `apk_dex_search_members`/`apk_dex_read_class_outline` 取；返回�
 
 **怎么验证**：先用原 class locator 复现 `JADX未找到类`；再用同一方法 locator 的 `apk_read_text`，确认 `data.text` 以 `.method` 开头、以 `.end method` 结束并包含方法名/描述符；若是内联，在 caller 的 `apk_decompile_method` 或 Smali 里找到对应常量/调用。
 
+**B18 非 ASCII 类名/文件名**：批量反编译产物文件名可能含非 ASCII 类名（如 `okhttp3.internal.io.ვ.java`），部分文件/压缩工具链会踩坑。机器处理时做 **name→ASCII 映射**（base64/hex 安全名 + 单独 manifest 记录原名），或跳过/转义；不要把文件名当类名。`apk_read_text` 用 locator、`apk_job_export` 用指定 `outPath`，不经过反编译文件名，不受影响。
+
 
 ### Apktool 工程路线
 
@@ -450,6 +452,8 @@ locator 从 `apk_dex_search_members`/`apk_dex_read_class_outline` 取；返回�
 - **既有 `apk_native_*`**：用 `workspaceId` + `editSessionId` + `locator=zip_entry:...`，直接读 APK 快照（Capstone）。
 - **radare2 系列 `native_*`**：只接受手机文件 `path`，不接 `workspaceId`/`locator`。先从快照导出 so，再传 `localPath`。
 - **`native_emulate`**：只接受 `codeHex` 原始机器码，不接 `path`/`locator`；详见 `emulate` 章节。
+
+**怎么选**：已导出/本机 so、要 r2ghidra 伪代码 → `native_*`（path）；APK 内 so、不导出、要 patch → `apk_native_*`（workspace/session/locator）；要从 APK 走 r2 → 先 `apk_copy_entry direction=workspace_to_local` 再传 path。不要两套参数混用。
 
 ### 从快照导出 so（新 native 工具的前置）
 
@@ -498,11 +502,15 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 | 工具 | 必填参数 | 说明 |
 |---|---|---|
 | `native_analyze` | `path` | ELF/二进制元数据，不执行目标 |
-| `native_functions` | `path` | 函数列表，`offset`/`limit` 分页，`limit≤200` |
+| `native_functions` | `path`（`offset`/`limit` 有默认） | 函数列表；`offset` 是**条目索引，不是地址**，用 `nextOffset` 续页，`limit≤200`；返回 `heuristic:true`，不保证覆盖全部函数 |
 | `native_function_detail` | `path`、`address` | `address` 是十进制或 `0x` 字符串，不是表达式 |
 | `native_decompile` | `path`、`address` | 需要 radare2 + r2ghidra；伪代码不是源码 |
 | `native_xrefs` | `path`、`address` | 到该地址的引用，`offset`/`limit` 分页 |
 | `native_compare` | `path`、`otherPath` | 有界字节差异 + radare2 元数据，不是语义等价 |
+
+`native_functions` 的 `offset` 是**函数条目索引**（不是地址）：跨页把上次 `nextOffset` 传给 `offset`；不要拿 `address` 当 offset。返回值 `heuristic:true` 表示启发式扫描，**不保证覆盖全部函数或边界准确**；要按地址看单个函数用 `native_function_detail`。
+
+**怎么验证**：`native_functions {path,offset:0,limit:10}` 后用返回的 `nextOffset` 取下一页；确认响应 `heuristic:true`，并在证据里标注“启发式列表，不是完整函数表”。
 
 ```json
 {"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"native_analyze","arguments":{"path":"${LOCAL_SO_PATH}","background":true,"timeoutSeconds":180}}}
@@ -737,7 +745,7 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 - 编辑会话：每工作区 8 个，每会话 2000 条变更/512 MiB；检查点最多 8 个。
 - 文本读取：`apk_read_text` 的 `maxChars` 上限 131072；`file_read_text` 单页 2..131072 码点。
 - 正则：每个 matcher 默认 750 ms、最多 8,000,000 次字符访问，并受总预算/取消检查限制。
-- 任务结果：24 MiB；`apk_job_result.maxChars` 1..200000；逆向任务 `timeoutSeconds` 1..1800（上界由 `McpLimits.MAX_TIMEOUT_SECONDS` 统一控制）。
+- 任务结果：24 MiB；`apk_job_result.maxChars` 1..1048576（dev-1380）；逆向任务 `timeoutSeconds` 1..1800（上界由 `McpLimits.MAX_TIMEOUT_SECONDS` 统一控制）。
 - 原生输入：`native_*` 文件 ≤64 MiB；`yara_scan` 规则 ≤1 MiB、输入 ≤64 MiB、扫描 ≤30 秒。
 - `native_emulate`：代码 1..65536 字节、数据 ≤4096 字节、指令 ≤100000、时间 ≤1000 ms。
 - 分页：APK 列表/DEX 大纲 1000 项、native 列表 500 项、其余列表 200 项；以 `pagination.limitMax` 为准。

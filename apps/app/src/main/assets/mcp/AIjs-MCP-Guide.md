@@ -276,7 +276,7 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 - **`.4` 实测真因**：升级后看不到结果，实际是 64 条 finished + 3 条活跃触发了 `retentionLimit`（`apk_job_list` 返回 32 条墓碑），与升级清空无关；升级清空只会出现 `SERVICE_RESTARTED`。先看 `retention` 和 `evicted[]`，不要臆断。
 - **正确做法**：任务一到终态就立即 `apk_job_result` 把 `content` 取回，写入自己的项目目录（如 `<项目>/recovered/`），不要等几个小时或升级后再找；Playbook 的留档约定也点名这条。
 - **原样留档用 `apk_job_export`**：`apk_job_export {jobId,outPath}` 把结果原样原子导出到工具操作目录（outPath 父目录会自动创建；省略 offset/maxChars 时导出全部，显式 maxChars ≤1 MiB；同名文件覆盖）。导出后内容归用户，但**不会延长任务缓存的 6 小时/64 条保留**，所以仍要尽早导出。
-- `apk_job_result` 默认读取窗口 **1,048,576 字符**（dev-1378；旧版 16,384），大结果一次可拿回；响应里 `hasMore`/`nextOffset`/`totalChars`/`defaultMaxChars` 仍按分页语义。显式传 `maxChars` 时当前 schema 上限仍是 200000（不要传 1 MiB；要更大的结果用默认值 + `nextOffset` 续读）。
+- `apk_job_result` 默认读取窗口 **1,048,576 字符**（dev-1378；旧版 16,384），大结果一次可拿回；响应里 `hasMore`/`nextOffset`/`totalChars`/`defaultMaxChars` 仍按分页语义。显式传 `maxChars` 时 schema 上限已是 **1 MiB**（dev-1380）；但 `apk_decompile_*` 是另一套：默认/上限 **200000**，仍会在 200000 截断（详见下方 B11），大结果用 `apk_job_export`/`offset` 续读。
 
 **怎么验证**：调 `apk_job_list {}`，检查 `retention` 是否包含 `windowMillis/maxRetainedFinished/maxTombstones/maxResultBytes`；若有 `evicted[]`，确认 `code=JOB_EVICTED` 且 `reason=retentionLimit|retentionWindow`。对墓碑 jobId 调 `apk_job_result` 应报 `JOB_EVICTED`；对 `SERVICE_RESTARTED` 的 job 才说明是进程重启丢失。再跑一个 >16K 的后台结果（如反编译类），不传 `maxChars` 调 `apk_job_result`，检查 `content` 长度 >16384、`defaultMaxChars=1048576`、必要时 `hasMore/nextOffset`。
 
@@ -429,7 +429,9 @@ APK 快照单包 512MiB、工作区总量 1GiB、最多 16 个工作区；每个
 
 ## 手机终端与编译
 
-MCP 和应用内终端复用同一底层，默认使用手机应用 UID，无需占用三引擎运行槽。`terminal_exec` 可显式选择 `backend="shizuku"`；Shizuku/Sui须已运行并授权，失败不会回退 app。后端实际身份可能为shell或root，诊断以真实状态为准。仍是管道终端（`pty=false`）；全屏编辑器、终端控制序列、交互PTY和完整作业控制不属于本接口。workingDirectory须在MCP操作目录内，命令可访问所选身份实际有权限的文件。
+MCP 和应用内终端复用同一底层，默认使用手机应用 UID，无需占用三引擎运行槽。
+
+> B13：执行前先 `shell_capabilities` 自检；`terminal_exec` 无 PTY，grep/cat/归档/python 有缺口，详见本节末「dev-1380 手册补丁」B13。`terminal_exec` 可显式选择 `backend="shizuku"`；Shizuku/Sui须已运行并授权，失败不会回退 app。后端实际身份可能为shell或root，诊断以真实状态为准。仍是管道终端（`pty=false`）；全屏编辑器、终端控制序列、交互PTY和完整作业控制不属于本接口。workingDirectory须在MCP操作目录内，命令可访问所选身份实际有权限的文件。
 
 1. `get_build_tools` 检测 PATH 中 clang/clang++、javac/java、Gradle、aapt2、zipalign、apksigner 等；`found=true` 仅表示定位到命令，`verified=false` 表示尚未试编译。`optionalComponents` 另返回可选 C/C++ 组件的状态与安装命令；此查询不会下载或执行编译器。
 2. `terminal_exec(command, workingDirectory?, env?, timeoutSeconds?, backend?)` 异步创建任务，立即返回jobId；backend只接受app（默认）/shizuku。env是字符串对象，不能伪造内部后端变量或替换RISH_APPLICATION_ID。最多3个并发、保留最近16条；超时默认300秒，范围1..3600。
@@ -633,6 +635,86 @@ full 诊断示例：
 2. `apk_build` 用绝对路径 `outputName`：`/storage/emulated/0/脚本/autojs_crack/_mcp_test/x.apk`（必须在工具操作根内）。纯文件名会落在操作根，不要写 `../`/符号链接。
 
 **怎么验证**：先直接用相对子目录复现报错；建目录后改绝对路径应成功，返回的 `path` 与传入绝对路径一致。
+
+## dev-1380 手册补丁（B9/B11/B12/B13/B15/B17/B18 + §11）
+
+> 来源：`.4` 的 `MCP-AIjsPro-总结-dev1378.md`（使用手册 + B1~B15）及 §11 实测。以下每条给正确用法与验证；旧版差异单独标注。
+
+### B9 `apk_inject_gadget.detail=summary`
+
+`apk_inject_gadget` 可选 `detail=full|summary`（默认 full，dev-1378 起）。`summary` 只回 `path/size/sha256/signed/signer/schemesApplied/providerProcess/providerProcessSource/partial/installable/note`，同一云镜样本实测 **42 KB→480 字符**；**summary 不含 `partialReasons`**，要诊断 partial 必须 `detail=full`（或 `apk_verify`）。
+
+**怎么验证**：同一输入分别 `detail=summary`/`full`，summary 只有上述关键字段、full 有 `verification/partialReasons`；不要用 summary 判断 partial 原因。
+
+### B11 `maxChars` 两套上限不要混
+
+- `apk_decompile_class`/`apk_decompile_method`：`maxChars` **默认 200000、上限 200000**；超过仍在 **200000 截断**（B3 正在修，先如实现状），不会自动分页。要拿全，用 `apk_job_export`/`offset` 续读，或把类/方法拆小。
+- `apk_job_result`：默认读取窗口 **1,048,576 字符**，schema 上限 **1 MiB**（dev-1380 起；旧构建曾为 200000）。大结果一次取回，超过再用 `nextOffset` 续读。
+- `apk_job_export`：默认导出全部结果，`offset`/`maxChars` 可选（`maxChars ≤1 MiB`）；适合把反编译等大结果原样留档。
+
+**怎么验证**：对一个 81,162 字符的反编译结果不传 `maxChars` 调 `apk_job_result`，确认 `totalChars=81162`、`hasMore=false`、`defaultMaxChars=1048576`；再对输出调 `apk_job_export`，`file_stat` 的 SHA/字节与导出返回一致。`apk_decompile_*` 传 `maxChars=200000` 与传更大值对比，确认仍按 200000 截断（不要宣称已修）。
+
+### B12 `zip_create` 与 `file_edit_text` 两个易错参数
+
+- `zip_create` **文件源**的 `entryPath` 必须是完整文件路径、**不能以 `/` 结尾**（传 `脚本/` 会报「文件源的 entryPath 必须是非空文件路径」）；目录源才以 `/` 结尾。**输出 ZIP 不能位于任一源目录内**（把整个项目目录当源会失败）。
+- `file_edit_text` **新建文件**必须 `targetVersion="missing"`、`encoding` 用实际编码、`edits` 只能是**一个** `write_target`；传 `"new"` 会报 `INVALID_ARGUMENT`（它只接受 64 位 SHA-256 或 missing）。
+
+正确示例：
+
+```json
+{"name":"zip_create","arguments":{"outputPath":"out/archive.zip","sources":[{"sourcePath":"脚本/a.txt","entryPath":"a.txt"}],"overwrite":false,"level":6}}
+{"name":"file_edit_text","arguments":{"path":"notes/new.txt","targetVersion":"missing","encoding":"utf-8","edits":[{"mode":"write_target","writeText":"hello"}]}}
+```
+
+**怎么验证**：`zip_create` 文件源 `entryPath="脚本/"` 复现报错，改 `a.txt` 成功；输出放在源目录内应失败，移到 `out/archive.zip` 成功。`file_edit_text` 传 `targetVersion="new"` 复现 INVALID_ARGUMENT，改 `missing` 成功；成功后 `file_read_text` 回读。
+
+### B13 `terminal_exec` 无 PTY 与能力缺口（执行前自检）
+
+`terminal_exec` 是**无 PTY** 管道终端，stdout/stderr 合并；`ls/grep/cat` 等是设备 shell 实现，不保证 GNU 特性。执行前先调 `shell_capabilities`（无参数）看当前后端清单，再按替代写法：
+
+- `grep` 可能不支持 `\b`/`\s`：用 `[[:space:]]`、显式边界或 `awk`；先 `grep --help` 确认。
+- `cat` 可能没有 `-n`/`-A`：用 `sed -n '1,20p'`、`awk '{print NR":"$0}'`、`od`/`xxd` 代替。
+- 没有 `zip`/`jar`/`7z`，通常只有 `tar`；ZIP 操作直接用 MCP 的 `zip_create`/`zip_extract`/`zip_update`，不要在终端里赌工具存在。
+- `python` 可能是坏软链：先 `command -v python3`/`ls -l`，用可用绝对路径；别再假设 `python` 可用。
+
+**怎么验证**：`shell_capabilities {}` 返回后逐项对照；再跑 `command -v zip jar 7z python3; grep --help | head; cat --help | head`，用 `grep -E '[[:space:]]'`/`sed -n` 各跑一条；在报告里写实际能力，不要写「命令不存在」为工具 bug。
+
+### B15 两套 native 工具别混
+
+| 目的 | 用哪套 | 输入 | 环境 | 不适合 |
+|---|---|---|---|---|
+| 分析本机/已导出的 so 或任意文件 | `native_*`（radare2） | 手机文件 `path` | r2/r2ghidra 组件 | 不能传 `workspaceId`/`locator` |
+| 分析 APK 快照内的 so | `apk_native_*`（Capstone） | `workspaceId`+`editSessionId`+`locator=zip_entry:...` | 不落盘 | 不能传本机 `path` |
+| 要 r2ghidra 伪代码 | `native_decompile` | 先 `apk_copy_entry` 导出，再 `path` | r2ghidra | 先导出再分析 |
+| 要改 APK 内 so | `apk_native_patch_*` | 会话/locator | 内置汇编/可选 clang | 不改源包 |
+
+**怎么验证**：对同一 so，先 `apk_native_inspect`（locator）确认可读；再 `apk_copy_entry direction="workspace_to_local"` 导出，用 `native_analyze {path}` 分析；两边地址/架构一致即路径选对。反向把 `workspaceId` 传给 `native_*` 应报参数错误，把 `path` 传给 `apk_native_*` 应报 locator 错误。
+
+### B17 `native_functions` 的 offset 是条目索引
+
+`native_functions(path,offset,limit)` 的 `offset` 是**函数条目索引，不是地址**；跨页用返回的 `nextOffset`，不要拿 `address` 当 offset。返回 `heuristic=true` 表示启发式扫函数，**不保证覆盖全部函数/边界准确**；要按地址看单个函数用 `native_function_detail`。
+
+**怎么验证**：`native_functions {path,offset:0,limit:10}` → 用 `nextOffset` 取下一页（不要 `address`）；确认响应 `heuristic:true`，并在报告里写明「启发式列表，不是完整函数表」。
+
+### B18 批量反编译产物的非 ASCII 文件名
+
+批量反编译输出的文件名可能含非 ASCII 类名（如 `okhttp3.internal.io.ვ.java`），部分文件/压缩工具链会踩坑。机器处理时做 **name→ASCII 映射**（如 base64/hex 安全名 + 单独 manifest 记录原类名），或跳过/转义；不要把文件名当类名。MCP 的 `apk_read_text` 用 locator、`apk_job_export` 用指定 `outPath`，**不经过反编译产物文件名**，不受影响。
+
+**怎么验证**：对一个非 ASCII 类名的目标跑 `apk_decompile_class`，检查产物文件名；改用 `apk_read_text(locator="dex_class:...")` 读取同一类，确认内容可达；`apk_job_export` 导出到自定义 `outPath` 检查文件存在。
+
+### §11 `run_script` 超时与 Node 执行槽
+
+- MCP `run_script.timeoutSeconds` 上限 **600**；`wait:true` 最多等 600 秒，超时返回 `timedOut=true`，但脚本可能仍在运行。用 `get_execution`/`wait_execution`/`stop_script` 继续处理，**不要把 timedOut 当脚本终止**。
+- 按 `path` 运行的脚本原生超时是 **1 小时**（`nativeTimeoutMillis=3600000`），MCP 的 600 秒不会真杀脚本；需要停止要显式 `stop_script`。
+- Node 执行槽 **3 个**；第 4 个会等待（≤8 秒）后抛 `PoolBusyException`，不是「engine 不存在」。先停一个 Node 脚本或复用任务；C 正在改排队/补文案，先按现状处理。
+
+**怎么验证**：`run_script {path:"<长脚本>",wait:true,timeoutSeconds:1}` 预期 `timedOut=true`，随后 `get_execution` 仍 `RUNNING`，再 `stop_script`；同时启动 3 个 Node 长任务再起第 4 个，预期 `PoolBusyException`（不要在真机留无限循环，验证后立即停止）。
+
+### Rhino 版本边界：`String.valueOf(42)`
+
+`.4` 的 **dev-1378** 在 Rhino 上 `Packages.java.lang.String.valueOf(42)` 仍是 `42.0`；**dev-1380+** 才返回 `42`（K40 实测；`valueOf(1.5)` 仍 `1.5`）。Node 早就返回 `42`。不要按手册的「已 OK」在旧 Rhino 上断言整数输出；先 `get_status.app.build` 或实测。
+
+**怎么验证**：分别用 `run_script {engine:"rhino",...}` 与 `engine:"nodejs"` 打印 `Packages.java.lang.String.valueOf(42)`；dev-1380+ Rhino 应为 `42`，`.4` dev-1378 是 `42.0`，Node 一直 `42`；报告里写清构建版本。
 
 
 ## 常见错误与修法

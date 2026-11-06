@@ -359,6 +359,86 @@ class ToolkitJobsTest {
     }
 
     @Test
+    fun listFiltersAndPaginatesWithoutChangingLegacyDefaults() {
+        val folder = temp.newFolder("jobs")
+        val jobs = immediateJobs(folder)
+        fun start(operation: String, owner: String) = jobs.start(obj(
+            "operation" to operation, "arguments" to ToolkitIo.json(), "timeoutSeconds" to 10, "owner" to owner,
+        )).get("jobId").asString
+        val a = start("apk_search", "alice")
+        val b = start("apk_search", "bob")
+        val c = start("apk_verify", "alice")
+        listOf(a, b, c).forEach { waitFinal(jobs, it) }
+
+        val all = jobs.list()
+        assertEquals(3, all.get("total").asInt)
+        assertEquals(3, all.get("count").asInt)
+        assertFalse(all.get("hasMore").asBoolean)
+        assertEquals(1, all.get("effectiveConcurrency").asInt)
+        assertTrue(all.get("maxActiveMeaning").asString.contains("不是实际并行"))
+        assertTrue(all.get("maxActiveNote").asString.contains("不代表"))
+
+        val byOperation = jobs.list(obj("operation" to "apk_search"))
+        assertEquals(2, byOperation.get("total").asInt)
+        assertEquals(2, byOperation.get("count").asInt)
+        byOperation.getAsJsonArray("items").forEach { assertEquals("apk_search", it.asJsonObject.get("operation").asString) }
+
+        val byOwner = jobs.list(obj("owner" to "alice"))
+        assertEquals(2, byOwner.get("total").asInt)
+        val byState = jobs.list(obj("state" to "SUCCEEDED"))
+        assertEquals(3, byState.get("total").asInt)
+        assertEquals(0, jobs.list(obj("state" to "FAILED")).get("total").asInt)
+
+        val first = jobs.list(obj("limit" to 2))
+        assertEquals(3, first.get("total").asInt)
+        assertEquals(2, first.get("count").asInt)
+        assertTrue(first.get("hasMore").asBoolean)
+        assertNotNull(first.get("nextCursor"))
+        val cursor = first.get("nextCursor").asString
+        val second = jobs.list(obj("limit" to 2, "cursor" to cursor))
+        assertEquals(1, second.get("count").asInt)
+        assertFalse(second.get("hasMore").asBoolean)
+        val ids = (first.getAsJsonArray("items") + second.getAsJsonArray("items"))
+            .map { it.asJsonObject.get("jobId").asString }.toSet()
+        assertEquals(setOf(a, b, c), ids)
+
+        assertTrue(runCatching { jobs.list(obj("cursor" to "bad")) }.exceptionOrNull() is IllegalArgumentException)
+    }
+
+    @Test
+    fun latestResultForLocatorIsIndexedAndMarked() {
+        val folder = temp.newFolder("jobs")
+        var now = 1000L
+        val jobs = ToolkitJobs(folder, { _, _ -> ToolkitIo.json("content" to "latest") },
+            ToolkitJobs.DEFAULT_RETENTION_WINDOW_MILLIS, ToolkitJobs.DEFAULT_MAX_RETAINED_FINISHED, 4) { now++ }
+        val locator = "dex_class:Lcom/example/Foo;"
+        val first = jobs.start(obj(
+            "operation" to "apk_decompile_class",
+            "arguments" to ToolkitIo.json("locator" to locator), "timeoutSeconds" to 10,
+        )).get("jobId").asString
+        waitFinal(jobs, first)
+        val second = jobs.start(obj(
+            "operation" to "apk_decompile_class",
+            "arguments" to ToolkitIo.json("locator" to locator), "timeoutSeconds" to 10,
+        )).get("jobId").asString
+        waitFinal(jobs, second)
+
+        val listed = jobs.list(obj("locator" to locator))
+        assertEquals(2, listed.get("total").asInt)
+        val entries = listed.getAsJsonArray("latestByLocator").map { it.asJsonObject }
+        val latest = entries.single { it.get("locator").asString == locator }
+        assertEquals(second, latest.get("jobId").asString)
+        val items = listed.getAsJsonArray("items").map { it.asJsonObject }.associateBy { it.get("jobId").asString }
+        assertFalse(items.getValue(first).get("latestForLocator").asBoolean)
+        assertTrue(items.getValue(second).get("latestForLocator").asBoolean)
+        val index = File(folder, ToolkitJobs.LOCATOR_INDEX_FILE)
+        assertTrue(index.isFile)
+        val indexEntry = JsonParser().parse(index.readText()).asJsonObject
+            .getAsJsonArray("entries").map { it.asJsonObject }.single { it.get("locator").asString == locator }
+        assertEquals(second, indexEntry.get("jobId").asString)
+    }
+
+    @Test
     fun exportWritesExactRawResultAndMetadata() {
         val folder = temp.newFolder("jobs")
         val root = temp.newFolder("root")

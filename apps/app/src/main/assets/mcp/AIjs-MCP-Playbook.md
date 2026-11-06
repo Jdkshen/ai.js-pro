@@ -37,6 +37,7 @@
 - 快照/会话：`apk_workspace_open` 建不可变快照（已有 APK 上下文可用 `aijs://current-apk` 取回，没有上下文时先按实际路径打开；已保存工作区用 `aijs://workspace/<id>` 且 `temporary=false`），`apk_session_create` 建写时复制会话。会话不会改源 APK。
 - 先读后改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；DEX 类/方法用 `apk_read_text` 的 `dex_*` 定位符读取文本；`apk_edit_text`/`apk_resource_edit` 原样传回。`apk_edit_text` 新建目标用 `targetVersion="missing"` + 单个 `write_target`。看到“内容已改变”重新读取，不要重试旧参数。
 - 输出路径坑（dev-1374）：`apk_build.outputName` 只接受**纯文件名或绝对路径**，相对子目录（如 `autojs_crack/_mcp_test/x.apk`）会被拒；`apk_inject_gadget.outPath` **不建父目录**，父目录必须已存在。先 `file_create_directory` 建目录，再传绝对路径；详见 Guide「dev-1373 已修」的 #18/#12。
+- 两个易错参数（B12）：`zip_create` 的**文件源** `entryPath` 不能以 `/` 结尾（传 `脚本/` 会报错）；输出 ZIP 不能位于任一源目录内。`file_edit_text` 新建文件必须 `targetVersion="missing"`（`"new"` 会报 INVALID_ARGUMENT），且 `edits` 只能有一个 `write_target`。详见 Guide「dev-1380 手册补丁」B12。
 - gadget 瘦身/partial（dev-1379 更正归因）：`detail=summary` 只回关键字段（同一云镜样本 42 KB→480 字符，**不含 `partialReasons`**）；看 `partialReasons[].entry`/`scope`（`target`=目标包自带的库，`injected`=本工具注入的 Gadget；`upstream`/`impact` 辅助）必须用 `detail=full`。K40 云镜样本 5 条实为 target 的 `lib/arm64-v8a/libroot_automator.so`（3 段）+ `libyj_aj_02_309.so`（2 段），**未注入原包同样 5 条**；注入的 `libaijsgadget.so` arm64 3 段全过。① target 库只能由目标方用 NDK r27+ 重编，不要直接改 `p_align`（32 位段不同余，要连带 p_vaddr/p_offset 或重链接）；② injected Gadget 只有 32 位 ABI 不合规，64 位已合规，16 KiB 设备是 arm64、当前无需重编；③ 4096 页设备不影响加载（K40/`.4` `getconf PAGE_SIZE=4096`，无真实 16K 加载失败证据，16K 硬件仍需实测）。验证：full 注入看 `entry/scope`，再对原包 vs 注入包跑 `apk_verify` 对比 native 告警是否仅在注入后新增。
 - 分页：列表/搜索/native/资源 xref 最多 200/页，返回 `nextCursor`，用 `apk_continue` 续页；游标 5 分钟过期且绑定会话 revision，编辑后必须重查。不能把两页拼成一份视图。
 - 检查/构建：先 `apk_session_check(runBuildChecks=true)`，再 `apk_build`；构建会再检查，失败不导出。默认未签名；`sign=true` 用本机 AI.js Pro 身份重签并移除原签名。`apk_read_signature` 只读 V1/V2/V3/V3.1 证书元数据，`verified=false`，不是验签。
@@ -252,12 +253,56 @@ console.log(JSON.stringify({nameAddr: nameAddr.toString(), hits: hits}));
 # APK native 反汇编（本地 toolkit，无需 MT）
 {"name":"apk_native_disassemble","arguments":{"workspaceId":"...","editSessionId":"","locator":"zip_entry:lib/arm64-v8a/x.so","addressKind":"virtual","address":"0x1234","instructionMode":"auto","maxBytes":400,"maxInstructions":100,"stopAtSymbolBoundary":false}}
 ```
+## 手册补丁（dev-1380 B13/B15/B17/B18 + §11/Rhino 版本边界）
+
+> 来源：`.4` 的 `MCP-AIjsPro-总结-dev1378.md` B 清单/§11；与 Guide「dev-1380 手册补丁」互补，这里给执行前速查。
+
+### B13 `terminal_exec` 自检
+
+- 执行前先 `shell_capabilities {}`；`terminal_exec` **无 PTY**，能力有缺口。
+- `grep` 可能不支持 `\b`/`\s`：用 `[[:space:]]`、显式边界或 `awk`；`cat` 可能没有 `-n/-A`：用 `sed -n`/`awk`/`od`。
+- 没有 `zip`/`jar`/`7z`，通常只有 `tar`；ZIP 用 MCP `zip_*` 工具。`python` 软链可能坏：先用 `command -v python3`/`ls -l`，不要假设 `python` 可用。
+- 验证：`shell_capabilities {}` 对照后，逐条跑 `command -v zip jar 7z python3; grep --help | head; cat --help | head`，报告写实际能力。
+
+### B15 两套 native 工具
+
+- `native_*`（radare2）：输入**手机文件 path**，不接受 `workspaceId`/`locator`；适合已导出的 so、r2ghidra 伪代码。
+- `apk_native_*`（Capstone）：输入 `workspaceId`+`editSessionId`+`locator=zip_entry:...`，直接读 APK 快照；不落盘，适合 APK 内 so 的 inspect/xref/反汇编/补丁。
+- 要从快照用 radare2：先 `apk_copy_entry direction=workspace_to_local` 导出，再把 `localPath` 传给 `native_*`。
+- 验证：同一 so 用 `apk_native_inspect` 与导出后 `native_analyze` 各查一次架构/地址；把错误输入类型互传应明确报参数/locator 错误。
+
+### B17 `native_functions` 分页
+
+`native_functions(path,offset,limit)` 的 `offset` 是**条目索引，不是地址**；跨页用 `nextOffset`，不要拿 `address` 当 offset。返回 `heuristic:true`，是启发式函数列表，不保证覆盖全部/边界准确；单函数按地址查用 `native_function_detail`。
+
+验证：`offset:0,limit:10` 后用 `nextOffset` 取下一页，确认 `heuristic:true`，报告标注“非完整函数表”。
+
+### B18 非 ASCII 反编译文件名
+
+批量反编译产物文件名可能含非 ASCII 类名（如 `okhttp3.internal.io.ვ.java`）；文件/压缩工具链可能踩坑。机器处理做 **name→ASCII 映射**（安全名 + 原名 manifest），或跳过/转义，不要把文件名当类名。`apk_read_text`（locator）与 `apk_job_export`（指定 outPath）不经过反编译文件名，不受影响。
+
+验证：对一个非 ASCII 类名目标看产物文件名，再用 `apk_read_text(dex_class:...)` 读取并 `apk_job_export` 到自定义 outPath。
+
+### §11 `run_script` 超时/Node 执行槽
+
+- MCP `run_script.timeoutSeconds` 上限 **600**；`wait:true` 超时返回 `timedOut=true`，脚本可能仍 RUNNING，用 `get_execution`/`wait_execution`/`stop_script`。
+- 按 `path` 运行的脚本原生超时 **1 小时**（`nativeTimeoutMillis=3600000`），MCP 600 秒不会真杀；要停必须显式 `stop_script`。
+- Node 执行槽 **3 个**；第 4 个等 ≤8 秒后 `PoolBusyException`（不是 engine 不存在），先停一个 Node 脚本或复用任务。
+
+验证：`wait:true,timeoutSeconds:1` 跑长脚本应 `timedOut=true` 且随后仍 RUNNING，再 stop；3 个 Node 长任务 + 第 4 个应 `PoolBusyException`（验证后立即停）。
+
+### Rhino 版本边界：`String.valueOf(42)`
+
+Node 一直返回 `42`；Rhino **dev-1380+** 返回 `42`，`.4` 的 **dev-1378** 仍是 `42.0`（`valueOf(1.5)` 都是 `1.5`）。先看 `get_status.app.build` 或实测，不要按旧手册断言整数输出。
+
+验证：分别用 `run_script engine=rhino` 和 `engine=nodejs` 打印 `Packages.java.lang.String.valueOf(42)`，按构建版本解释差异。
+
 
 ## 附录 D · 留档与写作用域
 
 - 探索脚本：`/storage/emulated/0/脚本/<用途>_harnessN.js`，只续号不覆盖。
 - 结果：`<项目>/recovered/`（正式交付放 `recovered/工程明文/`）；报告：`<项目>/analysis/*.md`。
-- **任务结果只保留 6 小时或 64 条（dev-1378）**：`apk_job_*` 输出超出保留策略会删除缓存，只留 `JOB_EVICTED` 墓碑（`apk_job_list.evicted[]` 的 `code=JOB_EVICTED`、`reason=retentionLimit|retentionWindow`；`retention` 里 `windowMillis=21600000`、`maxRetainedFinished=64`、`maxTombstones=256`、`maxResultBytes=24 MiB`）。结果“消失”先看墓碑，不是升级清空；`SERVICE_RESTARTED` 才是进程重启丢失。**任务到终态就立刻 `apk_job_result` 取回并写入本项目 `recovered/`，不要等**。`apk_job_result` 默认窗口 1,048,576 字符（dev-1378，旧 16,384），大结果一次取回；`hasMore/nextOffset` 续读，显式 `maxChars` schema 上限仍 200000。怎么验证：`apk_job_list {}` 看 `retention/evicted`；对墓碑 jobId 调 `apk_job_result` 应报 `JOB_EVICTED`；跑一个 >16K 结果不传 `maxChars`，确认 `content` 长度 >16384、`defaultMaxChars=1048576`。 留档用 `apk_job_export{jobId,outPath}` 原样原子导出（默认导出全部、父目录自动建、不延长 6h/64 条缓存）。
+- **任务结果只保留 6 小时或 64 条（dev-1378）**：`apk_job_*` 输出超出保留策略会删除缓存，只留 `JOB_EVICTED` 墓碑（`apk_job_list.evicted[]` 的 `code=JOB_EVICTED`、`reason=retentionLimit|retentionWindow`；`retention` 里 `windowMillis=21600000`、`maxRetainedFinished=64`、`maxTombstones=256`、`maxResultBytes=24 MiB`）。结果“消失”先看墓碑，不是升级清空；`SERVICE_RESTARTED` 才是进程重启丢失。**任务到终态就立刻 `apk_job_result` 取回并写入本项目 `recovered/`，不要等**。`apk_job_result` 默认窗口 1,048,576 字符（dev-1378，旧 16,384），大结果一次取回；`hasMore/nextOffset` 续读，`apk_job_result` 显式 `maxChars` schema 上限已 1 MiB（dev-1380）；但 `apk_decompile_*` 的 `maxChars` 默认/上限仍是 200000、会在 200000 截断（B3 修复中），大结果用 `apk_job_export`/`offset` 续读。怎么验证：`apk_job_list {}` 看 `retention/evicted`；对墓碑 jobId 调 `apk_job_result` 应报 `JOB_EVICTED`；跑一个 >16K 结果不传 `maxChars`，确认 `content` 长度 >16384、`defaultMaxChars=1048576`。 留档用 `apk_job_export{jobId,outPath}` 原样原子导出（默认导出全部、父目录自动建、不延长 6h/64 条缓存）。
 - 交付前两端 md5sum 对一遍并写进 `MANIFEST.md`；原始 APK / project.bin 只读不改。
 
 ## 资源不匹配、后台任务和回退

@@ -47,6 +47,7 @@ internal class ToolkitJobs internal constructor(
         val owner: String?,
         val clientId: String?,
         val sessionId: String?,
+        var locator: String? = null,
     ) {
         val cancelled = AtomicBoolean()
         @Volatile var state = "QUEUED"
@@ -78,6 +79,8 @@ internal class ToolkitJobs internal constructor(
 
     private val jobs = ConcurrentHashMap<String, Job>()
     private val tombstones = ConcurrentHashMap<String, Tombstone>()
+    /** locator -> 最新 jobId；配套 by-locator.index.json，避免调用方按目录扫到旧结果。 */
+    private val latestByLocator = ConcurrentHashMap<String, String>()
     private val registryLock = Any()
     private val serviceInstance = ToolkitIo.fresh()
     private val serviceStartedAt = clock()
@@ -116,8 +119,13 @@ internal class ToolkitJobs internal constructor(
             identity(args, "owner"),
             identity(args, "clientId"),
             identity(args, "sessionId"),
+            jobLocator(args),
         )
         jobs[job.id] = job
+        job.locator?.let { locator ->
+            latestByLocator[locator] = job.id
+            persistLocatorIndex()
+        }
         persist(job)
         persistRegistry()
         trim()
@@ -132,22 +140,83 @@ internal class ToolkitJobs internal constructor(
         val owner = identity(args, "owner")
         val clientId = identity(args, "clientId")
         val sessionId = identity(args, "sessionId")
-        val items = jobs.values.filter { matches(it, owner, clientId, sessionId) }
-            .sortedByDescending { it.created }.map { status(it) }
-        val evicted = tombstones.values.filter { matches(it, owner, clientId, sessionId) }
-            .sortedByDescending { it.recordedAt }.take(MAX_LISTED_TOMBSTONES).map { tombstoneJson(it) }
+        val operation = optionalString(args, "operation")
+        val state = optionalString(args, "state")
+        val locator = optionalString(args, "locator")
+        fun matchesFilters(job: Job): Boolean =
+            matches(job, owner, clientId, sessionId) &&
+                (operation == null || job.operation == operation) &&
+                (state == null || job.state == state) &&
+                (locator == null || job.locator == locator)
+        val matched = jobs.values.filter { matchesFilters(it) }.sortedByDescending { it.created }
+        // 默认 limit 不传=全部，保持旧行为；显式 limit 才分页。cursor 是不透明 jobs1-<offset>。
+        val limit = if (args.has("limit") && !args.get("limit").isJsonNull) {
+            args.tInt("limit", 20, 1, 200)
+        } else Int.MAX_VALUE
+        val cursor = args.tString("cursor", "").trim()
+        val offset = parseListCursor(cursor, matched.size)
+        val page = matched.drop(offset).take(limit)
+        val items = page.map { job ->
+            status(job).apply {
+                addProperty("locator", job.locator)
+                addProperty("latestForLocator", job.locator != null && latestByLocator[job.locator] == job.id)
+            }
+        }
+        val evictedMatches = tombstones.values.filter {
+            matches(it, owner, clientId, sessionId) && (operation == null || it.operation == operation)
+        }.sortedByDescending { it.recordedAt }
+        // 默认仍按旧上限返回墓碑；显式 limit 时也限制 evicted，避免 68+ 条里另一半墓碑完全不过滤。
+        val evictedLimit = if (limit == Int.MAX_VALUE) MAX_LISTED_TOMBSTONES else minOf(limit, MAX_LISTED_TOMBSTONES)
+        val evicted = evictedMatches.take(evictedLimit).map { tombstoneJson(it) }
+        val hasMore = offset + page.size < matched.size
+        val latestEntries = latestByLocator.entries.mapNotNull { (key, id) ->
+            jobs[id]?.let { job -> key to job }
+        }.sortedByDescending { it.second.created }
         return ToolkitIo.json(
             "items" to items,
             "count" to items.size,
+            "total" to matched.size,
+            "matched" to matched.size,
+            "offset" to offset,
+            "limit" to if (limit == Int.MAX_VALUE) null else limit,
+            "cursor" to cursor.ifEmpty { null },
+            "nextCursor" to if (hasMore) "jobs1-" + (offset + page.size) else null,
+            "hasMore" to hasMore,
             "activeJobs" to jobs.values.count { it.finished == 0L },
             "maxActive" to maxActive,
+            "effectiveConcurrency" to EFFECTIVE_CONCURRENCY,
+            "effectiveConcurrencyScope" to "per-workspace",
+            "workerThreads" to WORKER_THREADS,
+            "concurrencyModel" to "serialized-per-workspace",
+            "maxActiveMeaning" to "maxActive 是允许同时排队/登记的任务数（QUEUED+RUNNING），不是实际并行执行路数；同一 workspace 的任务由 McpApkToolkit.call 的 workspace 锁串行，因此 effectiveConcurrency=1，workerThreads=2 只是线程池上限。",
+            "maxActiveNote" to "maxActive=4 只表示最多 4 个任务可同时登记/排队，不代表 4 个任务并行跑；同 workspace 实际串行，effectiveConcurrency=1。",
             "retention" to retentionJson(),
             "retentionNote" to retentionNote(),
             "service" to serviceJson(),
             "evicted" to evicted,
-            "filter" to ToolkitIo.json("owner" to owner, "clientId" to clientId, "sessionId" to sessionId),
+            "evictedTotal" to evictedMatches.size,
+            "evictedHasMore" to (evictedMatches.size > evicted.size),
+            "latestByLocator" to JsonArray().apply {
+                latestEntries.forEach { (key, job) ->
+                    add(ToolkitIo.json(
+                        "locator" to key,
+                        "jobId" to job.id,
+                        "operation" to job.operation,
+                        "state" to job.state,
+                        "createdAt" to job.created,
+                        "finishedAt" to job.finished.takeIf { it > 0 },
+                        "resultAvailable" to job.resultReady,
+                    ))
+                }
+            },
+            "locatorIndexFile" to LOCATOR_INDEX_FILE,
+            "filter" to ToolkitIo.json(
+                "owner" to owner, "clientId" to clientId, "sessionId" to sessionId,
+                "operation" to operation, "state" to state, "locator" to locator,
+            ),
             "nextActions" to JsonArray().apply {
                 add("要留档：apk_job_export{jobId,outPath} 立刻把结果原样原子导出到工具操作目录；结果只保留 6 小时或最多 64 条已完成任务，超出即删除输出缓存")
+                add("按 locator 取最新：items[].latestForLocator=true 或 top-level latestByLocator；也可直接读 by-locator.index.json")
                 add("apk_job_list.evicted[] 是 JOB_EVICTED 墓碑；JOB_EVICTED 表示保留窗口/数量淘汰，不等于升级丢失的 SERVICE_RESTARTED")
             },
         )
@@ -288,14 +357,22 @@ internal class ToolkitJobs internal constructor(
             val responseData = response.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
             val decompileIncomplete = responseData?.get("decompileIncomplete")?.takeIf { it.isJsonPrimitive }
                 ?.asBoolean == true
+            // B2/B3：工具层新增的 warningCode（EMPTY_RESULT/RESULT_TRUNCATED/JADX_*）也要提升到作业状态，
+            // 否则"成功但空""被截断"在 job 层看起来仍是干净的 SUCCEEDED（.4 手册 B2/B3 的诉求）。
+            val dataWarningCode = responseData?.get("warningCode")?.takeIf { it.isJsonPrimitive }?.asString
             job.state = if (job.cancelled.get() && (
                     response.get("ok")?.asBoolean == false || responseData?.get("cancelled")?.asBoolean == true
                     )
             ) "CANCELLED"
             else if (response.get("ok")?.asBoolean == false) "FAILED"
-            else if (decompileIncomplete) "SUCCEEDED_WITH_WARNINGS"
+            else if (decompileIncomplete || dataWarningCode != null) "SUCCEEDED_WITH_WARNINGS"
             else "SUCCEEDED"
-            if (decompileIncomplete) {
+            if (dataWarningCode != null) {
+                // 工具层已经给出更具体的码（EMPTY_RESULT/RESULT_TRUNCATED/JADX_*），优先用它。
+                job.warningCode = dataWarningCode
+                job.reason = responseData?.get("warningHint")?.takeIf { it.isJsonPrimitive }?.asString
+                    ?: "任务完成但有警告（$dataWarningCode）"
+            } else if (decompileIncomplete) {
                 job.warningCode = "DECOMPILE_INCOMPLETE"
                 job.reason = responseData?.get("incompleteReason")?.takeIf { it.isJsonPrimitive }?.asString
                     ?: "反编译结果不完整，请改用 smali 视图"
@@ -373,6 +450,8 @@ internal class ToolkitJobs internal constructor(
             "owner" to job.owner,
             "clientId" to job.clientId,
             "sessionId" to job.sessionId,
+            "locator" to job.locator,
+            "latestForLocator" to (job.locator != null && latestByLocator[job.locator] == job.id),
             "lostByRestart" to job.lostByRestart,
             // 反馈 #11：以前只在 lostByRestart 时填 errorCode，操作级失败（如 Frida 连不上）虽然记了 code 却不暴露，
             // 调用方只能从 reason 里猜。现在统一暴露：丢失优先 SERVICE_RESTARTED，否则用本次失败捕获到的码。
@@ -476,6 +555,54 @@ internal class ToolkitJobs internal constructor(
     private fun metadataFile(id: String): File = File(folder, id + ".json")
     private fun resultFile(id: String): File = File(folder, id + ".result.json")
     private fun indexFile(): File = File(folder, INDEX_FILE)
+    private fun locatorIndexFile(): File = File(folder, LOCATOR_INDEX_FILE)
+
+    /** 持久化 locator -> 最新 jobId，供跨进程/重启后按 locator 取最新。 */
+    private fun persistLocatorIndex() = synchronized(registryLock) {
+        val entries = latestByLocator.entries.mapNotNull { (locator, id) ->
+            val job = jobs[id] ?: return@mapNotNull null
+            ToolkitIo.json(
+                "locator" to locator,
+                "jobId" to id,
+                "operation" to job.operation,
+                "state" to job.state,
+                "createdAt" to job.created,
+                "finishedAt" to job.finished.takeIf { it > 0 },
+                "resultAvailable" to job.resultReady,
+            )
+        }
+        val data = ToolkitIo.json(
+            "version" to 1,
+            "updatedAt" to clock(),
+            "entries" to JsonArray().apply { entries.forEach { add(it) } },
+        )
+        runCatching { ToolkitIo.atomic(locatorIndexFile()) { it.writeText(data.toString(), Charsets.UTF_8) } }
+    }
+
+    private fun loadLocatorIndex() {
+        val stored = runCatching {
+            val file = locatorIndexFile()
+            if (!file.isFile) null
+            else JsonParser().parse(file.readText(Charsets.UTF_8)).asJsonObject
+        }.getOrNull()
+        latestByLocator.clear()
+        // 以内存中已恢复的任务为准，createdAt 最大的为最新。
+        jobs.values.filter { !it.locator.isNullOrBlank() }
+            .sortedBy { it.created }
+            .forEach { job -> latestByLocator[job.locator!!] = job.id }
+        // 元数据里没有 locator（旧版本/仅结果恢复）时，尽量保留 by-locator.index.json 里的映射。
+        stored?.getAsJsonArray("entries")?.forEach { element ->
+            runCatching {
+                val item = element.asJsonObject
+                val locator = item.optString("locator") ?: return@runCatching
+                val id = item.optString("jobId") ?: return@runCatching
+                val job = jobs[id] ?: return@runCatching
+                if (job.locator == null) job.locator = locator
+                if (!latestByLocator.containsKey(locator)) latestByLocator[locator] = id
+            }
+        }
+        persistLocatorIndex()
+    }
 
     private fun persist(job: Job) = synchronized(job) {
         val metadata = ToolkitIo.json(
@@ -493,11 +620,16 @@ internal class ToolkitJobs internal constructor(
             "owner" to job.owner,
             "clientId" to job.clientId,
             "sessionId" to job.sessionId,
+            "locator" to job.locator,
             "lostByRestart" to job.lostByRestart,
             "warningCode" to job.warningCode,
             "timeoutSeconds" to job.timeout,
         )
         runCatching { ToolkitIo.atomic(metadataFile(job.id)) { it.writeText(metadata.toString(), Charsets.UTF_8) } }
+        // locator 索引随任务状态/结果更新，避免 by-locator.index.json 永远停在 QUEUED。
+        job.locator?.let { locator ->
+            if (latestByLocator[locator] == job.id) persistLocatorIndex()
+        }
     }
 
     private fun writeResult(job: Job, response: JsonObject) {
@@ -537,6 +669,7 @@ internal class ToolkitJobs internal constructor(
             "owner" to job.owner,
             "clientId" to job.clientId,
             "sessionId" to job.sessionId,
+            "locator" to job.locator,
             "resultAvailable" to job.resultReady,
             "resultBytes" to job.resultBytes,
             "lostByRestart" to job.lostByRestart,
@@ -641,7 +774,8 @@ internal class ToolkitJobs internal constructor(
         }
         // 1) 以元数据文件为准恢复；未完成的旧任务标记 INTERRUPTED + lostByRestart（不自动重放）。
         folder.listFiles()?.filter {
-            it.isFile && it.name.endsWith(".json") && !it.name.endsWith(".result.json") && it.name != INDEX_FILE
+            it.isFile && it.name.endsWith(".json") && !it.name.endsWith(".result.json") &&
+                it.name != INDEX_FILE && it.name != LOCATOR_INDEX_FILE
         }?.forEach { file ->
             runCatching {
                 val source = JsonParser().parse(file.readText(Charsets.UTF_8)).asJsonObject
@@ -658,6 +792,7 @@ internal class ToolkitJobs internal constructor(
                     source.optString("owner"),
                     source.optString("clientId"),
                     source.optString("sessionId"),
+                    source.optString("locator"),
                 )
                 job.state = source.optString("state") ?: "INTERRUPTED"
                 job.started = source.optLong("startedAt") ?: 0L
@@ -697,6 +832,7 @@ internal class ToolkitJobs internal constructor(
                         record.optString("owner"),
                         record.optString("clientId"),
                         record.optString("sessionId"),
+                        record.optString("locator"),
                     )
                     job.state = if (recordedState in ACTIVE_STATES) "INTERRUPTED" else recordedState
                     job.finished = record.optLong("finishedAt") ?: clock()
@@ -732,6 +868,7 @@ internal class ToolkitJobs internal constructor(
                 }
             }
         }
+        loadLocatorIndex()
         persistRegistry()
     }
 
@@ -771,6 +908,13 @@ internal class ToolkitJobs internal constructor(
             )
         }
         addTombstone(tombstone)
+        val locator = job.locator
+        if (locator != null && latestByLocator[locator] == id) {
+            latestByLocator.remove(locator)
+            jobs.values.filter { it.locator == locator }.maxByOrNull { it.created }
+                ?.let { latestByLocator[locator] = it.id }
+            persistLocatorIndex()
+        }
         runCatching { metadataFile(id).delete() }
         runCatching { resultFile(id).delete() }
         persistRegistry()
@@ -807,6 +951,37 @@ internal class ToolkitJobs internal constructor(
         return text
     }
 
+    /** list 的可选字符串过滤条件；空串/null 视为未过滤。 */
+    private fun optionalString(args: JsonObject, key: String): String? {
+        val value = args.get(key) ?: return null
+        if (value.isJsonNull) return null
+        require(value.isJsonPrimitive && value.asJsonPrimitive.isString) { key + " 必须是字符串" }
+        val text = value.asString
+        if (text.isEmpty()) return null
+        require(text.length <= 4096 && text.none { it.code < 0x20 || it.code == 0x7f }) { key + " 含控制字符或过长" }
+        return text
+    }
+
+    /** 从 apk_job_start 的 arguments.locator 提取 locator；仅用于 by-locator 索引，不改变任务执行。 */
+    private fun jobLocator(args: JsonObject): String? {
+        val arguments = args.getAsJsonObject("arguments") ?: return null
+        val value = arguments.get("locator") ?: return null
+        if (value.isJsonNull || !value.isJsonPrimitive || !value.asJsonPrimitive.isString) return null
+        val text = value.asString
+        if (text.isEmpty()) return null
+        return text.takeIf { it.length <= 4096 && it.none { c -> c.code < 0x20 || c.code == 0x7f } }
+    }
+
+    /** list 游标：jobs1-<offset>，不透明、只允许从本接口 nextCursor 取得。 */
+    private fun parseListCursor(raw: String, total: Int): Int {
+        if (raw.isEmpty()) return 0
+        require(raw.startsWith("jobs1-")) { "cursor 无效：请使用上次 apk_job_list 返回的 nextCursor" }
+        val offset = raw.removePrefix("jobs1-").toIntOrNull()
+            ?: throw IllegalArgumentException("cursor 无效：偏移不是整数")
+        require(offset in 0..total) { "cursor 超出当前结果范围（total=" + total + "）" }
+        return offset
+    }
+
     private fun JsonObject.optString(key: String): String? {
         val value = get(key) ?: return null
         if (value.isJsonNull) return null
@@ -835,6 +1010,10 @@ internal class ToolkitJobs internal constructor(
         const val MAX_RESULT_CHARS = 1_048_576
         const val MAX_LISTED_TOMBSTONES = 32
         const val INDEX_FILE = "jobs.index.json"
+        const val LOCATOR_INDEX_FILE = "by-locator.index.json"
+        /** 实际执行模型：同 workspace 由 McpApkToolkit.call 的 workspace 锁串行；线程池只是上限，不是并行路数。 */
+        const val EFFECTIVE_CONCURRENCY = 1
+        const val WORKER_THREADS = 2
         const val REGISTRY_VERSION = 1
         const val RESTART_REASON = "工具进程已重启，任务没有自动重放"
         private val ACTIVE_STATES = setOf("QUEUED", "RUNNING", "CANCELLING")

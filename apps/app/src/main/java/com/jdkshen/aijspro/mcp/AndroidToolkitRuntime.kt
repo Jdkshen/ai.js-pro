@@ -35,6 +35,14 @@ internal fun jadxCommand(
 )
 
 /** Components run in owned child processes, never load decompiler classes into the host. */
+/** B5：区分 JADX 真正跑过但找不到类/方法，与参数层 DEX locator 不存在。 */
+internal fun jadxFailureCode(text: String): String = when {
+    text.contains("JADX未找到类") -> "JADX_CLASS_NOT_FOUND"
+    text.contains("JADX未找到精确方法") -> "JADX_METHOD_NOT_FOUND"
+    text.contains("JADX未找到") -> "JADX_CLASS_NOT_FOUND"
+    else -> "JADX_DECOMPILE_FAILED"
+}
+
 internal class AndroidToolkitRuntime(private val context:Context, private val root:File):ToolkitRuntime {
     private val home=File(context.noBackupFilesDir,"apk-components")
     private val reverse by lazy { AndroidReverseRuntime(context,root,::component) }
@@ -294,9 +302,19 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
             val classpath=payload.path+File.pathSeparator+context.applicationInfo.sourceDir
             val command=jadxCommand(temp,payload,context.applicationInfo.sourceDir,request)
             val result=ToolkitProcess.run(context,command,temp,mapOf("CLASSPATH" to classpath),args.tInt("timeoutSeconds",120,1,McpLimits.MAX_TIMEOUT_SECONDS))
-            require(result.exitCode==0){"JADX exit=${result.exitCode}（子进程堆 -Xmx${McpLimits.CHILD_HEAP_MB}m）: ${result.text.takeLast(12000)}"}
+            if (result.exitCode != 0) {
+                val code = jadxFailureCode(result.text)
+                val smaliHint = if (code == "JADX_CLASS_NOT_FOUND" || code == "JADX_METHOD_NOT_FOUND")
+                    "；可改用 apk_read_text(locator=\"" + locator + "\") 读取 smali 视图" else ""
+                throw ToolkitException(code,
+                    "JADX 反编译失败（exit=" + result.exitCode + "，子进程堆 -Xmx" + McpLimits.CHILD_HEAP_MB + "m）" +
+                        smaliHint + "。原始输出：" + result.text.takeLast(12000),
+                    "locator")
+            }
             val log=result.text
-            require(output.isFile&&output.length()<=4L*1024*1024){"反编译器没有返回有效结果：${log.takeLast(2000)}"}
+            if (!output.isFile || output.length() > 4L * 1024 * 1024) {
+                throw ToolkitException("JADX_INVALID_RESULT", "反编译器没有返回有效结果：" + log.takeLast(2000), "locator")
+            }
             return JsonParser().parse(output.readText(Charsets.UTF_8)).asJsonObject.apply{addProperty("backend","jadx-component");addProperty("diagnostics",log.takeLast(4000))}
         }finally{temp.deleteRecursively()}
     }

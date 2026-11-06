@@ -116,6 +116,45 @@ class McpApkToolkitParityTest {
     }
 
     @Test
+    fun axmlSearchHitExposesReadableZipEntryLocatorWithoutChangingLocator() {
+        val hits = search("target" to "files", "query" to "功能")
+        val axml = hits.map { it.asJsonObject }.firstOrNull { locatorOf(it) == "axml:$MENU_PATH" }
+        assertNotNull("expected AXML hit, got $hits", axml)
+        val readLocator = axml!!.tString("readLocator")
+        assertEquals("zip_entry:$MENU_PATH", readLocator)
+        assertTrue(axml.tString("locatorNote").contains("zip_entry:"))
+        assertEquals("axml:$MENU_PATH", axml.tString("locator"))
+        val read = invoke("apk_read_text", "locator" to readLocator)
+        assertTrue(read.tString("text").contains("功能"))
+
+        hits.map { it.asJsonObject }.filter { !locatorOf(it).startsWith("axml:") }.forEach {
+            assertEquals(it.tString("locator"), it.tString("readLocator"))
+        }
+    }
+
+    @Test
+    fun missingDexLocatorIsStructuredAsLocatorNotFound() {
+        failsWithCode("LOCATOR_NOT_FOUND") {
+            invoke("apk_dex_read_class_outline", "locator" to "dex_class:Ldoes/NotExist;")
+        }
+    }
+
+    @Test
+    fun expiredWorkspaceIsStructuredAsWorkspaceExpired() {
+        val expired = ToolkitIo.fresh()
+        try {
+            tools.call("apk_read_text", args(
+                "workspaceId" to expired,
+                "locator" to "zip_entry:AndroidManifest.xml",
+            ))
+            fail("expected WORKSPACE_EXPIRED")
+        } catch (failure: ToolkitException) {
+            assertEquals("WORKSPACE_EXPIRED", failure.code)
+            assertTrue(failure.message.orEmpty().contains("apk_workspace_open"))
+        }
+    }
+
+    @Test
     fun missingDexClassCanBeCreatedAsARealClass() {
         val locator = "dex_class:Lfixture/NewClass;"
         val created = invoke("apk_edit_text", "locator" to locator, "targetVersion" to "missing",
