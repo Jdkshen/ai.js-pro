@@ -36,6 +36,13 @@ module.exports = function (runtime, scope) {
     function createOcrSession(preferred) {
         var order = OCR_BACKENDS.filter(function(backend) { return backend !== preferred; });
         if (preferred) order.unshift(preferred);
+        // ML Kit 在脚本进程里可能根本起不来：create() 不抛、detect() 才抛
+        // （`MlKitContext has not been initialized`）。选后端前先问一次 Java 侧，别把死后端排在前面。
+        try {
+            if (!com.stardust.autojs.runtime.api.Ocr.ensureMlKitInitialized()) {
+                order = order.filter(function(backend) { return backend !== 'mlkit'; });
+            }
+        } catch (ignore) { /* 老版本没有这个方法就保持原顺序 */ }
         var lastError = null;
         for (var i = 0; i < order.length; i++) {
             try {

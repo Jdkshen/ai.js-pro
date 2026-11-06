@@ -43,10 +43,42 @@ public class Ocr implements AutoCloseable, OcrSession {
 
     public Ocr(ScriptRuntime runtime) {
         mRuntime = runtime;
+        // ML Kit 的 InitProvider 只在主进程跑；:script 进程必须自己初始化组件注册表，
+        // 否则 create() 会「成功」，直到第一次 detect() 才抛
+        // `MlKitContext has not been initialized` —— 内置谷歌 OCR 示例就是这么挂的。
+        // Node 侧（Node24HostBridge）一直有这段初始化，Rhino 侧此前漏了。
+        ensureMlKitInitialized();
         sLiveCount.incrementAndGet();
         // 脚本忘了 release() 时由引擎在退出时兜底（与 Pro 文档一致）
         if (runtime != null) {
             runtime.addCleanable(this);
+        }
+    }
+
+    /**
+     * 幂等地初始化当前进程的 ML Kit 组件注册表。
+     *
+     * @return true 表示初始化后可用；false 表示当前进程拿不到 Application Context，
+     *         调用方应退回 ppocr（{@code __ocr__.js} 里有这条兜底）。
+     */
+    public static synchronized boolean ensureMlKitInitialized() {
+        try {
+            com.google.mlkit.common.sdkinternal.MlKitContext.getInstance();
+            return true;
+        } catch (IllegalStateException notInitialized) {
+            android.content.Context context = ScriptRuntime.getApplicationContext();
+            if (context == null) {
+                context = com.stardust.app.GlobalAppContext.get();
+            }
+            if (context == null) {
+                return false;
+            }
+            try {
+                com.google.mlkit.common.MlKit.initialize(context.getApplicationContext());
+                return true;
+            } catch (Throwable failure) {
+                return false;
+            }
         }
     }
 

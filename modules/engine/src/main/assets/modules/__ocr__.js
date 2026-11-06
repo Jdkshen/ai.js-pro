@@ -15,6 +15,42 @@ module.exports = function (runtime, global) {
         return Ocr.liveCount() + PPOcr.liveCount();
     };
 
+    /**
+     * OCRResult（Java）→ 纯 JS 对象。字段与 PDF 文档一致：text / confidence / bounds / rotation /
+     * rotationConfidence；`bounds` 附 x/y/width/height 便于直接用。原始 javaObject 不放进数据字段
+     * （会把 app 对象图带进 console.log/JSON），需要时用 raw() 取。
+     */
+    function toPlainResult(javaResult) {
+        var text = '';
+        var confidence = 0;
+        var rotation = 0;
+        var rotationConfidence = 0;
+        var bounds = null;
+        try { text = javaResult.getText(); } catch (ignoreText) {}
+        if (text == null) { text = ''; }
+        try { confidence = Number(javaResult.getConfidence()); } catch (ignoreConfidence) {}
+        try { rotation = Number(javaResult.getRotation()); } catch (ignoreRotation) {}
+        try { rotationConfidence = Number(javaResult.getRotationConfidence()); } catch (ignoreRotationConfidence) {}
+        try {
+            var rect = javaResult.getBounds();
+            if (rect != null) {
+                bounds = {
+                    left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+                    x: rect.left, y: rect.top, width: rect.width(), height: rect.height()
+                };
+            }
+        } catch (ignoreBounds) {}
+        return {
+            text: String(text),
+            confidence: confidence,
+            bounds: bounds,
+            rotation: rotation,
+            rotationConfidence: rotationConfidence,
+            /** 原始 Java 对象（方法而非字段：不会被 JSON/console.log 序列化）。 */
+            raw: function () { return javaResult.getJavaObject(); }
+        };
+    }
+
     function toIntArray(array) {
         if (array == undefined || array == null) {
             return null;
@@ -33,7 +69,18 @@ module.exports = function (runtime, global) {
     ocr.create = function (options) {
         options = options || {};
         var backend = String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase();
+        var degradedFrom = null;
+        var degradeReason = null;
         var session;
+        if (backend !== 'ppocr' && !Ocr.ensureMlKitInitialized()) {
+            // ML Kit 在本进程起不来（拿不到 Application Context / 组件被裁剪）：
+            // 以前 create() 会「成功」直到 detect() 才抛 MlKitContext has not been initialized，
+            // 现在提前退到随包 ppocr，并如实标注降级来源。
+            degradedFrom = backend;
+            degradeReason = 'MlKitContext has not been initialized（本进程无法初始化 ML Kit）';
+            backend = 'ppocr';
+            try { console.warn('[OCR] ML Kit 在本进程不可用，已退回随包 PP-OCRv6：' + degradeReason); } catch (ignore) {}
+        }
         if (backend === 'ppocr') {
             // ppocr：这些参数真的会传给 ncnn 引擎（0/undefined = 用默认值）。
             // ⚠️ Pro 样例常把 cpuPowerMode 传成字符串（如 'LITE_POWER_NO_BIND'）、把 models 传成
@@ -58,16 +105,24 @@ module.exports = function (runtime, global) {
             session = new Ocr(runtime);    // Java 对象上加不了属性（Rhino 限制），所以用 JS 包装暴露方法
         }
         return {
+            backend: backend,
+            requestedBackend: String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase(),
+            degraded: degradedFrom !== null,
+            degradedFrom: degradedFrom,
+            degradeReason: degradeReason,
             detect: function (image, detectOptions) {
                 detectOptions = detectOptions || {};
                 var max = detectOptions.max == undefined ? 1000 : parseInt(detectOptions.max);
                 var detectRotation = detectOptions.detectRotation === true;
-                // Java 侧返回 OCRResult[]，这里转成真正的 JS 数组，
-                // 这样文档示例里的 forEach/filter/find 才能直接用
+                // Java 侧返回 OCRResult[]。**必须逐项转成纯 JS 对象**：OCRResult 上有 android.graphics.Rect
+                // 和 javaObject（原始 ML Kit 对象），直接塞进数组时 `console.log(result)`（官方示例就是这么写的）
+                // 会去序列化 Java 对象图，一路走到宿主 Activity/RecyclerView，报
+                // `class androidx.recyclerview.widget.RecyclerView declares multiple JSON fields named
+                // mAccessibilityDelegate`（__json2__.js#234）——这就是内置谷歌 OCR 示例的第二个报错。
                 var javaResults = session.detect(image, max, detectRotation, toIntArray(detectOptions.region));
                 var results = [];
                 for (var i = 0; i < javaResults.length; i++) {
-                    results.push(javaResults[i]);
+                    results.push(toPlainResult(javaResults[i]));
                 }
                 return results;
             },

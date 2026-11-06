@@ -72,12 +72,166 @@
     };
 
     // ---- 内置 MLKit OCR：官方插件缺位时的等价实现（Rhino 侧 __plugins__.js 的同款兜底）----
+    //
+    // ML Kit 的 InitProvider 只在主进程跑；:script 进程里 MlKitContext 可能起不来。
+    // 旧实现直接 $ocr.create({backend:'mlkit'})，create 成功但 detect 才抛
+    // MlKitContext has not been initialized。这里先问一次 Java 侧（幂等初始化），
+    // 不可用就提前退到随包的 ppocr，并在返回对象里如实标注降级来源。
+    function mlKitUnavailableReason() {
+        try {
+            if (!g.Java || typeof g.Java.type !== 'function') {
+                return 'QuickJS 缺少 Java.type，无法检查 MlKitContext';
+            }
+            var Ocr = g.Java.type('com.stardust.autojs.runtime.api.Ocr');
+            if (!Ocr || typeof Ocr.ensureMlKitInitialized !== 'function') {
+                return 'Ocr.ensureMlKitInitialized 不可用（当前引擎版本过旧）';
+            }
+            if (!Ocr.ensureMlKitInitialized()) {
+                return 'MlKitContext has not been initialized（本进程无法初始化 ML Kit）';
+            }
+            return null;
+        } catch (error) {
+            return '检查 ML Kit 初始化失败：' + text(error);
+        }
+    }
+
+    function builtInOcrUnavailable(reason, ppocrError) {
+        var failure = new Error('内置 OCR 不可用：mlkit 原因=' + reason
+            + '；ppocr 创建失败=' + text(ppocrError));
+        failure.degraded = true;
+        failure.degradedFrom = 'mlkit';
+        failure.degradeReason = reason;
+        return failure;
+    }
+
+    function createBuiltInOcrSession() {
+        var reason = mlKitUnavailableReason();
+        if (reason === null) {
+            try {
+                var mlkitSession = g.$ocr.create({ backend: 'mlkit' });
+                // $ocr.create 的 guard 可能在 mlkit 创建失败时已提前退到 ppocr；
+                // 以会话上的真实字段为准，别把已经降级的会话误报成 mlkit。
+                return {
+                    backend: mlkitSession && mlkitSession.backend ? mlkitSession.backend : 'mlkit',
+                    session: mlkitSession,
+                    degraded: !!(mlkitSession && mlkitSession.degraded === true),
+                    degradedFrom: mlkitSession && mlkitSession.degradedFrom
+                        ? mlkitSession.degradedFrom : null,
+                    degradeReason: mlkitSession && mlkitSession.degradeReason
+                        ? mlkitSession.degradeReason : null
+                };
+            } catch (error) {
+                reason = '创建 mlkit 会话失败：' + text(error);
+            }
+        }
+        try {
+            return {
+                backend: 'ppocr',
+                session: g.$ocr.create({ backend: 'ppocr' }),
+                degraded: true,
+                degradedFrom: 'mlkit',
+                degradeReason: reason
+            };
+        } catch (error) {
+            throw builtInOcrUnavailable(reason, error);
+        }
+    }
+
     function BuiltInMLKitOCR() {
-        var session = g.$ocr.create({ backend: 'mlkit' });
+        var created = createBuiltInOcrSession();
+        var session = created.session;
+        // 与 Rhino 侧 __ocr__.js 的同名字段保持可观察：脚本不必 detect 就可以判断后端。
+        this.__aijsBuiltInShim = true;
+        this.requestedBackend = 'mlkit';
+        this.backend = created.backend;
+        this.degraded = created.degraded;
+        this.degradedFrom = created.degradedFrom;
+        this.degradeReason = created.degradeReason;
         this.detect = function (image, options) { return session.detect(image, options); };
         this.release = function () { return session.release(); };
         this.isReleased = function () { return session.isReleased(); };
     }
+
+    // ---- 直接 $ocr.create 的同源保护 ----
+    //
+    // qjs-plugins 在 QuickJS 启动时加载（早于用户脚本）。除了上面的插件兜底，
+    // 直接调用 $ocr.create({backend:'mlkit'}) 也有同样的「create 成功、detect 才炸」风险：
+    // C++ 侧默认 backend=mlkit，Java Ocr 构造器虽然会 ensure，但返回值没有传回 JS。
+    // 因此这里只做一层很薄的包装：先 ensure；不可用就提前改走 ppocr，并给会话加可观察字段。
+    function requestedOcrBackend(options) {
+        if (options == null || options.backend == null || options.backend === '') {
+            return 'mlkit';
+        }
+        var raw = String(options.backend).toLowerCase().replace(/[\s_-]+/g, '');
+        if (raw === '') {
+            return 'mlkit';
+        }
+        if (raw === 'ppocr' || raw === 'paddle' || raw === 'paddleocr') {
+            return 'ppocr';
+        }
+        if (raw === 'mlkit') {
+            return 'mlkit';
+        }
+        return null;   // 未知 backend 交给原实现，不在这里改变它的报错语义
+    }
+
+    function optionsWithBackend(options, backend) {
+        var copy = {};
+        if (options != null && typeof options === 'object') {
+            for (var key in options) {
+                if (Object.prototype.hasOwnProperty.call(options, key) && key !== 'backend') {
+                    copy[key] = options[key];
+                }
+            }
+        }
+        copy.backend = backend;
+        return copy;
+    }
+
+    function annotateOcrSession(session, requested, backend, degradeReason) {
+        if (!session) return session;
+        try {
+            session.requestedBackend = requested;
+            session.backend = backend;
+            session.degraded = degradeReason !== null;
+            session.degradedFrom = degradeReason !== null ? requested : null;
+            session.degradeReason = degradeReason;
+        } catch (ignore) { /* 个别原生会话对象不可扩展时，至少保持可用 */ }
+        return session;
+    }
+
+    function installOcrCreateGuard() {
+        if (!g.$ocr || typeof g.$ocr.create !== 'function') return;
+        var originalCreate = g.$ocr.create;
+        g.$ocr.create = function (options) {
+            var requested = requestedOcrBackend(options);
+            if (requested === null) {
+                return originalCreate.call(g.$ocr, options);
+            }
+            if (requested === 'ppocr') {
+                return annotateOcrSession(
+                    originalCreate.call(g.$ocr, optionsWithBackend(options, 'ppocr')),
+                    requested, 'ppocr', null);
+            }
+            var reason = mlKitUnavailableReason();
+            if (reason === null) {
+                try {
+                    return annotateOcrSession(originalCreate.call(g.$ocr, options), requested, 'mlkit', null);
+                } catch (error) {
+                    reason = '创建 mlkit 会话失败：' + text(error);
+                }
+            }
+            try {
+                return annotateOcrSession(
+                    originalCreate.call(g.$ocr, optionsWithBackend(options, 'ppocr')),
+                    requested, 'ppocr', reason);
+            } catch (error) {
+                throw builtInOcrUnavailable(reason, error);
+            }
+        };
+    }
+
+    installOcrCreateGuard();
 
     g.$plugins = plugins;
     g.plugins = plugins;
