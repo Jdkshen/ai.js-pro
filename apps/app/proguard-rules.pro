@@ -306,6 +306,9 @@
 -keep class com.android.apksig.ApkSigner { public *; }
 -keep class com.android.apksig.ApkSigner$Builder { public *; }
 -keep class com.android.apksig.ApkSigner$SignerConfig { *; }
+# apk_build(sign=true) 用 SignerConfig.Builder 构造签名者；嵌套 Builder 不是 SignerConfig 本身，
+# 单独 keep，避免 R8 只保留外层而裁掉构造入口。
+-keep class com.android.apksig.ApkSigner$SignerConfig$Builder { public *; }
 -keep class com.android.apksig.ApkSignerEngine { *; }
 -keep class com.android.apksig.ApkSignerEngine$Builder { *; }
 -keep class com.android.apksig.DefaultApkSignerEngine { *; }

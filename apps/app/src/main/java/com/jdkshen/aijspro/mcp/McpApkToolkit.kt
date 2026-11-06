@@ -1,6 +1,9 @@
 package com.jdkshen.aijspro.mcp
 
+import com.android.apksig.ApkSigner
 import com.google.gson.*
+import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity
+import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner
 import java.io.*
 import java.util.zip.*
 
@@ -847,25 +850,60 @@ internal class McpApkToolkit(
         require(!output.exists() || output.isFile && args.tBool("overwrite")) { "输出已存在或不是普通文件，需 overwrite=true" }
         val names = entries(workspace, session).filterNot { it.startsWith("META-INF/", true) && (it.endsWith(".SF", true) || it.endsWith(".RSA", true) || it.endsWith(".DSA", true) || it.endsWith(".EC", true) || it.equals("META-INF/MANIFEST.MF", true)) }
         var verification:JsonObject?=null
+        var signerMode = if (signing) "" else "unsigned"
+        var signerFallbackReason: String? = null
         ToolkitIo.atomic(output) { target ->
             if (!signing) writeUnsigned(workspace, session, names, target) else {
                 val callback = signer ?: error("当前环境没有 APK 签名器")
                 val unsigned = File(sessionDir(workspace, session), "unsigned-${ToolkitIo.fresh()}.apk")
+                val apksigOutput = File(sessionDir(workspace, session), "apksig-${ToolkitIo.fresh()}.apk")
                 try {
                     writeUnsigned(workspace, session, names, unsigned)
-                    callback(unsigned, target)
+                    try {
+                        signWithApksig(unsigned, apksigOutput, target.absoluteFile.parentFile ?: root)
+                        validateApksigOutput(apksigOutput)
+                        copyFile(apksigOutput, target)
+                        signerMode = "apksig"
+                    } catch (failure: Throwable) {
+                        if (failure is VirtualMachineError) throw failure
+                        if (failure is InterruptedIOException || Thread.currentThread().isInterrupted) throw failure
+                        signerFallbackReason = (failure.message ?: failure.javaClass.simpleName).take(1000)
+                        callback(unsigned, target)
+                        signerMode = "keystore-legacy"
+                    }
                     val signature = ToolkitSignatures.read(target)
-                    require(signature.tBool("available") && signature.tBool("signaturePresent") && signature.getAsJsonArray("certificates").size() > 0) { "签名器没有生成完整可读取的证书信息：${signature.get("error")}" }
-                } finally { unsigned.delete() }
+                    require(signature.tBool("available") && signature.tBool("signaturePresent") && signature.getAsJsonArray("certificates").size() > 0) { "签名器没有生成完整可读取的证书信息：" + signature.get("error") }
+                } finally {
+                    unsigned.delete()
+                    apksigOutput.delete()
+                }
             }
             val verified=ToolkitApkVerifier.inspect(target)
-            require(verified.getAsJsonObject("checks").getAsJsonObject("zip").tString("status")=="valid") { "导出ZIP对齐或结构检查失败：${verified.get("issues")}" }
-            if(signing) require(verified.getAsJsonObject("signature").tBool("verified")) { "导出APK密码学验签失败：${verified.get("issues")}" }
+            require(verified.getAsJsonObject("checks").getAsJsonObject("zip").tString("status")=="valid") { "导出ZIP对齐或结构检查失败：" + verified.get("issues") }
+            if(signing) require(verified.getAsJsonObject("signature").tBool("verified")) { "导出APK密码学验签失败：" + verified.get("issues") }
             verification=verified
             require(target.length() <= ToolkitIo.MAX_APK) { "构建结果超过 512 MiB" }; ZipFile(target).use { require(it.getEntry("AndroidManifest.xml") != null) }
         }
         val signature = ToolkitSignatures.read(output)
+        // 两个概念要分开，别混：
+        //  - schemesApplied：**实际产出**的方案（V1 由 META-INF 存在性判定；apksig/verifier 在 minSdk≥24 时
+        //    不会单独验 V1，所以不能靠 verified 判定它有没有产出）；
+        //  - schemesVerified：verifier 真正验过的方案。
+        // 之前只报 schemesApplied=verified，导致产出了 V1 却显示 ["V2","V3"]（实测 dev-1364）。
+        val schemesVerified = verifiedSchemes(verification)
+        val v1Present = signing && output.isFile && hasV1Signature(output)
+        val appliedSchemes = (if (v1Present) listOf("V1") else emptyList()) + schemesVerified
+        val signatureInfo = ToolkitIo.json(
+            "available" to signature.tBool("available"),
+            "signaturePresent" to signature.tBool("signaturePresent"),
+            "schemes" to appliedSchemes,
+            "schemesVerified" to schemesVerified,
+            "verified" to (verification?.getAsJsonObject("signature")?.tBool("verified") ?: false),
+            "certificateCount" to (signature.get("certificates")?.takeIf { it.isJsonArray }?.asJsonArray?.size() ?: 0)
+        )
         val result = ToolkitIo.json("path" to output.path, "size" to output.length(), "sha256" to ToolkitIo.sha(output), "signed" to signing,
+            "signer" to signerMode, "signerFallbackReason" to signerFallbackReason,
+            "schemesApplied" to appliedSchemes, "schemesVerified" to schemesVerified, "signature" to signatureInfo,
             "signatureSummary" to signature, "verification" to verification,
             // 只读对齐诊断：不改变导出流程；计数来自最终 APK 的 verifier 报告（见对齐/签名路径）。
             "alignment" to alignmentDiagnostics(verification, true),
@@ -875,6 +913,98 @@ internal class McpApkToolkit(
         }
         return result
     }
+    /**
+     * 新路径：apksig 生成 V1+V2+V3。只在 apk_build(sign=true) 内部使用；
+     * 失败时由调用方回退旧 KeyStoreApkSigner，不改变 apk_build_project/apk_inject_gadget 调用。
+     */
+    private fun signWithApksig(input: File, output: File, signingOutputDir: File) {
+        requireApksigSignerClasses()
+        val resolved = AutoSigningIdentity.signer(signingOutputDir, "APK工具")
+        val keySigner = resolved as? KeyStoreApkSigner
+            ?: error("当前签名身份不是 KeyStoreApkSigner，无法使用 apksig")
+        val key = keySigner.signingKey
+        val config = ApkSigner.SignerConfig.Builder(
+            keySigner.label.ifBlank { "aijspro" },
+            key.privateKey,
+            key.certificateChain.toList()
+        ).build()
+        ApkSigner.Builder(listOf(config))
+            .setInputApk(input)
+            .setOutputApk(output)
+            .setV1SigningEnabled(true)
+            .setV2SigningEnabled(true)
+            .setV3SigningEnabled(true)
+            .setMinSdkVersion(26)
+            .setAlignmentPreserved(true)
+            .setLibraryPageAlignmentBytes(16384)
+            .build()
+            .sign()
+    }
+
+    private fun requireApksigSignerClasses() {
+        val loader = McpApkToolkit::class.java.classLoader
+        listOf(
+            "com.android.apksig.ApkSigner",
+            "com.android.apksig.ApkSigner\$Builder",
+            "com.android.apksig.ApkSigner\$SignerConfig",
+            "com.android.apksig.ApkSigner\$SignerConfig\$Builder"
+        ).forEach { name -> Class.forName(name, false, loader) }
+    }
+
+    private fun validateApksigOutput(file: File) {
+        val report = ToolkitApkVerifier.inspect(file)
+        val zip = report.getAsJsonObject("checks")?.getAsJsonObject("zip")
+        require(zip?.tString("status") == "valid") {
+            "apksig 输出 ZIP 对齐或结构检查失败：" + report.get("issues").toString().take(800)
+        }
+        val signature = report.getAsJsonObject("signature")
+            ?: error("apksig 输出缺少签名检查结果")
+        require(signature.tBool("verified")) {
+            "apksig 输出未通过密码学验签：" + signature.get("issues").toString().take(800)
+        }
+        val schemes = signature.getAsJsonObject("schemes")
+            ?: error("apksig 输出缺少 schemes 结果")
+        // V2/V3：我们的 verifier 真会验，必须 verified。
+        listOf("V2", "V3").forEach { scheme ->
+            require(schemes.getAsJsonObject(scheme)?.tBool("verified") == true) {
+                "apksig 输出 " + scheme + " 未通过验证；要求 V1+V2+V3，准备回退"
+            }
+        }
+        // V1：apksig 的 ApkVerifier 在 minSdk≥24 时**不会**单独验 JAR 签名（报告 status=not_run），
+        // 所以不能要求它 verified——之前那条规则会让 apksig 路径永远回退（实测 signerFallbackReason=
+        // “apksig 输出 V1 未通过验证”）。这里只要求：V1 没被判 invalid，且归档里**真的存在** META-INF 签名。
+        val v1 = schemes.getAsJsonObject("V1")
+        require(v1 == null || v1.tString("status") != "invalid") {
+            "apksig 输出 V1 被判为 invalid，准备回退：" + signature.get("issues").toString().take(400)
+        }
+        require(hasV1Signature(file)) { "apksig 输出没有 META-INF（V1）签名，准备回退" }
+    }
+
+    /** V1（JAR）签名存在性：只看 META-INF 里的签名文件，不冒充“已验签”。 */
+    private fun hasV1Signature(file: File): Boolean = runCatching {
+        java.util.zip.ZipFile(file).use { zip ->
+            zip.entries().asSequence().any { entry ->
+                val name = entry.name.uppercase()
+                name.startsWith("META-INF/") &&
+                    (name.endsWith(".SF") || name.endsWith(".RSA") || name.endsWith(".DSA") || name.endsWith(".EC"))
+            }
+        }
+    }.getOrDefault(false)
+
+    private fun copyFile(source: File, target: File) {
+        source.inputStream().use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+    }
+
+    private fun verifiedSchemes(verification: JsonObject?): List<String> {
+        val schemes = verification?.getAsJsonObject("signature")?.getAsJsonObject("schemes")
+            ?: return emptyList()
+        return listOf("V1", "V2", "V3", "V3.1").filter { scheme ->
+            schemes.get(scheme)?.takeIf { it.isJsonObject }?.asJsonObject?.tBool("verified") == true
+        }
+    }
+
     private fun writeUnsigned(workspace: String, session: String, names: List<String>, target: File) {
         val changed = sessionInfo(workspace, session).getAsJsonObject("changedEntries").keySet()
         ZipFile(snapshot(workspace)).use { base ->
@@ -916,52 +1046,8 @@ internal class McpApkToolkit(
      * 最后由 build() 内的 verifier 复核。这里只把最终文件的真实偏移统计摊平给调用方，并明确
      * “fixed=true”不等于“本次一定改动过字节”，因为 align 不返回逐条 padding 计数。
      */
-    private fun alignmentDiagnostics(verification: JsonObject?, alignerApplied: Boolean): JsonObject {
-        val zip = verification?.get("zip")?.takeIf { it.isJsonObject }?.asJsonObject
-        val alignment = zip?.get("alignment")?.takeIf { it.isJsonObject }?.asJsonObject
-        if (zip == null || alignment == null) {
-            return ToolkitIo.json(
-                "checked" to false,
-                "misalignedEntries" to null,
-                "fixed" to false,
-                "alignerApplied" to alignerApplied,
-                "paddedEntries" to null,
-                "note" to "没有可用的最终 APK ZIP 验证报告，不能声称对齐；导出流程未变。",
-            )
-        }
-        val status = zip.tString("status", "unavailable")
-        fun count(name: String): Int? =
-            alignment.get(name)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
-        val storedMisaligned = count("storedEntriesMisaligned4Bytes")
-        val nativeMisaligned = count("nativeLibrariesMisaligned16Kb")
-        val checked = status == "valid"
-        val misaligned = if (checked) (storedMisaligned ?: 0) + (nativeMisaligned ?: 0) else null
-        val fixed = checked && alignerApplied && misaligned == 0
-        return ToolkitIo.json(
-            "checked" to checked,
-            "misalignedEntries" to misaligned,
-            "fixed" to fixed,
-            "alignerApplied" to alignerApplied,
-            "aligner" to "ToolkitArchiveAlignment.align",
-            "paddedEntries" to null,
-            "paddedEntriesNote" to "ToolkitArchiveAlignment.align 当前不返回逐条补 padding 计数；不伪造该数字",
-            "zipStatus" to status,
-            "requiredBytes" to alignment.get("requiredBytes"),
-            "storedEntriesChecked" to count("storedEntriesChecked"),
-            "storedEntriesMisaligned4Bytes" to storedMisaligned,
-            "deflatedEntryCount" to count("deflatedEntryCount"),
-            "nativeLibrariesChecked16Kb" to count("nativeLibrariesChecked16Kb"),
-            "nativeLibrariesMisaligned16Kb" to nativeMisaligned,
-            "nativeLibrariesCompressed" to count("nativeLibrariesCompressed"),
-            "note" to (if (!checked) {
-                "最终 APK ZIP 未完整通过解析（zipStatus=" + status + "），不能给对齐结论；详见 verification.zip.issues。"
-            } else {
-                "只读诊断：计数来自最终输出文件本地头的真实数据偏移（ToolkitApkVerifier）；" +
-                    "fixed=true 表示本次导出执行了对齐器且最终为 0 条 misaligned，不代表文件一定被改动过字节；" +
-                    "Stored 非目录要求 4B、Stored .so 要求 16KiB，Deflate 条目不参与对齐。"
-            }),
-        )
-    }
+    private fun alignmentDiagnostics(verification: JsonObject?, alignerApplied: Boolean): JsonObject =
+        alignmentDiagnosticsJson(verification, alignerApplied)
 
     private fun streamEntry(workspace: String, session: String, entry: String, consume: (InputStream) -> Unit) {
         if(session.isNotEmpty()) require(sessionInfo(workspace, session).getAsJsonArray("deleted").none { it.asString == entry }) { "条目已删除" }
@@ -1037,4 +1123,58 @@ internal class McpApkToolkit(
         file.listFiles()?.forEach { child -> safeRemove(child, base) }
         require(!file.exists() || file.delete()) { "无法清理 ${file.name}" }
     }
+}
+
+
+/**
+ * 只读对齐诊断（apk_build / apk_build_project / apk_inject_gadget 共用）。
+ *
+ * 不修改导出流程、不重写/重新签名：只把最终 APK 的真实本地头偏移统计摊平，并明确
+ * “fixed=true” 不等于“本次一定改过字节”（align 不返回逐条 padding 计数）。
+ */
+internal fun alignmentDiagnosticsJson(verification: JsonObject?, alignerApplied: Boolean): JsonObject {
+    val zip = verification?.get("zip")?.takeIf { it.isJsonObject }?.asJsonObject
+    val alignment = zip?.get("alignment")?.takeIf { it.isJsonObject }?.asJsonObject
+    if (zip == null || alignment == null) {
+        return ToolkitIo.json(
+            "checked" to false,
+            "misalignedEntries" to null,
+            "fixed" to false,
+            "alignerApplied" to alignerApplied,
+            "paddedEntries" to null,
+            "note" to "没有可用的最终 APK ZIP 验证报告，不能声称对齐；导出流程未变。",
+        )
+    }
+    val status = zip.tString("status", "unavailable")
+    fun count(name: String): Int? =
+        alignment.get(name)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt
+    val storedMisaligned = count("storedEntriesMisaligned4Bytes")
+    val nativeMisaligned = count("nativeLibrariesMisaligned16Kb")
+    val checked = status == "valid"
+    val misaligned = if (checked) (storedMisaligned ?: 0) + (nativeMisaligned ?: 0) else null
+    val fixed = checked && alignerApplied && misaligned == 0
+    return ToolkitIo.json(
+        "checked" to checked,
+        "misalignedEntries" to misaligned,
+        "fixed" to fixed,
+        "alignerApplied" to alignerApplied,
+        "aligner" to "ToolkitArchiveAlignment.align",
+        "paddedEntries" to null,
+        "paddedEntriesNote" to "ToolkitArchiveAlignment.align 当前不返回逐条补 padding 计数；不伪造该数字",
+        "zipStatus" to status,
+        "requiredBytes" to alignment.get("requiredBytes"),
+        "storedEntriesChecked" to count("storedEntriesChecked"),
+        "storedEntriesMisaligned4Bytes" to storedMisaligned,
+        "deflatedEntryCount" to count("deflatedEntryCount"),
+        "nativeLibrariesChecked16Kb" to count("nativeLibrariesChecked16Kb"),
+        "nativeLibrariesMisaligned16Kb" to nativeMisaligned,
+        "nativeLibrariesCompressed" to count("nativeLibrariesCompressed"),
+        "note" to (if (!checked) {
+            "最终 APK ZIP 未完整通过解析（zipStatus=" + status + "），不能给对齐结论；详见 verification.zip.issues。"
+        } else {
+            "只读诊断：计数来自最终输出文件本地头的真实数据偏移（ToolkitApkVerifier）；" +
+                "fixed=true 表示本次导出执行了对齐器且最终为 0 条 misaligned，不代表文件一定被改动过字节；" +
+                "Stored 非目录要求 4B、Stored .so 要求 16KiB，Deflate 条目不参与对齐。"
+        }),
+    )
 }
