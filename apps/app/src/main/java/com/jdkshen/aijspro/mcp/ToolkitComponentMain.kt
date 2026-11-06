@@ -33,9 +33,22 @@ object ToolkitComponentMain {
                 }?:error("JADX未找到精确方法") else null
                 val code=if(selected==null)classCode else invoke(selected,"getCodeStr").toString()
                 require(code.length<=10000000){"反编译源码超过10M字符"};val start=args.tInt("offset",0,0,code.length);val end=minOf(code.length,start+args.tInt("maxChars",16384,1,200000))
+                val errorsCount=(invoke(engine,"getErrorsCount") as? Number)?.toInt()?:0
+                val warningsCount=invoke(engine,"getWarnsCount")
+                // #17：JADX 的 getErrorsCount 是全局计数；即使目标方法自己没报错，也说明本次工程存在未反编译完整的方法。
+                val incompleteReasons=ArrayList<String>()
+                if(errorsCount>0)incompleteReasons.add("errorsCount=" + errorsCount)
+                if(code.contains("JADX ERROR",ignoreCase=true))incompleteReasons.add("content contains JADX ERROR")
+                if(code.contains("Method dump skipped",ignoreCase=true))incompleteReasons.add("content contains Method dump skipped")
+                val incomplete=incompleteReasons.isNotEmpty()
+                val incompleteReason=if(incomplete) "反编译结果不完整：" + incompleteReasons.joinToString("；") +
+                    "。请改用 smali 视图：apk_read_text(locator=\"" + locator + "\")" else ""
+                val nextActions=if(incomplete) listOf(ToolkitIo.json("tool" to "apk_read_text",
+                    "locator" to locator,"hint" to "换 smali 视图读取同一方法的字节码/注释")) else emptyList<Any>()
                 val response=ToolkitIo.json("locator" to locator,"language" to "java","content" to code.substring(start,end),"offset" to start,"nextOffset" to end,
-                    "hasMore" to (end<code.length),"totalChars" to code.length,"anchors" to anchors,"errorsCount" to invoke(engine,"getErrorsCount"),
-                    "warningsCount" to invoke(engine,"getWarnsCount"),"purpose" to "analysis","rebuildGuaranteed" to false)
+                    "hasMore" to (end<code.length),"totalChars" to code.length,"anchors" to anchors,"errorsCount" to errorsCount,
+                    "warningsCount" to warningsCount,"decompileIncomplete" to incomplete,"incompleteReason" to incompleteReason,
+                    "nextActions" to nextActions,"purpose" to "analysis","rebuildGuaranteed" to false)
                 File(args.tString("output")).writeText(response.toString(),Charsets.UTF_8)
             }finally{invoke(engine,"close")}
         }catch(e:Throwable){e.printStackTrace();System.exit(1)}

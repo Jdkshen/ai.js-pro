@@ -62,14 +62,42 @@
 | 12 | try/catch 抓不到 Java `Error`（如 `UnsatisfiedLinkError`），脚本直接 FAILED（.4 实战反馈） | Java `Error` 经引擎桥接不保证变成可捕获的 JS 异常；Rhino 实测 catch 不执行 | 不要用 try/catch 探测可加载性；先 `files.exists/canRead`、ABI/依赖检查，再 `System.load`；失败让任务报错并记录原文 |
 | 13 | `System.loadLibrary("foo")` 找不到自己拷进来的 SO（.4 实战反馈） | `loadLibrary` 只查系统/Java library path，不接受绝对路径；SO 需要绝对路径加载 | 用 `java.lang.System.load("/绝对路径/libfoo.so")`；文件放当前进程可读且 SELinux 允许执行的位置（`/data/local/tmp` 能否加载随 ROM，先验证；共享存储 `/sdcard` 通常不可执行），ABI 必须匹配 |
 | 14 | `pm install -r /storage/...apk` 报 `No packages staged`/读取失败（.4 实战反馈） | FUSE `/storage` 不能直接喂 PackageManager；app UID 也写不了 `/data/local/tmp` | 先用 `shell_capabilities` 确认 cp/pm 后端；用 shizuku/root shell 先 `cp` 到 `/data/local/tmp`，再 `pm install -r`；PC 用 `adb push`；详见 Guide「安装测试包」 |
+| 15 | 反馈 #14：`Math.abs.invoke(null, 5)` 报 `argument 1 has type int, got java.lang.Double`（dev-1373 及之前） | JS Number 是 `java.lang.Double`，反射 `invoke` 没自动收窄到 primitive `int` | 当前先传 `new java.lang.Integer(v)`（long/boolean/char 用对应包装类）；队友修复后可直接传 Number，以 `get_status.build`/实测为准 |
 
-> 注意：Java 的 `System.loadLibrary` 只接受库名、不接受路径；自定义 SO 必须用 `System.load(绝对路径)`。上面 12–14 是 `.4` 云镜实战要求补的已知坑。
+> 注意：Java 的 `System.loadLibrary` 只接受库名、不接受路径；自定义 SO 必须用 `System.load(绝对路径)`。上面 12–15 是 `.4` 云镜实战要求补的已知坑。
 
-**怎么验证（.4 实战反馈条目 12–14；只做一次性探针，生产脚本不要靠 catch 兜底）：**
+**怎么验证（.4 实战反馈条目 12–15；只做一次性探针，生产脚本不要靠 catch 兜底）：**
 
 - 12：一次性脚本执行 `try { java.lang.System.load("/data/local/tmp/__absent__.so"); } catch (e) { console.log("CAUGHT"); }` → 预期看不到 CAUGHT、任务 FAILED；记录 error 原文。正式流程先 `new java.io.File(path).isFile()` / `files.exists` 再加载。
 - 13：把测试 SO 放到应用私有目录或已验证可加载的位置，`java.lang.System.load(绝对路径)` 后调用一个导出符号；再对比 `System.loadLibrary` 的报错，确认不是同名系统库。若 `/data/local/tmp` 被 SELinux 拒绝，改应用私有目录/资产解压路径，不要放 `/sdcard`。
 - 14：先复现 `pm install -r /storage/...` 失败；再按 Guide「安装测试包」用 `backend="shizuku"` 的 `cp` + `pm install -r /data/local/tmp/...` 成功，并用 `pm path`/`dumpsys package | grep versionName` 核对。
+- 15：在 Rhino/Node 里取 `java.lang.Math` 的 `abs(int)` Method，先 `invoke(null, 5)` 复现类型错误；再用 `invoke(null, new java.lang.Integer(5))` 成功。队友修复后重跑直接传 Number 的版本，确认是否可以去掉包装。
+
+## #16 Java 异常 vs Java Error：try/catch 边界（.4 实战反馈）
+
+> 来源：`.4` 云镜会话要求写进已知坑。当前版本（dev-1373 实测）的边界如下，不要把「Java 异常能 catch」和「Java Error 也能 catch」混为一谈。
+
+- **普通 Java 异常**（`NullPointerException`/`IllegalArgumentException`/`IOException` 等）可以被 JS `try/catch` 捕获，catch 里能正常拿到并继续。
+- **Java `Error`**（如 `UnsatisfiedLinkError`、`NoClassDefFoundError`、`StackOverflowError`）当前会**穿透** JS `try/catch`，脚本直接 FAILED；catch 分支不会执行，不要用 try/catch 探测 SO 能否加载。
+- 识别方法：任务 FAILED，error/log 出现 `java.lang.UnsatisfiedLinkError`（或其它 Error 类名），同时没有你自己的 catch 日志。
+- 规避：加载前先用 `java.io.File`/`files.exists` 检查路径、大小、ABI/依赖；真正加载用 `java.lang.System.load(绝对路径)`（`System.loadLibrary` 只接受库名，不接受路径）；失败就让任务报错并保留原文，不要假装 catch 到了。
+
+**怎么验证（一次性脚本，故意失败；生产脚本不要这样探测）：**
+```js
+// 1) 普通 Java 异常应当可被 catch
+try { throw new java.lang.IllegalArgumentException("normal"); } catch (e) { console.log("EXCEPTION_CAUGHT: " + e); }
+
+// 2) Java Error 预期穿透：任务 FAILED，且看不到 ERROR_CAUGHT
+try { java.lang.System.load("/data/local/tmp/__absent__.so"); } catch (e) { console.log("ERROR_CAUGHT: " + e); }
+
+// 3) 正确做法：先检查文件，再绝对路径加载
+var f = new java.io.File("/data/local/tmp/libfoo.so");
+if (!f.isFile()) throw new Error("SO 不存在: " + f.getAbsolutePath());
+java.lang.System.load(f.getAbsolutePath());
+```
+
+验证结果：第 1 段打印 `EXCEPTION_CAUGHT`；第 2 段不打印 `ERROR_CAUGHT`、任务 FAILED 并带 `UnsatisfiedLinkError`；第 3 段对真实存在的 SO 才继续执行。
+
 
 ## 附录 B · 黄金流程：在外部进程里「借」目标 App 的解密函数
 
@@ -92,6 +120,110 @@ ne.reset(); ne.initWithBlob(blob64);  // 按目标实现传入密钥材料
 // ⑤ 解数据：用逐 blob 自包含入口
 var plain = ScriptEncryption.INSTANCE.decryptScript(blob);
 ```
+
+## Frida 实战：RegisterNatives 与 JNI 函数表（.4 云镜实战）
+
+> 来源：`.4` 云镜快照-成果/对照表.md §八「下一轮要修的两个小问题」——是他们自己 hook 时踩的坑。我们的 Gadget 固定 Frida 17.25.2，版本差异以实测为准。
+
+### 1. Frida 17 取 RegisterNatives 符号（旧取法失效）
+
+**旧取法/失败表现**：`Module.getExportByName("libart.so", "RegisterNatives")` 或 `Module.findExportByName(...)` 在 Frida 17 上可能抛 `unable to find export` / 返回 null（表现为「找不到 RegisterNatives」）。这不是 libart 没加载，而是符号名/API 变化；不要因此认定目标不可 hook。
+
+**现在可用写法**：
+```js
+var lib = Process.findModuleByName("libart.so");
+if (!lib) lib = Process.enumerateModules().find(function (m) { return m.name.indexOf("libart") >= 0; });
+if (!lib) throw new Error("libart.so 未加载");
+var addr = null;
+try { addr = Module.findGlobalExportByName("RegisterNatives"); } catch (e) {}
+if (!addr) {
+  var syms = Process.enumerateSymbols(lib.name).filter(function (s) { return s.name.indexOf("RegisterNatives") >= 0; });
+  console.log("RegisterNatives candidates=" + syms.length + " frida=" + Frida.version + " lib=" + lib.name);
+  if (!syms.length) throw new Error("找不到 RegisterNatives，列出符号名后再匹配");
+  addr = syms[0].address;
+}
+console.log(JSON.stringify({frida: Frida.version, module: lib.name, registerNatives: addr.toString()}));
+```
+
+**怎么验证**：
+- 用 `frida_eval` 跑上面骨架（`script` ≤64KiB、`durationMs` ≤10000）；期望 `registerNatives` 非 null、`frida=17.x`。
+- 若 `syms.length=0`，先打印前 20 个含 `Register` 的符号名，确认是名字/版本问题；把候选 `address` 与 `Process.enumerateSymbols` 输出交叉核对，不要硬编码旧十六进制地址。
+- `Interceptor.attach(addr, {onEnter: function (args) { ... }})` 前先 `console.log(addr)`；attach 抛错说明地址/符号不对。
+
+### 2. JNI 函数表扫描：三条校验（只扫 r-- 会扫到字符串）
+
+**失败表现**：只扫 `r--` 段，把字符串/数据当函数表；`readPointer` 解出来是 ASCII/乱码，hook 后崩溃或参数错乱。
+
+**正确校验**：扫该 so 的**所有可读段**（`r--`/`rw-`/`r-x`/`rwx` 合并去重），对 8 字节对齐候选 `P` 校验三条：
+1. `readPointer(P)` == 目标名字字符串地址；
+2. `readPointer(P+8)` 指向以 `(` 开头的签名串；
+3. `readPointer(P+16)` 落在该模块的**可执行段**内。
+
+**可粘贴骨架（把 so/方法名换成实际目标）**：
+```js
+var mod = Process.findModuleByName("libart.so");
+var targetName = "nativeMethod";
+if (!mod) throw new Error("目标 so 未加载");
+function readableRanges(m) {
+  var out = [], seen = {};
+  ["r--", "rw-", "r-x", "rwx"].forEach(function (prot) {
+    try {
+      Process.enumerateRanges(prot).forEach(function (r) {
+        if (r.base.compare(m.base) >= 0 && r.base.compare(m.base.add(m.size)) < 0) {
+          var key = r.base.toString() + ":" + r.size.toString();
+          if (!seen[key]) { seen[key] = 1; out.push(r); }
+        }
+      });
+    } catch (e) {}
+  });
+  return out;
+}
+var ranges = readableRanges(mod);
+var nameAddr = null;
+for (var i = 0; i < ranges.length && !nameAddr; i++) {
+  var ms = Memory.scanSync(ranges[i].base, ranges[i].size, targetName + String.fromCharCode(0));
+  if (ms.length) nameAddr = ms[0].address;
+}
+if (!nameAddr) throw new Error("找不到名字字符串 " + targetName + "（确认它在可读段）");
+function execRange(addr) {
+  try {
+    var r = Process.findRangeByAddress(addr);
+    return !!r && r.protection.indexOf("x") >= 0 && r.base.compare(mod.base) >= 0 && r.base.compare(mod.base.add(mod.size)) < 0;
+  } catch (e) { return false; }
+}
+var hits = [];
+ranges.forEach(function (r) {
+  for (var p = r.base; p.compare(r.base.add(r.size - 16)) < 0; p = p.add(8)) {
+    try {
+      if (!p.readPointer().equals(nameAddr)) continue;
+      var sig = p.add(8).readPointer().readCString();
+      if (!sig || sig.charAt(0) !== "(") continue;
+      var fn = p.add(16).readPointer();
+      if (!execRange(fn)) continue;
+      hits.push({at: p.toString(), sig: sig, fn: fn.toString()});
+    } catch (e) {}
+  }
+});
+console.log(JSON.stringify({nameAddr: nameAddr.toString(), hits: hits}));
+```
+
+> 全段逐 8 字节遍历只适合目标 so 很小或已知候选范围；大模块先打印 `ranges`/`nameAddr`，再在 `nameAddr` 附近窗口查找，或用 `Memory.scanSync` 搜指向 `nameAddr` 的 8 字节，避免长时间卡住脚本。
+
+**怎么验证**：跑骨架后看 `nameAddr` 非 null、`hits.length > 0`；每条 `sig.charAt(0) === "("`，`fn` 在同模块可执行段；若 0 命中，把 `ranges` 和候选数打印出来，确认不是只扫了 `r--`。
+
+### 3. 与 MCP 工具配合
+
+- `frida_status`：先确认组件/服务可用。listen 模式传 `endpoint/token`；**script 模式没有 endpoint/token**，`frida_status` 只做组件/服务检查，不能当作脚本已执行。
+- `frida_eval`：对 listen 模式 Gadget 传 `pid` + `script`（≤64KiB）+ `durationMs`（≤10000），从消息/输出取结果；script 模式没有网络通道，不提供 endpoint/token，不能硬套 `frida_eval`——让目标应用把结果写文件，再用 `file_read_text`/文件工具读。
+- `native_*`：`native_functions`/`native_function_detail`/`native_xrefs`/`native_decompile` 做静态对照（地址、符号、字符串、调用关系），确认 Frida 找到的地址不是把字符串当函数表；动态和静态结果都记录文件路径/SHA。
+- **`Java.perform` 需要自行打包 `frida-java-bridge`**：我们的 Gadget 只带 `libfrida-gadget.so`，不带 Java bridge；用 Java API 的脚本必须自带/加载 bridge，否则 `Java.perform` 会报缺失；`frida_eval` 不会自动注入。
+
+**怎么验证（MCP 层）**：
+1. `frida_status` 返回组件可用（script 模式只看组件，不找 endpoint/token）；
+2. `frida_eval` 执行上面的符号/函数表骨架，打印 JSON；
+3. 用 `native_function_detail`/`native_xrefs` 对同一地址/符号做静态核对；
+4. script 模式用 `apk_inject_gadget{interactionType:"script"}` 的输出（无 endpoint/token）+ 目标应用日志/结果文件验证，`frida_eval` 不适用。
+
 
 ## 附录 C · 命令速查
 

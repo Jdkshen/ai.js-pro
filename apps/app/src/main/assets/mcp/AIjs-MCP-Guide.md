@@ -192,6 +192,7 @@ console.log(JSON.stringify({position:w.getPosition(), size:w.getSize()}));
 ### Java 反射可变参数（R01）
 
 - `Class.getMethod(name)`（省略空参数数组）现在可用，与 `getMethod(name, [])` 行为一致；零个/一个/多个 varargs 均支持，基本类型按组件类型收窄，固定参数重载优先于 varargs。
+- **#14 已知坑（`.4` 实战，dev-1373 及之前）**：反射 `invoke` 传 JS Number 时不会自动收窄到 primitive `int`；`Math.abs.invoke(null, 5)` 会报 `argument 1 has type int, got java.lang.Double`。绕法：`invoke(null, new java.lang.Integer(5))`（其它 primitive 用对应包装类）。队友正在修，修好后可直接传 Number；以 build/实测为准。可复现脚本见 Playbook 坑表 #15。
 
 ### QuickJS 的 ui.inflate（R04）与边界
 
@@ -518,6 +519,47 @@ clang main.c -O2 -o hello
 | `get_status.limits` | 新增 `childHeapMbAppliesTo`（该 `-Xmx` 只对我们拼装的 apktool/jadx 子进程生效）与 `observedChildHeapBytes`（已知 jadx 实测 256MB）；`maxProjectEntries/maxProjectBytes/maxTimeoutSeconds` 不变 |
 
 > `apk_build_project` 的顶层 `alignment` 只读诊断：未签名导出时 `checked=false`（没有 verifier 报告就不声称对齐），签名导出时为 `checked=true` 并给 `storedEntriesChecked/storedEntriesMisaligned4Bytes/nativeLibrariesMisaligned16Kb` 等。
+
+## dev-1373 已修（对照 .4 反馈 #12/#13/#18）
+
+> 来源：`.4` 的 `MCP-AIjsPro-功能与遗留问题-dev1371.md` 第七节仍把 #12/#13/#18 列为未修；dev-1373 已修并 K40 实测。以下可直接复测，复测后请自行划掉。
+
+### #12 `apk_inject_gadget interactionType=script`：不再要求 endpoint/token
+
+现在 script 模式不构建网络配置：结果只有 `interaction=script` + `scriptPath`（以及 `providerProcess/providerProcessSource`），**没有 endpoint/token**；`nextActions` 也不会再提 endpoint/token。旧版本「endpoint 必须为字符串」的报错不再出现。
+
+复现（把路径换成本机工具目录内真实文件；`outPath` 必须是父目录存在的新文件）：
+```json
+{"name":"apk_inject_gadget","arguments":{"path":"/storage/emulated/0/脚本/target.apk","outPath":"/storage/emulated/0/脚本/target-script.apk","interactionType":"script","scriptPath":"/data/local/tmp/a.js","providerProcess":":remote"}}
+```
+
+预期：`interaction=script`、`scriptPath=/data/local/tmp/a.js`、`providerProcess=:remote`、`providerProcessSource=explicit`、`signed=true`，**结果里没有 `endpoint`/`token`**；`nextActions` 无 endpoint/token。安装打开后 Gadget 按 `scriptPath` 加载（不碰网络）。
+
+**怎么验证**：记录返回 JSON 的 `interaction/scriptPath/providerProcess/providerProcessSource`，确认 `endpoint`/`token` 不存在；安装后用 `frida_status`/logcat 确认 Gadget 加载，script 模式不找网络端口。
+
+### #13 `providerProcess` 已进 schema，省略时自动判定
+
+`apk_inject_gadget` 新增可选 `providerProcess`。省略时按 MAIN+LAUNCHER 入口 `activity/activity-alias` 的 `android:process` 自动判定；入口未声明则用 `application` 的 `android:process`；都没有则默认进程。返回 `providerProcess` + `providerProcessSource=explicit|manifest|default`。
+
+复现：
+```json
+{"name":"apk_inject_gadget","arguments":{"path":"<原APK>","outPath":"<新APK>","interactionType":"script","scriptPath":"/data/local/tmp/a.js"}}
+```
+预期 `providerProcessSource` 为 `manifest` 或 `default`（取决于该 APK 入口/application 的 `android:process`）；显式传 `"providerProcess":":remote"` 时必须是 `:remote`/`explicit`。
+- 边界：K40 实测了**显式分支**；`manifest/default` 自动分支目前只在本地 harness 验证，需拿一个入口 `android:process` 的 APK 做真机复测（`.4` 反馈原意也是先确认自动判定）。
+
+**怎么验证**：省略 `providerProcess` 调一次，看返回 `providerProcess/providerProcessSource`；有带入口 `android:process` 的样本 APK 时确认 `manifest` 分支，没有则确认 `default` 是预期；显式传 `:remote` 确认 `explicit`。
+
+### #18 `apk_build` 增加 `detail=summary`
+
+`apk_build` 新增可选 `detail=full|summary`（默认 full，老调用不变）。summary 只回关键字段：`path/size/sha256/signed/signer/schemesApplied/schemesVerified/changed*/signature{verified,schemes}/alignment{checked,misalignedEntries,zipStatus}/detail/detailNote`，不再回完整 `verification`/`signatureSummary`。
+
+复现（build 仍要求 `workspaceId/editSessionId/overwrite/sign`）：
+```json
+{"name":"apk_build","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","overwrite":true,"sign":true,"detail":"summary"}}
+```
+**怎么验证**：对同一编辑会话分别用 `detail=full`（默认）和 `detail=summary` 构建，比较返回键集合；summary 不应有完整 `verification`/`signatureSummary`，且 `path/sha256/signed` 必须与 full 一致。`detailNote` 会说明这是精简结果。
+
 
 ## 常见错误与修法
 

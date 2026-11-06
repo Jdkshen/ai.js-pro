@@ -350,8 +350,11 @@ internal class ToolkitDexNavigation(dexes: List<Pair<String, ToolkitDex>>) {
         val pattern = ToolkitRegex.compile(if (queryType == "literal") java.util.regex.Pattern.quote(query) else query,
             if (caseSensitive) 0 else java.util.regex.Pattern.CASE_INSENSITIVE or java.util.regex.Pattern.UNICODE_CASE)
         val ownerPrefix = ToolkitDex.ownerPrefix(prefix)
-        val deadline = System.nanoTime() + 8_000_000_000L
+        val startedAt = System.nanoTime()
+        val deadline = startedAt + 8_000_000_000L
         var scanned = 0
+        var scannedMembers = 0
+        var scannedInstructions = 0
         var truncated = false
         var cancelled = false
         var stopReason: String? = null
@@ -451,6 +454,7 @@ internal class ToolkitDexNavigation(dexes: List<Pair<String, ToolkitDex>>) {
                     if (!check()) break@outer
                     val ref = MethodRef(classRef, method)
                     scanned++
+                    scannedMembers++
                     if (scope in listOf("method", "name", "all")) {
                         match(method.name)?.let { addHit(ref, "name", method.name, it, null, null, null, null, null) }
                     }
@@ -464,6 +468,7 @@ internal class ToolkitDexNavigation(dexes: List<Pair<String, ToolkitDex>>) {
                     for (instruction in implementation.instructions) {
                         if (!check()) break@outer
                         scanned++
+                        scannedInstructions++
                         if (instruction is ReferenceInstruction) {
                             when (val reference = instruction.reference) {
                                 is StringReference -> if (scope in listOf("string", "all")) {
@@ -501,6 +506,25 @@ internal class ToolkitDexNavigation(dexes: List<Pair<String, ToolkitDex>>) {
         }
 
         if (scanned >= SEARCH_SCANNED_MAX) { truncated = true; stopReason = stopReason ?: "scan_budget" }
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+        val budgetUsed = ToolkitIo.json(
+            "budgetMs" to 8000,
+            "elapsedMs" to elapsedMs,
+            "scannedMembers" to scannedMembers,
+            "scannedInstructions" to scannedInstructions,
+            "scannedSteps" to scanned,
+            "reason" to stopReason,
+        )
+        val budgetHint = if (truncated) {
+            "本次扫描未扫完（stopReason=" + (stopReason ?: "unknown") + "，已扫 " + scannedMembers +
+                " 个成员/" + scannedInstructions + " 条指令）：count=0 不能判定「不存在」；请缩小 prefix、指定 dexEntry，" +
+                "或改用 apk_search{target:\"dex_names\"} 先拿类名/locator 再搜。"
+        } else null
+        val nextActions = if (truncated) JsonArray().apply {
+            add("缩小 prefix（例如只保留包名前缀）后重试，不要用 count=0 下结论")
+            add("指定 dexEntry 只扫描一个 classes*.dex，减少扫描范围")
+            add("改用 apk_search{target:\"dex_names\",query:\"" + query.replace("\"", "\\\"") + "\"} 再对本工具按类名/描述符定位")
+        } else null
         return ToolkitIo.json(
             "items" to JsonArray().apply { hits.forEach { add(it) } },
             "count" to hits.size,
@@ -510,6 +534,9 @@ internal class ToolkitDexNavigation(dexes: List<Pair<String, ToolkitDex>>) {
             "truncated" to truncated,
             "cancelled" to cancelled,
             "stopReason" to stopReason,
+            "budgetUsed" to budgetUsed,
+            "budgetHint" to budgetHint,
+            "nextActions" to nextActions,
             "scope" to scope,
             "anchorFailureCount" to anchorFailures.size,
             "warnings" to warnings.toList(),

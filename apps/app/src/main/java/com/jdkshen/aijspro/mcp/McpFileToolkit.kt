@@ -91,6 +91,7 @@ internal class McpFileToolkit(private val root: File) {
         private const val MAX_CURSOR_CHARS = 65536
         private const val CURSOR_TTL_MILLIS = 30L * 60L * 1000L
         private const val CURSOR_FORMAT_VERSION = 1
+        private const val SCAN_CURSOR_PREFIX = "scan1-"
         private const val MAX_RECURSIVE_DELETE_NODES = 200000
         private const val RECURSIVE_DELETE_TIME_BUDGET_NANOS = 60000L * 1000L * 1000L
         private const val MAX_RECURSIVE_DELETE_DEPTH = 256
@@ -401,7 +402,8 @@ internal class McpFileToolkit(private val root: File) {
             add(
                 "file_search", "搜索本地文件",
                 "在 root 内查找普通文件；名称、大小、修改时间、内容过滤条件按 AND 组合。" +
-                    "不跟随符号链接。每页有节点与时间预算，结果显式返回 truncated/stopReason，并给出继续 cursor。",
+                    "不跟随符号链接。每页有节点与时间预算，结果显式返回 truncated/stopReason、scannedEntries/scannedBytes/stoppedAt；" +
+                    "截断时返回 scanCursor（同 nextCursor），原样传回即可继续；未扫完≠不存在。",
                 schema(
                     listOf(
                         "path", "recursive", "namePatternType", "nameMatchMode",
@@ -422,6 +424,7 @@ internal class McpFileToolkit(private val root: File) {
                         "contentPatternType" to stringField("内容表达式类型。", enumValues = listOf("literal", "regex")),
                         "contentCaseSensitive" to boolField("内容是否大小写敏感。"),
                         "cursor" to stringField("省略或空字符串表示第一页；续页原样复制上一页 cursor；过滤器必须保持不变。"),
+                        "scanCursor" to stringField("可续扫游标，与 cursor 同义；截断时返回 nextCursor/scanCursor，原样传回即可继续扫描。"),
                         "limit" to intField("每页最多返回的匹配数，1..1000；省略时=200。", 1, MAX_SEARCH_LIMIT.toLong(), 200),
                     ),
                 ),
@@ -2907,7 +2910,8 @@ internal class McpFileToolkit(private val root: File) {
         val contentPattern = args.optionalString("contentPattern")
         val contentPatternType = args.requiredString("contentPatternType")
         val contentCaseSensitive = args.requiredBoolean("contentCaseSensitive")
-        val cursor = args.optionalString("cursor")
+        val rawCursor = args.optionalString("scanCursor").ifEmpty { args.optionalString("cursor") }
+        val cursor = rawCursor.removePrefix(SCAN_CURSOR_PREFIX)
         val limit = args.optionalInt("limit", 200)
 
         checkRange(limit.toLong(), "limit", 1, MAX_SEARCH_LIMIT.toLong())
@@ -2956,13 +2960,13 @@ internal class McpFileToolkit(private val root: File) {
             val body = decodeCursor(cursor)
             if (body.get("k")?.asString != "search") throw IllegalArgumentException("cursor 不属于 file_search")
             if (!samePathText(body.get("root")?.asString ?: "", normalizedPath(rootDir))) {
-                throw IllegalArgumentException("cursor 不属于当前 root")
+                throw IllegalArgumentException("cursor 已失效（不属于当前 root），请从第一页重新开始")
             }
             if (!samePathText(body.get("p")?.asString ?: "", normalizedPath(directory))) {
-                throw IllegalArgumentException("cursor 与当前搜索目录不匹配")
+                throw IllegalArgumentException("cursor 已失效（搜索目录变化），请从第一页重新开始")
             }
             if (body.get("fp")?.asString != fingerprint) {
-                throw IllegalArgumentException("cursor 与当前搜索条件不匹配，请从第一页重新开始")
+                throw IllegalArgumentException("cursor 已失效（pattern/搜索条件变化），请从第一页重新开始")
             }
             cursorStack(body)
         }
@@ -2970,6 +2974,7 @@ internal class McpFileToolkit(private val root: File) {
         val results = JsonArray()
         val warnings = ArrayList<String>()
         var visited = 0
+        var scannedBytes = 0L
         var stopReason: String? = null
         var canContinue = true
         var incompleteWarning = false
@@ -3015,6 +3020,7 @@ internal class McpFileToolkit(private val root: File) {
                 continue
             }
             if (!child.isFile) continue
+            scannedBytes += child.length()
 
             val matchedBy = ArrayList<String>()
             if (nameMatcher != null) {
@@ -3056,6 +3062,7 @@ internal class McpFileToolkit(private val root: File) {
             results.add(searchEntry(child, matchedBy))
         }
 
+        val stoppedFrame = stack.lastOrNull()
         val more = canContinue && hasMoreListWork(stack)
         if (stopReason == null) {
             stopReason = when {
@@ -3065,7 +3072,8 @@ internal class McpFileToolkit(private val root: File) {
             }
         }
         val finalStopReason = stopReason ?: "eof"
-        val truncated = more || !canContinue || incompleteWarning
+        val truncated = more || !canContinue || incompleteWarning ||
+            finalStopReason == "timeBudget" || finalStopReason == "nodeBudget"
         val nextCursor = if (more) {
             encodeCursor(JsonObject().apply {
                 addProperty("k", "search")
@@ -3077,6 +3085,25 @@ internal class McpFileToolkit(private val root: File) {
         } else {
             null
         }
+        val scanCursor = nextCursor?.let { SCAN_CURSOR_PREFIX + it }
+        val stoppedAt = if (truncated) JsonObject().apply {
+            stoppedFrame?.let { frame ->
+                addProperty("path", frame.dir.path)
+                addProperty("relativePath", relativePath(frame.dir))
+                addProperty("index", frame.index)
+            }
+            addProperty("reason", finalStopReason)
+        } else null
+        val stopReasonDetail = when (finalStopReason) {
+            "timeBudget" -> "时间预算耗尽，扫描未完成；带 scanCursor 可继续"
+            "nodeBudget" -> "节点预算耗尽，扫描未完成；带 scanCursor 可继续"
+            "limit" -> "本页达到 limit，剩余扫描未完成；带 scanCursor 可继续"
+            "warnings" -> "存在无法读取或无法解码的条目，结果不完整"
+            "contentBudget" -> "内容读取预算耗尽，当前文件未完成；不能从当前位置续扫，请缩小范围或关闭内容过滤"
+            "regexBudget" -> "正则预算耗尽，当前条目未完成；不能从当前位置续扫，请缩小 pattern"
+            "eof" -> "扫描完成"
+            else -> finalStopReason
+        }
         val data = JsonObject().apply {
             addProperty("path", directory.path)
             addProperty("recursive", recursive)
@@ -3084,9 +3111,21 @@ internal class McpFileToolkit(private val root: File) {
             addProperty("count", results.size())
             addProperty("limit", limit)
             addProperty("nodesVisited", visited)
+            addProperty("scannedEntries", visited)
+            addProperty("scannedBytes", scannedBytes)
             addProperty("truncated", truncated)
             addProperty("stopReason", finalStopReason)
+            addProperty("stopReasonDetail", stopReasonDetail)
             if (nextCursor == null) add("nextCursor", JsonNull.INSTANCE) else addProperty("nextCursor", nextCursor)
+            if (scanCursor == null) add("scanCursor", JsonNull.INSTANCE) else addProperty("scanCursor", scanCursor)
+            addProperty("hasMoreScan", scanCursor != null)
+            add("stoppedAt", stoppedAt)
+            if (truncated) {
+                val resumeAdvice = if (scanCursor != null) "可用 scanCursor 继续" else "当前无法从断点续扫"
+                val message = "未扫完≠不存在，$resumeAdvice；stopReason=$finalStopReason（$stopReasonDetail）"
+                addProperty("warning", message)
+                addWarning(warnings, message)
+            }
             add("warnings", stringArray(warnings))
         }
         val actions = JsonArray()
@@ -3145,6 +3184,7 @@ internal class McpFileToolkit(private val root: File) {
         addProperty("contentPatternType", spec.contentPatternType)
         addProperty("contentCaseSensitive", spec.contentCaseSensitive)
         addProperty("cursor", cursor)
+        addProperty("scanCursor", SCAN_CURSOR_PREFIX + cursor)
         addProperty("limit", spec.limit)
     }
 

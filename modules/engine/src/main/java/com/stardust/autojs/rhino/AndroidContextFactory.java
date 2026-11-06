@@ -75,7 +75,34 @@ public class AndroidContextFactory extends ShellContextFactory {
         if (featureIndex == Context.FEATURE_ENABLE_XML_SECURE_PARSING) {
             return isXmlSecureParsingSupported();
         }
+        if (featureIndex == Context.FEATURE_ENHANCED_JAVA_ACCESS && isInsideThrowAsScriptRuntimeEx()) {
+            // Rhino 默认把 Java Error（UnsatisfiedLinkError/NoClassDefFoundError/
+            // StackOverflowError 等）直接 rethrow，JS catch 看不到；feature 13 会让
+            // Context.throwAsScriptRuntimeEx 统一包成 WrappedException，从而可被
+            // script try/catch 捕获（异常对象的 javaException/rhinoException 保留原始
+            // Throwable，可用 e.javaException.getClass()/getCause() 取 class/cause）。
+            // 只在 Rhino 正在把 Java 调用异常转成脚本异常的那一帧临时打开，避免把
+            // feature 13 的“private/protected 成员可访问”也一起放开。
+            return true;
+        }
         return super.hasFeature(cx, featureIndex);
+    }
+
+    /**
+     * 只认 Rhino 的 Context.throwAsScriptRuntimeEx 调用帧；其它 hasFeature 查询保持原值。
+     * 这样 Java Error 可被 JS catch，未 catch 时仍按 WrappedException 让脚本 FAILED。
+     * 取舍：OOM/ThreadDeath 等 Error 也会变成可 catch（Rhino feature 无按类型过滤的钩子）；
+     * 未 catch 不会静默吞掉，仍会失败。若将来要排除 OOM，需要改 Rhino MemberBox/Context，
+     * 而不是这里。
+     */
+    private static boolean isInsideThrowAsScriptRuntimeEx() {
+        for (StackTraceElement frame : new Throwable().getStackTrace()) {
+            if ("org.mozilla.javascript.Context".equals(frame.getClassName())
+                    && "throwAsScriptRuntimeEx".equals(frame.getMethodName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** -1=未探测，0=不支持，1=支持。 */

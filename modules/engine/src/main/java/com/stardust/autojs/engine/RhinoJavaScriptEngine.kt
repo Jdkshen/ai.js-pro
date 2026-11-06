@@ -10,6 +10,7 @@ import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.project.ScriptConfig
 import com.stardust.autojs.rhino.AndroidClassLoader
 import com.stardust.autojs.rhino.PreferIntJavaObject
+import com.stardust.autojs.rhino.ReflectiveMethodObject
 import com.stardust.autojs.rhino.RhinoAndroidHelper
 import com.stardust.autojs.rhino.TopLevelScope
 import com.stardust.autojs.overlay.OverlayRegistry
@@ -245,6 +246,10 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         override fun wrapAsJavaObject(cx: Context?, scope: Scriptable, javaObject: Any?, staticType: Class<*>?): Scriptable? {
             //Log.d(LOG_TAG, "wrapAsJavaObject: java = " + javaObject + ", result = " + result + ", scope = " + scope);
             return when {
+                // Method.invoke(Object,Object...) 的桥接形参会把 JS 5 变成 Double；
+                // 用目标 Method 的真实形参类型收窄（三引擎共用 JavaReflectiveInvocation）。
+                javaObject is java.lang.reflect.Method ->
+                    ReflectiveMethodObject(scope, javaObject, staticType)
                 javaObject is View -> ViewExtras.getNativeView(scope, javaObject, staticType, runtime)
                 // Paint 这类同时有 int/long 重载的类：让 JS 的数字参数优先走 int 版本
                 PreferIntJavaObject.supports(javaObject) ->

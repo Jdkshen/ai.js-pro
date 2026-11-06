@@ -56,6 +56,7 @@ internal class ToolkitJobs internal constructor(
         @Volatile var reason = ""
         // 反馈 #11：失败原因的结构化码要能在 apk_job_status/list 里看到，而不是只藏在结果正文。
         @Volatile var errorCode: String? = null
+        @Volatile var warningCode: String? = null
         @Volatile var resultReady = false
         @Volatile var resultBytes = 0L
         @Volatile var lostByRestart = false
@@ -216,13 +217,21 @@ internal class ToolkitJobs internal constructor(
             // A committed operation can finish just before cancellation; its real response is retained.
             Thread.interrupted()
             writeResult(job, response)
+            val responseData = response.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
+            val decompileIncomplete = responseData?.get("decompileIncomplete")?.takeIf { it.isJsonPrimitive }
+                ?.asBoolean == true
             job.state = if (job.cancelled.get() && (
-                    response.get("ok")?.asBoolean == false ||
-                        response.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
-                            ?.get("cancelled")?.asBoolean == true
+                    response.get("ok")?.asBoolean == false || responseData?.get("cancelled")?.asBoolean == true
                     )
             ) "CANCELLED"
-            else if (response.get("ok")?.asBoolean == false) "FAILED" else "SUCCEEDED"
+            else if (response.get("ok")?.asBoolean == false) "FAILED"
+            else if (decompileIncomplete) "SUCCEEDED_WITH_WARNINGS"
+            else "SUCCEEDED"
+            if (decompileIncomplete) {
+                job.warningCode = "DECOMPILE_INCOMPLETE"
+                job.reason = responseData?.get("incompleteReason")?.takeIf { it.isJsonPrimitive }?.asString
+                    ?: "反编译结果不完整，请改用 smali 视图"
+            }
         } catch (failure: Exception) {
             job.state =
                 if (job.cancelled.get() || failure is InterruptedIOException || failure is InterruptedException) "CANCELLED"
@@ -300,6 +309,7 @@ internal class ToolkitJobs internal constructor(
             // 反馈 #11：以前只在 lostByRestart 时填 errorCode，操作级失败（如 Frida 连不上）虽然记了 code 却不暴露，
             // 调用方只能从 reason 里猜。现在统一暴露：丢失优先 SERVICE_RESTARTED，否则用本次失败捕获到的码。
             "errorCode" to if (lost) "SERVICE_RESTARTED" else job.errorCode,
+            "warningCode" to if (lost) null else job.warningCode,
             "errorHint" to if (lost) "任务因工具进程重启丢失，未自动重放；请确认需要后重新提交"
                 else job.errorCode?.let { "任务失败的结构化码；详细原因见 reason 与 apk_job_result 正文" },
             "metadataFromIndex" to job.metadataFromIndex,
@@ -407,6 +417,7 @@ internal class ToolkitJobs internal constructor(
             "clientId" to job.clientId,
             "sessionId" to job.sessionId,
             "lostByRestart" to job.lostByRestart,
+            "warningCode" to job.warningCode,
             "timeoutSeconds" to job.timeout,
         )
         runCatching { ToolkitIo.atomic(metadataFile(job.id)) { it.writeText(metadata.toString(), Charsets.UTF_8) } }
@@ -540,6 +551,7 @@ internal class ToolkitJobs internal constructor(
                 job.started = source.optLong("startedAt") ?: 0L
                 job.finished = source.optLong("finishedAt") ?: 0L
                 job.reason = source.optString("reason") ?: ""
+                job.warningCode = source.optString("warningCode")
                 job.lostByRestart = source.get("lostByRestart")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
                 val result = resultFile(id)
                 job.resultReady = result.isFile && result.length() > 0L
@@ -702,7 +714,7 @@ internal class ToolkitJobs internal constructor(
         const val REGISTRY_VERSION = 1
         const val RESTART_REASON = "工具进程已重启，任务没有自动重放"
         private val ACTIVE_STATES = setOf("QUEUED", "RUNNING", "CANCELLING")
-        private val TERMINAL_STATES = setOf("SUCCEEDED", "FAILED", "CANCELLED", "INTERRUPTED")
+        private val TERMINAL_STATES = setOf("SUCCEEDED", "SUCCEEDED_WITH_WARNINGS", "FAILED", "CANCELLED", "INTERRUPTED")
         private val WORKERS = Executors.newFixedThreadPool(2) { r ->
             Thread(r, "apk-tool-job").apply { isDaemon = true }
         }

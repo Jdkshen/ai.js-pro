@@ -2,6 +2,7 @@ package com.stardust.autojs.engine;
 
 import android.util.Log;
 
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -172,6 +173,9 @@ final class QuickJsJavaInterop {
         boolean staticReceiver = isStaticReceiver(receiver);
         Class<?> type = receiverType(receiver);
         List<Object> rawArgs = parseArgs(argsJson);
+        if (receiver instanceof Method && "invoke".equals(name)) {
+            return callReflective((Method) receiver, rawArgs);
+        }
         List<Method> candidates = methodsNamed(type, name);
         if (candidates.isEmpty()) {
             Field field = findField(type, name);
@@ -211,6 +215,41 @@ final class QuickJsJavaInterop {
         Object result = invoke(method, target, converted);
         mResources.called(target, name, converted);
         return encode(result);
+    }
+
+    /** Method.invoke(Object,Object...) 需要按目标方法的真实形参收窄，而不是把 JS 5 塞成 Double。 */
+    private String callReflective(Method method, List<Object> rawArgs) throws JSONException {
+        if (rawArgs.isEmpty()) {
+            throw new InvocationFailure("Method.invoke 需要目标对象参数");
+        }
+        Object target = reflectiveValue(rawArgs.get(0));
+        Object[] args = new Object[rawArgs.size() - 1];
+        for (int i = 0; i < args.length; i++) {
+            args[i] = reflectiveValue(rawArgs.get(i + 1));
+        }
+        try {
+            Object result = JavaReflectiveInvocation.invoke(method, target, args);
+            return encode(result);
+        } catch (InvocationTargetException error) {
+            throw new InvocationFailure(describeTargetError(error));
+        } catch (IllegalArgumentException error) {
+            throw new InvocationFailure(error.getMessage());
+        } catch (ReflectiveOperationException error) {
+            throw new InvocationFailure("Java 反射调用失败：" + method + " - " + error);
+        }
+    }
+
+    private Object reflectiveValue(Object value) {
+        if (value instanceof JSONObject) {
+            return referenceOf((JSONObject) value);
+        }
+        if (value instanceof JSONArray) {
+            JSONArray array = (JSONArray) value;
+            Object[] values = new Object[array.length()];
+            for (int i = 0; i < values.length; i++) values[i] = reflectiveValue(array.opt(i));
+            return values;
+        }
+        return value;
     }
 
     public String getField(long handle, String name) throws JSONException {

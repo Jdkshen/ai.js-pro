@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 package org.autojs.source.engine.android;
 
+import com.stardust.autojs.engine.JavaReflectiveInvocation;
 import android.content.Context;
 import android.content.Intent;
 import android.view.View;
@@ -1615,6 +1616,26 @@ public final class Node24HostBridge implements Node24Engine.Host {
     }
 
     private Object invokeMethod(Method method, Object target, Object[] args) throws Exception {
+        // Java 反射 Method.invoke(Object,Object...) 的形参是 Object/Object[]；普通桥接会把
+        // JS 5 变成 Double，目标 int 形参随即报 "got java.lang.Double"。这里按目标方法
+        // 的真实形参类型收窄，三引擎共用 JavaReflectiveInvocation。
+        if (target instanceof Method && "invoke".equals(method.getName())) {
+            Object invokeTarget = args != null && args.length > 0 ? args[0] : null;
+            Object[] invokeArgs;
+            if (args == null || args.length <= 1) {
+                invokeArgs = new Object[0];
+            } else {
+                invokeArgs = new Object[args.length - 1];
+                System.arraycopy(args, 1, invokeArgs, 0, args.length - 1);
+            }
+            try {
+                return JavaReflectiveInvocation.invoke((Method) target, invokeTarget, invokeArgs);
+            } catch (InvocationTargetException error) {
+                throw new RuntimeException("反射目标方法抛出异常：" + describeCause(error), error.getCause());
+            } catch (IllegalArgumentException error) {
+                throw new IllegalArgumentException(error.getMessage(), error);
+            }
+        }
         // Parameterless cached JSON calls skip handleJava; keep their UI scope.
         if (Looper.myLooper() != Looper.getMainLooper()
                 && (mUiThreadScope.isActive() || needsUiThread(target, method, args))) {
