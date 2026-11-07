@@ -36,15 +36,16 @@
 ## 文件与 APK 工具：读取 → 修改 → 检查 → 构建
 
 - 快照/会话：`apk_workspace_open` 建不可变快照（已有 APK 上下文可用 `aijs://current-apk` 取回，没有上下文时先按实际路径打开；已保存工作区用 `aijs://workspace/<id>` 且 `temporary=false`），`apk_session_create` 建写时复制会话。会话不会改源 APK。
-- 先读后改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；DEX 类/方法用 `apk_read_text` 的 `dex_*` 定位符读取文本；`apk_edit_text`/`apk_resource_edit` 原样传回。`apk_edit_text` 新建目标用 `targetVersion="missing"` + 单个 `write_target`。看到“内容已改变”重新读取，不要重试旧参数。
+- 先读后改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；DEX 类/方法用 `apk_read_text` 的 `dex_*` 定位符读取文本；`apk_edit_text`/`apk_resource_edit` 原样传回。`apk_edit_text` 新建目标用 `targetVersion="missing"` + 单个 `write_target`，且 `write_target` 的 `matchText` 必须为空串（可省略，默认空串）。看到“内容已改变”重新读取，不要重试旧参数。
 - 输出路径坑（dev-1374）：`apk_build.outputName` 只接受**纯文件名或绝对路径**，相对子目录（如 `autojs_crack/_mcp_test/x.apk`）会被拒；`apk_inject_gadget.outPath` **不建父目录**，父目录必须已存在。先 `file_create_directory` 建目录，再传绝对路径；详见 Guide「dev-1373 已修」的 #18/#12。
-- 两个易错参数（B12）：`zip_create` 的**文件源** `entryPath` 不能以 `/` 结尾（传 `脚本/` 会报错）；输出 ZIP 不能位于任一源目录内。`file_edit_text` 新建文件必须 `targetVersion="missing"`（`"new"` 会报 INVALID_ARGUMENT），且 `edits` 只能有一个 `write_target`。详见 Guide「dev-1380 手册补丁」B12。
+- 两个易错参数（B12）：`zip_create` 的**文件源** `entryPath` 不能以 `/` 结尾（传 `脚本/` 会报错）；输出 ZIP 不能位于任一源目录内。`file_edit_text` 新建文件必须 `targetVersion="missing"`（`"new"` 会报 INVALID_ARGUMENT），且 `edits` 只能有一个 `write_target`；`write_target` 的 `matchText` 必须为空串（可省略，默认空串），其它模式必须唯一匹配。详见 Guide「dev-1380 手册补丁」B12。
 - gadget 瘦身/partial（dev-1379 更正归因）：`detail=summary` 只回关键字段（同一云镜样本 42 KB→480 字符，**不含 `partialReasons`**）；看 `partialReasons[].entry`/`scope`（`target`=目标包自带的库，`injected`=本工具注入的 Gadget；`upstream`/`impact` 辅助）必须用 `detail=full`。K40 云镜样本 5 条实为 target 的 `lib/arm64-v8a/libroot_automator.so`（3 段）+ `libyj_aj_02_309.so`（2 段），**未注入原包同样 5 条**；注入的 `libaijsgadget.so` arm64 3 段全过。① target 库只能由目标方用 NDK r27+ 重编，不要直接改 `p_align`（32 位段不同余，要连带 p_vaddr/p_offset 或重链接）；② injected Gadget 只有 32 位 ABI 不合规，64 位已合规，16 KiB 设备是 arm64、当前无需重编；③ 4096 页设备不影响加载（K40/`.4` `getconf PAGE_SIZE=4096`，无真实 16K 加载失败证据，16K 硬件仍需实测）。验证：full 注入看 `entry/scope`，再对原包 vs 注入包跑 `apk_verify` 对比 native 告警是否仅在注入后新增。
 - 分页：列表/搜索/native/资源 xref 最多 200/页，返回 `nextCursor`，用 `apk_continue` 续页；游标 5 分钟过期且绑定会话 revision，编辑后必须重查。不能把两页拼成一份视图。
+  - **例外（游标归属）**：`apk_dex_list_classes` / `apk_dex_list_methods` 的 `nextCursor` 是**原工具 cursor**，必须原样回传给同一个工具的 `cursor` 字段（同过滤条件、同 workspace/session/revision），**不能传给 `apk_continue`**；反之 `apk_continue` 的游标也不能回传给这两个工具。
 - 检查/构建：先 `apk_session_check(runBuildChecks=true)`，再 `apk_build`；构建会再检查，失败不导出。默认未签名；`sign=true` 用本机 AI.js Pro 身份重签并移除原签名。`apk_read_signature` 只读 V1/V2/V3/V3.1 证书元数据，`verified=false`，不是验签。
 - 搜索/正则：搜索和文件替换使用 Java `java.util.regex`（支持环视/反向引用），每个 matcher 默认 750ms、最多 8M 字符访问，并受 3s/8s 总预算和中断检查约束；超预算报 `REGEX_BUDGET_EXCEEDED`。先加 prefix/缩小目标，别用灾难性回溯。
 - ZIP：读取支持 ZipCrypto/AES，写入只生成 AES-256 或明文；`zip_test` 才做完整 CRC/HMAC 校验，`zip_read_*` 只是预览。大包先看 50k 条目/512MiB 扫描预算、250:1 压缩比和 2GiB 创建预算；**加密**条目才必须传非空 `password`（未加密条目可省略或传空字符串，dev-1368 起不再强制）。
-- 资源：`apk_resource_read` 每项独立错误，默认 `variant=default`；`maxValueXmlChars` 超预算时 `valueXml=null`，不要写回半截 XML；`resolveDepth=1` 只解析一级直接引用。AXML/资源 XML 的写入/编辑拒绝 DOCTYPE/ENTITY。
+- 资源：`apk_resource_read` 每项独立错误，默认 `variant=default`；`maxValueXmlChars` 超预算时 `valueXml=null`，不要写回半截 XML；`resolveDepth=1` 只解析一级直接引用。AXML/资源 XML 的写入/编辑拒绝 DOCTYPE/ENTITY。**AXML/AndroidManifest 不在 `apk_resource_*` 范围内：读用 `apk_read_text(locator="axml:...")`，改用 `apk_edit_text` 同一 locator + targetVersion。**
 - 原生：指令分析在原生库可用时用 Capstone 覆盖 AArch64/ARM/Thumb/x86/x86-64，不可用时只回退有界 AArch64 子集。指令补丁支持四架构，但内置汇编器只有 AArch64 常见子集；ARM/Thumb/x86/x86-64 或内置未覆盖形式要可选 clang（`aijs-toolchain install cpp`）。字符串增长只利用已有 NUL/空格 padding，不改长度/指针/重定位。
 - 容量：APK 快照单包 512MiB、总量 1GiB；单条分析 64MiB、文本 10MiB；单工作区 8 会话、2000 变更条目/512MiB。旧 `mt_*` 名称不注册为规范工具。
 

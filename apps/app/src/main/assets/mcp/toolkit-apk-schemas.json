@@ -182,7 +182,7 @@
       },
       "locator": {
         "type": "string",
-        "description": "必填：条目/类/方法/资源定位符；由 apk_list、apk_search 或相关列表工具返回。"
+        "description": "必填：条目/类/方法/资源定位符；由 apk_list、apk_search 或相关列表工具返回。二进制 AXML/AndroidManifest.xml 用 axml:<entry> 或 zip_entry:<entry>（返回解码 XML 和 targetVersion）。"
       },
       "limit": {
         "type": "integer",
@@ -353,7 +353,8 @@
           "additionalProperties": false,
           "properties": {
             "locator": {
-              "type": "string"
+              "type": "string",
+              "description": "resources.arsc 的资源定位符（resource:...）；不包含二进制 AXML/AndroidManifest.xml，AXML 请用 apk_read_text/apk_edit_text 的 axml: locator。"
             },
             "variant": {
               "type": "string",
@@ -796,7 +797,7 @@
       },
       "nextCursor": {
         "type": "string",
-        "description": "必填：上一页返回的 nextCursor；5 分钟过期，绑定 workspaceId/editSessionId 和会话 revision，编辑后必须重新查询。"
+        "description": "必填：上一页返回的 nextCursor；5 分钟过期，绑定 workspaceId/editSessionId 和会话 revision，编辑后必须重新查询。APK 分页工具的 nextCursor 用 apk_continue；apk_dex_list_classes/list_methods 的 nextCursor 是原工具 cursor（同工具、同过滤条件、同 workspace/session/revision），不能传给 apk_continue。"
       },
       "limit": {
         "type": "integer",
@@ -836,7 +837,7 @@
       },
       "locator": {
         "type": "string",
-        "description": "必填：要编辑的条目/类/方法/资源定位符。"
+        "description": "必填：要编辑的条目/类/方法/资源定位符。二进制 AXML/AndroidManifest.xml 用 axml:<entry>（先 apk_read_text 拿 targetVersion，再用完整 XML write_target；内部 ToolkitResources.encodeXml 原子写会话）。"
       },
       "targetVersion": {
         "type": "string",
@@ -844,7 +845,7 @@
       },
       "edits": {
         "type": "array",
-        "description": "必填：1..200 条编辑；同一批基于一个不可变的 LF 归一化原文，匹配文本必须唯一。",
+        "description": "必填：1..200 条编辑；同一批基于一个不可变的 LF 归一化原文。write_target 模式下 matchText 可省略且必须为空串；其它模式 matchText 必填且必须唯一匹配。",
         "minItems": 1,
         "maxItems": 200,
         "items": {
@@ -858,10 +859,13 @@
                 "replace_match",
                 "insert_before_match",
                 "insert_after_match"
-              ]
+              ],
+              "description": "write_target 整体写（需唯一）；replace_match/insert_before_match/insert_after_match 按 matchText 唯一匹配后修改/插入。"
             },
             "matchText": {
-              "type": "string"
+              "type": "string",
+              "default": "",
+              "description": "精确匹配文本；write_target 模式可省略/必须为空串，其它模式必填且必须在原文中恰好出现一次。"
             },
             "writeText": {
               "type": "string"
@@ -869,7 +873,6 @@
           },
           "required": [
             "mode",
-            "matchText",
             "writeText"
           ]
         }
@@ -920,7 +923,8 @@
           "additionalProperties": false,
           "properties": {
             "locator": {
-              "type": "string"
+              "type": "string",
+              "description": "resources.arsc 的资源定位符（resource:...）；不包含 AXML/Manifest。"
             },
             "variant": {
               "type": "string",
@@ -1065,7 +1069,8 @@
         "type": "string"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：普通 ZIP 条目定位符；AXML/AndroidManifest.xml、classes*.dex、resources.arsc 会被拒绝。改 AXML 用 apk_read_text + apk_edit_text(locator=axml:<entry>)；或 apk_decode_project → file_edit_text → apk_build_project。"
       },
       "patches": {
         "type": "array",
@@ -2343,7 +2348,7 @@
         "type": "string"
       }
     },
-    "description": "分页列出 DEX 里的类（替代盲搜）。返回 items/total/returned/nextCursor/hasMore/truncated。"
+    "description": "分页列出 DEX 里的类（替代盲搜）。返回 items/total/returned/nextCursor/hasMore/truncated 与 cursorTool。nextCursor 是原工具 cursor：原样传回本工具 cursor，并保持 prefix/packageFilter/dexEntry 不变；不能传给 apk_continue（不是任务分页）。"
   },
   "apk_dex_list_methods": {
     "type": "object",
@@ -2376,6 +2381,6 @@
         "type": "string"
       }
     },
-    "description": "分页列出 DEX 里的方法（可按 owner 过滤）。返回 name/descriptor/access/returnType/paramTypes/locator + nextCursor。"
+    "description": "分页列出 DEX 里的方法（可按 owner 过滤）。返回 name/descriptor/access/returnType/paramTypes/locator + nextCursor 与 cursorTool。nextCursor 是原工具 cursor：原样传回本工具 cursor，并保持 owner/prefix/dexEntry 不变；不能传给 apk_continue。"
   }
 }

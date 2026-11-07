@@ -21,8 +21,8 @@ internal object ToolkitReverseTools {
         "apk_inject_gadget" to "免Root给完整单APK集成Frida Gadget：path→新outPath，自动添加启动Provider/DEX、对应ABI库及本机配置、对齐并重新签名验签。需frida-gadget组件；不重编资源、不覆盖原APK、不安装。默认 interactionType=listen 返回 endpoint/token，用 frida_status/processes/eval 连接；listen 跨 UID 可能被 SELinux 静默 DROP（实测停在 SYN_SENT，不是组件问题），此时改用 interactionType=script + scriptPath（启动即加载脚本，不碰网络）：script 返回 interaction=script + scriptPath，不再生成 endpoint/token。providerProcess 可选：显式指定 Provider 的 android:process；省略时自动按 MAIN+LAUNCHER 入口 activity/activity-alias 的 android:process 判定，读不到再用 application 的 android:process，仍无则默认进程并返回 providerProcessSource=manifest|explicit|default。实战：Auto.js 打包类应用业务在 `:script`，注入的 Provider 需要进 `:script` 才会加载（入口 activity 的 android:process=\":script\" 会被自动判定）；不要复制成两条 Provider 条目，否则脚本进程可能起不来。本工具是新增独立 Provider 条目，不复制/修改原 Provider。默认on_load=resume不阻塞界面，port=27042可改。重签不能直接覆盖不同证书的原应用；不支持Split/sharedUserId。后台jobId。",
         "yara_scan" to "使用 yara 组件按 rulesPath 扫描 path；规则≤1MiB，输入≤64MiB，扫描≤30秒，禁用 include。返回规则命中/偏移及截断；不是自动恶意性结论。后台 jobId。",
         "native_emulate" to "Unicorn 隔离模拟 codeHex 原始机器码，可选 dataHex 与 registers；arm64/arm/thumb/x86/x86_64。代码≤64KiB、数据≤4096B、指令≤100000、时间≤1000ms，不提供完整 Android/ELF/JNI 环境。后台 jobId。",
-        "frida_status" to "检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。注意：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT/超时，不是组件没装）；传入 portListening/synSentObserved/sameUid 可获得 connectDiagnosis，返回里另有 listenModeLimits 与 gadgetScriptMode（推荐改用 script 模式，不碰网络）。本版还会自动读取 /proc/net/tcp[6]（读不到时用 tcpText/tcp6Text 传入原文）解析 LISTEN(0A)/SYN_SENT(02) 作为证据；sameUid 无法从 tcp 文件推断，仍需比较目标/客户端 UID。后台 jobId。",
-        "frida_processes" to "列出指定免Root Gadget endpoint 可见的进程（最多500），需 frida 组件和已打开的Gadget应用，token取apk_inject_gadget结果。应用UID不能任意附加其他应用。后台 jobId。",
+        "frida_status" to "只读快路径（同步返回，不占后台任务槽）；检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。注意：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT/超时，不是组件没装）；传入 portListening/synSentObserved/sameUid 可获得 connectDiagnosis，返回里另有 listenModeLimits 与 gadgetScriptMode（推荐改用 script 模式，不碰网络）。本版还会自动读取 /proc/net/tcp[6]（读不到时用 tcpText/tcp6Text 传入原文）解析 LISTEN(0A)/SYN_SENT(02) 作为证据；sameUid 无法从 tcp 文件推断，仍需比较目标/客户端 UID。本工具不创建 job，连续重分析把任务槽占满时仍可直接调用。",
+        "frida_processes" to "只读快路径（同步返回，不占后台任务槽）；列出指定免Root Gadget endpoint 可见的进程（最多500），需 frida 组件和已打开的Gadget应用，token取apk_inject_gadget结果。应用UID不能任意附加其他应用。本工具不创建 job，任务槽满时仍可直接调用。",
         "frida_eval" to "对 endpoint 的 pid 附加并有界执行 Frida script，durationMs≤10000，返回消息后卸载脚本/分离。需可访问Gadget，传相同endpoint/token；Java.perform需另行打包frida-java-bridge；停止任务杀掉本次客户端进程组。后台 jobId。",
         "frida_session_open" to "开启有界 Frida 观测会话（内存态，TTL/消息上限）：绑定目标 packageName/pid 与 endpoint，脚本只记录长度与哈希，endpoint/token 回显掩码。本版本不实现持久 attach（attached=false 会如实标注），真实执行仍走 frida_eval；进程退出会话即丢失，需重新 open。",
         "frida_session_read" to "按 offset/limit 分页读取会话消息（seq/时间戳/截断标记）。会话过期或不存在时明确报错，不静默返回空列表。",
@@ -59,7 +59,9 @@ internal object ToolkitReverseTools {
     val analysisTools = setOf("native_analysis_open","native_analysis_status","native_analysis_define_function",
         "native_analysis_set_type","native_analysis_set_noreturn","native_analysis_overlay",
         "native_analysis_save","native_analysis_close","native_analysis_list","native_analysis_r2_commands")
-    val operations = names.toSet() - guideNames - "reverse_capabilities" - sessionTools - analysisTools - sessionNativeTools
+    /** 纯只读状态工具走 McpToolkit 的同步快路径，不占后台任务槽；避免 4 个重分析占满后被 JOB_QUEUE_FULL 误伤。 */
+    val readOnlyFastTools = setOf("frida_status","frida_processes")
+    val operations = names.toSet() - guideNames - "reverse_capabilities" - sessionTools - analysisTools - sessionNativeTools - readOnlyFastTools
     val dependencies = mapOf(
         "apk_decode_project" to listOf("apktool"), "apk_build_project" to listOf("apktool", "apk-resources"),
         "apk_install_framework" to listOf("apktool"), "native_decompile" to listOf("radare2", "r2ghidra"),
@@ -134,6 +136,8 @@ internal object ToolkitReverseTools {
             else->error("未知逆向工具")
         }
         if(name in operations){field("background",ToolkitIo.json("type" to "boolean","default" to true));field("timeoutSeconds",num(1,McpLimits.MAX_TIMEOUT_SECONDS,120))}
+        // 兼容旧调用：只读快路径仍接受 background/timeoutSeconds，但不会创建 job，参数仅被忽略。
+        else if(name in readOnlyFastTools){field("background",ToolkitIo.json("type" to "boolean","default" to false));field("timeoutSeconds",num(1,McpLimits.MAX_TIMEOUT_SECONDS,120))}
         return ToolkitIo.json("type" to "object","additionalProperties" to false,"properties" to p,"required" to required)
     }
     fun definitions()=JsonArray().apply{names.forEach{name->add(ToolkitIo.json("name" to name,"description" to descriptions.getValue(name),

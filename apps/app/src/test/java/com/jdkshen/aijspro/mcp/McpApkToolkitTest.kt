@@ -43,7 +43,11 @@ class McpApkToolkitTest {
     return v0
 .end method
 """)
-        assertTrue(Smali.assemble(SmaliOptions().apply { outputDexFile = dex.path; jobs = 1 },listOf(smali.path)))
+        val secondSmali = temp.newFile("Second.smali")
+        secondSmali.writeText(""".class public Lsample/Second;
+.super Ljava/lang/Object;
+""")
+        assertTrue(Smali.assemble(SmaliOptions().apply { outputDexFile = dex.path; jobs = 1 },listOf(smali.path, secondSmali.path)))
         source = File(home,"fixture.apk")
         ZipOutputStream(source.outputStream()).use { zip ->
             mapOf("AndroidManifest.xml" to "<manifest package=\"com.example.fixture\"/>".toByteArray(), "assets/test.txt" to "中文\r\nsecond\r\n".toByteArray(),
@@ -109,6 +113,26 @@ class McpApkToolkitTest {
         val entries = invoke("apk_list","view" to "resource_table").getAsJsonArray("items")
         assertEquals(2,entries.size()); assertTrue(entries.all { it.asJsonObject.tString("locator") == locator })
     }
+    @Test fun dexListCursorIsScopedToProducerAndRejectedByApkContinue() {
+        val first = invoke("apk_dex_list_classes", "limit" to 1)
+        val cursor = first.tString("nextCursor")
+        assertTrue(cursor.startsWith("dxi1:classes:"))
+        assertEquals("apk_dex_list_classes", first.tString("cursorTool"))
+        assertTrue(first.tString("nextCursorHint").contains("不能用于 apk_continue"))
+
+        val message = try {
+            invoke("apk_continue", "nextCursor" to cursor, "limit" to 1)
+            fail("apk_continue must reject a dex-list cursor")
+            ""
+        } catch (failure: IllegalArgumentException) { failure.message ?: "" }
+        assertTrue(message, message.contains("apk_dex_list_classes"))
+        assertTrue(message, message.contains("不能用于 apk_continue"))
+
+        val second = invoke("apk_dex_list_classes", "limit" to 1, "cursor" to cursor)
+        assertEquals(2, second.get("total").asInt)
+        assertEquals(1, second.getAsJsonArray("items").size())
+    }
+
     @Test fun editsInvalidateContinuationAndCrossSessionReuseIsRejected() {
         val first = invoke("apk_list","view" to "zip_entries","limit" to 1); val cursor = first.tString("nextCursor")
         assertTrue(cursor.isNotEmpty())

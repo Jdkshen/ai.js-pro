@@ -192,7 +192,7 @@ MCP 走 `POST /mcp`，方法固定为 `initialize`、`tools/list`、`tools/call`
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"apk_edit_text","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"${LOCATOR}","targetVersion":"${TARGET_VERSION}","edits":[{"mode":"replace_match","matchText":"${UNIQUE_OLD_TEXT}","writeText":"${NEW_TEXT}"}]}}}
 ```
 
-看到“内容已改变”就重新读取并拿新 `targetVersion`，不要重试旧参数。新建目标可以用 `targetVersion="missing"` 加**单个** `write_target` 编辑。
+看到“内容已改变”就重新读取并拿新 `targetVersion`，不要重试旧参数。新建目标可以用 `targetVersion="missing"` 加**单个** `write_target` 编辑；`write_target` 的 `matchText` 必须为空串（可省略，默认空串），`replace_match`/`insert_*` 模式必须给出且唯一匹配。
 
 ### 从快照导出条目
 
@@ -555,6 +555,16 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 - AXML 写入/编辑拒绝 DOCTYPE/ENTITY；资源读写用 `apk_resource_read`/`apk_resource_edit`/`apk_resource_add`，不要拿普通 `zip_entry:` 去改 `resources.arsc`。
 - 保留条目（`classes*.dex`、`resources.arsc`、Manifest 等）不能走普通删除/字节补丁；用 DEX/资源专用工具。
 
+### AXML / AndroidManifest 的读与改（P1-F；无需新工具）
+
+AXML 不是普通文本，但也有**已接通**的读写路径：
+
+1. 读：`apk_read_text(locator="axml:AndroidManifest.xml")` 或 `apk_read_text(locator="zip_entry:AndroidManifest.xml")`；返回解码后的 XML 文本和 `targetVersion`。
+2. 改：`apk_edit_text(locator="axml:AndroidManifest.xml", targetVersion, edits=[{"mode":"write_target","matchText":"","writeText":"<完整XML>"}])`。工具内部用 `ToolkitResources.encodeXml` 重新编码 AXML，并原子写回会话；失败不会留下半截修改。
+3. 或走工程路线：`apk_decode_project` 解出可读 XML → `file_edit_text` 改 → `apk_build_project` 回编。
+
+边界：`apk_patch_bytes` 只做等长原始字节补丁，遇到 AXML/Manifest 会拒绝并改指向上面路径；`apk_resource_read/edit/add` **只操作 resources.arsc**，不等于 AXML 编辑。AXML 编码要求 XML 合法、实体白名单、文本 ≤10 MiB；编码失败或结构不合法会明确报错，不伪造成功。
+
 ### 路线 B：Apktool 工程 decode/build
 
 ```json
@@ -734,7 +744,7 @@ Capstone 可用时覆盖 AArch64、ARM/Thumb、x86、x86-64；不可用时只回
 | `REGEX_BUDGET_EXCEEDED` | 正则超时/字符预算 | 改字面量、缩小 `prefix`/`target`/`limit` |
 | `RESPONSE_TOO_LARGE` | 响应超过 24 MiB | 分页/缩小 `limit`/`maxChars`/查询范围 |
 | `INVALID_ARGUMENT` | 缺必填或类型不对 | 读 `tools/list` schema，补齐字段；不要丢参数“试试” |
-| 分页游标不存在/过期 | 超过 5 分钟或会话已改 | 重新查询第一页；不要复用旧 `nextCursor` |
+| 分页游标不存在/过期 | 超过 5 分钟、会话/revision 已改，或把别的工具的游标传错工具 | 先看返回的 `cursorTool`：`apk_continue` 只接 APK 分页游标；`apk_dex_list_classes`/`list_methods` 的游标要回传原工具 `cursor`；重新查询第一页，不要复用旧 `nextCursor` |
 | 内容已改变 | `targetVersion` 旧了 | 重新读取拿新版本，再编辑 |
 | 任务不存在 | jobId 不属于当前工具目录/已清理 | `apk_job_list` 对账；不要猜 |
 | `INTERRUPTED` | 工具进程重启，任务未重放 | 重新评估输入后显式启动新任务；没有 `resume` |

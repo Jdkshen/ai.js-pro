@@ -56,7 +56,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 正确示例：
 ```json
 {"name":"file_create_directory","arguments":{"path":"云镜分析/notes"}}
-{"name":"file_edit_text","arguments":{"path":"云镜分析/notes/todo.txt","targetVersion":"missing","encoding":"utf-8","edits":[{"mode":"write_target","writeText":"hello"}]}}
+{"name":"file_edit_text","arguments":{"path":"云镜分析/notes/todo.txt","targetVersion":"missing","encoding":"utf-8","edits":[{"mode":"write_target","matchText":"","writeText":"hello"}]}}
 {"name":"file_create_directory","arguments":{"path":"云镜分析/build"}}
 {"name":"apk_build","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","overwrite":true,"sign":true,"outputName":"/storage/emulated/0/脚本/云镜分析/build/app-signed.apk"}}
 {"name":"apk_job_export","arguments":{"jobId":"${JOB_ID}","outPath":"云镜分析/recovered/job-result.json"}}
@@ -369,9 +369,9 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 1. `toolkit_status` 确认工具可用性与限制；`apk_list_available_apks` 找包。
 2. `apk_workspace_open` 建不可变快照：`temporary=true` 为一次性工作区；已保存工作区用 `temporary=false` 打开。已有 APK 上下文可用 `path="aijs://current-apk"` 取回（没有上下文时先按实际路径打开）；保存后的工作区路径是 `aijs://workspace/<workspaceId>`。公开写法只使用 `aijs://`；旧 URI 输入和旧 `mt_*` 工具名仅作兼容，不应写进新配置。
 3. `apk_session_create` 建写时复制编辑会话；之后的浏览、读取和修改都在会话视图上完成，不会改源 APK。
-4. 先读取再修改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；编辑时原样传回。DEX 类/方法先用 `apk_read_text` 的 `dex_class:`/`dex_method:` 定位符读取文本，再编辑。`apk_edit_text` 新建目标用 `targetVersion="missing"` 加唯一 `write_target`（可新建 DEX 类或普通文本条目）。
+4. 先读取再修改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；编辑时原样传回。DEX 类/方法先用 `apk_read_text` 的 `dex_class:`/`dex_method:` 定位符读取文本，再编辑。`apk_edit_text` 新建目标用 `targetVersion="missing"` 加唯一 `write_target`（可新建 DEX 类或普通文本条目）；`write_target` 的 `matchText` 必须为空串（可省略，默认空串），其它模式必须唯一匹配。
 5. 修改后调用 `apk_session_check(runBuildChecks=true)`；`apk_build` 会再检查一次，失败不导出。构建默认不签名；`sign=true` 使用本机 AI.js Pro 身份重签并移除原签名，不能沿原作者签名。
-6. 保留条目保护：普通 `zip_entry:` 的 `apk_patch_bytes` 不能处理 `classes*.dex`、`resources.arsc`、二进制 AXML/Manifest；`apk_delete_target` 不能删除 `classes*.dex`/`resources.arsc`，源码包中这些保留条目被移除时 `apk_session_check` 也会失败。DEX 用 `dex_class:`/`dex_method:`，资源用 `apk_resource_*`，AXML 文本用 `axml:` 定位符。
+6. 保留条目保护：普通 `zip_entry:` 的 `apk_patch_bytes` 不能处理 `classes*.dex`、`resources.arsc`、二进制 AXML/Manifest；`apk_delete_target` 不能删除 `classes*.dex`/`resources.arsc`，源码包中这些保留条目被移除时 `apk_session_check` 也会失败。DEX 用 `dex_class:`/`dex_method:`，资源用 `apk_resource_*`，**AXML/Manifest 用 `apk_read_text(locator="axml:...")` + `apk_edit_text(locator="axml:...", ...)`**（不要拿 `apk_resource_*` 改 AXML）。
 ### 改打包版应用资源（.4 实战反馈：解包→改资源→回编→重签→安装）
 
 > 来源：`.4` 的 MCP反馈-云镜逆向会话要求把「改打包版应用资源」写成可执行一节；如果以后有「装探针包」类工具，应把 clear + 授权 + 启动串成一步（当前没有该工具，下面是手动步骤）。
@@ -398,7 +398,7 @@ apk_workspace_open → apk_session_create → apk_resource_read（拿 targetVers
   → apk_resource_edit（edits[] 带 locator/variant/targetVersion/valueXml）
   → apk_session_check(runBuildChecks=true) → apk_build(overwrite=true, sign=true, outputName="...")
 ```
-- 只改资源值/AXML 时可用这条；`apk_resource_edit` 的 `edits[]` 必须带 `locator`/`variant`/`targetVersion`/`valueXml`，不要用普通 `zip_entry:` 改 `resources.arsc` 或 Manifest。
+- 只改 `resources.arsc` 资源值时用这条；`apk_resource_edit` 的 `edits[]` 必须带 `locator`/`variant`/`targetVersion`/`valueXml`，不要用普通 `zip_entry:` 改 `resources.arsc`。**AXML/Manifest 不走 `apk_resource_*`：先 `apk_read_text(locator="axml:...")` 拿 targetVersion，再 `apk_edit_text(locator="axml:...", ...)`；或 `apk_decode_project` → `file_edit_text` → `apk_build_project`。**
 - `apk_build` 默认不签名；`sign=true` 用本机 AI.js Pro 身份并移除原签名，**不能沿用原作者签名**。覆盖安装要求同证书，否则报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`；测试包可先卸载（会丢数据）。
 - 回编/构建失败时保留 stderr、组件版本和实际输出路径；不要把 `apk_build_project` 的结构检查通过当成业务可启动。
 
@@ -457,7 +457,7 @@ apk_workspace_open → apk_session_create → apk_resource_read（拿 targetVers
 
 ### 分页与陈旧保护
 
-- 分页上限按类型区分：APK列表/DEX大纲1000项、native列表500项，其余列表200项。以 `pagination.limitMax` 为准；有更多时返回 `nextCursor` 和 `nextActions`，用 `apk_continue` 续页。
+- 分页上限按类型区分：APK列表/DEX大纲1000项、native列表500项，其余列表200项。以 `pagination.limitMax` 为准；有更多时返回 `nextCursor` 和 `nextActions`，用 `apk_continue` 续页。**例外**：`apk_dex_list_classes`/`apk_dex_list_methods` 的 `nextCursor` 属于原工具，回传原工具的 `cursor`（同过滤条件、同 workspace/session/revision），不能传给 `apk_continue`。
 - 分页游标绑定 `workspaceId`、`editSessionId` 和会话 revision，5 分钟过期；编辑、删除、重建会话或超时后必须重新查询，不能把两页拼成一份视图。
 - `apk_edit_text`/`apk_resource_edit` 使用 `targetVersion` 防止旧读覆盖；`apk_patch_bytes` 用逐段 `expectedHex`；`apk_native_patch_*` 用 `expectedHex`/`expectedText`。看到“内容已改变”时重新读取，不要重试旧参数。
 - `apk_read_text` 的普通文本源超过 10MiB 时只返回前缀并标 `editable=false`/`sourceTruncated=true`；此时不要写回，改用分页或字节接口。
@@ -698,12 +698,13 @@ full 诊断示例：
 
 - `zip_create` **文件源**的 `entryPath` 必须是完整文件路径、**不能以 `/` 结尾**（传 `脚本/` 会报「文件源的 entryPath 必须是非空文件路径」）；目录源才以 `/` 结尾。**输出 ZIP 不能位于任一源目录内**（把整个项目目录当源会失败）。
 - `file_edit_text` **新建文件**必须 `targetVersion="missing"`、`encoding` 用实际编码、`edits` 只能是**一个** `write_target`；传 `"new"` 会报 `INVALID_ARGUMENT`（它只接受 64 位 SHA-256 或 missing）。
+- `edits[].matchText`：`write_target` 模式下必须为空串（可省略，省略时默认空串）；`replace_match`/`insert_before_match`/`insert_after_match` 模式必须给出，且必须在原文中恰好出现一次。
 
 正确示例：
 
 ```json
 {"name":"zip_create","arguments":{"outputPath":"out/archive.zip","sources":[{"sourcePath":"脚本/a.txt","entryPath":"a.txt"}],"overwrite":false,"level":6}}
-{"name":"file_edit_text","arguments":{"path":"notes/new.txt","targetVersion":"missing","encoding":"utf-8","edits":[{"mode":"write_target","writeText":"hello"}]}}
+{"name":"file_edit_text","arguments":{"path":"notes/new.txt","targetVersion":"missing","encoding":"utf-8","edits":[{"mode":"write_target","matchText":"","writeText":"hello"}]}}
 ```
 
 **怎么验证**：`zip_create` 文件源 `entryPath="脚本/"` 复现报错，改 `a.txt` 成功；输出放在源目录内应失败，移到 `out/archive.zip` 成功。`file_edit_text` 传 `targetVersion="new"` 复现 INVALID_ARGUMENT，改 `missing` 成功；成功后 `file_read_text` 回读。

@@ -1172,22 +1172,18 @@
           "tool": "frida_status",
           "args": {
             "endpoint": "${endpoint}",
-            "background": true,
-            "timeoutSeconds": 60,
             "token": "${token}"
           },
-          "purpose": "使用集成结果endpoint/token确认已打开的Gadget可连接"
+          "purpose": "只读快路径，同步返回、不占任务槽；使用集成结果 endpoint/token 确认已打开的 Gadget 可连接"
         },
         {
           "id": "frida-processes",
           "tool": "frida_processes",
           "args": {
             "endpoint": "${endpoint}",
-            "background": true,
-            "timeoutSeconds": 60,
             "token": "${token}"
           },
-          "purpose": "获取Gadget自身实际PID，不能猜PID"
+          "purpose": "只读快路径，同步返回、不占任务槽；获取 Gadget 自身实际 PID，不能猜 PID"
         },
         {
           "id": "frida-eval",
@@ -1210,7 +1206,7 @@
             "jobId": "${fridaJobId}"
           },
           "required": false,
-          "when": "frida_status/processes/eval 返回 jobId 后",
+          "when": "frida_eval 返回 jobId 后（frida_status/frida_processes 是同步只读，不返回 jobId）",
           "purpose": "轮询到终态；不要把 RUNNING 当结果。"
         },
         {

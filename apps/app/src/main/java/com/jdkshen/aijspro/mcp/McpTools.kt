@@ -103,7 +103,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 }
                 "tools/list" -> {
                     McpRpcValidation.optionalParams(params)
-                    listTools()
+                    listTools(McpRpcValidation.optionalParams(params))
                 }
                 "tools/call" -> {
                     val invocation = McpRpcValidation.parseToolCall(params)
@@ -202,8 +202,23 @@ internal class McpTools(private val context: Context, private val event: (String
             "查看文件：{\"name\":\"list_scripts\",\"arguments\":{}}；{\"name\":\"read_script\",\"arguments\":{\"path\":\"main.js\",\"maxBytes\":65536}}",
             "语法检查：{\"name\":\"check_syntax\",\"arguments\":{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}}",
             "",
+            "重分析（native_analyze/native_functions/native_compare/yara_scan 等）占 30s 级后台槽位，连续调用前先 apk_job_list；frida_status/frida_processes 是只读快路径，不占槽。",
+            "分页游标只对产生它的工具（同工具、同 revision）有效：拿 A 工具的 nextCursor 去调 apk_continue 会报错，请用原工具继续翻页。",
             "调用失败时先看错误指出的参数名/类型，再调用 learn_autojs_skill 查对应章节；不要猜字段。",
         ).joinToString("\n"))
+
+        // 第七章（上下文成本）：把分组暴露给客户端，便于用 tools/list{groups:[...]} 或 {tier:"core"} 裁剪。
+        add("toolCategories", JsonArray().apply {
+            McpToolCategories.all.sortedBy { it.order }.forEach { category ->
+                add(JsonObject().apply {
+                    addProperty("id", category.id)
+                    addProperty("title", category.title)
+                    addProperty("summary", category.summary)
+                    addProperty("count", McpToolCategories.toolNamesIn(category.id).size)
+                })
+            }
+        })
+        addProperty("toolFilterHint", "tools/list 支持 params.groups=[组id] 或 params.tier=core 裁剪本次返回；不带参数则返回全部工具。")
 
         // 始终暴露目录指纹（便于诊断宿主到底有没有刷新）；只有"相对上次 initialize 变了"才插提示行。
         val recordedFingerprint = catalogPrefs().getString("fingerprint", null)
@@ -233,7 +248,7 @@ internal class McpTools(private val context: Context, private val event: (String
         }
     }
 
-    private fun listTools() = JsonObject().apply {
+    private fun listTools(params: JsonObject? = null) = JsonObject().apply {
         add("tools", JsonArray().apply {
             add(tool("get_status", "读取 MCP、脚本目录、任务和工作区状态"))
             add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）；示例：{\"path\":\"\",\"recursive\":true}", objSchema("path", "offset", "limit", "recursive")))
@@ -345,9 +360,59 @@ internal class McpTools(private val context: Context, private val event: (String
                 "MCP 工具定义与公开目录不一致"
             }
         })
-        // v4 §10.4：应用升级后宿主侧工具绑定不会自动刷新（调用新工具会报 not a function）。
-        // 这里在 initialize 阶段主动说明「目录变了、请重新 tools/list」，并配合 capabilities.tools.listChanged=true。
         add("serverInfo", McpServerMetadata.toJson())
+        // 第七章：允许客户端按组裁剪本次 tools/list（token 紧张时只拉需要的组）。
+        applyToolFilter(params)
+    }
+
+    /**
+     * `tools/list` 的可选裁剪：`params.groups`（组 id 数组或逗号分隔字符串）与 `params.tier=core`。
+     * 只影响本次返回，服务端不记忆；被裁掉的工具仍可 `tools/call`（但请按需重新 list）。
+     */
+    private fun JsonObject.applyToolFilter(params: JsonObject?) {
+        val tools = getAsJsonArray("tools") ?: return
+        val total = tools.size()
+        val groups = LinkedHashSet<String>()
+        val raw = params?.get("groups")
+        when {
+            raw == null -> {}
+            raw.isJsonArray -> raw.asJsonArray.forEach { if (it.isJsonPrimitive) it.asString.trim().takeIf { id -> id.isNotEmpty() }?.let(groups::add) }
+            raw.isJsonPrimitive -> raw.asString.split(',').map { it.trim() }.filter { it.isNotEmpty() }.forEach(groups::add)
+        }
+        val tier = params?.get("tier")?.takeIf { it.isJsonPrimitive }?.asString?.trim()?.lowercase()
+        val valid = McpToolCategories.groupIds().toSet()
+        val unknown = groups.filter { it !in valid }
+        val keep: (String) -> Boolean = when {
+            tier == "core" -> { name -> name in McpToolCategories.coreToolNames }
+            groups.isNotEmpty() -> { name -> McpToolCategories.categoryFor(name).id in groups }
+            else -> { _ -> true }
+        }
+        if (tier != "core" && groups.isEmpty()) {
+            add("toolFilter", JsonObject().apply {
+                addProperty("applied", false)
+                addProperty("total", total)
+                addProperty("returned", total)
+                add("availableGroups", JsonArray().apply { McpToolCategories.groupIds().forEach { add(it) } })
+                addProperty("note", "可用 params.groups=[组id] 或 params.tier=core 裁剪本次 tools/list（只影响本次返回）。")
+            })
+            return
+        }
+        val kept = JsonArray()
+        tools.forEach { element ->
+            val name = element.asJsonObject.get("name")?.asString ?: return@forEach
+            if (keep(name)) kept.add(element)
+        }
+        add("tools", kept)
+        add("toolFilter", JsonObject().apply {
+            addProperty("applied", true)
+            if (tier != null) addProperty("tier", tier)
+            add("groups", JsonArray().apply { groups.forEach { add(it) } })
+            add("unknownGroups", JsonArray().apply { unknown.forEach { add(it) } })
+            add("availableGroups", JsonArray().apply { McpToolCategories.groupIds().forEach { add(it) } })
+            addProperty("total", total)
+            addProperty("returned", kept.size())
+            addProperty("note", "过滤只影响本次 tools/list；被裁掉的工具仍可 tools/call（按需重新 list 即可）。")
+        })
     }
 
     /** 工具目录指纹 = 工具数 + build（用于识别"升级后宿主未刷新工具表"）。 */
@@ -1180,12 +1245,16 @@ internal class McpTools(private val context: Context, private val event: (String
 
     @Synchronized private fun continueResult(id: String, limit: Int): JsonObject {
         cleanupCursors()
-        val cursor = cursors[id] ?: throw ToolError("游标不存在或已过期")
+        val cursor = cursors[id] ?: throw ToolError(
+            "游标不存在或已过期：分页 cursor 只对产生它的工具（当前仅 search_scripts）有效，且 5 分钟内有效；" +
+                "apk_* 的 nextCursor 请用 apk_continue（或 apk_dex_list_classes/list_methods 原工具的 cursor），不能传给 continue_result。",
+        )
         val size = limit.coerceIn(1, 200); val start = cursor.offset; val end = (start + size).coerceAtMost(cursor.items.size)
         cursor.offset = end
         return JsonObject().apply {
             add("items", JsonArray().apply { cursor.items.subList(start, end).forEach { add(it) } })
             addProperty("nextOffset", end); addProperty("total", cursor.items.size); addProperty("hasMore", end < cursor.items.size)
+            addProperty("cursorTool", "search_scripts")
             if (end < cursor.items.size) addProperty("cursor", id) else cursors.remove(id)
         }
     }

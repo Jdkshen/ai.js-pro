@@ -6,6 +6,7 @@ import com.google.gson.JsonParser
 import java.io.File
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -82,6 +83,121 @@ class McpToolSchemaParamsTest {
             temp.deleteRecursively()
         }
         assertTrue("required 同时带 default 或描述默认值（会把可选参数伪装成必填）：\n" + problems.distinct().joinToString("\n"), problems.isEmpty())
+    }
+
+    @Test
+    fun writeTargetEditAcceptsOmittedMatchText() {
+        val apkSchemas = JsonParser().parse(File(schemaAssets, "toolkit-apk-schemas.json").readText()).asJsonObject
+        val apkItem = apkSchemas.getAsJsonObject("apk_edit_text").getAsJsonObject("properties")
+            .getAsJsonObject("edits").getAsJsonObject("items")
+        assertFalse(apkItem.getAsJsonArray("required").map { it.asString }.contains("matchText"))
+        assertEquals("", apkItem.getAsJsonObject("properties").getAsJsonObject("matchText").get("default").asString)
+        val apkEdits = JsonParser().parse("[{\"mode\":\"write_target\",\"writeText\":\"hello\"}]").asJsonArray
+        assertEquals("hello", ToolkitTextEdits.apply("old", apkEdits))
+
+        val temp = Files.createTempDirectory("mcp-write-target").toFile()
+        try {
+            val toolkit = McpFileToolkit(temp)
+            val fileEdit = toolkit.definitions().first { it.asJsonObject.get("name").asString == "file_edit_text" }
+                .asJsonObject.getAsJsonObject("inputSchema")
+            val fileItem = fileEdit.getAsJsonObject("properties").getAsJsonObject("edits").getAsJsonObject("items")
+            assertFalse(fileItem.getAsJsonArray("required").map { it.asString }.contains("matchText"))
+            assertEquals("", fileItem.getAsJsonObject("properties").getAsJsonObject("matchText").get("default").asString)
+            val result = toolkit.call("file_edit_text", ToolkitIo.json(
+                "path" to "new.txt", "targetVersion" to "missing", "encoding" to "utf-8",
+                "edits" to listOf(ToolkitIo.json("mode" to "write_target", "writeText" to "hello")),
+                "organize" to false,
+            ))
+            assertEquals(true, result.get("ok").asBoolean)
+        } finally {
+            temp.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun documentedExamplesMatchToolSchemas() {
+        val schemas = linkedMapOf<String, JsonObject>()
+        val apkSchemas = JsonParser().parse(File(schemaAssets, "toolkit-apk-schemas.json").readText()).asJsonObject
+        for ((name, value) in apkSchemas.entrySet()) if (value.isJsonObject) schemas[name] = value.asJsonObject
+        val temp = Files.createTempDirectory("mcp-schema-examples").toFile()
+        try {
+            for (definitions in listOf(McpFileToolkit(temp).definitions(), McpZipToolkit(temp).definitions(), ToolkitReverseTools.definitions())) {
+                for (definition in definitions) {
+                    val tool = definition.asJsonObject
+                    val name = tool.get("name")?.asString ?: continue
+                    tool.getAsJsonObject("inputSchema")?.let { schemas[name] = it }
+                }
+            }
+        } finally {
+            temp.deleteRecursively()
+        }
+        val docs = listOf("AIjs-MCP-Guide.md", "AIjs-MCP-Playbook.md", "AIjs-Reverse-Guide.md")
+        val problems = mutableListOf<String>()
+        var validated = 0
+        for (doc in docs) {
+            val file = File(schemaAssets, doc)
+            if (!file.isFile) continue
+            file.readLines().forEachIndexed { index, line ->
+                val example = parseExample(line.trim()) ?: return@forEachIndexed
+                val schema = schemas[example.first] ?: return@forEachIndexed
+                validateExample(schema, example.second, doc + ":" + (index + 1) + " " + example.first, problems)
+                validated++
+            }
+        }
+        assertTrue("至少应校验到文档示例", validated > 0)
+        assertTrue("文档工具示例与 inputSchema 不符（漏 required / 多未知字段）：\n" + problems.distinct().joinToString("\n"),
+            problems.isEmpty())
+    }
+
+    /** 提取 {"name":...,"arguments":...} / JSON-RPC / {"tool":...,"args":...} 三类单行示例。 */
+    private fun parseExample(line: String): Pair<String, JsonObject>? {
+        if (!line.startsWith("{") || !line.endsWith("}")) return null
+        val obj = runCatching { JsonParser().parse(line).asJsonObject }.getOrNull() ?: return null
+        obj.get("name")?.takeIf { it.isJsonPrimitive }?.let { name ->
+            obj.getAsJsonObject("arguments")?.let { return name.asString to it }
+        }
+        obj.getAsJsonObject("params")?.let { params ->
+            params.get("name")?.takeIf { it.isJsonPrimitive }?.let { name ->
+                params.getAsJsonObject("arguments")?.let { return name.asString to it }
+            }
+        }
+        obj.get("tool")?.takeIf { it.isJsonPrimitive }?.let { tool ->
+            obj.getAsJsonObject("args")?.let { return tool.asString to it }
+        }
+        return null
+    }
+
+    private fun validateExample(schema: JsonObject, value: JsonElement, path: String, problems: MutableList<String>) {
+        if (value.isJsonArray) {
+            val items = schema.getAsJsonObject("items")
+            if (items != null) value.asJsonArray.forEachIndexed { index, item ->
+                validateExample(items, item, path + "[" + index + "]", problems)
+            }
+            return
+        }
+        if (!value.isJsonObject) return
+        val args = value.asJsonObject
+        val objectSchema = when {
+            schema.get("type")?.takeIf { it.isJsonPrimitive }?.asString == "object" -> schema
+            schema.has("anyOf") -> schema.getAsJsonArray("anyOf").map { it.asJsonObject }.firstOrNull { branch ->
+                val required = branch.getAsJsonArray("required")?.map { it.asString } ?: emptyList()
+                required.all { it in args.keySet() } &&
+                    (branch.get("additionalProperties")?.takeIf { it.isJsonPrimitive }?.asBoolean != false ||
+                        args.keySet().all { it in (branch.getAsJsonObject("properties")?.keySet() ?: emptySet()) })
+            }
+            else -> null
+        } ?: return
+        val properties = objectSchema.getAsJsonObject("properties") ?: return
+        for (required in objectSchema.getAsJsonArray("required") ?: return) {
+            val name = required.asString
+            if (!args.has(name)) problems += path + " 缺少 required 字段 " + name
+        }
+        if (objectSchema.get("additionalProperties")?.takeIf { it.isJsonPrimitive }?.asBoolean == false) {
+            for (name in args.keySet()) if (!properties.has(name)) problems += path + " 含未知字段 " + name
+        }
+        for ((name, child) in args.entrySet()) {
+            properties.getAsJsonObject(name)?.let { validateExample(it, child, path + "." + name, problems) }
+        }
     }
 
     private fun collectRequiredDefaultProblems(schema: JsonObject, path: String, problems: MutableList<String>) {

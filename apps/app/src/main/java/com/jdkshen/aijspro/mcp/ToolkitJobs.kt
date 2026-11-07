@@ -109,9 +109,20 @@ internal class ToolkitJobs internal constructor(
         require(operation in OPERATIONS) { "此操作不支持后台任务：" + operation }
         val active = jobs.values.count { it.finished == 0L }
         if (active >= maxActive) {
+            val queueDetails = ToolkitIo.json(
+                "active" to active,
+                "maxActive" to maxActive,
+                "readOnlyFastPath" to ToolkitReverseTools.readOnlyFastTools.toList(),
+                "nextActions" to listOf(
+                    ToolkitIo.json("tool" to "apk_job_list", "hint" to "查看 QUEUED/RUNNING 任务与 operation/locator"),
+                    ToolkitIo.json("tool" to "apk_job_status", "hint" to "等现有任务到终态后再提交"),
+                    ToolkitIo.json("tool" to "apk_job_cancel", "hint" to "取消不再需要的重分析任务"),
+                ),
+            )
             throw ToolkitException(
                 "JOB_QUEUE_FULL",
-                "最多排队 " + maxActive + " 个 APK 任务；请先 apk_job_list/apk_job_result 读取或 apk_job_cancel 取消现有任务",
+                "最多排队 " + maxActive + " 个 APK 任务；只读状态工具（frida_status/frida_processes）已走不占槽快路径；" +
+                    "请先 apk_job_list 查看谁在跑、等终态或 apk_job_cancel 取消不需要的任务。details=" + queueDetails,
                 "operation",
             )
         }
@@ -195,7 +206,7 @@ internal class ToolkitJobs internal constructor(
             "workerThreads" to WORKER_THREADS,
             "concurrencyModel" to "serialized-per-workspace",
             "maxActiveMeaning" to "maxActive 是允许同时排队/登记的任务数（QUEUED+RUNNING），不是实际并行执行路数；同一 workspace 的任务由 McpApkToolkit.call 的 workspace 锁串行，因此 effectiveConcurrency=1，workerThreads=2 只是线程池上限。",
-            "maxActiveNote" to "maxActive=4 只表示最多 4 个任务可同时登记/排队，不代表 4 个任务并行跑；同 workspace 实际串行，effectiveConcurrency=1。",
+            "maxActiveNote" to "maxActive=" + maxActive + " 只表示最多 " + maxActive + " 个任务可同时登记/排队，不代表 " + maxActive + " 个任务并行跑；同 workspace 实际串行，effectiveConcurrency=1；frida_status/frida_processes 等只读工具不占这个槽。",
             "retention" to retentionJson(),
             "retentionNote" to retentionNote(),
             "service" to serviceJson(),
@@ -1166,7 +1177,11 @@ internal class ToolkitJobs internal constructor(
     companion object {
         /** timeoutSeconds 未提供时的默认值（与历史行为一致；上界统一由 McpLimits.MAX_TIMEOUT_SECONDS 控制）。 */
         const val DEFAULT_JOB_TIMEOUT_SECONDS = 300
-        const val DEFAULT_MAX_ACTIVE = 4
+        /** 原 4 个槽在四个重分析后会把 frida_status/frida_processes 这类状态工具也挤成 JOB_QUEUE_FULL；
+         * 只读状态工具现已走不占槽快路径，剩余槽位给真正需要后台执行的重任务。
+         * 上限取 8（2× 原值）：workerThreads=2、同 workspace 仍串行（effectiveConcurrency=1），
+         * 8 只增加“排队/登记”容量，不增加实际并行；结果缓存另有 24MiB/条与 6h/64 条保留约束。 */
+        const val DEFAULT_MAX_ACTIVE = 8
         const val DEFAULT_RETENTION_WINDOW_MILLIS = 6L * 60L * 60L * 1000L
         const val DEFAULT_MAX_RETAINED_FINISHED = 64
         const val MAX_TOMBSTONES = 256

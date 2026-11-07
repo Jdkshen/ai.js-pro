@@ -775,8 +775,11 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
         val packageRaw = optionalString(args, "packageFilter")
         val prefix = prefixRaw?.let { typePrefix(it) }
         val packageType = packageRaw?.let { typePrefix(it) }
+        // McpApkToolkit 内部注入 _scope/_revision：游标只对同 workspace/session、同 revision、同过滤条件有效。
+        val scope = optionalString(args, "_scope").orEmpty()
+        val scopeRevision = optionalString(args, "_revision").orEmpty()
         val filter = "classes|" + (prefix ?: "") + "|" + (packageType ?: "") + "|" + (dexEntry ?: "") + "|" +
-            entries.joinToString(",") { it.name }
+            entries.joinToString(",") { it.name } + "|" + scope + "|" + scopeRevision
         val offset = cursorOffset(args, "classes", filter)
         val limit = args.tInt("limit", 200, 1, 2000)
         val all = ArrayList<JsonObject>()
@@ -811,6 +814,9 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
             "nextCursor" to next,
             "hasMore" to (next != null),
             "truncated" to (next != null),
+            "cursorTool" to "apk_dex_list_classes",
+            "nextCursorHint" to "把 nextCursor 原样传给 apk_dex_list_classes 的 cursor 字段；这是同工具游标，不能用于 apk_continue。",
+            "cursorScope" to "workspace/session/revision/filter",
             "dexEntries" to entries.map { it.name },
             "filters" to ToolkitIo.json("prefix" to prefixRaw, "packageFilter" to packageRaw, "dexEntry" to dexEntry),
         )
@@ -825,8 +831,10 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
         val prefixRaw = optionalString(args, "prefix")
         val owner = ownerRaw?.let { ownerMatcher(it) }
         val prefix = prefixRaw?.let { typePrefix(it) }
+        val scope = optionalString(args, "_scope").orEmpty()
+        val scopeRevision = optionalString(args, "_revision").orEmpty()
         val filter = "methods|" + (ownerRaw ?: "") + "|" + (prefix ?: "") + "|" + (dexEntry ?: "") + "|" +
-            entries.joinToString(",") { it.name }
+            entries.joinToString(",") { it.name } + "|" + scope + "|" + scopeRevision
         val limit = args.tInt("limit", 200, 1, 5000)
         val offset = cursorOffset(args, "methods", filter)
         val all = ArrayList<JsonObject>()
@@ -861,6 +869,9 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
             "nextCursor" to next,
             "hasMore" to (next != null),
             "truncated" to (next != null),
+            "cursorTool" to "apk_dex_list_methods",
+            "nextCursorHint" to "把 nextCursor 原样传给 apk_dex_list_methods 的 cursor 字段；这是同工具游标，不能用于 apk_continue。",
+            "cursorScope" to "workspace/session/revision/filter",
             "dexEntries" to entries.map { it.name },
             "filters" to ToolkitIo.json("owner" to ownerRaw, "prefix" to prefixRaw, "dexEntry" to dexEntry),
         )
@@ -869,12 +880,14 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
     private fun cursorOffset(args: JsonObject, kind: String, filter: String): Int {
         val cursor = optionalString(args, "cursor") ?: return 0
         val parts = cursor.split(':')
+        val tool = if (kind == "classes") "apk_dex_list_classes" else "apk_dex_list_methods"
         if (parts.size != 4 || parts[0] != "dxi1" || parts[1] != kind) {
-            throw ToolkitException("INVALID_CURSOR", "分页 cursor 无效：" + cursor + "。nextActions: 不传 cursor 重新查询。", "cursor")
+            throw ToolkitException("INVALID_CURSOR", "分页 cursor 无效：" + cursor + "。该游标只属于 " + tool +
+                "（同工具、同过滤条件、同 workspace/session/revision）；请不带 cursor 重新查询。nextActions: 不传 cursor 重新查询。", "cursor")
         }
         val expected = cursorHash(filter)
         if (parts[3] != expected) {
-            throw ToolkitException("INVALID_CURSOR", "分页 cursor 与当前过滤条件不匹配。nextActions: 不传 cursor 重新查询。", "cursor")
+            throw ToolkitException("INVALID_CURSOR", "分页 cursor 与当前过滤条件不匹配：游标只对产生它的工具（同过滤条件、同 workspace/session/revision）有效；请不带 cursor 重新查询。nextActions: 不传 cursor 重新查询。", "cursor")
         }
         val offset = parts[2].toIntOrNull()
         if (offset == null || offset < 0) {
@@ -1024,7 +1037,10 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
                 "确认 descriptor 形状为 Lpkg/IFoo;（也接受 pkg.IFoo）",
             )
             "DEX_ENTRY_NOT_FOUND" -> listOf("用 apk_dex_list_classes 查 dexEntry 后重试")
-            "INVALID_CURSOR" -> listOf("不带 cursor 重新查询，按返回的 nextCursor 顺序翻页")
+            "INVALID_CURSOR" -> listOf(
+                "不带 cursor 重新查询，按返回的 nextCursor 顺序翻页",
+                "apk_dex_list_classes/list_methods 的 nextCursor 是原工具 cursor，不能传给 apk_continue；反之 apk_continue 的 nextCursor 也不能回传这两个工具",
+            )
             "NOT_AN_INTERFACE" -> listOf("用 apk_dex_hierarchy 确认类类型；只对 Binder/AIDL interface 推导事务号")
             "DEX_CONTAINER_READ_FAILED", "DEX_NOT_FOUND" -> listOf("用 apk_workspace_open 打开 APK，或传操作根内 .dex/.apk")
             else -> listOf("减小查询范围或检查 descriptor/owner 参数后重试")

@@ -199,10 +199,10 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
                         "write_target", "replace_match", "insert_before_match", "insert_after_match"
                     ),
                 ),
-                "matchText" to stringField("精确匹配文本；write_target 时必须为空。"),
+                "matchText" to stringField("精确匹配文本；write_target 时可省略/必须为空串，其它模式必填且必须唯一匹配。", default = ""),
                 "writeText" to stringField("写入文本；不自动添加换行，可为空。"),
             ),
-            listOf("mode", "matchText", "writeText"),
+            listOf("mode", "writeText"),
         )
 
         private fun patchItemSchema(): JsonObject = objectField(
@@ -2027,7 +2027,7 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
             if (mode !in setOf("write_target", "replace_match", "insert_before_match", "insert_after_match")) {
                 throw IllegalArgumentException("不支持的编辑模式：$mode")
             }
-            val matchText = item.objString("matchText")
+            val matchText = if (mode == "write_target") item.optionalString("matchText", "") else item.objString("matchText")
             val writeText = item.objString("writeText")
             if (mode == "write_target" && matchText.isNotEmpty()) {
                 throw IllegalArgumentException("write_target 的 matchText 必须为空")

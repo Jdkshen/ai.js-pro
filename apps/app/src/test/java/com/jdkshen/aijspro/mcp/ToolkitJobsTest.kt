@@ -243,9 +243,14 @@ class ToolkitJobsTest {
             "operation" to "apk_search", "arguments" to ToolkitIo.json(), "timeoutSeconds" to 10,
         ))
         assertTrue(started.await(3, TimeUnit.SECONDS))
-        assertEquals("JOB_QUEUE_FULL", codeOf(runCatching {
+        val queueError = runCatching {
             jobs.start(obj("operation" to "apk_search", "arguments" to ToolkitIo.json(), "timeoutSeconds" to 10))
-        }.exceptionOrNull()))
+        }.exceptionOrNull()
+        assertEquals("JOB_QUEUE_FULL", codeOf(queueError))
+        val queueMessage = queueError?.message.orEmpty()
+        assertTrue(queueMessage, queueMessage.contains("apk_job_list"))
+        assertTrue(queueMessage, queueMessage.contains("details="))
+        assertTrue(queueMessage, queueMessage.contains("nextActions"))
         release.countDown()
         waitFinal(jobs, first.get("jobId").asString)
     }

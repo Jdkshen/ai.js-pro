@@ -34,6 +34,19 @@ class ToolkitReverseContractTest {
         rejects{ToolkitReverseTools.validate("native_emulate",args("""{"architecture":"arm64","codeHex":"00","instructionLimit":100001}"""))}
         rejects{ToolkitReverseTools.validate("native_analyze",args("""{"path":"a.so","command":"!ls"}"""))}
     }
+    @Test fun readOnlyStatusToolsUseFastPathAndDoNotConsumeJobSlots(){
+        assertEquals(setOf("frida_status","frida_processes"),ToolkitReverseTools.readOnlyFastTools)
+        for(name in ToolkitReverseTools.readOnlyFastTools){
+            assertTrue(name in ToolkitReverseTools.names)
+            assertFalse(name in ToolkitReverseTools.operations)
+            assertFalse(name in ToolkitJobs.OPERATIONS)
+            val definition=ToolkitReverseTools.definitions().map{it.asJsonObject}.single{it.tString("name")==name}
+            assertFalse(definition.getAsJsonObject("_meta").getAsJsonObject("aijs").tBool("backgroundDefault"))
+            assertTrue("不占" in ToolkitReverseTools.descriptions.getValue(name))
+        }
+        assertTrue(ToolkitJobs.DEFAULT_MAX_ACTIVE >= 6)
+    }
+
     @Test fun everyNewToolHasTypedSchemaDependenciesAndBackgroundContract(){
         val definitions=ToolkitReverseTools.definitions().map{it.asJsonObject}
         assertEquals(43,definitions.size)

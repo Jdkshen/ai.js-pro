@@ -60,6 +60,31 @@ internal object McpToolCategories {
         listOf("list_samples", "read_sample", "learn_autojs_skill", "search_api_docs", "read_api_doc").forEach { put(it, "asset") }
     }
 
+    /**
+     * `tier=core` 的精简工具集：覆盖"起手就要用"的高频工具（读状态/跑脚本/读写文件/终端/APK 会话与作业/截图/项目目录）。
+     * 这是**主观白名单**（不是自动推导），目的是让客户端在 token 紧张时只拉一小撮工具；完整集仍可 `groups` 或不过滤。
+     */
+    val coreToolNames: Set<String> = setOf(
+        "get_status", "learn_autojs_skill", "reverse_guide",
+        "list_scripts", "read_script", "search_scripts", "run_script", "check_syntax", "stop_script",
+        "file_list", "file_read_text", "file_write_bytes", "file_edit_text", "file_move", "file_stat",
+        "project_folder", "capture_screen",
+        "terminal_exec", "terminal_read", "get_build_tools",
+        "apk_workspace_open", "apk_session_create", "apk_search",
+        "apk_decompile_class", "apk_decompile_method",
+        "apk_job_status", "apk_job_result", "apk_job_list", "apk_job_export",
+    )
+
+    /** 组 id 列表（按 order 排序），供客户端挑选过滤。 */
+    fun groupIds(): List<String> = all.sortedBy { it.order }.map { it.id }
+
+    /** 名称 → 组 id 的只读视图（过滤用）。 */
+    fun groupsOf(toolNames: Collection<String>): Map<String, List<String>> {
+        val result = LinkedHashMap<String, MutableList<String>>()
+        toolNames.forEach { name -> result.getOrPut(categoryFor(name).id) { ArrayList() }.add(name) }
+        return result
+    }
+
     fun categoryFor(toolName: String): McpToolCategory =
         byId[toolToCategory[toolName]] ?: McpToolCategory("other", "其它", "未分类", 99)
 

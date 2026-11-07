@@ -238,7 +238,8 @@ internal class McpApkToolkit(
     private val workspaceLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
     @Volatile private var currentWorkspace: String? = null
     private data class Page(val workspace: String, val session: String, val revision: String, val items: List<JsonObject>, var offset: Int,
-                            val kind: String, val metadata: JsonObject, val truncated: Boolean, val limitMax: Int = 200, val at: Long = System.currentTimeMillis())
+                            val kind: String, val metadata: JsonObject, val truncated: Boolean, val limitMax: Int = 200,
+                            val producer: String = "apk_page", val at: Long = System.currentTimeMillis())
     private val gson = Gson()
     /** #5：locator 前缀清单与跨 DEX uniqueLocator 的统一提示；错误和 inputSchema 共用。 */
     private val locatorHint = "locator 前缀：zip_entry:（如 zip_entry:assets/project/main.js）、" +
@@ -325,7 +326,7 @@ internal class McpApkToolkit(
                     "apk_session_create" -> ToolkitIo.ok(createSession(workspace))
                     "apk_session_diff" -> {
                         val required = requiredSession(session); val beforeRevision = revision(workspace, required)
-                        val result = page(workspace, required, ToolkitApkSessions.diff(snapshot(workspace), sessionDir(workspace, required)), args.tInt("limit", 50, 1, 200))
+                        val result = page(workspace, required, ToolkitApkSessions.diff(snapshot(workspace), sessionDir(workspace, required)), args.tInt("limit", 50, 1, 200), producer = "apk_session_diff")
                         result.getAsJsonObject("data").withRevision(workspace, required, beforeRevision)
                         result
                     }
@@ -333,7 +334,7 @@ internal class McpApkToolkit(
                     "apk_session_checkpoints" -> ToolkitIo.ok(ToolkitApkSessions.checkpoints(sessionDir(workspace,requiredSession(session))))
                     "apk_session_rollback" -> ToolkitIo.ok(ToolkitApkSessions.rollback(sessionDir(workspace,requiredSession(session)),args))
                     "artifact_export" -> ToolkitIo.ok(exportArtifact(workspace,session,args))
-                    "apk_set_members" -> page(workspace,session,setMembers(workspace),args.tInt("limit",50,1,200))
+                    "apk_set_members" -> page(workspace,session,setMembers(workspace),args.tInt("limit",50,1,200), producer = "apk_set_members")
                     "apk_set_open_member" -> ToolkitIo.ok(openSetMember(workspace,args))
                     "apk_decompile_class", "apk_decompile_method" -> ToolkitIo.ok(decompile(workspace,session,args))
                     "apk_list" -> list(workspace, session, args)
@@ -348,7 +349,7 @@ internal class McpApkToolkit(
                     "apk_read_bytes" -> ToolkitIo.ok(readBytes(workspace, session, args))
                     "apk_dex_read_class_outline" -> {
                         val (entry, dex) = dexFor(workspace, session, args.tString("locator"))
-                        page(workspace, session, dex.outline(args.tString("locator")).map { it.apply { addProperty("dexEntry", entry) } }, args.tInt("limit", 200, 1, 1000), limitMax = 1000)
+                        page(workspace, session, dex.outline(args.tString("locator")).map { it.apply { addProperty("dexEntry", entry) } }, args.tInt("limit", 200, 1, 1000), limitMax = 1000, producer = "apk_dex_read_class_outline")
                     }
                     "apk_dex_search_members", "apk_dex_call_graph", "apk_dex_hierarchy" ->
                         ToolkitIo.ok(ToolkitDexNavigation(dexes(workspace,session).toList()).call(name,args))
@@ -356,8 +357,8 @@ internal class McpApkToolkit(
                     "apk_dex_interface_table", "apk_dex_list_classes", "apk_dex_list_methods" ->
                         ToolkitIo.ok(dexInterfaceValue(workspace, session) { dex -> when (name) {
                             "apk_dex_interface_table" -> dex.interfaceTable(args)
-                            "apk_dex_list_classes" -> dex.listClasses(args)
-                            else -> dex.listMethods(args)
+                            "apk_dex_list_classes" -> dex.listClasses(scopedDexPagingArgs(workspace, session, args))
+                            else -> dex.listMethods(scopedDexPagingArgs(workspace, session, args))
                         } })
                     "apk_dex_xref" -> {
                         val locator = args.tString("locator"); val limit = args.tInt("limit", 50, 1, 200)
@@ -367,7 +368,7 @@ internal class McpApkToolkit(
                             if (items.size >= 10000) break
                             items.addAll(dex.references(locator, args.tString("methodResolution", if(locator.startsWith("dex_method:")) "dispatch" else "not_applicable"), 10001 - items.size, universe).map { it.apply { addProperty("dexEntry", entry) } })
                         }
-                        val envelope = page(workspace, session, items, limit, items.size >= 10000)
+                        val envelope = page(workspace, session, items, limit, items.size >= 10000, producer = "apk_dex_xref")
                         // 可选：合并「接口实现者 / 方法重写者」（includeImplementations/includeOverrides）。
                         if (args.tBool("includeImplementations") || args.tBool("includeOverrides")) {
                             // includeOverrides 只对 dex_method 定位符有意义：给了 class 定位符时跳过并说明，
@@ -405,7 +406,8 @@ internal class McpApkToolkit(
                             item
                         }
                         page(workspace, session, items, args.tInt("limit", 100, 1, 500),
-                            metadata = ToolkitIo.json("demangleAvailable" to ToolkitNative.demangleAvailable), limitMax = 500)
+                            metadata = ToolkitIo.json("demangleAvailable" to ToolkitNative.demangleAvailable), limitMax = 500,
+                            producer = "apk_native_list_items")
                     }
                     "apk_native_map_address" -> ToolkitIo.ok(elf(workspace, session, args).map(args))
                     "apk_native_disassemble" -> {
@@ -417,7 +419,7 @@ internal class McpApkToolkit(
                         val result = elf(workspace, session, args).xref(args, resultLimit = 10001)
                         val items = result.remove("items").asJsonArray.map { it.asJsonObject }
                         val truncated = result.remove("truncated").asBoolean || items.size > 10000
-                        page(workspace, session, items.take(10000), args.tInt("limit", 50, 1, 200), truncated, kind = "refs", metadata = result)
+                        page(workspace, session, items.take(10000), args.tInt("limit", 50, 1, 200), truncated, kind = "refs", metadata = result, producer = "apk_native_xref")
                     }
                     "apk_native_analyze_control_flow" -> ToolkitIo.ok(elf(workspace, session, args).cfg(args))
                     "apk_edit_text" -> ToolkitIo.ok(editText(workspace, requiredSession(session), args))
@@ -473,10 +475,14 @@ internal class McpApkToolkit(
         "apk_workspace_inventory" -> "解释 APK 工作区配额占用：列出保存/临时/过期/dangling 工作区、实际字节、owner/clientId/sessionId、活动引用、orphanDirs 与 danglingEntries；配额 16，统计范围见 quotaScope。"
         "apk_workspace_gc" -> "受控清理过期临时 APK 工作区：默认 dryRun=true 只预览；支持 protectedIds/minAgeMinutes/owner/clientId 过滤，保存/活动引用/编辑会话/未知所有权默认全部保护；orphan/dangling 永不自动删除。"
         "apk_session_release" -> "释放 APK 工作区的编辑会话（workspaceId 或 all=true）；只删除 sessions/ 下会话，不删除工作区/快照；返回 releasedSessions/releasedBytes/remainingSessions，重复调用幂等。"
+        "apk_read_text" -> "读取文本：普通条目；DEX 类/方法（smali）；axml: 或 zip_entry: 的二进制 XML/Manifest 会解码成可读 XML。AXML 读取会返回 text/targetVersion，下一步用同一个 axml: locator 调 apk_edit_text。"
+        "apk_edit_text" -> "按 targetVersion 原子编辑会话文本：普通条目、DEX 类/方法 smali、axml: 或 zip_entry: 的二进制 XML/Manifest（内部 ToolkitResources.encodeXml，拒绝 DOCTYPE/ENTITY）；AXML 先 apk_read_text(locator=axml:<entry>) 再传完整 XML 到 write_target。"
+        "apk_patch_bytes" -> "等长原始字节补丁，只适用于普通条目；classes*.dex、resources.arsc、二进制 AXML/AndroidManifest.xml 会被拒绝。改 AXML 用 apk_read_text + apk_edit_text（axml: locator），或 apk_decode_project → file_edit_text → apk_build_project。"
+        "apk_resource_read", "apk_resource_edit", "apk_resource_add" -> "只操作 resources.arsc 的资源表/资源 XML，不包含 AXML/AndroidManifest.xml；AXML 请用 apk_read_text/apk_edit_text 的 axml: locator。"
         "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。"
         "apk_native_disassemble", "apk_native_xref", "apk_native_analyze_control_flow" -> "有界直接指令分析：原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），否则回退 AArch64 常见指令子集；未知指令明确标出，间接引用与完整数据流不作成功保证。"
         "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64、ARM/Thumb、x86/x86-64 指令，expectedHex 防旧数据。常见指令可直接处理，一般汇编可通过可选 C/C++ 组件完成。"
-        "apk_read_text", "apk_read_bytes", "apk_edit_text", "apk_delete_target", "apk_patch_bytes", "apk_copy_entry" ->
+        "apk_read_bytes", "apk_delete_target", "apk_copy_entry" ->
             "读取/编辑 APK 条目、DEX 或资源；$locatorHint"
         else -> "AI.js Pro 本地 APK 工具：${name.removePrefix("apk_").replace('_', ' ')}；使用 tools/list 参数定义，locator 来自列表/搜索，不依赖 MT。"
     }
@@ -908,7 +914,7 @@ internal class McpApkToolkit(
                 else if (file.isFile && file.name.endsWith(".apk", true) && relative.startsWith(prefix)) items.add(ToolkitIo.json("path" to relative, "name" to file.name, "size" to file.length()))
             }
         }; scan(root.canonicalFile, 0)
-        return page("", "", items, args.tInt("limit", 50, 1, 200), truncated)
+        return page("", "", items, args.tInt("limit", 50, 1, 200), truncated, producer = "apk_list_available_apks")
     }
     private fun createSession(workspace: String): JsonObject {
         val parent = File(directory(workspace), "sessions"); parent.mkdirs()
@@ -997,6 +1003,12 @@ internal class McpApkToolkit(
      * dex 接口族调用包装：把 {@link ToolkitDexInterface.nextActionsFor} 的可执行建议
      * 以 `details={...}` 附加到消息里，由 McpToolkitProvider 提升为 error.nextActions（MCP 更新建议 P0-1 的一级字段）。
      */
+    /** 给 dxi1 游标补内部作用域/修订，让同工具 cursor 在 workspace/session 或 revision 变化后失效。 */
+    private fun scopedDexPagingArgs(workspace: String, session: String, args: JsonObject): JsonObject =
+        args.deepCopy().apply {
+            addProperty("_scope", workspace + "/" + session)
+            addProperty("_revision", revision(workspace, session))
+        }
     private inline fun dexInterfaceValue(workspace: String, session: String,
                                          block: (ToolkitDexInterface) -> JsonObject): JsonObject = try {
         block(ToolkitDexInterface(dexes(workspace, session).toList()))
@@ -1105,27 +1117,29 @@ internal class McpApkToolkit(
                     resources.locator(it).removePrefix("resource:").startsWith(prefix.removePrefix("resource:"), ignoreCase = true)
             }.map { resources.item(it) } }
             else -> throw IllegalArgumentException("view 无效")
-        }; return page(workspace, session, items, args.tInt("limit", 200, 1, 1000), limitMax = 1000)
+        }; return page(workspace, session, items, args.tInt("limit", 200, 1, 1000), limitMax = 1000, producer = "apk_list")
     }
     private fun page(workspace: String, session: String, items: List<JsonObject>, limit: Int, truncated: Boolean = false,
                      kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200,
-                     extraActions: JsonArray = JsonArray()): JsonObject {
+                     extraActions: JsonArray = JsonArray(), producer: String = "apk_page"): JsonObject {
         val key = if (items.size > limit) ToolkitIo.fresh() else ""
         if (key.isNotEmpty()) {
             require(items.size <= 80000) { "结果过大，请缩小 prefix 或搜索范围" }
             while (pages.isNotEmpty() && (pages.size >= 16 || pages.values.sumOf { it.items.size } + items.size > 80000)) pages.remove(pages.keys.first())
-            pages[key] = Page(workspace, session, revision(workspace, session), items, limit, kind, metadata, truncated, limitMax)
+            pages[key] = Page(workspace, session, revision(workspace, session), items, limit, kind, metadata, truncated, limitMax, producer)
         }
-        return paged(workspace, session, items.take(limit), key, items.size, truncated, kind, metadata, limitMax, extraActions)
+        return paged(workspace, session, items.take(limit), key, items.size, truncated, kind, metadata, limitMax, extraActions, producer)
     }
     private fun paged(workspace: String, session: String, items: List<JsonObject>, key: String, total: Int, truncated: Boolean,
                       kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200,
-                      extraActions: JsonArray = JsonArray()): JsonObject {
+                      extraActions: JsonArray = JsonArray(), producer: String = "apk_page"): JsonObject {
         val actions = JsonArray()
         if(key.isNotEmpty()) actions.add(action("apk_continue", ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "nextCursor" to key, "limit" to 200)))
         extraActions.forEach { actions.add(it) }
         val data = ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "items" to items,
             "nextCursor" to key, "hasMore" to key.isNotEmpty(), "total" to total, "truncated" to truncated,
+            "cursorTool" to producer,
+            "cursorSemantics" to "nextCursor 仅在 5 分钟内、同 workspaceId/editSessionId、同 revision 有效；APK 分页游标请用 apk_continue；apk_dex_list_classes/list_methods 的 nextCursor 属于原工具（回传 cursor），不能混用。",
             "pagination" to ToolkitIo.json("hasMore" to key.isNotEmpty(), "nextCursor" to key.takeIf { it.isNotEmpty() },
                 "returnedCount" to items.size, "limitMax" to limitMax, "totalAvailableCount" to if(truncated) null else total))
         if(kind == "search") data.add("hits", data.get("items"))
@@ -1134,12 +1148,47 @@ internal class McpApkToolkit(
         return ToolkitIo.ok(data, actions)
     }
     private fun continuePage(args: JsonObject): JsonObject {
-        val key = args.tString("nextCursor"); val page = pages[key] ?: error("分页游标不存在或已过期")
-        require(page.workspace == args.tString("workspaceId", "") && page.session == args.tString("editSessionId", "")) { "分页游标不属于此工作区或会话" }
-        require(System.currentTimeMillis() - page.at < 300000 && page.revision == revision(page.workspace, page.session)) { "内容已变更或游标已过期，请重新查询" }
+        val key = args.tString("nextCursor").trim()
+        if (key.isEmpty()) throw ToolkitException(
+            "INVALID_CURSOR", "nextCursor 不能为空：请传产生它的工具返回的 nextCursor；不要自己构造。", "nextCursor",
+        )
+        val page = pages[key] ?: throw ToolkitException("INVALID_CURSOR", cursorOwnerMessage(key), "nextCursor")
+        if (page.workspace != args.tString("workspaceId", "") || page.session != args.tString("editSessionId", "")) {
+            throw ToolkitException(
+                "INVALID_CURSOR",
+                "分页游标属于 " + page.producer + "，不属于当前 workspaceId/editSessionId；请用 " + page.producer +
+                    " 在原来的工作区/会话重新查询，再用它返回的 nextCursor 调 apk_continue。",
+                "nextCursor",
+            )
+        }
+        if (System.currentTimeMillis() - page.at >= 300000 || page.revision != revision(page.workspace, page.session)) {
+            throw ToolkitException(
+                "INVALID_CURSOR",
+                "分页游标属于 " + page.producer + "，但工作区内容已变更或游标超过 5 分钟；请用 " + page.producer +
+                    " 按原参数重新查询第一页，不要复用旧 nextCursor。",
+                "nextCursor",
+            )
+        }
         val next = minOf(page.offset + args.tInt("limit", 200, 1, page.limitMax), page.items.size); val values = page.items.subList(page.offset, next)
         page.offset = next; if (next == page.items.size) pages.remove(key)
-        return paged(page.workspace, page.session, values, if(next < page.items.size) key else "", page.items.size, page.truncated, page.kind, page.metadata, page.limitMax)
+        return paged(page.workspace, page.session, values, if(next < page.items.size) key else "", page.items.size, page.truncated,
+            page.kind, page.metadata, page.limitMax, producer = page.producer)
+    }
+    /** 跨工具游标的最短可执行提示：能识别 dxi1/jobs1/scan1 前缀就点名归属，不能识别也说明边界。 */
+    private fun cursorOwnerMessage(key: String): String {
+        val owner = when {
+            key.startsWith("dxi1:classes:") -> "apk_dex_list_classes"
+            key.startsWith("dxi1:methods:") -> "apk_dex_list_methods"
+            key.startsWith("jobs1-") -> "apk_job_list"
+            key.startsWith("scan1-") -> "search_scripts / 扫描类工具"
+            else -> null
+        }
+        if (owner != null) {
+            return "该游标属于 " + owner + "，不能用于 apk_continue；请把 nextCursor 原样传给 " + owner +
+                " 的 cursor 字段（同工具、同过滤条件、同 workspace/session/revision 才有效）。"
+        }
+        return "分页游标不存在或已过期：APK 分页 nextCursor 只在 5 分钟内、同 workspaceId/editSessionId、同 revision 有效，" +
+            "且只能用于产生它的工具；apk_dex_list_classes/list_methods 的 nextCursor 请回传给原工具的 cursor，不能传给 apk_continue，反之亦然。"
     }
     private fun action(name: String, args: JsonObject) = ToolkitIo.json("tool" to name, "arguments" to args)
     private fun search(workspace: String, session: String, args: JsonObject): JsonObject {
@@ -1168,7 +1217,7 @@ internal class McpApkToolkit(
             }
         }
         return page(workspace, session, result.hits, args.tInt("limit", 50, 1, 200), result.partial, "search",
-            result.metadata, extraActions = diagnostics.nextActions)
+            result.metadata, extraActions = diagnostics.nextActions, producer = "apk_search")
     }
     private fun readResources(workspace: String, session: String, args: JsonObject): JsonObject {
         return ToolkitResourceReader(resourceTable(workspace, session)).read(args)
@@ -1311,7 +1360,7 @@ internal class McpApkToolkit(
                 }
             } else partial = true
         }
-        return page(workspace, session, items, args.tInt("limit", 50, 1, 200), partial)
+        return page(workspace, session, items, args.tInt("limit", 50, 1, 200), partial, producer = "apk_resource_xref")
     }
     private fun check(workspace: String, session: String, run: Boolean): JsonObject {
         val beforeRevision = revision(workspace, session)
