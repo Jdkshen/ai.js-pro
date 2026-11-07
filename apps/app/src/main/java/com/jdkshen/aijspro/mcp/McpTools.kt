@@ -124,7 +124,7 @@ internal class McpTools(private val context: Context, private val event: (String
             rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolError) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "工具调用失败", "TOOL_ERROR"))
+            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "工具调用失败", "TOOL_FAILED"))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolkitException) {
             // 必须先于 IllegalArgumentException 捕获（ToolkitException 是它的子类），否则 code 会被丢成纯文本。
@@ -455,7 +455,16 @@ internal class McpTools(private val context: Context, private val event: (String
         if(name=="reverse_plan")return toolJson(ToolkitIo.ok(reverseGuide.plan(args)))
         if (name in McpToolkitCatalog.names) {
             val result = McpToolkitBridge.call(context, root, name, args)
-            return toolJson(result).apply { if (result.get("ok")?.asBoolean == false) addProperty("isError", true) }
+            return toolJson(result).apply {
+                if (result.get("ok")?.asBoolean == false) {
+                    addProperty("isError", true)
+                    // `.4` 终检 minor：错误码要能不解析正文就取到；桥接结果的 code 在 payload 顶层或 error.code。
+                    val code = result.get("errorCode") ?: result.getAsJsonObject("error")?.get("code")
+                    code?.takeIf { it.isJsonPrimitive }?.asString?.let { addProperty("errorCode", it) }
+                    result.getAsJsonObject("error")?.get("argument")?.takeIf { it.isJsonPrimitive }?.asString
+                        ?.let { addProperty("argument", it) }
+                }
+            }
         }
         if (McpAutomationTransport.supports(name)) return McpAutomationTransport.call(context, name, args)
         return when (name) {
@@ -564,7 +573,12 @@ internal class McpTools(private val context: Context, private val event: (String
             "engine_api_diff" -> engineApiDiff()
             "stop_script" -> stopScript(args)
             "coordinate_convert" -> toolJson(McpCoordinateTools.call(context, args)).apply {
-                if (getAsJsonObject("structuredContent")?.get("ok")?.asBoolean == false) addProperty("isError", true)
+                val envelope = getAsJsonObject("structuredContent")
+                if (envelope?.get("ok")?.asBoolean == false) {
+                    addProperty("isError", true)
+                    envelope.getAsJsonObject("error")?.get("code")?.takeIf { it.isJsonPrimitive }?.asString
+                        ?.let { addProperty("errorCode", it) }
+                }
             }
             "check_syntax" -> {
                 val code = args.string("code")
@@ -1336,7 +1350,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private inline fun structuredCall(block: () -> JsonObject): JsonObject = try {
         block()
     } catch (failure: ToolError) {
-        toolFailure(failure.message ?: "工具调用失败", "TOOL_ERROR")
+        toolFailure(failure.message ?: "工具调用失败", "TOOL_FAILED")
     } catch (failure: IllegalStateException) {
         toolFailure(failure.message ?: "工作区状态冲突", "WORKSPACE_STATE_CONFLICT")
     } catch (failure: SecurityException) {

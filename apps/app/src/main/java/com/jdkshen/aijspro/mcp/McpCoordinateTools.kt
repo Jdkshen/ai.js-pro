@@ -76,12 +76,34 @@ internal object McpCoordinateTools {
     private fun prefs(context: Context): SharedPreferences =
         PreferenceManager.getDefaultSharedPreferences(context)
 
-    /** 已标定的仿射（没有就返回 null）。格式：scaleX,scaleY,offsetX,offsetY,points,at。 */
-    private fun stored(context: Context): McpCoordinateMath.Affine? {
+    /** 标定记录：仿射 + 它是为哪一对空间标的（老格式没有 from/to，按默认 window→screenshot 解释）。 */
+    private data class Calibration(
+        val from: String,
+        val to: String,
+        val affine: McpCoordinateMath.Affine,
+    )
+
+    /** `window,appdisplay,display,overlay,panel,screenshot` 之外的 from/to 一律拒绝（不再静默当成 panel）。 */
+    private val knownSpaces = setOf("window", "appdisplay", "display", "overlay", "panel", "screenshot")
+
+    private fun requireSpace(name: String, argument: String) {
+        require(name in knownSpaces) {
+            "$argument=\"$name\" 不是已知空间；可用：" + knownSpaces.sorted().joinToString("/")
+        }
+    }
+
+    /** 已标定的仿射（没有就返回 null）。格式：from,to,scaleX,scaleY,offsetX,offsetY[,points,at]；老格式只有 4 个数。 */
+    private fun stored(context: Context): Calibration? {
         val raw = prefs(context).getString(PREF_KEY, null) ?: return null
-        val parts = raw.split(",").mapNotNull { it.trim().toDoubleOrNull() }
-        if (parts.size < 4) return null
-        return McpCoordinateMath.Affine(parts[0], parts[1], parts[2], parts[3], "calibrated")
+        val fields = raw.split(",").map { it.trim() }
+        val numbers = fields.mapNotNull { it.toDoubleOrNull() }
+        if (numbers.size >= 6 && fields.size >= 6 && fields[0].toDoubleOrNull() == null && fields[1].toDoubleOrNull() == null) {
+            return Calibration(fields[0].lowercase(), fields[1].lowercase(),
+                McpCoordinateMath.Affine(numbers[0], numbers[1], numbers[2], numbers[3], "calibrated"))
+        }
+        if (numbers.size < 4) return null
+        return Calibration("window", "screenshot",
+            McpCoordinateMath.Affine(numbers[0], numbers[1], numbers[2], numbers[3], "calibrated"))
     }
 
     private fun state(context: Context, measureScreenshot: Boolean): JsonObject {
@@ -96,8 +118,11 @@ internal object McpCoordinateTools {
             add("spaces", spaces.toJson(measureScreenshot))
             addProperty("screenshotEqualsPanel", panel.width > 0 && spaces.screenshot?.width == panel.width)
             calibrated?.let {
-                add("affine", affineJson(it))
+                add("affine", affineJson(it.affine))
                 addProperty("affineSource", "calibrated")
+                add("calibration", JsonObject().apply {
+                    addProperty("from", it.from); addProperty("to", it.to)
+                })
             } ?: derived?.let {
                 add("affine", affineJson(it))
                 addProperty("affineSource", "derived_from_panel_vs_app")
@@ -125,8 +150,11 @@ internal object McpCoordinateTools {
         } else {
             McpCoordinateMath.fromOnePoint(w1[0], w1[1], s1[0], s1[1])
         }
+        val from = args.coordStringOr("from", "window").lowercase()
+        val to = args.coordStringOr("to", "screenshot").lowercase()
+        requireSpace(from, "from"); requireSpace(to, "to")
         prefs(context).edit().putString(PREF_KEY,
-            "${affine.scaleX},${affine.scaleY},${affine.offsetX},${affine.offsetY}").apply()
+            "$from,$to,${affine.scaleX},${affine.scaleY},${affine.offsetX},${affine.offsetY}").apply()
         return ToolkitIo.ok(JsonObject().apply {
             add("affine", affineJson(affine))
             addProperty("points", if (w2 != null && s2 != null) 2 else 1)
@@ -141,6 +169,7 @@ internal object McpCoordinateTools {
         val spaces = spaces(context)
         val affine = resolveAffine(context, from, to, spaces)
             ?: throw IllegalArgumentException("$from → $to 没有可用映射：请先 action=calibrate 传两组对应点")
+        val storedCalibration = stored(context)
         val point = args.coordIntArray("point")
         val rect = args.coordIntArray("rect")
         require(point != null || rect != null) { "convert 需要 point:[x,y] 或 rect:[l,t,r,b]" }
@@ -149,6 +178,11 @@ internal object McpCoordinateTools {
             addProperty("from", from); addProperty("to", to)
             add("affine", affineJson(affine))
             addProperty("affineSource", affine.source)
+            // 标定只为它自己那一对空间有效；这里如实说明本次用的是尺寸比例而不是标定。
+            if (storedCalibration != null && !(storedCalibration.from == from && storedCalibration.to == to)) {
+                addProperty("calibrationNote",
+                    "已有标定是 ${storedCalibration.from}→${storedCalibration.to}，与本次 $from→$to 不匹配，本次按屏幕尺寸比例换算；要精确请对 $from/$to 重新 calibrate")
+            }
             if (point != null) {
                 val (x, y) = affine.apply(point[0], point[1])
                 add("point", JsonArray().apply { add(McpCoordinateMath.round(x)); add(McpCoordinateMath.round(y)) })
@@ -166,8 +200,12 @@ internal object McpCoordinateTools {
     }
 
     private fun resolveAffine(context: Context, from: String, to: String, spaces: Spaces): McpCoordinateMath.Affine? {
+        requireSpace(from, "from"); requireSpace(to, "to")
         if (from == to) return McpCoordinateMath.Affine(1.0, 1.0, 0.0, 0.0, "identity")
-        stored(context)?.let { return it }
+        // 标定只对"它标的那一对"有效（`.4`：以前任何 from/to 都拿同一份标定，会静默给错映射）。
+        stored(context)?.let { calibration ->
+            if (calibration.from == from && calibration.to == to) return calibration.affine
+        }
         val windowLike = setOf("window", "appdisplay", "display", "overlay")
         val src = when (from) { in windowLike -> spaces.app; "panel" -> spaces.panel; "screenshot" -> spaces.screenshot ?: spaces.panel; else -> spaces.app }
         val dst = when (to) { in windowLike -> spaces.app; "panel" -> spaces.panel; "screenshot" -> spaces.screenshot ?: spaces.panel; else -> spaces.app }

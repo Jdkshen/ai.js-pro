@@ -64,7 +64,10 @@ class McpToolkitProvider : ContentProvider() {
                 }
                 details.getAsJsonArray("nextActions")?.forEach { actions.add(it) }
             }
-            ToolkitIo.json("ok" to false, "data" to null, "error" to error, "nextActions" to actions)
+            // 与主进程侧失败结果对齐：顶层也镜像 errorCode（`.4` 终检的 minor：错误码要能不解析正文就取到）。
+            ToolkitIo.json("ok" to false, "data" to null,
+                "errorCode" to error.get("code")?.takeIf { it.isJsonPrimitive }?.asString,
+                "error" to error, "nextActions" to actions)
         }
         val json = GsonBuilder().serializeNulls().disableHtmlEscaping().create()
         var serialized = json.toJson(payload)
