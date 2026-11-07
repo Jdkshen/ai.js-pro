@@ -129,7 +129,7 @@ internal class McpTools(private val context: Context, private val event: (String
         } catch (e: ToolkitException) {
             // 必须先于 IllegalArgumentException 捕获（ToolkitException 是它的子类），否则 code 会被丢成纯文本。
             event("$eventName · 失败 · ${e.code} · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "工具调用失败", true, errorCode = e.code, argument = e.argument))
+            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "工具调用失败", e.code, e.argument))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalArgumentException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
@@ -275,7 +275,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("workspace_read", "读取工作区文件", objSchema("workspaceId", "path", "offset", "maxBytes", required = arrayOf("workspaceId", "path"))))
             add(tool("workspace_write", "修改工作区，不会直接覆盖真实脚本；示例：{\"workspaceId\":\"...\",\"path\":\"main.js\",\"content\":\"...\"}", objSchema("workspaceId", "path", "content", required = arrayOf("workspaceId", "path", "content"))))
             add(tool("workspace_delete", "在工作区中标记删除文件", objSchema("workspaceId", "path", required = arrayOf("workspaceId", "path"))))
-            add(tool("workspace_diff", "查看工作区与创建时快照的 Diff", objSchema("workspaceId", required = arrayOf("workspaceId"))))
+            add(tool("workspace_diff", "查看工作区与创建时快照的 Diff。返回纯文本 unified diff（content[0].text）；机器可读同一份正文在 structuredContent.data.diff（另有 workspaceId）", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_request_apply", "直接应用工作区到真实脚本；校验原文件、自动备份并支持历史回退（工具名为兼容保留）；示例：{\"workspaceId\":\"...\"}", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_mkdir", "在真实脚本目录下创建目录（含多级）", objSchema("path", required = arrayOf("path"))))
             add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
@@ -284,7 +284,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("capture_screen", "截屏并返回 MCP 图像内容；mode 四种预设（MI8 1080×2160 实测）：fastest = 360 宽 + JPEG40（只够看有没有/大概在哪）；fast = 540 宽 + JPEG60，约 0.22~0.28s / 36KB（适合定位、轮询、先看一眼）；balanced = 原图 PNG，约 0.61~0.77s / 217KB（**与历史默认一致**）；quality = 原图 PNG + 更长超时，约 0.63~0.65s / 217KB（适合存档、像素级比对）。耗时主因是 PNG 编码（约 550ms），fast 靠缩小 + JPEG 把它省掉；显式传的 format/quality/maxWidth/timeoutMillis 覆盖预设；返回含 captureMs/encodeMs/totalMs/bytes/scale/effective，便于自己权衡质量与速度；region 可只截一块（[left,top,right,bottom] / \"[l,t][r,b]\" / {x,y,width,height}，越界自动夹取）——只截一块时**先裁后缩**，编码成本极低且保留 1:1 像素，比整屏缩小更清楚；缩小或裁剪后块内坐标 = 屏幕坐标 − 区域左上角，再乘 scale（返回里有 region/scale/regionNote）。**savePath（逐帧 CV 的关键）**：只要路径不要图像 —— 写入脚本目录内文件并只返回 {path,width,height,bytes,captureMs/encodeMs/writeMs/totalMs}，不回传 base64/JSON；saveFormat=raw 直接写 RGBA8888 原始像素（stride=width*4、无文件头，与 image.exportPixels 布局一致），省掉 PNG 编码（约 550ms）→ 适合逐帧循环；saveFormat 也可 auto（按扩展名）/png/jpg。需 Android 11+ 无障碍截图权限。示例：{\"mode\":\"fastest\"}、{\"savePath\":\"poker-recog/calib/live-6.png\",\"saveFormat\":\"raw\"}、{\"mode\":\"fast\"} / {\"mode\":\"quality\",\"maxWidth\":1080} / {\"mode\":\"fast\",\"region\":[0,1000,1080,1400]}", objSchema("mode", "format", "quality", "dataUri", "maxWidth", "timeoutMillis", "region", "savePath", "saveFormat")))
             add(tool("coordinate_convert", "截图/显示/浮窗三套坐标系的换算与标定：action=state 给出 panel（物理面板≈截图尺寸）、appDisplay（无障碍与浮窗同一套）、可选 measureScreenshot 实测截图尺寸，并给出仿射 dst=src*(scaleX,scaleY)+(offsetX,offsetY)；action=calibrate 传两组对应点（windowPoint1/screenshotPoint1[/2]）持久化标定值；action=convert 传 from/to/point|rect 换算；action=clear 清除标定。示例：{\"action\":\"state\",\"measureScreenshot\":true} 或 {\"action\":\"convert\",\"from\":\"window\",\"to\":\"screenshot\",\"rect\":[100,200,300,400]}", objSchema("action", "measureScreenshot", "windowPoint1", "screenshotPoint1", "windowPoint2", "screenshotPoint2", "from", "to", "point", "rect")))
             add(tool("check_syntax", "按 Rhino/QuickJS/Node.js 只编译检查源码，不执行任何脚本；Node 使用同版本真实编译器；示例：{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}", objSchema("code", "engine", "name", required = arrayOf("code"))))
-            add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 完整使用说明、三引擎规则、权限和实际支持范围；首次连接或调用报错前先调用一次"))
+            add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 完整使用说明、三引擎规则、权限和实际支持范围；首次连接或调用报错前先调用一次。返回纯文本正文（content[0].text）；同一份正文也在 structuredContent.data.text"))
             add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本）；普通任务应使用 stop_script"))
             add(tool("get_mcp_log", "读取脚本日志尾部或 MCP 服务请求记录；executionId 可限制为指定任务；maxChars 默认 20000，最大 200000", objSchema("maxChars", "executionId", "channel")))
             add(tool("list_engines", "列出三个引擎与 MCP 支持的运行、查询、调用及语法检查能力"))
@@ -1492,14 +1492,18 @@ internal class McpTools(private val context: Context, private val event: (String
      * 失败结果：既给 content[0].text（人读），也给 structuredContent（机读）。
      * `.4` 总报告 P1-E：以前 ToolError/IllegalArgumentException 只回纯文本，标准客户端要再写一个解析器。
      */
-    private fun toolFailure(message: String, code: String, argument: String? = null): JsonObject =
-        toolResult(message, true, errorCode = code, argument = argument).apply {
-            add("structuredContent", ToolkitIo.json(
-                "ok" to false, "data" to null,
-                "error" to ToolkitIo.json("code" to code, "message" to message,
-                    "argument" to argument, "recoverable" to true),
-                "nextActions" to emptyList<Any>()))
+    private fun toolFailure(message: String, code: String, argument: String? = null): JsonObject {
+        // `.4` P1-A：失败路径的 content[0].text 也必须是同一个 `{ok:false,error:{…}}` 信封，
+        // 这样"把 text 当 JSON 解析"的客户端不会再撞到纯文本（人读的 message 就在 error.message 里）。
+        val envelope = ToolkitIo.json(
+            "ok" to false, "data" to null,
+            "error" to ToolkitIo.json("code" to code, "message" to message,
+                "argument" to argument, "recoverable" to true, "retrySameArguments" to false),
+            "nextActions" to emptyList<Any>())
+        return toolResult(envelope.toString(), true, errorCode = code, argument = argument).apply {
+            add("structuredContent", envelope)
         }
+    }
 
     private fun toolResult(text: String, error: Boolean = false, errorCode: String? = null, argument: String? = null) = JsonObject().apply {
         add("content", JsonArray().apply { add(JsonObject().apply { addProperty("type", "text"); addProperty("text", text) }) })
