@@ -1217,6 +1217,7 @@ public class ApkBuilder {
                     launchConfig = new JSONObject();
                 }
                 launchConfig.put("hideLogs", config.hideLogs);
+                launchConfig.put("logBridge", config.logBridge);
                 launchConfig.put("showSplash", config.showSplash);
                 if (config.requestPermissions != null && !config.requestPermissions.isEmpty()) {
                     JSONArray requestPermissions = new JSONArray();
@@ -1374,6 +1375,8 @@ public class ApkBuilder {
         private List<String> permissionsToRemove;
         private List<String> requestPermissions;
         private boolean hideLogs = false;
+        /** 打包版是否开放 log-only 调试桥（project.json 的 launchConfig.logBridge，默认关）。 */
+        private boolean logBridge = false;
         private boolean showSplash = true;
         private String splashText;
         private String splashIconPath;
@@ -1424,6 +1427,7 @@ public class ApkBuilder {
             LaunchConfig launchConfig = projectConfig.getLaunchConfig();
             if (launchConfig != null) {
                 config.hideLogs = launchConfig.shouldHideLogs();
+                config.logBridge = launchConfig.shouldLogBridge();
                 config.showSplash = launchConfig.shouldShowSplash();
                 config.splashText = launchConfig.getSplashText();
                 config.requestPermissions = launchConfig.getRequestPermissions();
@@ -1494,6 +1498,15 @@ public class ApkBuilder {
         /** Skip the log screen and run the script right after launch. */
         public AppConfig setHideLogs(boolean hideLogs) {
             this.hideLogs = hideLogs;
+            return this;
+        }
+
+        /**
+         * 打包版是否提供 log-only 调试桥（VSCode 连 9317 看脚本日志）。默认 false；
+         * 打开后打包版只发日志、不接受任何命令。
+         */
+        public AppConfig setLogBridge(boolean logBridge) {
+            this.logBridge = logBridge;
             return this;
         }
 

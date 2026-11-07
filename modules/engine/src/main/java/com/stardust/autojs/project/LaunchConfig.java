@@ -13,6 +13,14 @@ public class LaunchConfig {
     @SerializedName("hideLogs")
     private boolean mHideLogs = false;
 
+    /**
+     * Whether the packaged app exposes its log-only bridge on port 9317 so the VS Code
+     * extension can show script logs. Defaults to false: a packaged app never opens a
+     * debug port unless the project explicitly asked for it.
+     */
+    @SerializedName("logBridge")
+    private boolean mLogBridge = false;
+
     @SerializedName("showSplash")
     private boolean mShowSplash = true;
 
@@ -28,6 +36,15 @@ public class LaunchConfig {
 
     public void setHideLogs(boolean hideLogs) {
         mHideLogs = hideLogs;
+    }
+
+    /** @see #mLogBridge */
+    public boolean shouldLogBridge() {
+        return mLogBridge;
+    }
+
+    public void setLogBridge(boolean logBridge) {
+        mLogBridge = logBridge;
     }
 
     /**

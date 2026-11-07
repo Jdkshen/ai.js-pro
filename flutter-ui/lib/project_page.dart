@@ -70,7 +70,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
   Map<String, dynamic> baseline = {};
   String? error, statusError;
   int encryptLevel = 0, loadToken = 0, jobGeneration = 0;
-  bool displaySplash = true, hideLogs = false, stableMode = false;
+  bool displaySplash = true, hideLogs = false, logBridge = false, stableMode = false;
   bool loading = false, saving = false, submitting = false, actionBusy = false;
   bool statusBusy = false, leaving = false, appActive = true;
   List<String> abis = List<String>.from(allAbis);
@@ -165,6 +165,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
         'launchConfig': {
           'displaySplash': displaySplash,
           'hideLogs': hideLogs,
+          'logBridge': logBridge,
           'stableMode': stableMode,
           'splashText': fields['splashText']!.text
         }
@@ -326,6 +327,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
       clearSigning = false;
       displaySplash = launch['displaySplash'] != false;
       hideLogs = launch['hideLogs'] == true;
+      logBridge = launch['logBridge'] == true;
       stableMode = launch['stableMode'] == true;
       baseline =
           Map<String, dynamic>.from(jsonDecode(jsonEncode(values())) as Map);
@@ -1638,6 +1640,16 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
               value: hideLogs,
               onChanged:
                   busy ? null : (value) => setState(() => hideLogs = value)),
+          SwitchListTile(
+              key: const ValueKey('project-logBridge'),
+              contentPadding: EdgeInsets.zero,
+              title: const Text('VSCode 日志'),
+              subtitle: const Text(
+                  '打包版允许 VSCode 查看脚本日志（仅日志，默认关闭；打开后打包版会在 9317 端口提供只读日志通道）',
+                  style: TextStyle(fontSize: 12)),
+              value: logBridge,
+              onChanged:
+                  busy ? null : (value) => setState(() => logBridge = value)),
           SwitchListTile(
               key: const ValueKey('project-stableMode'),
               contentPadding: EdgeInsets.zero,

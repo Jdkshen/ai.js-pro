@@ -2,17 +2,31 @@ package com.jdkshen.aijspro.inrt.script;
 
 import android.app.Application;
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.preference.PreferenceManager;
 import android.util.Log;
 
+import com.jdkshen.aijspro.inrt.BuildConfig;
+import com.jdkshen.aijspro.inrt.autojs.AutoJs;
+import com.jdkshen.aijspro.inrt.debuglog.InrtLogBridge;
 import com.stardust.app.GlobalAppContext;
 import com.stardust.autojs.ScriptEngineService;
+import com.stardust.autojs.core.console.ConsoleImpl;
 
+import org.json.JSONObject;
+
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -55,6 +69,12 @@ public final class InrtScriptThreadHost {
     /** 工程动态 dex（files/project/libs/*.dex|jar、files/project/.codecache/*.dex）的加载器。 */
     private static volatile ClassLoader sProjectClassLoader;
     private static volatile boolean sBootstrapDone;
+
+    /** Log-only VSCode bridge. Default off; enabled by project.json or the debug SharedPreferences key. */
+    private static final String LOG_BRIDGE_ENABLED_KEY = "inrt_log_bridge_enabled";
+    private static final String LOG_BRIDGE_DEVICE_ID_KEY = "inrt_log_bridge_device_id";
+    private static final Object LOG_BRIDGE_LOCK = new Object();
+    private static volatile InrtLogBridge sLogBridge;
 
     private InrtScriptThreadHost() {
     }
@@ -99,6 +119,11 @@ public final class InrtScriptThreadHost {
                 // 3) dex -> so 顺序的工程侧准备（全部在当前线程 = 脚本线程）。
                 runBootstrapOnScriptThread(context);
                 sInitialized = true;
+                // The bridge is a log-only debug tap; only the :script process owns the
+                // global console containing script logs. It must never run in the main process.
+                if (process != null && process.endsWith(":script")) {
+                    startLogBridgeIfEnabled(context);
+                }
                 Log.i(TAG, "C-INRT: process=" + process + " thread=" + sScriptThread.getName()
                         + "/" + sScriptThread.getId() + " HOST READY (script looper = process main looper)");
                 return true;
@@ -236,6 +261,7 @@ public final class InrtScriptThreadHost {
 
     /** 进程收尾（A 不主动调用；用于 :script 进程结束/测试）。主 Looper 不 quit，只清引用。 */
     public static void shutdown() {
+        stopLogBridge();
         synchronized (LOCK) {
             if (!sInitialized) {
                 return;
@@ -250,6 +276,155 @@ public final class InrtScriptThreadHost {
             sScriptLooper = null;
             sScriptThread = null;
             Log.i(TAG, "C-INRT: host shutdown");
+        }
+    }
+
+    // ------------------------------------------------------------------ log-only VSCode bridge
+
+    private static void startLogBridgeIfEnabled(Context context) {
+        synchronized (LOG_BRIDGE_LOCK) {
+            if (sLogBridge != null) {
+                return;
+            }
+            if (!isLogBridgeEnabled(context)) {
+                Log.d(TAG, "C-INRT: log bridge disabled (launchConfig.logBridge=false, pref=false)");
+                return;
+            }
+            AutoJs autoJs;
+            try {
+                autoJs = AutoJs.Companion.getInstance();
+            } catch (Throwable error) {
+                Log.w(TAG, "C-INRT: log bridge skipped: inrt AutoJs unavailable", error);
+                return;
+            }
+            Object console = autoJs.getGlobalConsole();
+            if (!(console instanceof ConsoleImpl)) {
+                Log.w(TAG, "C-INRT: log bridge skipped: globalConsole is not ConsoleImpl");
+                return;
+            }
+            InrtLogBridge bridge = new InrtLogBridge(
+                    InrtLogBridge.DEFAULT_PORT,
+                    new InrtLogBridge.Hello(
+                            "AI.js Pro",
+                            (Build.BRAND + " " + Build.MODEL).trim(),
+                            BuildConfig.VERSION_NAME,
+                            BuildConfig.VERSION_CODE,
+                            logBridgeDeviceId(context)),
+                    message -> Log.w(TAG, "C-INRT-LOG-BRIDGE: " + message));
+            try {
+                bridge.start();
+                bridge.attach(new ConsoleLogSource((ConsoleImpl) console));
+                sLogBridge = bridge;
+                Log.i(TAG, "C-INRT: log bridge started (log-only) port=" + InrtLogBridge.DEFAULT_PORT);
+            } catch (Throwable error) {
+                Log.w(TAG, "C-INRT: log bridge start failed (continue)", error);
+                try {
+                    bridge.close();
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+    }
+
+    private static void stopLogBridge() {
+        synchronized (LOG_BRIDGE_LOCK) {
+            InrtLogBridge bridge = sLogBridge;
+            sLogBridge = null;
+            if (bridge != null) {
+                try {
+                    bridge.close();
+                    Log.i(TAG, "C-INRT: log bridge stopped");
+                } catch (Throwable error) {
+                    Log.w(TAG, "C-INRT: log bridge stop failed", error);
+                }
+            }
+        }
+    }
+
+    private static boolean isLogBridgeEnabled(Context context) {
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        // Debug/runtime escape hatch for manual verification; default false.
+        if (preferences.getBoolean(LOG_BRIDGE_ENABLED_KEY, false)) {
+            Log.i(TAG, "C-INRT: log bridge enabled by SharedPreferences " + LOG_BRIDGE_ENABLED_KEY);
+            return true;
+        }
+        // Packaged project switch: assets/project/project.json -> launchConfig.logBridge.
+        try (InputStream input = context.getAssets().open("project/project.json")) {
+            byte[] bytes = readAll(input);
+            JSONObject root = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+            JSONObject launchConfig = root.optJSONObject("launchConfig");
+            boolean enabled = launchConfig != null && launchConfig.optBoolean("logBridge", false);
+            if (enabled) {
+                Log.i(TAG, "C-INRT: log bridge enabled by assets/project/project.json launchConfig.logBridge");
+            }
+            return enabled;
+        } catch (Exception error) {
+            Log.d(TAG, "C-INRT: log bridge project.json unavailable: " + error.getMessage());
+            return false;
+        }
+    }
+
+    private static String logBridgeDeviceId(Context context) {
+        SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
+        String existing = preferences.getString(LOG_BRIDGE_DEVICE_ID_KEY, null);
+        if (existing != null && !existing.isEmpty()) {
+            return existing;
+        }
+        String id = UUID.randomUUID().toString();
+        preferences.edit().putString(LOG_BRIDGE_DEVICE_ID_KEY, id).apply();
+        return id;
+    }
+
+    private static byte[] readAll(InputStream input) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+        return output.toByteArray();
+    }
+
+    /** Adapter from :script AutoJs.globalConsole (same backing listener as ConsoleView). */
+    private static final class ConsoleLogSource implements InrtLogBridge.LogSource {
+        private final ConsoleImpl console;
+        private final CopyOnWriteArrayList<InrtLogBridge.Listener> listeners = new CopyOnWriteArrayList<>();
+        private final ConsoleImpl.LogListener consoleListener = new ConsoleImpl.LogListener() {
+            @Override
+            public void onNewLog(ConsoleImpl.LogEntry logEntry) {
+                String line = logEntry.content == null ? "" : logEntry.content.toString();
+                for (InrtLogBridge.Listener listener : listeners) {
+                    try {
+                        listener.onLog(line);
+                    } catch (Throwable ignored) {
+                        // A broken network client must not break the console callback.
+                    }
+                }
+            }
+
+            @Override
+            public void onLogClear() {
+            }
+        };
+
+        ConsoleLogSource(ConsoleImpl console) {
+            this.console = console;
+        }
+
+        @Override
+        public void addListener(InrtLogBridge.Listener listener) {
+            if (listeners.isEmpty()) {
+                console.addLogListener(consoleListener);
+            }
+            listeners.addIfAbsent(listener);
+        }
+
+        @Override
+        public void removeListener(InrtLogBridge.Listener listener) {
+            listeners.remove(listener);
+            if (listeners.isEmpty()) {
+                console.removeLogListener(consoleListener);
+            }
         }
     }
 

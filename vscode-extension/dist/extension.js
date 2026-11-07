@@ -37,7 +37,7 @@ var require_package = __commonJS({
       name: "aijspro-vscode",
       displayName: "AI.js Pro",
       description: "\u8FDE\u63A5 AI.js Pro\uFF08Android\uFF09\uFF1A\u8FD0\u884C\u5F53\u524D\u6587\u4EF6/\u6574\u4E2A\u5DE5\u7A0B\u3001\u5B9E\u65F6\u65E5\u5FD7\u3001Rhino \u65AD\u70B9\u8C03\u8BD5\u3001\u4FDD\u5B58\u81EA\u52A8\u63A8\u9001\u3001\u8BBE\u5907\u6587\u4EF6\u6D4F\u89C8\u4E0E\u62C9\u53D6\u3002",
-      version: "0.3.6",
+      version: "0.3.7",
       publisher: "jdkshen",
       license: "MIT",
       engines: {
@@ -176,6 +176,11 @@ var require_package = __commonJS({
             command: "aijspro.showLogs",
             title: "AI.js Pro: \u663E\u793A\u65E5\u5FD7(Show Logs)",
             icon: "$(output)"
+          },
+          {
+            command: "aijspro.logStatus",
+            title: "AI.js Pro: \u65E5\u5FD7\u72B6\u6001(Log Status)",
+            icon: "$(pulse)"
           },
           {
             command: "aijspro.togglePushOnSave",
@@ -326,6 +331,13 @@ var require_package = __commonJS({
               default: true,
               description: "\u9996\u6B21\u8FDE\u63A5\u5230\u624B\u673A\u65F6\u81EA\u52A8\u5207\u6362\u5230 AI.js Pro \u8F93\u51FA\u65E5\u5FD7\uFF0C\u5E76\u5728\u72B6\u6001\u680F\u663E\u793A\u8BBE\u5907 IP\u3002"
             },
+            "aijspro.logHeartbeatSeconds": {
+              type: "number",
+              default: 30,
+              minimum: 0,
+              maximum: 3600,
+              description: "\u65E5\u5FD7\u5FC3\u8DF3\u95F4\u9694\uFF08\u79D2\uFF09\uFF1A\u6BCF N \u79D2\u68C0\u67E5\u4E00\u6B21\uFF1B\u8BBE\u5907\u8FDE\u63A5\u9759\u9ED8\u8FBE\u5230\u9608\u503C\u65F6\u5728\u8F93\u51FA\u9762\u677F\u63D0\u793A\u94FE\u8DEF\u4ECD\u6B63\u5E38\uFF0C\u6062\u590D\u65E5\u5FD7\u65F6\u63D0\u793A\u6062\u590D\u30020=\u5173\u95ED\u3002"
+            },
             "aijspro.pushOnSave": {
               type: "boolean",
               default: false,
@@ -404,7 +416,7 @@ var require_package = __commonJS({
         ]
       },
       scripts: {
-        test: "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs test/projectRoot.test.cjs",
+        test: "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs test/projectRoot.test.cjs test/logHeartbeat.test.cjs",
         "test:devices": "node --test test/manager.test.cjs",
         "test:connection": "node --test test/connection.test.cjs",
         build: "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",
@@ -3398,6 +3410,122 @@ function findProjectRoot(workspaceRoot) {
   return candidates.length === 1 ? candidates[0] : void 0;
 }
 
+// src/logHeartbeat.ts
+function normalizeHeartbeatSeconds(value) {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(numeric) || numeric < 0) return 30;
+  return Math.min(3600, Math.floor(numeric));
+}
+function formatSilence(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1e3));
+  return seconds + "s";
+}
+function formatClock(timestamp) {
+  const date = new Date(timestamp);
+  const pad = (value) => String(value).padStart(2, "0");
+  return pad(date.getHours()) + ":" + pad(date.getMinutes()) + ":" + pad(date.getSeconds());
+}
+var LogHeartbeat = class {
+  output;
+  now;
+  connections = /* @__PURE__ */ new Map();
+  intervalSecondsValue;
+  constructor(options) {
+    this.output = options.output;
+    this.now = options.now ?? Date.now;
+    this.intervalSecondsValue = normalizeHeartbeatSeconds(options.intervalSeconds);
+  }
+  get intervalSeconds() {
+    return this.intervalSecondsValue;
+  }
+  get enabled() {
+    return this.intervalSecondsValue > 0;
+  }
+  /** 运行中修改配置；0 表示关闭。 */
+  setIntervalSeconds(value) {
+    this.intervalSecondsValue = normalizeHeartbeatSeconds(value);
+  }
+  /**
+   * 连接建立：初始化每个连接的独立状态，并打印一次启动行。
+   * 已存在时只更新名字，不重复打印。
+   */
+  connect(key, name, at = this.now()) {
+    const existing = this.connections.get(key);
+    if (existing) {
+      existing.name = name;
+      return;
+    }
+    this.connections.set(key, {
+      key,
+      name,
+      lines: 0,
+      connectedAt: at,
+      lastLogAt: null,
+      lastActivityAt: at
+    });
+    if (this.enabled) {
+      this.output("[" + name + "] \u65E5\u5FD7\u5FC3\u8DF3\u5DF2\u5F00\u542F\uFF08\u6BCF " + this.intervalSecondsValue + "s \u4E00\u6B21\uFF0C\u9759\u9ED8\u65F6\u63D0\u793A\uFF09");
+    }
+  }
+  /** 收到一行设备日志；同时检测“长时间静默后恢复”。 */
+  onLog(key, name, at = this.now()) {
+    let state = this.connections.get(key);
+    if (!state) {
+      state = {
+        key,
+        name,
+        lines: 0,
+        connectedAt: at,
+        lastLogAt: null,
+        lastActivityAt: at
+      };
+      this.connections.set(key, state);
+    }
+    const silent = Math.max(0, at - state.lastActivityAt);
+    state.name = name;
+    state.lines += 1;
+    state.lastLogAt = at;
+    state.lastActivityAt = at;
+    if (this.enabled && silent >= this.intervalSecondsValue * 2e3) {
+      this.output("[" + name + "] \u25B6 \u65E5\u5FD7\u6062\u590D\uFF08\u9759\u9ED8 " + formatSilence(silent) + "\uFF09");
+    }
+  }
+  /** 定时 tick：只对静默达到阈值的连接输出心跳，正常刷日志时不输出。 */
+  tick(at = this.now()) {
+    if (!this.enabled) return;
+    const thresholdMs = this.intervalSecondsValue * 1e3;
+    for (const state of this.connections.values()) {
+      const silent = Math.max(0, at - state.lastActivityAt);
+      if (silent < thresholdMs) continue;
+      const recent = state.lastLogAt === null ? "\u6682\u65E0\u65E5\u5FD7" : formatClock(state.lastLogAt);
+      this.output(
+        "[" + state.name + "] \u23F1 \u94FE\u8DEF\u6B63\u5E38\uFF0C\u5DF2\u6536 " + state.lines + " \u884C\uFF1B\u811A\u672C\u9759\u9ED8 " + formatSilence(silent) + "\uFF08\u6700\u8FD1 " + recent + "\uFF09"
+      );
+    }
+  }
+  /** 命令 aijspro.logStatus 用的一次性状态；不产生心跳行。 */
+  status(at = this.now()) {
+    return [...this.connections.values()].map((state) => ({
+      key: state.key,
+      name: state.name,
+      lines: state.lines,
+      connectedAt: state.connectedAt,
+      lastLogAt: state.lastLogAt,
+      silentMs: Math.max(0, at - state.lastActivityAt)
+    }));
+  }
+  statusLines(at = this.now()) {
+    return this.status(at).map((state) => {
+      const recent = state.lastLogAt === null ? "\u6682\u65E0\u65E5\u5FD7" : formatClock(state.lastLogAt);
+      return "[" + state.name + "] \u5DF2\u6536 " + state.lines + " \u884C\uFF1B\u6700\u8FD1\u65E5\u5FD7 " + recent + "\uFF1B\u9759\u9ED8 " + formatSilence(state.silentMs);
+    });
+  }
+  /** 连接关闭：清掉状态，避免 logStatus 显示幽灵连接。 */
+  drop(key) {
+    this.connections.delete(key);
+  }
+};
+
 // src/extension.ts
 var PUSH_MANIFEST_PREFIX = "aijspro.pushManifest";
 var channel;
@@ -3405,11 +3533,19 @@ var manager;
 var usbDevices;
 var treeProvider;
 var statusBar;
+var heartbeat;
+var heartbeatTimer;
+var heartbeatKeys = /* @__PURE__ */ new Set();
 function activate(context) {
   channel = vscode7.window.createOutputChannel("AI.js Pro", { log: true });
   channel.appendLine("AI.js Pro \u6269\u5C55\u5DF2\u542F\u52A8");
   e2eLog("[ext] activated");
   manager = new DeviceManager((message) => channel.appendLine(message));
+  heartbeat = new LogHeartbeat({
+    intervalSeconds: heartbeatConfigSeconds(),
+    output: (line) => channel.appendLine(line)
+  });
+  startHeartbeatTimer();
   usbDevices = new UsbDevices(() => vscode7.workspace.getConfiguration("aijspro").get("adbPath", ""));
   treeProvider = new DeviceFileProvider(manager);
   trackScriptEditors(context);
@@ -3442,11 +3578,14 @@ function activate(context) {
       channel.show(true);
     }
   });
+  manager.on("changed", () => syncHeartbeatConnections());
   manager.on("deviceLog", (conn, line) => {
     const clean = line.replace(/\x1e/g, "").replace(/\r\n/g, "\n");
     for (const entry of clean.split("\n")) {
       if (entry.length > 0) channel.appendLine(`[${conn.deviceName}] ${entry}`);
     }
+    syncHeartbeatConnections();
+    heartbeat.onLog(conn.key, conn.deviceName);
   });
   updateStatus();
   context.subscriptions.push(
@@ -3483,6 +3622,7 @@ function activate(context) {
     vscode7.debug.registerDebugConfigurationProvider("aijspro", createDebugConfigurationProvider()),
     vscode7.commands.registerCommand("aijspro.disconnect", () => manager.disconnectAll()),
     vscode7.commands.registerCommand("aijspro.showLogs", () => channel.show(true)),
+    vscode7.commands.registerCommand("aijspro.logStatus", () => logStatusCommand()),
     vscode7.commands.registerCommand("aijspro.refreshFiles", () => treeProvider.refresh()),
     vscode7.commands.registerCommand("aijspro.togglePushOnSave", () => togglePushOnSave()),
     vscode7.commands.registerCommand("aijspro.menu", () => menuCommand()),
@@ -3490,6 +3630,14 @@ function activate(context) {
     vscode7.commands.registerCommand("aijspro.runDeviceFile", (node) => runDeviceFile(node)),
     vscode7.commands.registerCommand("aijspro.downloadFile", (node) => downloadFile(node)),
     vscode7.workspace.onDidSaveTextDocument((document) => pushOnSave(document)),
+    vscode7.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("aijspro.logHeartbeatSeconds")) return;
+      const seconds = heartbeatConfigSeconds();
+      heartbeat.setIntervalSeconds(seconds);
+      startHeartbeatTimer();
+      channel.appendLine(seconds > 0 ? `\u65E5\u5FD7\u5FC3\u8DF3\u95F4\u9694\u5DF2\u66F4\u65B0\u4E3A ${seconds}s` : "\u65E5\u5FD7\u5FC3\u8DF3\u5DF2\u5173\u95ED\uFF08aijspro.logHeartbeatSeconds=0\uFF09");
+    }),
+    { dispose: () => stopHeartbeatTimer() },
     { dispose: () => manager.dispose() }
   );
   manager.startListening();
@@ -3509,6 +3657,49 @@ function activate(context) {
 async function deactivate() {
   manager?.dispose();
   await usbDevices?.dispose();
+}
+function heartbeatConfigSeconds() {
+  const value = vscode7.workspace.getConfiguration("aijspro").get("logHeartbeatSeconds", 30);
+  return normalizeHeartbeatSeconds(value);
+}
+function startHeartbeatTimer() {
+  stopHeartbeatTimer();
+  if (!heartbeat.enabled) return;
+  heartbeatTimer = setInterval(() => heartbeat.tick(), heartbeat.intervalSeconds * 1e3);
+  heartbeatTimer.unref?.();
+}
+function stopHeartbeatTimer() {
+  if (!heartbeatTimer) return;
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = void 0;
+}
+function syncHeartbeatConnections() {
+  if (!heartbeat) return;
+  const live = /* @__PURE__ */ new Set();
+  for (const conn of manager.all) {
+    if (!conn.attached || conn.isClosed()) continue;
+    live.add(conn.key);
+    if (!heartbeatKeys.has(conn.key)) {
+      heartbeatKeys.add(conn.key);
+      heartbeat.connect(conn.key, conn.deviceName);
+    }
+  }
+  for (const key of [...heartbeatKeys]) {
+    if (live.has(key)) continue;
+    heartbeatKeys.delete(key);
+    heartbeat.drop(key);
+  }
+}
+function logStatusCommand() {
+  syncHeartbeatConnections();
+  channel.appendLine("\u2014\u2014 AI.js Pro \u65E5\u5FD7\u72B6\u6001 \u2014\u2014");
+  if (!heartbeat.enabled) {
+    channel.appendLine("\u65E5\u5FD7\u5FC3\u8DF3\u5DF2\u5173\u95ED\uFF08aijspro.logHeartbeatSeconds=0\uFF09");
+  }
+  const lines = heartbeat.statusLines();
+  if (lines.length === 0) channel.appendLine("\u5F53\u524D\u6CA1\u6709\u5DF2\u8FDE\u63A5\u8BBE\u5907");
+  else lines.forEach((line) => channel.appendLine(line));
+  channel.show(true);
 }
 async function connectCommand() {
   const remembered = savedDevices();

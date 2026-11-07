@@ -16,6 +16,7 @@ import { DeviceFileProvider, ExplorerNode, FileNode } from './tree';
 import { createZip, ZipInput } from './zip';
 import { createExcludeMatcher, ExcludeMatcher } from './exclude';
 import { findProjectRoot } from './projectRoot';
+import { LogHeartbeat, normalizeHeartbeatSeconds } from './logHeartbeat';
 
 const PUSH_MANIFEST_PREFIX = 'aijspro.pushManifest';
 
@@ -24,6 +25,9 @@ let manager: DeviceManager;
 let usbDevices: UsbDevices;
 let treeProvider: DeviceFileProvider;
 let statusBar: vscode.StatusBarItem;
+let heartbeat: LogHeartbeat;
+let heartbeatTimer: NodeJS.Timeout | undefined;
+const heartbeatKeys = new Set<string>();
 
 export function activate(context: vscode.ExtensionContext): void {
   channel = vscode.window.createOutputChannel('AI.js Pro', { log: true });
@@ -31,6 +35,11 @@ export function activate(context: vscode.ExtensionContext): void {
   e2eLog('[ext] activated');
 
   manager = new DeviceManager((message) => channel.appendLine(message));
+  heartbeat = new LogHeartbeat({
+    intervalSeconds: heartbeatConfigSeconds(),
+    output: (line) => channel.appendLine(line),
+  });
+  startHeartbeatTimer();
   usbDevices = new UsbDevices(() => vscode.workspace.getConfiguration('aijspro').get<string>('adbPath', ''));
   treeProvider = new DeviceFileProvider(manager);
   trackScriptEditors(context);
@@ -64,12 +73,15 @@ export function activate(context: vscode.ExtensionContext): void {
       channel.show(true);
     }
   });
+  manager.on('changed', () => syncHeartbeatConnections());
   manager.on('deviceLog', (conn: DeviceConnection, line: string) => {
     // Android log records may contain a record separator; it is not display text.
     const clean = line.replace(/\x1e/g, '').replace(/\r\n/g, '\n');
     for (const entry of clean.split('\n')) {
       if (entry.length > 0) channel.appendLine(`[${conn.deviceName}] ${entry}`);
     }
+    syncHeartbeatConnections();
+    heartbeat.onLog(conn.key, conn.deviceName);
   });
   updateStatus();
 
@@ -110,6 +122,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.debug.registerDebugConfigurationProvider('aijspro', createDebugConfigurationProvider()),
     vscode.commands.registerCommand('aijspro.disconnect', () => manager.disconnectAll()),
     vscode.commands.registerCommand('aijspro.showLogs', () => channel.show(true)),
+    vscode.commands.registerCommand('aijspro.logStatus', () => logStatusCommand()),
     vscode.commands.registerCommand('aijspro.refreshFiles', () => treeProvider.refresh()),
     vscode.commands.registerCommand('aijspro.togglePushOnSave', () => togglePushOnSave()),
     vscode.commands.registerCommand('aijspro.menu', () => menuCommand()),
@@ -117,6 +130,16 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('aijspro.runDeviceFile', (node: FileNode) => runDeviceFile(node)),
     vscode.commands.registerCommand('aijspro.downloadFile', (node: FileNode) => downloadFile(node)),
     vscode.workspace.onDidSaveTextDocument((document) => pushOnSave(document)),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration('aijspro.logHeartbeatSeconds')) return;
+      const seconds = heartbeatConfigSeconds();
+      heartbeat.setIntervalSeconds(seconds);
+      startHeartbeatTimer();
+      channel.appendLine(seconds > 0
+        ? `日志心跳间隔已更新为 ${seconds}s`
+        : '日志心跳已关闭（aijspro.logHeartbeatSeconds=0）');
+    }),
+    { dispose: () => stopHeartbeatTimer() },
     { dispose: () => manager.dispose() },
   );
 
@@ -146,6 +169,55 @@ export function activate(context: vscode.ExtensionContext): void {
 export async function deactivate(): Promise<void> {
   manager?.dispose();
   await usbDevices?.dispose();
+}
+
+function heartbeatConfigSeconds(): number {
+  const value = vscode.workspace.getConfiguration('aijspro').get<number>('logHeartbeatSeconds', 30);
+  return normalizeHeartbeatSeconds(value);
+}
+
+function startHeartbeatTimer(): void {
+  stopHeartbeatTimer();
+  if (!heartbeat.enabled) return;
+  heartbeatTimer = setInterval(() => heartbeat.tick(), heartbeat.intervalSeconds * 1000);
+  heartbeatTimer.unref?.();
+}
+
+function stopHeartbeatTimer(): void {
+  if (!heartbeatTimer) return;
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = undefined;
+}
+
+/** 已握手连接同步到心跳器；断开时清状态，避免 logStatus 出现幽灵设备。 */
+function syncHeartbeatConnections(): void {
+  if (!heartbeat) return;
+  const live = new Set<string>();
+  for (const conn of manager.all) {
+    if (!conn.attached || conn.isClosed()) continue;
+    live.add(conn.key);
+    if (!heartbeatKeys.has(conn.key)) {
+      heartbeatKeys.add(conn.key);
+      heartbeat.connect(conn.key, conn.deviceName);
+    }
+  }
+  for (const key of [...heartbeatKeys]) {
+    if (live.has(key)) continue;
+    heartbeatKeys.delete(key);
+    heartbeat.drop(key);
+  }
+}
+
+function logStatusCommand(): void {
+  syncHeartbeatConnections();
+  channel.appendLine('—— AI.js Pro 日志状态 ——');
+  if (!heartbeat.enabled) {
+    channel.appendLine('日志心跳已关闭（aijspro.logHeartbeatSeconds=0）');
+  }
+  const lines = heartbeat.statusLines();
+  if (lines.length === 0) channel.appendLine('当前没有已连接设备');
+  else lines.forEach((line) => channel.appendLine(line));
+  channel.show(true);
 }
 
 // ---- 命令实现 ----

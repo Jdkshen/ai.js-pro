@@ -2,7 +2,7 @@
   "name": "aijspro-vscode",
   "displayName": "AI.js Pro",
   "description": "连接 AI.js Pro（Android）：运行当前文件/整个工程、实时日志、Rhino 断点调试、保存自动推送、设备文件浏览与拉取。",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "publisher": "jdkshen",
   "license": "MIT",
   "engines": {
@@ -141,6 +141,11 @@
         "command": "aijspro.showLogs",
         "title": "AI.js Pro: 显示日志(Show Logs)",
         "icon": "$(output)"
+      },
+      {
+        "command": "aijspro.logStatus",
+        "title": "AI.js Pro: 日志状态(Log Status)",
+        "icon": "$(pulse)"
       },
       {
         "command": "aijspro.togglePushOnSave",
@@ -291,6 +296,13 @@
           "default": true,
           "description": "首次连接到手机时自动切换到 AI.js Pro 输出日志，并在状态栏显示设备 IP。"
         },
+        "aijspro.logHeartbeatSeconds": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 3600,
+          "description": "日志心跳间隔（秒）：每 N 秒检查一次；设备连接静默达到阈值时在输出面板提示链路仍正常，恢复日志时提示恢复。0=关闭。"
+        },
         "aijspro.pushOnSave": {
           "type": "boolean",
           "default": false,
@@ -369,7 +381,7 @@
     ]
   },
   "scripts": {
-    "test": "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs test/projectRoot.test.cjs",
+    "test": "node --test test/manager.test.cjs test/connection.test.cjs test/devicePicker.test.cjs test/adb.test.cjs test/exclude.test.cjs test/projectRoot.test.cjs test/logHeartbeat.test.cjs",
     "test:devices": "node --test test/manager.test.cjs",
     "test:connection": "node --test test/connection.test.cjs",
     "build": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist/extension.js",

@@ -248,6 +248,7 @@ final class PocPackaging {
                 .put("launchConfig", new JSONObject()
                         .put("displaySplash", true)
                         .put("hideLogs", false)
+                        .put("logBridge", false)
                         .put("stableMode", false)
                         .put("splashText", "AI.js Pro"));
         String main = null;
@@ -297,7 +298,7 @@ final class PocPackaging {
         }
         if (!config.has("launchConfig")) {
             config.put("launchConfig", new JSONObject()
-                    .put("displaySplash", true).put("hideLogs", false)
+                    .put("displaySplash", true).put("hideLogs", false).put("logBridge", false)
                     .put("stableMode", false).put("splashText", "AI.js Pro"));
         }
     }

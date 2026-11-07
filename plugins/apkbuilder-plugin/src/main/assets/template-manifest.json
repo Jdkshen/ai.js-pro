@@ -1,7 +1,7 @@
 {
   "manifestVersion": 1,
   "templateVersion": "1.0.2-265",
-  "templateBytes": 88438580,
+  "templateBytes": 88445288,
   "nodeRuntimeManifest": "assets/source-engine-upgrade/node24/arm64-v8a/runtime.json",
   "nodeRuntimeHashes": {
     "libajsnode24bridge.so": "d18673a2872eb744c73c40a4dd3165e30b2c73a4f96f6d1f654fdcb8a211bab6",

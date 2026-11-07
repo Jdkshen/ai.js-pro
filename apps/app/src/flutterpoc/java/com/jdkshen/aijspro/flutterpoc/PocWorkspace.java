@@ -231,7 +231,7 @@ final class PocWorkspace {
                     .put("encryptLevel", 0)
                     .put("useFeatures", new JSONArray())
                     .put("launchConfig", new JSONObject().put("displaySplash", true)
-                            .put("hideLogs", false).put("splashText", "").put("stableMode", false))
+                            .put("hideLogs", false).put("logBridge", false).put("splashText", "").put("stableMode", false))
                     .put("optimization", new JSONObject().put("removeOpenCv", false)
                             .put("unusedResources", false).put("obfuscateComponents", false))
                     .put("permissionConfig", new JSONObject()
