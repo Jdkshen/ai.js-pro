@@ -5,6 +5,16 @@
 > 架构与流程请看 [`guides/ARCHITECTURE.md`](guides/ARCHITECTURE.md)，规范看 [`guides/REPO_CONVENTIONS.md`](guides/REPO_CONVENTIONS.md)，历史报告看 [`INDEX.md`](INDEX.md)。
 > （2026-11-06 整理规范时加：多份状态页曾长期停留在旧版本，例如 `HANDOFF_AI.md` §4 写的是 dev-1177。读数字前先对一下 AGENTS.md。）
 
+> **2026-11-08 已发布 LAN dev-1393（当前更新源）**：本日连发 **dev-1382 → dev-1393**（全部依据 `.4` 的实战反馈做 MCP 修复/增强），逐条报告：
+> - **dev-1382** 产出自动归到项目目录：`initialize.instructions` 强制规则 + 新工具 `project_folder`（state/create/set/tidy）+ **23 个产出工具自动归置**（返回 `organized`）。[报告](reports/2026-11-07_产出自动归到项目目录（dev-1382）.md)
+> - **dev-1383/1384** 修 `getClass().getName()` 回归（Class 包装补回**实例 API**）**并重建打包模板** —— 独立 APK 的引擎来自 `template.apk`，**旧包无法自愈、必须重打**。[报告](reports/2026-11-07_修getClass回归（dev-1383）.md)
+> - **dev-1385** 打包版 **log-only 日志桥**（打包页开关 → 项目 `project.json` 的 `launchConfig.logBridge`；只在 `:script`、只发日志）+ VSCode 扩展 **0.3.7 日志心跳**。[报告](reports/2026-11-07_打包版日志桥与扩展心跳（dev-1385）.md)
+> - **dev-1386** 按 `.4`《更新建议》落地 8 项：P0-1 过期诊断、P0-2 组件可见 + `get_status.baseline`、P0-3 搜索预算、P0-4 `format=text`、新工具 `apk_dex_interface_table/list_classes/list_methods`、P1-5/6/7。[报告](reports/2026-11-08_按设备4MCP更新建议落地（dev-1386）.md)
+> - **dev-1387~1393** 按 `.4` v4/《总报告（218/218 冒烟）》再迭代：号表 **`string_const` 兜底**、terminal 组件缺失接清单、**目录变化通知**（`tools/list` 变更）、**P0-1 协议级**（`coordinate_convert` 补 `content`）、P1-A/B/E、**P1-C/D/E/F**、以及**第七章工具分组裁剪**（`initialize.toolCategories` + `tools/list{groups|tier:core}`：218→93/29）。[报告](reports/2026-11-08_按设备4MCP更新建议v4再迭代（dev-1387-1388）.md)
+> - 回复稿：`output/MCP-FEEDBACK-REPLY-dev1386.md` / `-dev1391.md` / `-dev1392.md` / `-dev1393.md`（均已推到 `.4`）。
+> - 测试机：**K40 `cccc62c7`**（MCP `adb forward tcp:18768 tcp:8765`）；`.4` = `192.168.10.4:8765`（其仍为 dev-1386，建议升级到 dev-1393 复测上述各项）。
+> - 状态数字（版本/雷区/命令）一律以根 [`AGENTS.md`](../AGENTS.md) 顶部为准。
+
 > **2026-11-05 已发布 LAN dev-1352**（当前更新源）：三批收尾——[MCP 改进第三批（常驻 r2 会话）](reports/2026-11-05_MCP改进第三批（常驻r2会话）.md)、[《华仔部落_佣兵战纪》脚本报错定位与修复](reports/2026-11-05_华仔部落佣兵战纪脚本报错定位与修复.md)、[内置 Rhino 示例全量运行与引擎修复](reports/2026-11-05_Rhino内置示例全量运行与引擎修复.md)、[「悬浮窗关闭不了」定位与修复](reports/2026-11-05_悬浮窗关闭问题定位与修复.md)。公开入口 **212**（203+9）；R8/16KB/平台阴影/Retrofit 通过；LAN `update.json` = dev-1352（137.97 MiB，SHA `fd9fcf28…`），MI8 已装。要点：常驻 r2 进程（单条命令 45~72ms、5 条批量 149ms，framing=`<cmd>;?e <marker>` + `-0` 刷新）；R8 保留 okhttp3/okio 公开成员（脚本反射调用）并修 `__http__` 空 body、`$zip` 按脚本 cwd 解析、`Events.observeKey` 空 serviceInfo、`ScriptCanvasView` 绘制线程 FATAL 杀 `:script`；160 个 Rhino 示例全量跑过（57 成功 / 95 常驻 / 8 环境类）；应用悬浮球关闭路径修好并新增 `floating_menu{state|show|close}`。未做：Frida 持久 attach、sameUid 自动判定、常驻会话跨进程持久化、QuickJS/Node 示例同样跑法；K40 未动、未 push。
 
 > **2026-11-04 已发布 LAN dev-1330**：[MCP免Root Gadget集成](reports/2026-11-04_MCP免RootGadget集成.md)。新增apk_inject_gadget，四ABI组件按需下载，二进制Manifest/独立DEX加载器、原资源保留、重签验签、本机令牌与客户端v2升级；不需要Root/Server。170入口（161+9）、toolkit100、650 App回归和MI8普通UID安装/附加/原生42/重开/拒绝/取消通过。主包137.70MiB，仅增约18KiB，SHA43c50a05…；PC/MI8完整LAN下载与实装摘要一致。真实16KiB页、Android17及其他ABI设备未验，K40未动、无push。
