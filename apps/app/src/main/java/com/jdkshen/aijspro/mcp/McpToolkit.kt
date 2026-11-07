@@ -4,20 +4,25 @@ import com.google.gson.*
 import java.io.File
 
 /** A reusable utility class for the UI and MCP; implementation owns local files only. */
-internal class McpToolkit(private val root: File, store: File, schemas: JsonObject,
+internal class McpToolkit(private val root: File, private val store: File, schemas: JsonObject,
     signer: ((File,File) -> Unit)? = null, assembler: ((Int,Long,String,String) -> ByteArray)? = null, private val runtime: ToolkitRuntime? = null,
     private val guide:ToolkitReverseGuide?=null) {
     private val fileLock=Any(); private val zipLock=Any()
-    private val files = McpFileToolkit(root)
+    private val files = McpFileToolkit(root, store)
+    private val outputOrganizer = ToolkitOutputOrganizer(store, root)
     private val zip = McpZipToolkit(root)
     private val apk = McpApkToolkit(root, store, schemas, signer, assembler, runtime)
     private val jobs = ToolkitJobs(File(store,"jobs"), ::executeOperation)
     fun definitions() = JsonArray().apply {
         add(ToolkitIo.json("name" to "toolkit_status", "description" to "查看本机文件、ZIP、APK、DEX、资源与ELF工具及真实能力限制；全部独立于 MT。操作目录沿用 MCP 设置。",
             "category" to "toolkit", "categoryTitle" to "文件与APK工具", "inputSchema" to ToolkitIo.json("type" to "object", "additionalProperties" to false, "properties" to JsonObject())))
-        val definitions = files.definitions().toList() + zip.definitions().toList() + apk.definitions().toList() + ToolkitReverseTools.definitions().toList()
+        val definitions = files.definitions().toList() + zip.definitions().toList() + apk.definitions().toList() +
+            ToolkitReverseTools.definitions().toList()
         McpToolkitCatalog.names.drop(1).forEach { name -> add(definitions.single { it.asJsonObject.tString("name") == name }) }
     }
+    /** toolkit_status 的产品级约定：统一走 McpOutputConventions（规则与工具清单只有一份实现）。 */
+    private fun outputConventions(): JsonObject = McpOutputConventions.describeFor(root, store)
+
     private fun executeOperation(name:String,args:JsonObject):JsonObject=when(name){
         "apk_component_install"->ToolkitIo.ok(requireNotNull(runtime){"组件后端不可用"}.install(args))
         "android_resources_compile"->ToolkitIo.ok(requireNotNull(runtime){"资源编译后端不可用"}.compileResources(args))
@@ -25,6 +30,7 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
         else->apk.call(name,args)
     }
     fun call(name: String, args: JsonObject): JsonObject = when {
+        name=="project_folder"->ToolkitIo.ok(outputOrganizer.call(args))
         name=="reverse_guide"->ToolkitIo.ok(requireNotNull(guide){"当前没有指南资源"}.read(args))
         name=="reverse_plan"->ToolkitIo.ok(requireNotNull(guide){"当前没有工作流资源"}.plan(args))
         name=="reverse_capabilities"->{ToolkitReverseTools.validate(name,args);ToolkitIo.ok(ToolkitIo.json("schemaVersion" to 1,"root" to root.canonicalPath,
@@ -61,6 +67,7 @@ internal class McpToolkit(private val root: File, store: File, schemas: JsonObje
                     "backendHealthProbe" to "signature.backendDiagnosis.asn1AnnotationsRetained"),
                 ToolkitIo.json("name" to "artifactAnalysis","status" to "available","formats" to listOf("apk","dex","elf","apks","xapk","apkm")),
                 ToolkitIo.json("name" to "longJobsAndRollback","status" to "available","evidence" to "implementation")), "toolCount" to McpToolkitCatalog.names.size,
+            "outputConventions" to outputConventions(),
             "jobs" to jobs.summary(),
             "groups" to listOf("file", "zip", "apk", "dex", "resources", "elf"),
             "capabilities" to ToolkitIo.json("signatures" to listOf("V1", "V2", "V3", "V3.1"),

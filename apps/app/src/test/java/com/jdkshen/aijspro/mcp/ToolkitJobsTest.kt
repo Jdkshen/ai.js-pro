@@ -449,7 +449,7 @@ class ToolkitJobsTest {
         waitFinal(jobs, jobId)
         val raw = jobs.result(obj("jobId" to jobId)).get("content").asString
         val out = File(root, "archive.json")
-        val exported = jobs.export(root, obj("jobId" to jobId, "outPath" to "archive.json"))
+        val exported = jobs.export(root, obj("jobId" to jobId, "outPath" to "archive.json", "organize" to false))
         assertEquals(raw, out.readText())
         assertEquals(jobId, exported.get("jobId").asString)
         assertEquals(out.path, exported.get("outPath").asString)
@@ -458,6 +458,32 @@ class ToolkitJobsTest {
         assertEquals(ToolkitIo.sha(out), exported.get("sha256").asString)
         assertFalse(exported.get("truncated").asBoolean)
         assertTrue(exported.getAsJsonObject("retention").has("windowMillis"))
+    }
+
+    @Test
+    fun exportOrganizesBareOutPathButKeepsExplicitSubdir() {
+        val folder = temp.newFolder("jobs")
+        val root = folder.parentFile ?: error("jobs parent")
+        val jobs = immediateJobs(folder)
+        val jobId = jobs.start(obj(
+            "operation" to "apk_search",
+            "arguments" to ToolkitIo.json("query" to "x"),
+            "timeoutSeconds" to 10,
+        )).get("jobId").asString
+        waitFinal(jobs, jobId)
+
+        val organized = jobs.export(root, obj("jobId" to jobId, "outPath" to "exported.json", "organize" to true))
+        val organizedPath = File(organized.get("outPath").asString)
+        assertTrue(organizedPath.parentFile.name.startsWith("mcp-out-"))
+        assertTrue(organized.has("organized"))
+        // 首次归置会自动建 mcp-out-YYYYMMDD，因此 reason 是 auto-project。
+        assertEquals("auto-project", organized.getAsJsonObject("organized").get("reason").asString)
+        assertFalse(File(root, "exported.json").exists())
+
+        val explicitDir = File(root, "explicit"); assertTrue(explicitDir.mkdirs())
+        val kept = jobs.export(root, obj("jobId" to jobId, "outPath" to "explicit/kept.json", "organize" to true))
+        assertEquals(File(explicitDir, "kept.json").path, kept.get("outPath").asString)
+        assertFalse(kept.has("organized"))
     }
 
     @Test
@@ -476,7 +502,7 @@ class ToolkitJobsTest {
         var pageIndex = 0
         while (true) {
             val page = jobs.export(root, obj(
-                "jobId" to jobId, "outPath" to "page-" + pageIndex + ".json",
+                "jobId" to jobId, "outPath" to "page-" + pageIndex + ".json", "organize" to false,
                 "offset" to offset, "maxChars" to 1000,
             ))
             val part = File(root, "page-" + pageIndex + ".json").readText()
@@ -503,7 +529,7 @@ class ToolkitJobsTest {
         )).get("jobId").asString
         waitFinal(jobs, jobId)
         val kept = File(root, "kept.json")
-        jobs.export(root, obj("jobId" to jobId, "outPath" to "kept.json"))
+        jobs.export(root, obj("jobId" to jobId, "outPath" to "kept.json", "organize" to false))
         val keptText = kept.readText()
         assertTrue(kept.isFile)
         // Reload with zero finished retention: constructor trim must evict the completed job.
@@ -511,7 +537,7 @@ class ToolkitJobsTest {
             folder, { _, _ -> ToolkitIo.json() }, ToolkitJobs.DEFAULT_RETENTION_WINDOW_MILLIS, 0, 4,
         ) { System.currentTimeMillis() }
         val error = runCatching {
-            evicting.export(root, obj("jobId" to jobId, "outPath" to "evicted.json"))
+            evicting.export(root, obj("jobId" to jobId, "outPath" to "evicted.json", "organize" to false))
         }.exceptionOrNull()
         assertEquals("JOB_EVICTED", codeOf(error))
         assertFalse(File(root, "evicted.json").exists())

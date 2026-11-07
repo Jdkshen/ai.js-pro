@@ -316,7 +316,10 @@ internal class ToolkitJobs internal constructor(
         ) end--
         require(end > offset || offset == text.length) { "maxChars太小，不能容纳当前Unicode字符，请至少使用2" }
         val chunk = text.substring(offset, end)
-        val target = ToolkitIo.resolve(root, args.tString("outPath"))
+        // C：apk_job_export 也是产出；与 apk_*/zip_* 共用同一个默认项目（store 为本 jobs 目录的父目录）。
+        val organizer = ToolkitOutputOrganizers.forStore(folder.absoluteFile.parentFile ?: folder, root)
+        val organized = organizer.organize(ToolkitIo.resolve(root, args.tString("outPath")), args)
+        val target = organized.path
         require(!target.isDirectory) { "outPath 必须是文件，不能是目录" }
         val parent = target.parentFile
         require(parent != null && (parent.isDirectory || parent.mkdirs())) {
@@ -335,7 +338,7 @@ internal class ToolkitJobs internal constructor(
             "nextOffset" to end,
             "totalChars" to text.length,
             "hasMore" to (end < text.length),
-        )
+        ).withOrganized(organized)
     }
 
     // ------------------------------------------------------------------

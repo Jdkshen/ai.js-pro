@@ -36,6 +36,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
     private val fridaSessions = ToolkitFridaSession()
     /** §7：有状态 native 分析会话（状态落盘在 noBackupFilesDir，不启动 r2 进程）。 */
     private val nativeAnalysis = ToolkitNativeAnalysis(File(context.noBackupFilesDir,"native-analysis"))
+    private val outputOrganizer by lazy { ToolkitOutputOrganizers.forRoot(root) }
     /**
      * UX-1：r2 project 会话（一次 aaa 分析 + 多次查询），执行注入到 [ToolkitProcess]。
      * 没有 runner 时 ToolkitR2Session 会返回 executed=false，不假装跑过。
@@ -264,7 +265,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
     private fun injectGadget(args:JsonObject,temp:File):JsonObject {
         val detail=args.tString("detail","full").lowercase()
         require(detail in setOf("full","summary")){"detail 必须为 full 或 summary"}
-        val destination=ToolkitIo.resolve(root,args.tString("outPath"))
+        val organized=outputOrganizer.organize(ToolkitIo.resolve(root,args.tString("outPath")),args)
+        val destination=organized.path
         require(!destination.exists()&&destination.parentFile?.isDirectory==true){"outPath 必须为父目录存在的新文件"}
         val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk")
         val interaction=args.tString("interactionType","listen")
@@ -309,7 +311,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 "upstream" to false,"impact" to "may-block-load","messages" to listOf(failure.message ?: failure.javaClass.simpleName)))
             val schemes=runCatching{ToolkitSignatures.read(target).getAsJsonArray("schemes") ?: JsonArray()}.getOrDefault(JsonArray())
             val note="可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载" + gadgetPartialNote(reasons)
-            if(detail=="summary") return gadgetSummary(target,info,signerLabel,schemes,true,true,note)
+            if(detail=="summary") return gadgetSummary(target,info,signerLabel,schemes,true,true,note).apply { this.withOrganized(organized) }
             return ToolkitIo.json(
                 "outputPath" to target.path, "path" to target.path, "size" to target.length(),
                 "sha256" to runCatching{ToolkitIo.sha(target)}.getOrNull(),
@@ -324,7 +326,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 "nextActions" to ToolkitIo.json(
                     "install" to "安装该 APK（重签证书与原应用不同，覆盖安装可能失败，必要时保留数据重装）",
                     "verify" to "安装后用 frida_status / logcat 确认 Gadget 是否加载；注入未验证不代表不能加载",
-                ))
+                )).withOrganized(organized)
         }
         val partialReasons=gadgetPartialReasons(verification)
         val verificationStatus=verification?.tString("status","") ?: "unavailable"
@@ -335,7 +337,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "已重签并可安装；静态验证 status=" + verificationStatus + "，详见 partialReasons/verification；只有 warning 的检查不会造成 partial"
         else "已重签并通过静态验证；安装/启动仍需实测"
         val noteWithUpstream=note + gadgetPartialNote(partialReasons)
-        if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,noteWithUpstream)
+        if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,noteWithUpstream).apply { this.withOrganized(organized) }
         verification?.add("partialReasons",partialReasons)
         return info.apply {
             addProperty("path",destination.path);addProperty("size",destination.length());addProperty("sha256",ToolkitIo.sha(destination))
@@ -343,6 +345,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             addProperty("originalSignaturePreserved",false);addProperty("installed",false)
             addProperty("signer",signerLabel);add("schemesApplied",schemes);add("partialReasons",partialReasons);addProperty("note",noteWithUpstream)
             add("verification",verification)
+            this.withOrganized(organized)
             // 只读对齐诊断（与 apk_build 同源：写入后 align、再由 verifier 复核本地头偏移）
             add("alignment",alignmentDiagnosticsJson(verification,true))
             // 反馈：script 模式不构建 endpoint/token，nextActions 也不能再引用它们（否则调用方拿到空值去连）。
@@ -452,6 +455,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val framework=File(context.noBackupFilesDir,"apk-frameworks").apply{mkdirs()}
         val subcommand=mutableListOf<String>()
         var output:File?=null;var projectTarget:File?=null
+        var outputOrganized:ToolkitOutputOrganizer.OrganizedPath?=null
         // 任务2：staging 诊断（copy/in_place），只在 apk_build_project 成功返回中暴露。
         var stagingMode="copy"
         var copyMs=0L
@@ -467,7 +471,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         var inPlaceCleanupOk=true
         when(name){
             "apk_decode_project"->{val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk");validateArchive(input)
-                projectTarget=ToolkitIo.resolve(root,args.tString("outDir"));require(!projectTarget.exists()&&projectTarget.parentFile?.isDirectory==true){"outDir 必须是父目录存在的新目录"}
+                outputOrganized=outputOrganizer.organize(ToolkitIo.resolve(root,args.tString("outDir")),args)
+                projectTarget=outputOrganized!!.path;require(!projectTarget.exists()&&projectTarget.parentFile?.isDirectory==true){"outDir 必须是父目录存在的新目录"}
                 output=File(temp,"decoded");subcommand+=listOf("d",input.path,"-o",output.path,"-p",framework.path,"-j","1")
                 if(!args.tBool("decodeResources",true))subcommand+="-r"
             }
@@ -532,7 +537,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         if(name=="apk_decode_project") {
             require(output!!.isDirectory&&File(output,"apktool.yml").isFile){"解包没有生成有效工程"}
             ToolkitReverseFiles.publishTree(output,projectTarget!!)
-            return ToolkitIo.json("path" to projectTarget.path,"backend" to "apktool","decoded" to true,"diagnostics" to completed.text.takeLast(12000),"rebuildGuaranteed" to false)
+            return ToolkitIo.json("path" to projectTarget.path,"backend" to "apktool","decoded" to true,"diagnostics" to completed.text.takeLast(12000),"rebuildGuaranteed" to false).withOrganized(outputOrganized)
         }
         require(output!!.isFile){"回编译没有生成APK"};validateArchive(output)
         ToolkitArchiveAlignment.align(output)
@@ -542,7 +547,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             verification=ToolkitApkVerifier.inspect(output,null,null)
             require(verification.getAsJsonObject("signature").tBool("verified")){"回编译APK验签失败"}
         }
-        val destination=ToolkitIo.resolve(root,args.tString("outPath"))
+        outputOrganized=outputOrganizer.organize(ToolkitIo.resolve(root,args.tString("outPath")),args)
+        val destination=outputOrganized!!.path
         ToolkitIo.withFileLocks(listOf(destination)){require(!destination.exists()){"outPath 已存在，请使用新文件名"};ToolkitIo.atomic(destination){output.copyTo(it,true)}}
         return ToolkitIo.json(
             "path" to destination.path,
@@ -565,7 +571,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "sourceTreeUnchanged" to if(stagingMode=="in_place") sourceTreeUnchanged else null,
             "sourceTreeVerification" to if(stagingMode=="in_place") "sha256_before_after" else "not_needed_copy_mode",
             "diagnostics" to completed.text.takeLast(12000),
-        )
+        ).withOrganized(outputOrganized)
     }
     /** 删除 in_place 构建新建的 apktool 输出目录；只在预检确认 build/dist 原本不存在时调用。 */
     private fun cleanupInPlaceGenerated(project:File):Boolean{

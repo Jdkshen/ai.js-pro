@@ -1144,7 +1144,10 @@
     "properties": {
       "detail": {
         "type": "string",
-        "enum": ["full","summary"],
+        "enum": [
+          "full",
+          "summary"
+        ],
         "description": "full（默认）返回完整 verification/alignment 诊断；summary 只回 path/size/sha256/signed/signer/schemes/changed* 等关键字段，适合轮询或大包。"
       },
       "workspaceId": {
@@ -1164,6 +1167,11 @@
       "sign": {
         "type": "boolean",
         "description": "false 导出未签名 APK；true 使用本机 AI.js Pro 签名身份重签并移除原签名，不能沿用原作者签名。"
+      },
+      "organize": {
+        "type": "boolean",
+        "default": true,
+        "description": "产出目录归置：默认 true。裸文件名或直接落在操作根的输出会被自动写进默认项目目录（没有则自动建 mcp-out-YYYYMMDD）；显式子目录不改写；传 false 关闭。返回体出现 organized 即为被改写。"
       }
     },
     "required": [
@@ -1681,6 +1689,48 @@
       }
     }
   },
+  "project_folder": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "action": {
+        "type": "string",
+        "enum": [
+          "state",
+          "create",
+          "set",
+          "tidy"
+        ],
+        "default": "state",
+        "description": "state 查看；create/set 建并设为默认；tidy 默认 dryRun=true 移到项目 _incoming/。"
+      },
+      "name": {
+        "type": "string",
+        "description": "项目名，例如 云镜分析；create/set 时创建操作根下 <name>/。"
+      },
+      "path": {
+        "type": "string",
+        "description": "可选：create/set 指定操作根内的项目目录；与 name 二选一。"
+      },
+      "move": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "description": "tidy 要移动的文件相对路径列表。"
+      },
+      "pattern": {
+        "type": "string",
+        "description": "tidy 的可选根目录文件名 glob（* 和 ?）。"
+      },
+      "dryRun": {
+        "type": "boolean",
+        "default": true,
+        "description": "tidy 默认只预览，不移动。"
+      }
+    },
+    "required": []
+  },
   "apk_job_status": {
     "type": "object",
     "additionalProperties": false,
@@ -1749,6 +1799,11 @@
         "minimum": 1,
         "maximum": 1048576,
         "description": "单次导出窗口；省略时导出全部结果；显式传值时上限 1048576（1 MiB）。"
+      },
+      "organize": {
+        "type": "boolean",
+        "default": true,
+        "description": "产出目录归置：默认 true。裸文件名或直接落在操作根的输出会被自动写进默认项目目录（没有则自动建 mcp-out-YYYYMMDD）；显式子目录不改写；传 false 关闭。返回体出现 organized 即为被改写。"
       }
     },
     "required": [
@@ -1934,7 +1989,14 @@
       },
       "op": {
         "type": "string",
-        "enum": ["xor", "bswap", "index_permute", "aes_decrypt", "inflate", "pointer_table_restore"],
+        "enum": [
+          "xor",
+          "bswap",
+          "index_permute",
+          "aes_decrypt",
+          "inflate",
+          "pointer_table_restore"
+        ],
         "description": "变换类型；统一记录参数来源、输出哈希与验证断言。"
       },
       "rangeStart": {
@@ -1965,7 +2027,10 @@
         "description": "可选；不传则只返回证据与输出哈希，不落盘。"
       }
     },
-    "required": ["path", "op"]
+    "required": [
+      "path",
+      "op"
+    ]
   },
   "evidence_export": {
     "type": "object",
@@ -2025,7 +2090,9 @@
         "default": 512
       }
     },
-    "required": ["outPath"]
+    "required": [
+      "outPath"
+    ]
   },
   "apk_workspace_inventory": {
     "type": "object",

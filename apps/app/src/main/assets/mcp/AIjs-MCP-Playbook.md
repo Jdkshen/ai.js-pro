@@ -27,6 +27,7 @@
 ## 调用习惯
 
 - 相对路径相对「操作目录」（脚本根 `/storage/emulated/0/脚本`），不要写 `/sdcard` 绝对路径；先 `list_scripts` 看清根目录。
+- **产出目录（必须）**：所有 APK/ZIP/反编译/截图/证据放 `<root>/<项目名>/`；没有先 `project_folder {action:"create",name:"…"}` 再 `set`。裸文件名或写在根目录会被自动归置并返回 `organized:{from,to,projectDir,reason}`——看到它说明原本写错位置，下次直接传项目目录；`organize:false` 可显式关闭。
 - 需要 shell（uid=2000，可 `pm`/`am`/`dumpsys`）时用设备上的 rish（`terminal_exec backend="shizuku"` 或 `shell_rish`）；terminal 默认是应用 UID，跑不了 `pm`。
 - 文件/APK 工具全部本地实现：先 `toolkit_status`；APK 按 `apk_list_available_apks` → `apk_workspace_open` → `apk_session_create` → 读取/搜索 → 修改 → `apk_session_check` → `apk_build`。旧 `mt_*` 名称只是 dispatch 兼容别名；公开写法和 URI 用 `aijs://current-apk` / `aijs://workspace/<id>`，不需要另装 MT。
 - 浮窗：Node 用 `require("floating_window")`；坐标/根布局看 Guide「Node floating_window 坐标系与根布局（.4 实战反馈）」——根 `layout_*` 会被 WindowManager 无视，根 `match_parent`，窗口大小用 `setSize`/`initialSize`。
@@ -302,7 +303,10 @@ Node 一直返回 `42`；Rhino **dev-1380+** 返回 `42`，`.4` 的 **dev-1378**
 
 - 探索脚本：`/storage/emulated/0/脚本/<用途>_harnessN.js`，只续号不覆盖。
 - 结果：`<项目>/recovered/`（正式交付放 `recovered/工程明文/`）；报告：`<项目>/analysis/*.md`。
-- **任务结果只保留 6 小时或 64 条（dev-1378）**：`apk_job_*` 输出超出保留策略会删除缓存，只留 `JOB_EVICTED` 墓碑（`apk_job_list.evicted[]` 的 `code=JOB_EVICTED`、`reason=retentionLimit|retentionWindow`；`retention` 里 `windowMillis=21600000`、`maxRetainedFinished=64`、`maxTombstones=256`、`maxResultBytes=24 MiB`）。结果“消失”先看墓碑，不是升级清空；`SERVICE_RESTARTED` 才是进程重启丢失。**任务到终态就立刻 `apk_job_result` 取回并写入本项目 `recovered/`，不要等**。`apk_job_result` 默认窗口 1,048,576 字符（dev-1378，旧 16,384），大结果一次取回；`hasMore/nextOffset` 续读，`apk_job_result` 显式 `maxChars` schema 上限已 1 MiB（dev-1380）；但 `apk_decompile_*` 的 `maxChars` 默认/上限仍是 200000、会在 200000 截断（B3 修复中），大结果用 `apk_job_export`/`offset` 续读。怎么验证：`apk_job_list {}` 看 `retention/evicted`；对墓碑 jobId 调 `apk_job_result` 应报 `JOB_EVICTED`；跑一个 >16K 结果不传 `maxChars`，确认 `content` 长度 >16384、`defaultMaxChars=1048576`。 留档用 `apk_job_export{jobId,outPath}` 原样原子导出（默认导出全部、父目录自动建、不延长 6h/64 条缓存）。
+- **项目目录约定（必须，dev-1381）**：APK/ZIP/反编译/截图/导出证据统一放 `<root>/<项目名>/`；没有就 `project_folder {action:"create",name:"…"}`，再 `set` 为默认。不要放脚本根或 `tmp/out/test/__xxx`；自动归置的 `organized` 是纠错信号，不是长期方案。
+- **正反例**：❌ `脚本/out.apk`、`脚本/__verify/x.apk`；✅ `脚本/云镜分析/build/out.apk`、`脚本/云镜分析/recovered/job-result.json`。
+- **验证**：`project_folder {action:"state"}` 看 root/projects；裸输出应带 `organized`；按项目路径直传则不应带；`tidy` 默认 `dryRun:true`，确认后 `dryRun:false`，再用 `file_list` 核对。
+- **任务结果只保留 6 小时或 64 条（dev-1378）**：`apk_job_*` 输出超出保留策略会删除缓存，只留 `JOB_EVICTED` 墓碑（`apk_job_list.evicted[]` 的 `code=JOB_EVICTED`、`reason=retentionLimit|retentionWindow`；`retention` 里 `windowMillis=21600000`、`maxRetainedFinished=64`、`maxTombstones=256`、`maxResultBytes=24 MiB`）。结果“消失”先看墓碑，不是升级清空；`SERVICE_RESTARTED` 才是进程重启丢失。**任务到终态就立刻 `apk_job_result`/`apk_job_export` 取回并写入项目目录的 `recovered/`，不要等**。`apk_job_result` 默认窗口 1,048,576 字符（dev-1378，旧 16,384），大结果一次取回；`hasMore/nextOffset` 续读，`apk_job_result` 显式 `maxChars` schema 上限已 1 MiB（dev-1380）；但 `apk_decompile_*` 的 `maxChars` 默认/上限仍是 200000、会在 200000 截断（B3 修复中），大结果用 `apk_job_export`/`offset` 续读。怎么验证：`apk_job_list {}` 看 `retention/evicted`；对墓碑 jobId 调 `apk_job_result` 应报 `JOB_EVICTED`；跑一个 >16K 结果不传 `maxChars`，确认 `content` 长度 >16384、`defaultMaxChars=1048576`。 留档用 `apk_job_export{jobId,outPath}` 原样原子导出（默认导出全部、父目录自动建、不延长 6h/64 条缓存）。
 - 交付前两端 md5sum 对一遍并写进 `MANIFEST.md`；原始 APK / project.bin 只读不改。
 
 ## 资源不匹配、后台任务和回退

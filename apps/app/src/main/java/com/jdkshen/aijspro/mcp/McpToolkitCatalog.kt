@@ -4,6 +4,7 @@ package com.jdkshen.aijspro.mcp
 internal object McpToolkitCatalog {
     val names = listOf(
         "toolkit_status",
+        "project_folder",
         "apk_workspace_open",
         "apk_list_available_apks",
         "apk_workspace_list",

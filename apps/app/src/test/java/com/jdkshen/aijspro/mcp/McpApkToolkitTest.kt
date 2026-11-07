@@ -23,6 +23,8 @@ class McpApkToolkitTest {
     private fun invoke(name: String, vararg p: Pair<String,Any?>): JsonObject {
         val input = args("workspaceId" to workspace, "editSessionId" to session)
         p.forEach { (k,v) -> input.add(k,Gson().toJsonTree(v)) }
+        // 归置行为由专门用例覆盖；既有用例继续验证原路径语义。
+        if (!input.has("organize")) input.addProperty("organize", false)
         return tools.call(name,input).getAsJsonObject("data")
     }
     private fun fails(block: () -> Unit) { try { block(); fail("Expected failure") } catch(expected: IllegalArgumentException) { } catch(expected: IllegalStateException) { } }
@@ -145,6 +147,24 @@ class McpApkToolkitTest {
         }
         fails { invoke("apk_build","outputName" to "fixture.apk","overwrite" to true,"sign" to false) }
     }
+    @Test fun buildOutputIsOrganizedOnlyForRootOrBareNames() {
+        val result = invoke("apk_build", "outputName" to "organized-result.apk", "overwrite" to false,
+            "sign" to false, "organize" to true)
+        val organized = result.getAsJsonObject("organized")
+        assertNotNull(organized)
+        val projectDir = File(organized.get("projectDir").asString)
+        assertTrue(projectDir.name.startsWith("mcp-out-"))
+        assertEquals(projectDir.path, File(result.get("path").asString).parentFile.path)
+        assertTrue(File(result.get("path").asString).isFile)
+        assertFalse(File(home, "organized-result.apk").exists())
+
+        val explicitDir = File(home, "explicit"); assertTrue(explicitDir.mkdirs())
+        val explicit = invoke("apk_build", "outputName" to "explicit/kept.apk", "overwrite" to false,
+            "sign" to false, "organize" to true)
+        assertEquals(File(explicitDir, "kept.apk").path, explicit.get("path").asString)
+        assertFalse(explicit.has("organized"))
+    }
+
     @Test fun summaryCfgHasEmptyGraphsAndKeepsObservedCounts() {
         val result = invoke("apk_native_analyze_control_flow", "locator" to "zip_entry:lib/arm64-v8a/libfixture.so",
             "addressKind" to "virtual", "address" to "0x10080", "outputMode" to "summary",

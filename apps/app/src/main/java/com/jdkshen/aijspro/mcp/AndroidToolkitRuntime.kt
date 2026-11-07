@@ -12,8 +12,41 @@ import com.stardust.autojs.runtime.tool.ToolchainRuntime
 import com.stardust.autojs.runtime.tool.ToolchainStore
 import java.io.*
 import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.zip.ZipFile
+
+/**
+ * C：按操作根共享一个 ToolkitOutputOrganizer；默认项目状态持久化在工具 store 的 project.json，
+ * 所以 apk_ 系、zip_ 系与 job 导出必须拿到同一个实例，不能各自复制归置规则。
+ */
+internal object ToolkitOutputOrganizers {
+    private val cache = ConcurrentHashMap<String, ToolkitOutputOrganizer>()
+    @Volatile private var storeBase: File? = null
+
+    /** McpToolkitProvider 的 store 基目录（apk-toolkit）；由 AndroidToolkitRuntime 在构造时注册。 */
+    fun registerStore(base: File) { storeBase = base.canonicalFile; cache.clear() }
+
+    fun storeFor(root: File): File {
+        val hash = ToolkitIo.version(root.canonicalPath.toByteArray()).take(16)
+        val base = storeBase ?: File(root.canonicalFile.parentFile ?: root.canonicalFile, ".mcp-output-store")
+        return File(base, hash)
+    }
+
+    fun forRoot(root: File): ToolkitOutputOrganizer = forStore(storeFor(root), root)
+
+    fun forStore(store: File, root: File): ToolkitOutputOrganizer {
+        val key = store.canonicalPath + "|" + root.canonicalPath
+        return cache.getOrPut(key) { ToolkitOutputOrganizer(store, root) }
+    }
+
+    fun resetForTest() { storeBase = null; cache.clear() }
+}
+
+/** 把 organizer 的 organized 摘要原样加进工具结果；未改写时不加字段（不改变既有返回形状）。 */
+internal fun JsonObject.withOrganized(organized: ToolkitOutputOrganizer.OrganizedPath?): JsonObject = apply {
+    organized?.info?.let { add("organized", it) }
+}
 
 /**
  * B: jadx 子进程命令。-Xmx 必须放在 /system/bin（app_process 可执行路径）之前，
@@ -48,6 +81,8 @@ internal class AndroidToolkitRuntime(private val context:Context, private val ro
     private val reverse by lazy { AndroidReverseRuntime(context,root,::component) }
 
     init {
+        // 同一个操作根的所有工具共享 organizer；store 与 McpToolkitProvider 的 apk-toolkit 目录一致。
+        ToolkitOutputOrganizers.registerStore(File(context.filesDir, "apk-toolkit"))
         // file_access_diagnose（P0-B）需要真实 UID/errno 与 Shizuku 授权身份；本类持有 Context，
         // 由它把探测实现安装到进程级注册表，McpFileToolkit 只负责参数与工具外壳。
         ToolkitPathDiagnostics.installProvider { rootDir, requested, backend, compareWithShizuku ->

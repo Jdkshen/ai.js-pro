@@ -96,10 +96,11 @@ internal object McpDeviceTools {
      */
     fun screenshot(mode: String, format: String?, quality: Int?, dataUri: Boolean,
                    maxWidth: Int?, timeoutMillis: Int?, region: com.google.gson.JsonElement? = null,
-                   savePath: String? = null, saveFormat: String? = null): JsonObject {
+                   savePath: String? = null, saveFormat: String? = null, organize: Boolean = true): JsonObject {
         require(McpCapturePreset.isKnownMode(mode)) { "mode 必须是 fastest、fast、balanced 或 quality" }
         val requestedRegion = McpCapturePreset.parseRegion(region)
-        val saveTarget = McpCapturePreset.resolveSaveTarget(savePath)
+        val requestedSaveTarget = McpCapturePreset.resolveSaveTarget(savePath)
+        val (saveTarget, organized) = McpCapturePreset.organizeSaveTarget(requestedSaveTarget, organize)
         val resolvedSaveFormat = McpCapturePreset.resolveSaveFormat(saveFormat, saveTarget != null)
         // saveFormat=auto 时按 savePath 扩展名决定编码；raw 表示写原始像素（不看 format）。
         val autoFormat = when {
@@ -181,6 +182,7 @@ internal object McpDeviceTools {
                 if (saveTarget != null) {
                     addProperty("saved", true)
                     addProperty("path", saveTarget.absolutePath)
+                    if (organized != null) add("organized", organized)
                     addProperty("saveFormat", resolvedSaveFormat)
                     addProperty("writeMs", writeMs)
                     if (rawRequested) addProperty("rawLayout", "RGBA8888 行优先，stride=width*4，无文件头（${output.width}x${output.height}，共 ${bytes.size} 字节）")
@@ -198,6 +200,7 @@ internal object McpDeviceTools {
             // 这正是逐帧 CV 循环想要的「给个路径就行」。
             val embedImage = saveTarget == null || dataUri
             return JsonObject().apply {
+                if (organized != null) add("organized", organized)
                 add("structuredContent", metadata)
                 add("content", JsonArray().apply {
                     if (embedImage) {

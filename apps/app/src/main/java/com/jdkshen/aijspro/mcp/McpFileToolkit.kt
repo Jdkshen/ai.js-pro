@@ -41,7 +41,7 @@ import kotlin.math.min
  * 失败一律抛出 IllegalArgumentException / IOException / SecurityException，由主集成转换成
  * MCP 错误；成功返回普通 payload：{ok:true,data:...,error:null,nextActions:[...]}。
  */
-internal class McpFileToolkit(private val root: File) {
+internal class McpFileToolkit(private val root: File, private val store: File? = null) {
 
     companion object {
         /** 对外暴露的工具名（去掉 mt_ 前缀，保留相同语义）。 */
@@ -308,6 +308,7 @@ internal class McpFileToolkit(private val root: File) {
                         "targetVersion" to stringField("已有文件传 SHA-256；仅创建新文件传 missing。"),
                         "encoding" to stringField("已有文件传实际编码令牌；创建传 utf-8 / utf-8-bom 等。"),
                         "edits" to arrayField("1..200 条编辑，全部匹配文本与写入文本合计不超过 524288 码点。", editItemSchema(), 1, MAX_EDIT_ITEMS),
+                        "organize" to boolField("默认 true：裸文件名/直接落在操作根下的目标自动归置到默认项目；显式子目录不改写；false 关闭。", true),
                     ),
                 ),
             )
@@ -322,6 +323,7 @@ internal class McpFileToolkit(private val root: File) {
                         "path" to stringField("非空绝对路径或相对 root 的路径，父目录必须存在。"),
                         "targetVersion" to stringField("missing 仅用于创建；否则为当前 64 位小写十六进制 SHA-256。"),
                         "hex" to stringField("0..1048576 原始字节，偶数长度十六进制，无分隔符。", maxLength = 2 * MAX_BINARY_WRITE_BYTES),
+                        "organize" to boolField("默认 true：裸文件名/直接落在操作根下的目标自动归置到默认项目；显式子目录不改写；false 关闭。", true),
                     ),
                 ),
             )
@@ -359,11 +361,11 @@ internal class McpFileToolkit(private val root: File) {
                 "移动一个普通文件或目录。目录要求目标不存在且不能移动到自身子树；" +
                     "文件 overwrite=true 可替换普通文件。跨文件系统的复制+删除移动不受支持。",
                 schema(
-                    listOf("sourcePath", "destinationPath", "overwrite"),
+                    listOf("sourcePath", "destinationPath"),
                     props(
-                        "sourcePath" to stringField("非空源路径。"),
-                        "destinationPath" to stringField("非空目标路径，父目录必须存在。"),
-                        "overwrite" to boolField("文件是否允许替换现有目标；目录必须为 false。"),
+                        "sourcePath" to stringField("非空源路径。参数名是 sourcePath，不是 source。"),
+                        "destinationPath" to stringField("非空目标路径，父目录必须存在。参数名是 destinationPath，不是 destination。"),
+                        "overwrite" to boolField("是否允许替换现有普通文件；默认 false，目录必须为 false。", false),
                     ),
                 ),
             )
@@ -557,6 +559,8 @@ internal class McpFileToolkit(private val root: File) {
     }
 
     private val rootDir: File = root.canonicalFile
+    /** 只有生产入口 McpToolkit 会传 store；单参构造保留给既有 JVM 测试，不改变其路径语义。 */
+    private val outputOrganizer: ToolkitOutputOrganizer? = store?.let { ToolkitOutputOrganizer(it, rootDir) }
     private val caseInsensitivePaths: Boolean = File.separatorChar == '\\'
     private val definitionsJson: JsonArray by lazy { buildDefinitions() }
 
@@ -602,7 +606,22 @@ internal class McpFileToolkit(private val root: File) {
             add("data", result.data)
             add("error", JsonNull.INSTANCE)
             add("nextActions", result.nextActions)
+            // 文件工具既在 data.organized 给细节，也在顶层冗余一份，方便通用 MCP 客户端发现。
+            result.data.get("organized")?.let { add("organized", it) }
         }
+    }
+
+    private data class OrganizedTarget(val path: File, val organized: JsonObject?)
+
+    /** 写类工具统一入口：裸文件名/操作根直下文件归置到默认项目；显式子目录与 organize=false 不动。 */
+    private fun resolveOrganizedWrite(raw: String, args: JsonObject, label: String): OrganizedTarget {
+        val organizer = outputOrganizer ?: return OrganizedTarget(resolvePath(raw, allowEmpty = false), null)
+        val result = organizer.organize(raw, args.optionalBoolean("organize", true), label)
+        return OrganizedTarget(resolvePath(result.path, allowEmpty = false), result.organized)
+    }
+
+    private fun addOrganized(data: JsonObject, organized: JsonObject?) {
+        organized?.let { data.add("organized", it) }
     }
 
     private data class ToolResult(
@@ -2077,7 +2096,8 @@ internal class McpFileToolkit(private val root: File) {
     }
 
     private fun editText(args: JsonObject): ToolResult {
-        val path = resolvePath(args.requiredString("path"), allowEmpty = false)
+        val write = resolveOrganizedWrite(args.requiredString("path"), args, "file_edit_text")
+        val path = write.path
         val targetVersion = args.requiredString("targetVersion")
         val encoding = args.requiredString("encoding")
         val edits = parseEdits(args.requiredArray("edits"))
@@ -2105,6 +2125,7 @@ internal class McpFileToolkit(private val root: File) {
                 addProperty("bytesWritten", output.size)
                 addProperty("editsApplied", 1)
                 addProperty("targetVersion", newVersion)
+                addOrganized(this, write.organized)
             }
             return ToolResult(data)
         }
@@ -2124,6 +2145,7 @@ internal class McpFileToolkit(private val root: File) {
                 addProperty("bytesWritten", decoded.bytes.size)
                 addProperty("editsApplied", edits.size)
                 addProperty("targetVersion", decoded.version)
+                addOrganized(this, write.organized)
             }
             return ToolResult(data)
         }
@@ -2136,12 +2158,14 @@ internal class McpFileToolkit(private val root: File) {
             addProperty("bytesWritten", output.size)
             addProperty("editsApplied", edits.size)
             addProperty("targetVersion", newVersion)
+            addOrganized(this, write.organized)
         }
         return ToolResult(data)
     }
 
     private fun writeBytes(args: JsonObject): ToolResult {
-        val path = resolvePath(args.requiredString("path"), allowEmpty = false)
+        val write = resolveOrganizedWrite(args.requiredString("path"), args, "file_write_bytes")
+        val path = write.path
         val targetVersion = args.requiredString("targetVersion")
         val bytes = parseHex(args.requiredString("hex"), "hex", MAX_BINARY_WRITE_BYTES, allowEmpty = true)
         val creating = targetVersion == "missing"
@@ -2162,6 +2186,7 @@ internal class McpFileToolkit(private val root: File) {
             addProperty("changed", true)
             addProperty("bytesWritten", bytes.size)
             addProperty("targetVersion", newVersion)
+            addOrganized(this, write.organized)
         }
         return ToolResult(data)
     }
@@ -2302,9 +2327,15 @@ internal class McpFileToolkit(private val root: File) {
     }
 
     private fun movePath(args: JsonObject): ToolResult {
+        if (!args.has("sourcePath")) {
+            throw IllegalArgumentException("缺少参数 sourcePath（本工具参数名是 sourcePath / destinationPath，不是 source / destination）。")
+        }
+        if (!args.has("destinationPath")) {
+            throw IllegalArgumentException("缺少参数 destinationPath（本工具参数名是 sourcePath / destinationPath，不是 source / destination）。")
+        }
         val source = resolvePath(args.requiredString("sourcePath"), allowEmpty = false)
         val destination = resolvePath(args.requiredString("destinationPath"), allowEmpty = false)
-        val overwrite = args.requiredBoolean("overwrite")
+        val overwrite = args.optionalBoolean("overwrite", false)
         if (samePath(source, destination)) throw IllegalArgumentException("源与目标不能相同")
         if (samePath(source, rootDir)) throw SecurityException("不能移动 root")
         if (!source.exists()) throw IOException("源不存在：${source.path}")

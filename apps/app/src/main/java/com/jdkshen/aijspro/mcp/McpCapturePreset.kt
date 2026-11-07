@@ -1,6 +1,8 @@
 package com.jdkshen.aijspro.mcp
 
 import com.google.gson.JsonElement
+import com.stardust.app.GlobalAppContext
+import com.jdkshen.aijspro.Pref
 
 /**
  * `capture_screen` 的三种预设：一个**质量好**、一个**快速**，外加保持现状的 balanced。
@@ -62,12 +64,37 @@ internal object McpCapturePreset {
     fun resolveSaveTarget(savePath: String?): java.io.File? {
         val raw = savePath?.trim().orEmpty()
         if (raw.isEmpty()) return null
-        val root = java.io.File(com.jdkshen.aijspro.Pref.getScriptDirPath())
+        val root = operationRoot()
         var target = McpPathRules.resolve(root, raw, "savePath 必须在脚本目录内")
         if (raw.endsWith("/") || raw.endsWith("\\") || target.isDirectory) {
             target = java.io.File(target, "capture-${System.currentTimeMillis()}.png")
         }
         return target
+    }
+
+    /** A 的归置器：把裸文件名/脚本根直下文件改写到默认项目；拿不到上下文/归置器时返回 original。 */
+    fun organizeSaveTarget(target: java.io.File?, organize: Boolean = true): Pair<java.io.File?, com.google.gson.JsonObject?> {
+        if (target == null || !organize) return target to null
+        val organizer = runCatching { outputOrganizer() }.getOrNull() ?: return target to null
+        return runCatching {
+            val result = organizer.organize(target.path, true, "capture_screen")
+            java.io.File(result.path) to result.organized
+        }.getOrElse { target to null }
+    }
+
+    private fun operationRoot(): java.io.File {
+        val scriptRoot = runCatching { java.io.File(Pref.getScriptDirPath()).canonicalFile }.getOrElse { java.io.File(".").canonicalFile }
+        val context = runCatching { GlobalAppContext.get() }.getOrNull() ?: return scriptRoot
+        val operation = runCatching { McpSettings.operationPath(context) }.getOrDefault("")
+        if (operation.isBlank()) return scriptRoot
+        return runCatching { java.io.File(scriptRoot, operation).canonicalFile }.getOrDefault(scriptRoot)
+    }
+
+    private fun outputOrganizer(): ToolkitOutputOrganizer {
+        val context = GlobalAppContext.get()
+        val root = operationRoot()
+        val store = java.io.File(java.io.File(context.filesDir, "apk-toolkit"), ToolkitIo.version(root.path.toByteArray()).take(16))
+        return ToolkitOutputOrganizers.forStore(store, root)
     }
 
     /** saveFormat：auto（按扩展名）/ png / jpg / raw（RGBA8888 原始像素，最快）。 */

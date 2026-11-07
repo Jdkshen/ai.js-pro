@@ -852,12 +852,68 @@ class McpZipToolkitTest {
         assertTrue(error?.message.orEmpty().contains("游标失效"))
     }
 
+    @Test
+    fun createAndExtractOrganizeBareOutputsButKeepExplicitSubdirs() {
+        newToolkit()
+        File(root, "source.txt").writeText("organized-source")
+        val created = call("zip_create", obj(
+            "outputPath" to "organized.zip",
+            "sources" to JsonArray().apply { add(obj("sourcePath" to "source.txt", "entryPath" to "source.txt")) },
+            "overwrite" to false,
+            "level" to 6,
+            "organize" to true,
+        )).getAsJsonObject("data")
+        val createdPath = File(created.get("path").asString)
+        assertEquals("mcp-out-", createdPath.parentFile.name.take(8))
+        // 首次归置会自动建 mcp-out-YYYYMMDD，因此 reason 是 auto-project（有默认项目后才是 default-project）。
+        assertEquals("auto-project", created.getAsJsonObject("organized").get("reason").asString)
+        assertFalse(File(root, "organized.zip").exists())
+
+        val extracted = call("zip_extract", obj(
+            "path" to createdPath.path,
+            "entries" to JsonArray().apply {
+                add(obj("entryPath" to "source.txt", "destinationPath" to "extracted.txt"))
+            },
+            "overwrite" to false,
+            "organize" to true,
+        )).getAsJsonObject("data")
+        val destination = File(extracted.getAsJsonArray("destinations")[0].asString)
+        assertEquals(createdPath.parentFile.path, destination.parentFile.path)
+        assertEquals("organized-source", destination.readText())
+        assertTrue(extracted.has("organized"))
+
+        val explicitDir = File(root, "explicit"); assertTrue(explicitDir.mkdirs())
+        val explicit = call("zip_create", obj(
+            "outputPath" to "explicit/kept.zip",
+            "sources" to JsonArray().apply { add(obj("sourcePath" to "source.txt", "entryPath" to "source.txt")) },
+            "overwrite" to false,
+            "level" to 6,
+            "organize" to true,
+        )).getAsJsonObject("data")
+        assertEquals(File(explicitDir, "kept.zip").path, explicit.get("path").asString)
+        assertFalse(explicit.has("organized"))
+
+        val explicitExtract = call("zip_extract", obj(
+            "path" to explicit.get("path").asString,
+            "entries" to JsonArray().apply {
+                add(obj("entryPath" to "source.txt", "destinationPath" to "explicit/extracted.txt"))
+            },
+            "overwrite" to false,
+            "organize" to true,
+        )).getAsJsonObject("data")
+        assertEquals(File(explicitDir, "extracted.txt").path, explicitExtract.getAsJsonArray("destinations")[0].asString)
+        assertFalse(explicitExtract.has("organized"))
+    }
+
     // ---------------------------------------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------------------------------------
 
     private fun call(name: String, args: JsonObject): JsonObject {
-        val response = toolkit.call(name, args)
+        // 既有用例验证原路径；归置由专门用例显式传 organize=true 覆盖。
+        val effective = args.deepCopy()
+        if (!effective.has("organize")) effective.addProperty("organize", false)
+        val response = toolkit.call(name, effective)
         assertTrue(response.get("ok").asBoolean)
         assertTrue(response.has("data"))
         assertTrue(response.get("error").isJsonNull)

@@ -46,6 +46,7 @@ internal class McpZipToolkit(private val root: File) {
         require(it.isDirectory) { "ZIP 工具 root 必须是已存在的目录" }
     }
     private val rootPrefix = canonicalRoot.path.trimEnd(File.separatorChar) + File.separator
+    private val outputOrganizer by lazy { ToolkitOutputOrganizers.forRoot(canonicalRoot) }
 
     /**
      * Resource budgets. They are properties (instead of private constants) so tests can exercise
@@ -206,6 +207,7 @@ internal class McpZipToolkit(private val root: File) {
         },
         "password" to str("可选；未加密条目传空字符串或省略。支持 AES-256 与 ZipCrypto"),
         "overwrite" to bool("是否允许替换已存在的普通目标文件"),
+        "organize" to bool("默认 true：裸文件名或直接落在操作根的 destinationPath 会改写进默认项目 mcp-out-YYYYMMDD；显式子目录/项目内路径不动。false 保持原路径。"),
         required = arrayOf("path", "entries", "overwrite"),
     )
 
@@ -228,6 +230,7 @@ internal class McpZipToolkit(private val root: File) {
         "overwrite" to bool("是否允许替换已存在的普通输出文件"),
         "level" to int("0 仅存储；1..9 使用 Deflate，数字越大压缩越强", 0, 9),
         "password" to str("可选；空字符串或省略不加密；非空时文件条目使用 AES-256 加密"),
+        "organize" to bool("默认 true：裸文件名或直接落在操作根的 outputPath 会改写进默认项目 mcp-out-YYYYMMDD；显式子目录/项目内路径不动。false 保持原路径。"),
         required = arrayOf("outputPath", "sources", "overwrite", "level"),
     )
 
@@ -647,7 +650,13 @@ internal class McpZipToolkit(private val root: File) {
             val selected = mutableListOf<SelectedFile>()
             val targetKeys = LinkedHashMap<String, String>()
             val directoryDestinations = LinkedHashSet<File>()
+            val organizedInfos = JsonArray()
             var selectedDeclaredBytes = 0L
+            fun organizeDestination(raw: String, label: String): File {
+                val result = outputOrganizer.organize(resolvePath(raw, "destinationPath"), args)
+                result.info?.let { organizedInfos.add(it) }
+                return result.path
+            }
 
             for (mapping in mappings) {
                 val archivePath = mapping.entryPath
@@ -659,7 +668,7 @@ internal class McpZipToolkit(private val root: File) {
                     if (!archive.isDirectory(archivePath)) {
                         throw IllegalArgumentException("ZIP 中不存在目录: ${archivePath.ifEmpty { "<root>" }}")
                     }
-                    val destination = resolvePath(rawDestination, "destinationPath")
+                    val destination = organizeDestination(rawDestination, "directory")
                     if (destination.exists() && !destination.isDirectory) {
                         throw IllegalArgumentException("目录目标已存在且不是目录: ${destination.path}")
                     }
@@ -699,7 +708,7 @@ internal class McpZipToolkit(private val root: File) {
                         throw IllegalArgumentException("'$archivePath' 是目录，destinationPath 应使用目录映射")
                     }
                     validateFileEntryName(entry.name)
-                    val destination = resolvePath(rawDestination, "destinationPath")
+                    val destination = organizeDestination(rawDestination, "file")
                     addSelected(
                         archive, entry, destination, targetKeys, selected,
                         mappingLabel = "$archivePath -> $rawDestination",
@@ -826,6 +835,10 @@ internal class McpZipToolkit(private val root: File) {
                 add("warnings", JsonArray())
                 add("destinations", destinations)
                 addProperty("overwrite", overwrite)
+                when {
+                    organizedInfos.size() == 1 -> add("organized", organizedInfos[0])
+                    organizedInfos.size() > 1 -> add("organized", organizedInfos)
+                }
             }
             success(data)
         }
@@ -897,7 +910,8 @@ internal class McpZipToolkit(private val root: File) {
         val password = args.optionalString("password")
         if (sourcesJson.size() == 0) throw IllegalArgumentException("sources 不能为空")
 
-        val output = resolvePath(rawOutput, "outputPath")
+        val organized = outputOrganizer.organize(resolvePath(rawOutput, "outputPath"), args)
+        val output = organized.path
         if (output.exists() && output.isDirectory) {
             throw IllegalArgumentException("输出路径是目录: ${output.path}")
         }
@@ -989,7 +1003,7 @@ internal class McpZipToolkit(private val root: File) {
                 addProperty("bytes", plans.filter { !it.directory }.sumOf { it.sourceFile?.length() ?: 0L })
                 addProperty("overwrite", overwrite)
                 addProperty("level", level)
-            }
+            }.withOrganized(organized)
             success(data)
         }
     }
@@ -1073,6 +1087,7 @@ internal class McpZipToolkit(private val root: File) {
         val replaced: Int,
     )
 
+    // zip_update 是原地修改用户指定的 ZIP；移动输入会破坏 targetVersion/原子覆盖语义，因此不归置。
     private fun zipUpdate(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
         val operationsJson = args.requiredArray("operations")

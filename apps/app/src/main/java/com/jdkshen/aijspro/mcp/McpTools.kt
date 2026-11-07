@@ -52,6 +52,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private val root = File(scriptsRoot, McpSettings.operationPath(context)).canonicalFile.also {
         if (it != scriptsRoot && !it.path.startsWith(scriptsRoot.path + File.separator)) error("操作目录无效")
     }
+    private val toolkitStore = File(File(context.filesDir, "apk-toolkit"), ToolkitIo.version(root.path.toByteArray()).take(16))
     private val workspaces = McpWorkspaceStore(context, root)
     private val terminalBackend = McpAndroidTerminal(context)
     private val terminals = McpTerminalJobs(root, terminalBackend::launch)
@@ -172,6 +173,7 @@ internal class McpTools(private val context: Context, private val event: (String
         add("serverInfo", McpServerMetadata.toJson())
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
+            McpOutputConventions.INSTRUCTION,
             "逆向任务首次连接：reverse_guide({topic:index}) → reverse_capabilities({}) → reverse_plan({goal:inspect|decode|rebuild|native|dynamic|fingerprint|emulate|compare})。指南与步骤也可通过 resources/list/read、prompts/list/get 发现；URI aijs://reverse/guide、aijs://reverse/workflows。",
             "逆向组件按需安装，工具注册不代表已安装；apk_component_status查询后显式apk_component_install。后台返回jobId后apk_job_status到终态，再apk_job_result按nextOffset读完；失败保留error.code，不要把排队/启动当成功。免Root Frida先apk_inject_gadget生成重签APK，安装打开后用返回的endpoint/token连接；无需Root/Server。",
             "",
@@ -282,6 +284,13 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("node_script_command", "给出「写脚本文件再运行」的推荐命令（避免 node -e 双重转义），并说明 argv[0]=node、argv[1]=脚本、argv[2] 才是参数", objSchema("scriptPath", "args", required = arrayOf("scriptPath"))))
             add(tool("crash_buffer_semantics", "解释 logcat -b crash -c 的清理语义：只清 crash 环形缓冲、不是同步屏障、旧条目可能仍被读到；给出可核对的时间窗/PID 过滤方法", objSchema()))
             McpToolkitBridge.definitions(context, root).forEach { add(it) }
+            // 所有会写文件的工具统一追加同一句产出目录 pointer（只改文案，不改逻辑）。
+            forEach { element ->
+                val tool = element.asJsonObject
+                if (tool.get("name")?.asString in McpOutputConventions.TOOLS_WITH_ORGANIZE) {
+                    tool.addProperty("description", McpOutputConventions.appendPointer(tool.get("description").asString))
+                }
+            }
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {
@@ -323,6 +332,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 })
                 add("limits", McpLimits.describe())
                 addProperty("toolCount", McpToolCatalog.names.size)
+                add("outputConventions", McpOutputConventions.describeFor(root, toolkitStore))
                 addProperty("canonicalToolCount", McpToolCatalog.canonicalNames.size)
                 addProperty("scriptRoot", root.path); addProperty("writeAllowed", McpService.allowWrite)
                 addProperty("executionAllowed", McpService.allowExecution)

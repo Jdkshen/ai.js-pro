@@ -82,13 +82,15 @@ internal object ToolkitReverseTools {
                 // 工程已在 MCP 根目录内且可写时，可跳过整树复制直接原地构建（默认 false=复制）。
                 // 原地址构建会在前后各算一次工程树 SHA-256，不一致会抛 IN_PLACE_SOURCE_MODIFIED。
                 field("buildInPlace",ToolkitIo.json("type" to "boolean","default" to false,
-                    "description" to "true=在工程目录原地构建（省掉整树复制；会校验源树未变）；false=复制到临时目录再构建"))}
+                    "description" to "true=在工程目录原地构建（省掉整树复制；会校验源树未变）；false=复制到临时目录再构建"))
+                field("organize",ToolkitIo.json("type" to "boolean","default" to true,"description" to "产出目录归置：默认 true；裸文件名/直接落在操作根的输出会自动写进默认项目目录（没有则自动建 mcp-out-YYYYMMDD），显式子目录不改写，传 false 关闭。返回体出现 organized 即被改写。"))}
             "apk_install_framework"->{path();field("tag",str())}
             "apk_inject_gadget"->{path();path("outPath");field("port",num(1024,65535,27042))
                 field("interactionType",ToolkitIo.json("type" to "string","enum" to listOf("listen","script"),"default" to "listen","description" to "listen=监听127.0.0.1端口并返回 endpoint/token；script=启动即加载脚本（不碰网络，跨UID SELinux 拦不到），返回 interaction=script + scriptPath，不生成 endpoint/token"))
                 field("scriptPath",str("script 模式下目标应用可读的脚本绝对路径"))
                 field("providerProcess",str("可选：显式指定注入 Provider 的 android:process。省略时自动读 MAIN+LAUNCHER 入口 activity/activity-alias 的 android:process；入口未声明则用 application 的 android:process；都没有=默认进程。返回 providerProcessSource=explicit|manifest|default"))
-                field("detail",ToolkitIo.json("type" to "string","enum" to listOf("full","summary"),"default" to "full","description" to "返回体详细程度；可省略，省略时=full。summary 只回 path/size/sha256/signed/signer/schemesApplied/providerProcess/providerProcessSource/partial/installable/note；full 保留 verification/alignment/nextActions 等全部诊断"))}
+                field("detail",ToolkitIo.json("type" to "string","enum" to listOf("full","summary"),"default" to "full","description" to "返回体详细程度；可省略，省略时=full。summary 只回 path/size/sha256/signed/signer/schemesApplied/providerProcess/providerProcessSource/partial/installable/note；full 保留 verification/alignment/nextActions 等全部诊断"))
+                field("organize",ToolkitIo.json("type" to "boolean","default" to true,"description" to "产出目录归置：默认 true；裸文件名/直接落在操作根的输出会自动写进默认项目目录（没有则自动建 mcp-out-YYYYMMDD），显式子目录不改写，传 false 关闭。返回体出现 organized 即被改写。"))}
             "artifact_fingerprint","native_analyze"->path()
             "native_functions"->{path();page()}
             "native_function_detail"->{path();field("address",str("十进制或0x地址，禁止命令/表达式"),true)

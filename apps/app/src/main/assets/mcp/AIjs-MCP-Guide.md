@@ -13,6 +13,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 状态与诊断 | get_status、read_apk_logs、get_mcp_log |
 | 脚本与执行 | list_scripts、read_script、search_scripts、continue_result、run_script、check_syntax、list_executions、get_execution、wait_execution、stop_script、stop_all_scripts |
 | 工作区 | workspace_open/list/read/write/delete/diff/request_apply/mkdir/cancel/cleanup |
+| 项目目录 | project_folder（state/create/set/tidy；产出自动归置） |
 | 引擎与 API | list_engines、list_engine_api、probe_engine_api、engine_api_diff、call_engine_api |
 | 设备与无障碍 | get_ui_layout、capture_screen、ui_find/click/long_click/node_action/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
 | 终端与构建 | terminal_exec/read/write/stop/list、shell_rish、get_build_tools |
@@ -28,6 +29,45 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 3. 运行：run_script 的 path/file/source 三选一；需要结果与错误日志必须 wait:true（timeoutSeconds 建议 30~120）。
 4. 改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply（workspace_write 本身不落盘）。
 5. 任何失败：先看返回的 error/status，再调用 get_execution / wait_execution / get_mcp_log；不要重复猜参数。
+
+## 产出目录约定（必须遵守）
+
+> 这是产品行为，不是建议。所有 MCP 产出都归到**项目目录**，不再散落在脚本根；AI 一上手就先读本节。
+
+1. **统一位置**：APK/ZIP、反编译结果、截图、导出的证据/JSON/日志，一律放操作根下的项目目录 `<root>/<项目名>/`（例如 `<root>/云镜分析/build/out.apk`）。
+2. **没有就先建**：先调 `project_folder {action:"create",name:"云镜分析"}`；再用 `project_folder {action:"set",name:"云镜分析"}` 设为默认项目。`state` 可随时查看根目录/当前项目/已有项目。
+3. **不要直接写根目录**：`<root>/out.apk`、`<root>/__verify/x.apk`、`tmp/out/test` 这类一次性名字都不要再出现；用项目名 + 子目录（`build/`、`recovered/`、`analysis/`、`screenshots/`）。
+4. **工具会自动归置**：裸文件名或落在根目录的输出会被改写进默认项目，返回体出现 `organized:{from,to,projectDir,reason}`。**看到 `organized` 就说明你原本写错了位置**；下次直接传项目目录，而不是反复依赖自动归置。
+5. **显式关闭**：确实需要关闭自动归置时传 `organize:false`（例如一次性只读/临时命令）；不要用它绕过项目目录约定。
+
+`project_folder` 用法：
+```json
+{"name":"project_folder","arguments":{"action":"state"}}
+{"name":"project_folder","arguments":{"action":"create","name":"云镜分析"}}
+{"name":"project_folder","arguments":{"action":"set","name":"云镜分析"}}
+{"name":"project_folder","arguments":{"action":"tidy","dryRun":true}}
+```
+
+- `state`：查看操作根、当前/默认项目、已有项目；不确定放哪时先看它。
+- `create`：在 `<root>/<name>/` 创建项目目录；已存在时幂等返回项目路径。
+- `set`：把项目设为默认，后续裸输出/自动归置都落到它。
+- `tidy`：把已有散落产物收进项目；**默认 `dryRun:true`**，先看计划，确认后传 `dryRun:false` 执行；只移动/归置，不删除源文件。
+
+正确示例：
+```json
+{"name":"file_create_directory","arguments":{"path":"云镜分析/notes"}}
+{"name":"file_edit_text","arguments":{"path":"云镜分析/notes/todo.txt","targetVersion":"missing","encoding":"utf-8","edits":[{"mode":"write_target","writeText":"hello"}]}}
+{"name":"file_create_directory","arguments":{"path":"云镜分析/build"}}
+{"name":"apk_build","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","overwrite":true,"sign":true,"outputName":"/storage/emulated/0/脚本/云镜分析/build/app-signed.apk"}}
+{"name":"apk_job_export","arguments":{"jobId":"${JOB_ID}","outPath":"云镜分析/recovered/job-result.json"}}
+```
+
+**怎么验证**：
+1. `project_folder {action:"state"}` 记录 `root/currentProject/projects`；
+2. 调 `project_folder {action:"create",name:"验证项目"}` 和 `set` 后，用裸文件名/根目录路径调用一个输出工具（如 `file_edit_text`），返回应出现 `organized.from/to/projectDir/reason`；
+3. 再按 `<root>/验证项目/build/out.apk` 直传项目路径，返回不应再有 `organized`；
+4. `project_folder {action:"tidy"}` 应默认 `dryRun:true` 并列出计划；确认后再传 `dryRun:false`，用 `file_list` 核对文件在项目目录内。
+
 
 ## API 文档与代码示例（离线）
 

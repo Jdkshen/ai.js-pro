@@ -405,6 +405,8 @@ class ToolkitZipCryptoTest {
     // ---------------------------------------------------------------------------------------------
 
     private fun call(name: String, args: JsonObject): JsonObject {
+        // 产出归置默认开启会把裸名输出移进项目目录，本测试断言的是精确路径 —— 统一关闭。
+        if (!args.has("organize")) args.addProperty("organize", false)
         val response = toolkit.call(name, args)
         assertTrue(response.get("ok").asBoolean)
         assertTrue(response.get("error").isJsonNull)
@@ -429,6 +431,8 @@ class ToolkitZipCryptoTest {
                 "overwrite" to false,
                 "level" to level,
                 "password" to password,
+                // 精确路径语义：本测试不接受自动归置。
+                "organize" to false,
             ),
         )
         assertTrue(response.get("ok").asBoolean)

@@ -13,13 +13,13 @@ import java.io.File
 internal object ToolkitExtraTools {
     val names = setOf("binary_transform", "evidence_export")
 
-    fun call(root: File, name: String, args: JsonObject): JsonObject = when (name) {
-        "binary_transform" -> transform(root, args)
-        "evidence_export" -> export(root, args)
+    fun call(root: File, store: File?, name: String, args: JsonObject): JsonObject = when (name) {
+        "binary_transform" -> transform(root, store, args)
+        "evidence_export" -> export(root, store, args)
         else -> throw IllegalArgumentException("未知扩展工具：$name")
     }
 
-    private fun transform(root: File, args: JsonObject): JsonObject {
+    private fun transform(root: File, store: File?, args: JsonObject): JsonObject {
         val source = ToolkitIo.resolve(root, args.tString("path"))
         require(source.isFile && source.length() <= ToolkitIo.MAX_ENTRY) { "输入必须是工具目录内不超过 64 MiB 的文件" }
         val bytes = source.readBytes()
@@ -45,12 +45,15 @@ internal object ToolkitExtraTools {
             result.addProperty("written", false)
             result.addProperty("writeNote", "未提供 outPath：只返回证据与输出哈希，不落盘")
         } else {
-            val destination = ToolkitIo.resolve(root, outPath)
+            // Lead 接线：B 的 organizeOutput 之前只在 export 路径用上，这里补到 transform 的写盘前。
+            val requested = ToolkitIo.resolve(root, outPath)
+            val (destination, organized) = organizeOutput(root, store, requested, args.tBool("organize", true))
             require(!destination.exists()) { "outPath 已存在，请使用新文件名" }
             require(destination.parentFile?.isDirectory == true) { "outPath 的父目录必须存在" }
             // ToolkitIo.atomic 的写入器拿到的是临时 File（不是流），写完再原子替换。
             ToolkitIo.atomic(destination) { temp -> temp.writeBytes(outcome.bytes) }
             result.addProperty("outPath", destination.path)
+            if (organized != null) result.add("organized", organized)
             result.addProperty("outputSha256", ToolkitIo.sha(destination))
             result.addProperty("written", true)
             result.addProperty("writeNote", if (analysisOnly) "已写出分析副本：不得作为构建输入" else "已写出修改结果")
@@ -58,10 +61,11 @@ internal object ToolkitExtraTools {
         return result
     }
 
-    private fun export(root: File, args: JsonObject): JsonObject {
+    private fun export(root: File, store: File?, args: JsonObject): JsonObject {
         val outPath = args.tString("outPath", "")
         require(outPath.isNotEmpty()) { "evidence_export 需要 outPath" }
-        val destination = ToolkitIo.resolve(root, outPath)
+        val requested = ToolkitIo.resolve(root, outPath)
+        val (destination, organized) = organizeOutput(root, store, requested, args.tBool("organize", true))
         require(!destination.exists()) { "outPath 已存在，请使用新文件名" }
         require(destination.parentFile?.isDirectory == true) { "outPath 的父目录必须存在" }
 
@@ -123,5 +127,18 @@ internal object ToolkitExtraTools {
                 "failures" to archive.get("failures")
             )
         )
+    }
+
+    /** B：证据落盘走 A 的归置器；拿不到 store/归置器时保持原路径（旧行为）。 */
+    private fun organizeOutput(root: File, store: File?, requested: File, organize: Boolean): Pair<File, JsonObject?> {
+        if (!organize) return requested to null
+        val configuredStore = store ?: runCatching {
+            val context = com.stardust.app.GlobalAppContext.get()
+            File(File(context.filesDir, "apk-toolkit"), ToolkitIo.version(root.path.toByteArray()).take(16))
+        }.getOrNull() ?: return requested to null
+        return runCatching {
+            val result = ToolkitOutputOrganizers.forStore(configuredStore, root).organize(requested.path, true, "evidence_export")
+            File(result.path) to result.organized
+        }.getOrElse { requested to null }
     }
 }

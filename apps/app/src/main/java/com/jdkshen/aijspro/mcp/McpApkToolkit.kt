@@ -16,6 +16,7 @@ internal class McpApkToolkit(
     private val assembler: ((Int, Long, String, String) -> ByteArray)? = null,
     private val runtime: ToolkitRuntime? = null,
 ) {
+    private val outputOrganizer by lazy { ToolkitOutputOrganizers.forStore(store, root) }
     private val pages = java.util.concurrent.ConcurrentHashMap<String, Page>()
     private val workspaceLocks = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.locks.ReentrantLock>()
     @Volatile private var currentWorkspace: String? = null
@@ -31,7 +32,20 @@ internal class McpApkToolkit(
     init { require(store.isDirectory || store.mkdirs()) { "无法创建 APK 工作区目录" } }
     fun definitions(): JsonArray = JsonArray().apply {
         schemas.entrySet().forEach { (name, schema) -> add(ToolkitIo.json("name" to name, "category" to "toolkit", "categoryTitle" to "文件与APK工具",
-            "description" to description(name), "inputSchema" to schemaWithLocatorHint(schema))) }
+            "description" to description(name), "inputSchema" to schemaWithOrganize(name, schemaWithLocatorHint(schema)))) }
+    }
+
+    /** 产出工具统一暴露 organize=true 默认；显式子目录/绝对子目录仍不移动。 */
+    private fun schemaWithOrganize(name: String, schema: JsonElement): JsonElement {
+        if (name !in setOf("apk_build", "artifact_export", "apk_copy_entry") || !schema.isJsonObject) return schema
+        val copy = schema.deepCopy().asJsonObject
+        val properties = copy.getAsJsonObject("properties") ?: return copy
+        properties.add("organize", JsonObject().apply {
+            addProperty("type", "boolean")
+            addProperty("default", true)
+            addProperty("description", "默认 true：裸文件名或直接落在操作根的文件会改写进默认项目 mcp-out-YYYYMMDD；显式子目录/项目内路径不动。false 保持原路径。")
+        })
+        return copy
     }
     /** 给含 locator 参数的 inputSchema 补前缀说明；只加 description，不改 type/required/其它约束。 */
     private fun schemaWithLocatorHint(schema: JsonElement): JsonElement {
@@ -55,7 +69,7 @@ internal class McpApkToolkit(
         return when (name) {
             "apk_workspace_open" -> ToolkitIo.ok(open(args))
             "artifact_open" -> ToolkitIo.ok(openArtifact(args))
-            in ToolkitExtraTools.names -> ToolkitIo.ok(ToolkitExtraTools.call(root, name, args))
+            in ToolkitExtraTools.names -> ToolkitIo.ok(ToolkitExtraTools.call(root, store, name, args))
             "apk_verify" -> {
                 val file=if(args.has("workspaceId"))snapshot(args.tString("workspaceId")) else ToolkitIo.resolve(root,args.tString("path"))
                 ToolkitIo.ok(ToolkitApkVerifier.inspect(file,args.get("minSdk")?.asInt,args.get("maxSdk")?.asInt))
@@ -177,6 +191,7 @@ internal class McpApkToolkit(
         "apk_component_status" -> "只读查看JADX/资源编译组件安装与可用状态；不下载不运行编译器。"
         "apk_component_install" -> "显式下载并校验可选APK/逆向组件（含免Root frida-gadget）；默认后台jobId，manifestUrl可指定发布清单。"
         "apk_component_remove" -> "卸载指定可选APK组件，保留源工程和其他组件。"
+        "project_folder" -> "管理产出项目目录：state 查看默认项目与候选；create/set 建并持久化为默认；tidy 默认 dryRun=true 把散落文件移到项目 _incoming/，只移动不删除。裸文件名/操作根直下的 file_write_bytes/file_edit_text 默认自动归置到默认项目。"
         "apk_job_start" -> "后台运行指定APK分析/编译操作，立即返回jobId；任务有超时，失败不自动重放。"
         "apk_job_list" -> "读取当前工具目录的后台任务和状态；支持 operation/state/owner/locator 过滤与 limit/cursor 分页（默认全部）。latestByLocator/items[].latestForLocator 指向同一 locator 的最新任务；effectiveConcurrency=1，maxActive 只是排队/登记上限。"
         "apk_job_status" -> "读取后台任务状态/阶段；CANCELLING表示正在等待实际worker结束。SUCCEEDED_WITH_WARNINGS 表示完成但有反编译不完整（warningCode=DECOMPILE_INCOMPLETE，详见结果 decompileIncomplete/incompleteReason）。"
@@ -487,9 +502,10 @@ internal class McpApkToolkit(
         val type=workspace(workspace).tString("artifactType","");require(type in setOf("dex","elf")){"仅独立DEX/ELF使用artifact_export"}
         val entry=if(type=="dex")"classes.dex" else "lib/standalone.so";val bytes=raw(workspace,session,entry)
         if(type=="dex")ToolkitDex(bytes)else ToolkitElf(bytes)
-        val output=ToolkitIo.resolve(root,args.tString("path"));require(output.path!=workspace(workspace).tString("sourcePath")){"不能覆盖源文件"}
+        val organized=outputOrganizer.organize(ToolkitIo.resolve(root,args.tString("path")),args)
+        val output=organized.path;require(output.path!=workspace(workspace).tString("sourcePath")){"不能覆盖源文件"}
         require(!output.exists()||args.tBool("overwrite")){"输出已存在"};ToolkitIo.atomic(output){it.writeBytes(bytes)}
-        return ToolkitIo.json("path" to output.path,"sha256" to ToolkitIo.sha(output),"sourceUnchanged" to true,"artifactType" to type)
+        return ToolkitIo.json("path" to output.path,"sha256" to ToolkitIo.sha(output),"sourceUnchanged" to true,"artifactType" to type).withOrganized(organized)
     }
     private fun decompile(workspace:String,session:String,args:JsonObject):JsonObject{
         val backend=runtime?:throw ToolkitException("COMPONENT_UNAVAILABLE","反编译组件后端未接入")
@@ -936,8 +952,9 @@ internal class McpApkToolkit(
         val signing = args.tBool("sign", false)
         val requested = args.tString("outputName", "")
         val name = requested.ifEmpty { File(workspace(workspace).tString("sourcePath")).nameWithoutExtension + "_mcp_${session}_${if(signing) "sign" else "unsigned"}.apk" }
-        require(File(name).isAbsolute || !name.contains('/')) { "outputName 只接受文件名或绝对路径" }
-        require(name.endsWith(".apk", true)); val output = ToolkitIo.resolve(root, name)
+        require(name.endsWith(".apk", true)) { "outputName 必须写完整的 .apk 文件名" }
+        val organized = outputOrganizer.organize(ToolkitIo.resolve(root, name), args)
+        val output = organized.path
         require(output != File(workspace(workspace).tString("sourcePath"))) { "不能覆盖源 APK" }
         require(!output.exists() || output.isFile && args.tBool("overwrite")) { "输出已存在或不是普通文件，需 overwrite=true" }
         val names = entries(workspace, session).filterNot { it.startsWith("META-INF/", true) && (it.endsWith(".SF", true) || it.endsWith(".RSA", true) || it.endsWith(".DSA", true) || it.endsWith(".EC", true) || it.equals("META-INF/MANIFEST.MF", true)) }
@@ -1003,11 +1020,12 @@ internal class McpApkToolkit(
         listOf("changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries").forEach {
             result.add(it, checked.get(it))
         }
+        result.withOrganized(organized)
         // 云镜反馈：apk_build 返回太大，调用方常只要路径/哈希/签名/改动计数。detail=summary 只留关键字段（默认 full，老调用不变）。
         if (args.tString("detail", "full").equals("summary", true)) {
             val keep = listOf("path", "size", "sha256", "signed", "signer", "signerFallbackReason", "schemesApplied", "schemesVerified",
                 "changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries",
-                "signingIdentity", "sourceUnchanged")
+                "signingIdentity", "sourceUnchanged", "organized")
             val summary = com.google.gson.JsonObject()
             keep.forEach { key -> result.get(key)?.let { value -> summary.add(key, value) } }
             result.getAsJsonObject("signature")?.let { signature ->
@@ -1173,7 +1191,11 @@ internal class McpApkToolkit(
     }
     private fun copyEntry(workspace: String, session: String, args: JsonObject): JsonObject {
         val beforeRevision = revision(workspace, session)
-        val entry = entryLocator(args.tString("locator")); val local = ToolkitIo.resolve(root, args.tString("localPath")); val overwrite = args.tBool("overwrite")
+        val entry = entryLocator(args.tString("locator")); val overwrite = args.tBool("overwrite")
+        var organized: ToolkitOutputOrganizer.OrganizedPath? = null
+        val local = if (args.tString("direction") == "workspace_to_local") {
+            outputOrganizer.organize(ToolkitIo.resolve(root, args.tString("localPath")), args).also { organized = it }.path
+        } else ToolkitIo.resolve(root, args.tString("localPath"))
         when(args.tString("direction")) {
             "workspace_to_local" -> {
                 ToolkitApkTargets.ordinary(entry, prefix(workspace, session, entry, 8))
@@ -1196,6 +1218,7 @@ internal class McpApkToolkit(
             }
             else -> error("复制方向无效")
         }; return ToolkitIo.json("copied" to true, "locator" to "zip_entry:$entry", "localPath" to local.path)
+            .apply { organized?.let { this.withOrganized(it) } }
             .withRevision(workspace, session, beforeRevision)
     }
     private fun prefix(workspace: String, session: String, entry: String, max: Int): ByteArray {
@@ -1295,4 +1318,49 @@ internal fun alignmentDiagnosticsJson(verification: JsonObject?, alignerApplied:
                 "Stored 非目录要求 4B、Stored .so 要求 16KiB，Deflate 条目不参与对齐。"
         }),
     )
+}
+
+/**
+ * 产出目录约定的只读投影。归置逻辑在 [ToolkitOutputOrganizer]（A 负责 project_folder/自动归置）；
+ * 这里只把当前默认项目与规则整理成 MCP 可读字段，供 get_status / toolkit_status 共用。
+ */
+internal object McpOutputConventions {
+    const val RULE = "所有产出必须放在操作根下的项目目录 <root>/<项目名>/；没有先 project_folder{action:\"create\",name:\"<项目名>\"}，不要直接写脚本根目录或 tmp/out/test 这类一次性名字。"
+    const val INSTRUCTION = "产出目录（强制）：所有 APK/ZIP/反编译/截图/导出/证据必须落在操作根下的项目目录 <root>/<项目名>/；没有就先 project_folder{action:\"create\",name:\"<项目名>\"}（需要默认再 set）；不要写 <root> 根目录，也不要用 tmp/out/test/__xxx 一次性名字。工具返回 organized 说明它已帮你归位——看到就说明你原本写错了位置，下次直接传项目目录。"
+    const val POINTER = "产出请放项目目录，见 project_folder"
+
+    val TOOLS_WITH_ORGANIZE: List<String> = listOf(
+        "capture_screen", "evidence_export",
+        "file_edit_text", "file_write_bytes", "file_patch_bytes", "file_copy", "file_move", "file_delete",
+        "file_create_directory", "file_delete_directory", "file_replace_text", "file_truncate_bytes",
+        "file_append_bytes", "file_append_text",
+        "zip_extract", "zip_create", "zip_update",
+        "apk_build", "apk_build_project", "apk_decode_project", "apk_inject_gadget", "apk_job_export",
+        "artifact_export",
+    )
+
+    fun appendPointer(description: String): String =
+        if (description.contains(POINTER)) description else description.trimEnd() + "；" + POINTER
+
+    /** 无 A 的归置器时也返回完整形状：projectDir/defaultProject 为 null，note 明说未就绪。 */
+    fun describe(organizerState: JsonObject?): JsonObject {
+        val projectDir = organizerState?.get("projectDir")?.takeIf { it.isJsonPrimitive && !it.isJsonNull }?.asString
+        val defaultProject = organizerState?.get("name")?.takeIf { it.isJsonPrimitive && !it.isJsonNull }?.asString
+        return ToolkitIo.json(
+            "projectDir" to projectDir,
+            "defaultProject" to defaultProject,
+            "rule" to RULE,
+            "toolsWithOrganize" to TOOLS_WITH_ORGANIZE,
+            "note" to if (projectDir == null)
+                "归置器尚未就绪或尚无默认项目：当前只提醒，不会自动归置；先 project_folder{action:\"create\",name:\"<项目名>\"} 再 set。"
+            else organizerState?.get("note")?.takeIf { it.isJsonPrimitive && it.asString.isNotBlank() }?.asString,
+        )
+    }
+
+    /** 读取 A 的归置器 state；A 的类/API 未就绪时返回 null（调用方给 null+note）。 */
+    fun readState(root: File, store: File): JsonObject? = runCatching {
+        ToolkitOutputOrganizers.forStore(store, root).state()
+    }.getOrNull()
+
+    fun describeFor(root: File, store: File): JsonObject = describe(readState(root, store))
 }
