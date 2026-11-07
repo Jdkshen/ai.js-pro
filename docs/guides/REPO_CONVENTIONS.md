@@ -167,6 +167,30 @@ $env:GRADLE_USER_HOME = 'E:\dev-cache\gradle'
 ⚠️ 两条注意：① 改的是**用户级注册表变量**，只有**新启动的进程**读到 —— VS Code 要完全退出重开；
 ② E: 从此是构建依赖，别把 E: 拔了/清空。
 
+### 2026-11-08 补：环境变量不够，加 junction 兜底；以及「合并缓存」的坑
+
+**为什么还要 junction**：16 小时后 C: 又到 99%，因为**老进程仍持有旧环境变量**
+（实测 `TEMP` 进程值还是 `C:\...\Temp`），于是 `~\.gradle` 又长回 3.16 GB、`Temp` 长回 4.79 GB。
+用**目录 junction** 让 C: 路径直接指向 E:，**任何进程**（含老进程）写入都落 E:：
+
+```powershell
+cmd /c mklink /J "C:\Users\18101\.gradle" "E:\dev-cache\gradle"
+cmd /c mklink /J "C:\Users\18101\AppData\Local\npm-cache" "E:\dev-cache\npm"
+cmd /c mklink /J "C:\Users\18101\AppData\Local\pip"       "E:\dev-cache\pip"
+```
+
+`~\.codex` 与 `%TEMP%` **建不了 junction**（目录被进程/系统持续持有，删不掉）→ 只能靠环境变量。
+
+> ⚠️ **事故教训：迁移 Gradle 缓存只能用 `robocopy /MOVE` 整体搬，绝不能把两份 merge 到一起。**
+> 混了两份不同状态的增量缓存后 Gradle 直接拒绝启动：
+> `Could not create service of type JavaModuleDetector ... Unexpected lock protocol found in lock file. Expected 3, found 0.`
+> **修法**：停掉全部 daemon → 删掉缓存里**所有 `*.lock`**（本次 257 个）→ Gradle 重新获取即可，
+> 不必重建整个 `caches/`（依赖 jar 能保住）。修后 `:app:tasks --all` BUILD SUCCESSFUL（176 tasks）。
+
+> ⚠️ 迁移后**别并发跑构建**：`R.jar: 另一个程序正在使用此文件` 就是与并发构建撞锁，
+> 不是缓存坏了 —— 见 §六「构建由 Lead 独占」。
+
+
 ## 八、常见坑速查
 
 | 坑 | 结论 |
