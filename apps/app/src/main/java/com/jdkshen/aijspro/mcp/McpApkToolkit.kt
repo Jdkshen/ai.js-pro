@@ -7,6 +7,223 @@ import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner
 import java.io.*
 import java.util.zip.*
 
+/**
+ * P0-1: expiry diagnostics shared by workspace and edit-session failures.
+ *
+ * <p>The outer MCP error envelope only exposes code/message/argument, so the machine-readable
+ * ttl/expiry/recovery fields are embedded in the message as compact details={...}. The
+ * authoritative error code is still [ToolkitException.code]; callers must not treat this as
+ * INVALID_ARGUMENT.</p>
+ */
+internal object ToolkitApkExpiry {
+    const val TTL_MINUTES: Int = ToolkitWorkspaceInventory.DEFAULT_EXPIRED_AFTER_MINUTES
+
+    data class Details(
+        val code: String,
+        val workspaceId: String,
+        val sessionId: String?,
+        val temporary: Boolean?,
+        val createdAt: Long?,
+        val expiredAt: Long?,
+        val ttlRemainingMs: Long?,
+        val ttlNote: String,
+        val runState: String,
+        val reason: String,
+        val quota: Int,
+        val quotaUsed: Int,
+        val recovery: String,
+        val nextActions: List<JsonObject>,
+    ) {
+        fun toJson(): JsonObject = ToolkitIo.json(
+            "code" to code,
+            "workspaceId" to workspaceId,
+            "sessionId" to sessionId,
+            "ttlRemainingMs" to ttlRemainingMs,
+            "expiredAt" to expiredAt,
+            "ttlMinutes" to if (temporary == true) TTL_MINUTES else null,
+            "ttlNote" to ttlNote,
+            "workspaceState" to runState,
+            "reason" to reason,
+            "quota" to quota,
+            "quotaUsed" to quotaUsed,
+            "recovery" to recovery,
+            "nextActions" to nextActions,
+        )
+
+        fun message(): String {
+            val subject = if (code == "SESSION_EXPIRED") "编辑会话不存在或已过期" else "APK 工作区不存在或已过期"
+            return subject + "（" + code + "）：workspaceId=" + workspaceId +
+                (if (sessionId == null) "" else "，sessionId=" + sessionId) +
+                "；reason=" + reason +
+                "；ttlRemainingMs=" + (ttlRemainingMs?.toString() ?: "null") +
+                "；expiredAt=" + (expiredAt?.toString() ?: "null") +
+                "；" + ttlNote +
+                "；recovery=" + recovery +
+                "；quota=" + quotaUsed + "/" + quota +
+                "；details=" + toJson()
+        }
+    }
+
+    fun isTtlExpired(temporary: Boolean?, createdAt: Long?, now: Long = System.currentTimeMillis()): Boolean =
+        temporary == true && createdAt != null && now - createdAt >= TTL_MINUTES * 60_000L
+
+    fun details(
+        code: String,
+        workspaceId: String,
+        sessionId: String?,
+        temporary: Boolean?,
+        createdAt: Long?,
+        reason: String,
+        quotaUsed: Int,
+        now: Long = System.currentTimeMillis(),
+    ): Details {
+        val expiredAt = if (temporary == true && createdAt != null) createdAt + TTL_MINUTES * 60_000L else null
+        val remaining = expiredAt?.let { maxOf(0L, it - now) }
+        val ttlNote = when {
+            temporary == null -> "workspace.json 不存在，无法计算 TTL（可能已被 GC 或手动删除）。"
+            !temporary -> "保存工作区没有 TTL；会话可能被 apk_session_release 释放或手动删除。"
+            createdAt == null -> "workspace.json 缺少 createdAt，无法计算 TTL。"
+            remaining == 0L -> "临时工作区 TTL 已用尽（默认 " + TTL_MINUTES + " 分钟）。"
+            else -> "临时工作区 TTL 剩余 " + remaining + " ms（默认 " + TTL_MINUTES + " 分钟）。"
+        }
+        val runState = when {
+            temporary == null -> "unknown"
+            !temporary -> "saved"
+            expiredAt != null && now >= expiredAt -> "expired"
+            else -> "temporary"
+        }
+        val recovery = if (code == "SESSION_EXPIRED") {
+            "先 artifact_open 或 apk_workspace_open 确认/重建工作区；再 apk_session_create {workspaceId:\"" + workspaceId + "\"} 建新会话，不要重试旧 editSessionId。"
+        } else {
+            "先 apk_workspace_open {path:\"<源APK路径>\",temporary:true}（或 artifact_open {path:\"<源APK路径>\"}）重新打开；同路径+同 sha256 会幂等复用/重建，然后 apk_session_create 建新会话。"
+        }
+        val actions = ArrayList<JsonObject>()
+        actions.add(ToolkitIo.json(
+            "tool" to "artifact_open",
+            "reason" to "EXPIRED_OR_MISSING",
+            "arguments" to ToolkitIo.json("path" to "<源APK路径>", "temporary" to true),
+            "hint" to "同路径+同 sha256 会复用未过期快照并续期；旧工作区已被 GC 时重建。"
+        ))
+        actions.add(ToolkitIo.json(
+            "tool" to "apk_workspace_inventory",
+            "reason" to "SEE_TTL_AND_QUOTA",
+            "arguments" to JsonObject(),
+            "hint" to "已在错误 details 中给出 ttlRemainingMs/expiredAt/quota；需要完整清单时可再查。"
+        ))
+        if (code == "SESSION_EXPIRED") {
+            actions.add(ToolkitIo.json(
+                "tool" to "apk_session_create",
+                "reason" to "RECREATE_SESSION",
+                "arguments" to ToolkitIo.json("workspaceId" to workspaceId),
+                "hint" to "旧 editSessionId 已失效；新建后再重试原操作。"
+            ))
+        }
+        return Details(code, workspaceId, sessionId, temporary, createdAt, expiredAt, remaining,
+            ttlNote, runState, reason, ToolkitWorkspaceInventory.QUOTA, quotaUsed, recovery, actions)
+    }
+}
+
+/** P0-3: classify a possibly-budget-cut search so zero hits are not reported as "not found". */
+internal object ToolkitApkSearchDiagnostics {
+    data class Classification(val fields: JsonObject, val nextActions: JsonArray)
+
+    private fun strings(value: JsonElement?): List<String> =
+        value?.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull {
+            it.takeIf { item -> item.isJsonPrimitive && item.asJsonPrimitive.isString }?.asString
+        } ?: emptyList()
+
+    fun classify(
+        partial: Boolean,
+        elapsedMs: Long,
+        hitCount: Int,
+        metadata: JsonObject,
+        args: JsonObject,
+        budgetMillis: Long = 8_000L,
+    ): Classification {
+        val partialTargets = strings(metadata.get("partialTargets"))
+        val notSearched = strings(metadata.get("notSearchedTargets"))
+        val target = args.tString("target", "overview")
+        val stopReason = when {
+            !partial -> "COMPLETE"
+            elapsedMs >= budgetMillis - 500L -> "TIME_BUDGET"
+            partialTargets.isNotEmpty() || notSearched.isNotEmpty() -> "BUDGET"
+            else -> "INCOMPLETE"
+        }
+        val zero = hitCount == 0
+        val budgetNote = if (!partial) null else
+            "搜索尚未完成（stopReason=" + stopReason + "，elapsedMs=" + elapsedMs + "/" + budgetMillis + "）：" +
+                "partialTargets=" + partialTargets + "，notSearchedTargets=" + notSearched + "。" +
+                "total=" + hitCount + " 不能判为“不存在”；请缩小 target/prefix 或重试，只有 stopReason=COMPLETE 的 0 命中才可视为没有。"
+        val actions = JsonArray()
+        if (partial) {
+            val narrower = partialTargets.firstOrNull() ?: notSearched.firstOrNull()
+                ?: if (target == "overview") "files" else target
+            val retryArgs = args.deepCopy().apply {
+                addProperty("target", narrower)
+                if (narrower != "overview" && !has("limit")) addProperty("limit", 50)
+            }
+            actions.add(ToolkitIo.json(
+                "tool" to "apk_search",
+                "reason" to "BUDGET_EXHAUSTED",
+                "arguments" to retryArgs,
+                "hint" to "用具体 target 重试；结果不完整时不要用 total 判不存在，可继续按 nextActions 收窄 prefix。"
+            ))
+        }
+        val fields = ToolkitIo.json(
+            "stopReason" to stopReason,
+            "complete" to !partial,
+            "budgetExhausted" to partial,
+            "searchBudgetMillis" to budgetMillis,
+            "searchElapsedMs" to elapsedMs,
+            "partialTargets" to partialTargets,
+            "notSearchedTargets" to notSearched,
+            "zeroResult" to zero,
+            "emptyResult" to (zero && !partial),
+            "zeroResultMeaning" to when {
+                !zero -> null
+                !partial -> "COMPLETE_ZERO_HITS"
+                else -> "UNKNOWN_BUDGET_EXHAUSTED"
+            },
+            "budgetNote" to budgetNote,
+            "nextActions" to actions,
+        )
+        return Classification(fields, actions)
+    }
+}
+
+/** W1: atomically write decompiled source when outPath is explicitly requested. */
+internal fun writeDecompiledOutput(
+    organizer: ToolkitOutputOrganizer,
+    root: File,
+    args: JsonObject,
+    result: JsonObject,
+): JsonObject {
+    val raw = args.get("outPath")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString?.trim().orEmpty()
+    if (raw.isEmpty()) return result
+    val content = result.get("content")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+        ?: result.get("text")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+        ?: throw ToolkitException("DECOMPILE_OUTPUT_EMPTY", "反编译结果没有 content/text，无法按 outPath 落盘", "outPath")
+    val organized = organizer.organize(ToolkitIo.resolve(root, raw), args)
+    val target = organized.path
+    require(!target.exists()) { "outPath 已存在，请使用新文件名：" + target.path }
+    require(target.parentFile?.isDirectory == true) { "outPath 父目录不存在或无法创建：" + (target.parentFile?.path ?: "") }
+    ToolkitIo.atomic(target) { it.writeText(content, Charsets.UTF_8) }
+    result.addProperty("savedPath", target.path)
+    result.addProperty("outPath", target.path)
+    result.addProperty("savedChars", content.length)
+    result.addProperty("savedBytes", target.length())
+    result.addProperty("savedSha256", ToolkitIo.sha(target))
+    result.addProperty("outputTruncated", result.tBool("truncated") || result.tBool("hasMore"))
+    organized.info?.let { result.add("organized", it) }
+    val actions = result.get("nextActions")?.takeIf { it.isJsonArray }?.asJsonArray ?: JsonArray().also { result.add("nextActions", it) }
+    actions.add(ToolkitIo.json(
+        "tool" to "file_read_text",
+        "arguments" to ToolkitIo.json("path" to target.path),
+        "hint" to "反编译正文已原子落盘，可直接读取/归档。"
+    ))
+    return result
+}
+
 /** Immutable APK snapshots and copy-on-write edit sessions. Never calls MT. */
 internal class McpApkToolkit(
     private val root: File,
@@ -37,14 +254,27 @@ internal class McpApkToolkit(
 
     /** 产出工具统一暴露 organize=true 默认；显式子目录/绝对子目录仍不移动。 */
     private fun schemaWithOrganize(name: String, schema: JsonElement): JsonElement {
-        if (name !in setOf("apk_build", "artifact_export", "apk_copy_entry") || !schema.isJsonObject) return schema
+        val organizeTools = setOf("apk_build", "artifact_export", "apk_copy_entry")
+        val decompileOutputTools = setOf("apk_decompile_class", "apk_decompile_method")
+        val needsOrganize = name in organizeTools || name in decompileOutputTools
+        if (!needsOrganize || !schema.isJsonObject) return schema
         val copy = schema.deepCopy().asJsonObject
         val properties = copy.getAsJsonObject("properties") ?: return copy
+        if (name in decompileOutputTools) {
+            properties.add("outPath", JsonObject().apply {
+                addProperty("type", "string")
+                addProperty("description", "可选：把反编译正文（data.content）原子写入该路径；裸文件名/操作根直下会按 organize 归置到默认项目。写入成功返回 savedPath/organized，避免 job_result → file_write 三段式。")
+            })
+        }
         properties.add("organize", JsonObject().apply {
             addProperty("type", "boolean")
             addProperty("default", true)
             addProperty("description", "默认 true：裸文件名或直接落在操作根的文件会改写进默认项目 mcp-out-YYYYMMDD；显式子目录/项目内路径不动。false 保持原路径。")
         })
+        if (name in decompileOutputTools) {
+            val desc = copy.get("description")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: ""
+            if (desc.isNotBlank() && !desc.contains("outPath")) copy.addProperty("description", desc + " 可选 outPath 直接原子落盘正文。")
+        }
         return copy
     }
     /** 给含 locator 参数的 inputSchema 补前缀说明；只加 description，不改 type/required/其它约束。 */
@@ -122,6 +352,13 @@ internal class McpApkToolkit(
                     }
                     "apk_dex_search_members", "apk_dex_call_graph", "apk_dex_hierarchy" ->
                         ToolkitIo.ok(ToolkitDexNavigation(dexes(workspace,session).toList()).call(name,args))
+                    // dex 接口族（商家建议 §4.3）：AIDL/Binder 事务号表 + 类/方法清单分页。
+                    "apk_dex_interface_table", "apk_dex_list_classes", "apk_dex_list_methods" ->
+                        ToolkitIo.ok(dexInterfaceValue(workspace, session) { dex -> when (name) {
+                            "apk_dex_interface_table" -> dex.interfaceTable(args)
+                            "apk_dex_list_classes" -> dex.listClasses(args)
+                            else -> dex.listMethods(args)
+                        } })
                     "apk_dex_xref" -> {
                         val locator = args.tString("locator"); val limit = args.tInt("limit", 50, 1, 200)
                         val items = ArrayList<JsonObject>()
@@ -129,7 +366,16 @@ internal class McpApkToolkit(
                         for ((entry, dex) in allDex) {
                             if (items.size >= 10000) break
                             items.addAll(dex.references(locator, args.tString("methodResolution", if(locator.startsWith("dex_method:")) "dispatch" else "not_applicable"), 10001 - items.size, universe).map { it.apply { addProperty("dexEntry", entry) } })
-                        }; page(workspace, session, items, limit, items.size >= 10000)
+                        }
+                        val envelope = page(workspace, session, items, limit, items.size >= 10000)
+                        // 可选：合并「接口实现者 / 方法重写者」（includeImplementations/includeOverrides）。
+                        if (args.tBool("includeImplementations") || args.tBool("includeOverrides")) {
+                            val extra = dexInterfaceValue(workspace, session) { dex -> dex.xref(args) }
+                            envelope.getAsJsonObject("data")?.let { data ->
+                                extra.entrySet().forEach { entryValue -> data.add(entryValue.key, entryValue.value) }
+                            }
+                        }
+                        envelope
                     }
                     "apk_resource_read" -> ToolkitIo.ok(readResources(workspace, session, args))
                     "apk_resource_xref" -> resourceXref(workspace, session, args)
@@ -183,10 +429,14 @@ internal class McpApkToolkit(
     private fun description(name: String): String = when(name) {
         "apk_verify" -> "只读检查真实APK：密码学验签、普通Stored4B/原生库ZIP16KB、ELF LOAD段及Manifest。返回独立检查证据，不保证安装/业务行为。"
         "apk_dex_search_members" -> "按方法名/描述符/字符串/引用搜索，返回精确方法locator、dexEntry和行/指令锚点；有预算，truncated表示需要缩小查询。"
+        "apk_search" -> "跨 ZIP/resources/dex/native 语义目标搜索；返回 stopReason（COMPLETE/TIME_BUDGET/BUDGET）、partialTargets、budgetNote 与 zeroResultMeaning。只有 stopReason=COMPLETE 且 total=0 才是“没有命中”。"
         "apk_dex_call_graph" -> "跨DEX向内/向外调用图，限定深度/节点/边；dexEntry消歧，动态和反射目标明确报告不完整。"
         "apk_dex_hierarchy" -> "查看类继承、接口实现与方法覆盖关系，使用原始descriptor定位符，跨DEX同名类需dexEntry。"
-        "apk_decompile_class" -> "可选JADX类Java阅读；默认后台返回jobId，用apk_job_status/result读回。不保证反编译源码可重新构建。输出含 JADX ERROR/Method dump skipped/errorsCount>0 时 decompileIncomplete=true，job state=SUCCEEDED_WITH_WARNINGS，可按 incompleteReason 改用 smali。"
-        "apk_decompile_method" -> "可选JADX精确方法Java阅读；默认后台返回jobId，需原始dex_method定位符，重载完整签名匹配。输出含 JADX ERROR/Method dump skipped/errorsCount>0 时 decompileIncomplete=true，job state=SUCCEEDED_WITH_WARNINGS，按 incompleteReason 改用 apk_read_text(locator=同一 dex_method) 读 smali。"
+        "apk_dex_interface_table" -> "Binder/AIDL 接口事务号表：输入接口 descriptor（Lpkg/IFoo; 或 pkg.IFoo）→ 方法/transactCode/参数/返回/oneway，并给 Stub 与 Proxy 两侧对照（missingOnServer/missingOnClient/orderMismatches/proxyCodeMismatches）。transactSource=static_field 才是权威编号；declaration_order 只是静态字段缺失时的推导（父接口在前），不保证等于 AIDL 编译器编号。只读 DEX 静态结构，不执行 Binder。"
+        "apk_dex_list_classes" -> "分页列出 DEX 里的类（替代盲搜）：prefix/packageFilter/dexEntry/cursor/limit → items/total/returned/nextCursor/hasMore/truncated。"
+        "apk_dex_list_methods" -> "分页列出 DEX 里的方法（可按 owner 过滤，owner 可给 descriptor 或简单类名）：name/descriptor/access/returnType/paramTypes/locator + nextCursor。"
+        "apk_decompile_class" -> "可选JADX类Java阅读；默认后台返回jobId，用apk_job_status/result读回。不保证反编译源码可重新构建。输出含 JADX ERROR/Method dump skipped/errorsCount>0 时 decompileIncomplete=true，job state=SUCCEEDED_WITH_WARNINGS，可按 incompleteReason 改用 smali。可选 outPath 直接原子落盘正文（返回 savedPath/organized），省掉 job_result→file_write。"
+        "apk_decompile_method" -> "可选JADX精确方法Java阅读；默认后台返回jobId，需原始dex_method定位符，重载完整签名匹配。输出含 JADX ERROR/Method dump skipped/errorsCount>0 时 decompileIncomplete=true，job state=SUCCEEDED_WITH_WARNINGS，按 incompleteReason 改用 apk_read_text(locator=同一 dex_method) 读 smali。可选 outPath 直接原子落盘正文（返回 savedPath/organized）。"
         "android_resources_compile" -> "可选Android AAPT2把res/Manifest按指定宿主编译为project-res.apk及sidecar；默认后台jobId，组件显式安装。"
         "apk_component_status" -> "只读查看JADX/资源编译组件安装与可用状态；不下载不运行编译器。"
         "apk_component_install" -> "显式下载并校验可选APK/逆向组件（含免Root frida-gadget）；默认后台jobId，manifestUrl可指定发布清单。"
@@ -202,11 +452,11 @@ internal class McpApkToolkit(
         "apk_session_checkpoint" -> "保存编辑会话检查点，复制变更条目以支持后续回退；最多8个、总量512MiB。"
         "apk_session_checkpoints" -> "列出会话检查点及其revision。"
         "apk_session_rollback" -> "按检查点回退会话，必须提供当前expectedRevision；不覆盖原APK，返回新revision。"
-        "artifact_open" -> "直接打开APK、独立DEX/SO/ELF或APKS/XAPK/APKM。独立文件使用明确标记的分析容器；分包先选择成员。"
+        "artifact_open" -> "直接打开APK、独立DEX/SO/ELF或APKS/XAPK/APKM。独立文件使用明确标记的分析容器；分包先选择成员。同路径+同sha256幂等复用（返回 reused/reopened/reuseReason），过期临时快照会续期而不是报错。"
         "artifact_export" -> "导出编辑后的独立DEX/ELF文件，不把分析容器伪装成可安装APK。"
         "apk_set_members" -> "列出分包归档APK成员、大小和base候选；不承诺自动合并或安装。"
         "apk_set_open_member" -> "选中分包成员创建独立只读APK快照，保留容器来源；可继续原APK工具链。"
-        "apk_workspace_open" -> "创建 APK 只读快照。path 在工具目录内；temporary=true 为一次性工作区。后续修改先 apk_session_create。"
+        "apk_workspace_open" -> "创建 APK 只读快照。path 在工具目录内；temporary=true 为一次性工作区（默认 TTL 24h）。同路径+同sha256幂等复用并续期（reused/reopened/reuseReason）；后续修改先 apk_session_create。"
         "apk_workspace_inventory" -> "解释 APK 工作区配额占用：列出保存/临时/过期/dangling 工作区、实际字节、owner/clientId/sessionId、活动引用、orphanDirs 与 danglingEntries；配额 16，统计范围见 quotaScope。"
         "apk_workspace_gc" -> "受控清理过期临时 APK 工作区：默认 dryRun=true 只预览；支持 protectedIds/minAgeMinutes/owner/clientId 过滤，保存/活动引用/编辑会话/未知所有权默认全部保护；orphan/dangling 永不自动删除。"
         "apk_session_release" -> "释放 APK 工作区的编辑会话（workspaceId 或 all=true）；只删除 sessions/ 下会话，不删除工作区/快照；返回 releasedSessions/releasedBytes/remainingSessions，重复调用幂等。"
@@ -342,24 +592,130 @@ internal class McpApkToolkit(
             "旧记录 owner=null 时必须带 includeUnknownOwner=true；新记录 owner=mcp-host/ownerSource=server-default。"
 
     private fun directory(id: String) = File(store, ToolkitIo.id(id))
+    private fun workspaceMetadata(id: String): JsonObject? = runCatching {
+        val file = File(directory(id), "workspace.json")
+        if (file.isFile) JsonParser().parse(file.readText()).asJsonObject else null
+    }.getOrNull()
     private fun snapshot(id: String): File = File(directory(id), "base.apk").also {
-        if (!it.isFile) throw workspaceExpired(id)
+        if (!it.isFile) throw workspaceExpired(id, "snapshot_missing")
     }
     private fun workspace(id: String): JsonObject {
         val file = File(directory(id), "workspace.json")
-        if (!file.isFile) throw workspaceExpired(id)
+        if (!file.isFile) throw workspaceExpired(id, "workspace_metadata_missing")
         return JsonParser().parse(file.readText()).asJsonObject
     }
 
-    private fun workspaceExpired(id: String): ToolkitException = ToolkitException(
-        "WORKSPACE_EXPIRED",
-        "APK 工作区不存在或已被回收（WORKSPACE_EXPIRED）：$id。临时工作区被 GC/删除后旧 workspaceId 不能复用；" +
-            "请先 apk_workspace_open {path:...}（或 artifact_open）重新打开，并用返回的新 workspaceId；" +
-            "当前工作区可用 apk_workspace_list / apk_workspace_inventory 查看。",
-        "workspaceId",
-    )
-    private fun workspaces(): List<JsonObject> = store.listFiles()?.filter { it.isDirectory && File(it, "workspace.json").isFile }?.mapNotNull { runCatching { workspace(it.name) }.getOrNull() } ?: emptyList()
-    private fun sessionDir(workspace: String, session: String): File = File(File(directory(workspace), "sessions"), ToolkitIo.id(session)).also { require(File(it, "session.json").isFile) { "会话不存在或不属于该工作区" } }
+    private fun workspaceExpired(id: String, reason: String = "workspace_missing"): ToolkitException =
+        expiryException("WORKSPACE_EXPIRED", id, null, reason, workspaceMetadata(id))
+    private fun sessionExpired(workspace: String, session: String): ToolkitException {
+        val info = workspaceMetadata(workspace)
+        if (info == null) return workspaceExpired(workspace, "workspace_metadata_missing")
+        val temporary = jsonBooleanOrNull(info, "temporary")
+        val createdAt = jsonLongOrNull(info, "createdAt")
+        val reason = if (ToolkitApkExpiry.isTtlExpired(temporary, createdAt)) "workspace_ttl_expired" else "session_missing_or_released"
+        return expiryException("SESSION_EXPIRED", workspace, session, reason, info)
+    }
+    private fun expiryException(
+        code: String,
+        workspace: String,
+        session: String?,
+        reason: String,
+        info: JsonObject?,
+    ): ToolkitException {
+        val details = ToolkitApkExpiry.details(
+            code = code,
+            workspaceId = workspace,
+            sessionId = session,
+            temporary = info?.let { jsonBooleanOrNull(it, "temporary") },
+            createdAt = info?.let { jsonLongOrNull(it, "createdAt") },
+            reason = reason,
+            quotaUsed = workspaces().size,
+        )
+        return ToolkitException(code, details.message(), if (session == null) "workspaceId" else "editSessionId")
+    }
+    private fun jsonBooleanOrNull(obj: JsonObject, key: String): Boolean? =
+        obj.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+    private fun jsonLongOrNull(obj: JsonObject, key: String): Long? =
+        obj.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong
+    private fun workspaces(): List<JsonObject> = store.listFiles()
+        ?.filter { it.isDirectory && File(it, "workspace.json").isFile }
+        ?.mapNotNull { workspaceMetadata(it.name) } ?: emptyList()
+    private fun sessionDir(workspace: String, session: String): File {
+        if (!File(directory(workspace), "workspace.json").isFile) throw workspaceExpired(workspace, "workspace_metadata_missing")
+        val folder = File(File(directory(workspace), "sessions"), ToolkitIo.id(session))
+        if (!File(folder, "session.json").isFile) throw sessionExpired(workspace, session)
+        return folder
+    }
+    /**
+     * P0-1 idempotent reopen: same sourcePath + sha256 + temporary/artifactType is the same
+     * immutable snapshot. If it is still on disk (even past its TTL) renew it instead of
+     * allocating another quota slot. Returns null when the old directory/base is gone/corrupt,
+     * in which case the caller safely rebuilds a new snapshot.
+     */
+    private fun reuseWorkspace(
+        sourcePath: String,
+        sha256: String,
+        temporary: Boolean,
+        artifactType: String? = null,
+    ): JsonObject? {
+        val now = System.currentTimeMillis()
+        val candidate = workspaces()
+            .filter { it.tString("sourcePath", "") == sourcePath }
+            .filter { it.tString("sha256", "") == sha256 }
+            .filter { it.tBool("temporary", true) == temporary }
+            .filter { artifactType == null || it.tString("artifactType", "") == artifactType }
+            .filter { File(directory(it.tString("workspaceId")), "base.apk").isFile }
+            .maxByOrNull { jsonLongOrNull(it, "createdAt") ?: 0L }
+            ?: return null
+        val id = candidate.tString("workspaceId")
+        val previousCreatedAt = jsonLongOrNull(candidate, "createdAt")
+        val expired = ToolkitApkExpiry.isTtlExpired(temporary, previousCreatedAt, now)
+        val reopened = candidate.deepCopy().asJsonObject
+        reopened.addProperty("reused", true)
+        reopened.addProperty("reopened", true)
+        reopened.addProperty("reuseReason", when {
+            expired -> "expired_ttl_renewed"
+            temporary -> "same_path_sha256_snapshot"
+            else -> "saved_workspace_same_path_sha256"
+        })
+        reopened.addProperty("reusedAt", now)
+        reopened.addProperty("lastAccessAt", now)
+        if (previousCreatedAt != null) {
+            reopened.addProperty("previousCreatedAt", previousCreatedAt)
+            if (expired) reopened.addProperty("expiredAt", previousCreatedAt + ToolkitApkExpiry.TTL_MINUTES * 60_000L)
+        }
+        if (temporary) reopened.addProperty("createdAt", now)
+        ToolkitIo.atomic(File(directory(id), "workspace.json")) { it.writeText(gson.toJson(reopened), Charsets.UTF_8) }
+        currentWorkspace = id
+        return reopened
+    }
+
+    /**
+     * If the old directory/metadata still exists but the snapshot payload is gone, the caller
+     * must rebuild; mark that rebuild so clients see reopened=true and a concrete reason.
+     */
+    private fun markRebuiltFromUnusableSnapshot(
+        info: JsonObject,
+        sourcePath: String,
+        sha256: String,
+        temporary: Boolean,
+        artifactType: String? = null,
+    ) {
+        val prior = workspaces()
+            .filter { it.tString("sourcePath", "") == sourcePath }
+            .filter { it.tString("sha256", "") == sha256 }
+            .filter { it.tBool("temporary", true) == temporary }
+            .filter { artifactType == null || it.tString("artifactType", "") == artifactType }
+            .filter { !File(directory(it.tString("workspaceId")), "base.apk").isFile }
+            .maxByOrNull { jsonLongOrNull(it, "createdAt") ?: 0L }
+            ?: return
+        info.addProperty("reopened", true)
+        info.addProperty("reused", false)
+        info.addProperty("reuseReason", "previous_snapshot_missing_rebuilt")
+        info.addProperty("previousWorkspaceId", prior.tString("workspaceId"))
+        jsonLongOrNull(prior, "createdAt")?.let { info.addProperty("previousCreatedAt", it) }
+    }
+
     private fun requiredSession(session: String) = session.also { require(it.isNotEmpty()) { "此操作必须在编辑会话中执行" } }
     private fun open(args: JsonObject): JsonObject {
         val path = args.tString("path"); val temporary = args.tBool("temporary", true)
@@ -388,7 +744,7 @@ internal class McpApkToolkit(
             }
         }
         val hash = ToolkitIo.sha(source)
-        if (!temporary) workspaces().firstOrNull { !it.tBool("temporary") && it.tString("sourcePath") == source.path && it.tString("sha256") == hash }?.let { currentWorkspace = it.tString("workspaceId"); return it }
+        reuseWorkspace(source.path, hash, temporary)?.let { return it }
         val workspaceCount = workspaces().size
         val quotaHint = workspaceQuotaHint()
         require(workspaceCount < 16) { "最多保留 16 个 APK 工作区，当前 " + workspaceCount + " 个" + quotaHint }
@@ -408,6 +764,7 @@ internal class McpApkToolkit(
             val info = ToolkitIo.json("workspaceId" to id, "path" to "aijs://workspace/$id", "sourcePath" to source.path,
                 "temporary" to temporary, "sha256" to hash, "size" to copy.length(), "createdAt" to System.currentTimeMillis())
             addClientMetadata(args, info)
+            markRebuiltFromUnusableSnapshot(info, source.path, hash, temporary)
             val signature = ToolkitSignatures.read(copy)
             info.add("signatureSummary", ToolkitIo.json("available" to signature.get("available"), "signaturePresent" to signature.get("signaturePresent"),
                 "schemes" to signature.get("schemes"), "certificateCount" to signature.getAsJsonArray("certificates").size()))
@@ -444,6 +801,9 @@ internal class McpApkToolkit(
         val probe=runCatching{ToolkitDiscovery.probe(source)}.getOrNull()
         if(suffix=="apk"||probe?.candidate==true)return open(args)
         require(suffix in setOf("dex","so","elf","apks","xapk","apkm")){"支持APK、DEX、ELF/SO及APKS/XAPK/APKM；该文件按结构不是 APK（"+(probe?.let{describeProbe(it)}?:"未探测")+"），确认候选请用 file_discover_apk"}
+        val type=if(suffix in setOf("apks","xapk","apkm"))"apk-set" else if(suffix=="dex")"dex" else "elf"
+        val hash=ToolkitIo.sha(source)
+        reuseWorkspace(source.path,hash,args.tBool("temporary",true),type)?.let{return it}
         val workspaceCount = workspaces().size
         val existingSize = workspaces().sumOf { it.get("size").asLong }
         val quotaHint = workspaceQuotaHint()
@@ -451,10 +811,9 @@ internal class McpApkToolkit(
         require(existingSize + source.length() <= 1024L * 1024 * 1024) {
             "APK 快照总量超过 1 GiB（当前 " + existingSize + " 字节，新增 " + source.length() + " 字节）" + quotaHint
         }
-        val type=if(suffix in setOf("apks","xapk","apkm"))"apk-set" else if(suffix=="dex")"dex" else "elf"
         val id=ToolkitIo.fresh();val dir=directory(id);require(dir.mkdir())
         try{
-            val hash=ToolkitIo.sha(source);val original=File(dir,"original.bin")
+            val original=File(dir,"original.bin")
             source.inputStream().use{input->original.outputStream().use{copyBounded(input,it,ToolkitIo.MAX_APK)}}
             require(ToolkitIo.sha(original)==hash){"读取期间源文件已改变"}
             val target=File(dir,"base.apk")
@@ -467,6 +826,7 @@ internal class McpApkToolkit(
                 "sourcePath" to source.path,"sha256" to hash,"analysisSha256" to ToolkitIo.sha(target),"size" to target.length(),"sourceSize" to source.length(),"createdAt" to System.currentTimeMillis(),
                 "temporary" to args.tBool("temporary",true),"path" to "aijs://workspace/$id")
             addClientMetadata(args, info)
+            markRebuiltFromUnusableSnapshot(info, source.path, hash, args.tBool("temporary",true), type)
             File(dir,"workspace.json").writeText(info.toString(),Charsets.UTF_8)
             if(type=="apk-set")info.addProperty("memberCount",setMembers(id).size)
             currentWorkspace=id;return info
@@ -517,7 +877,8 @@ internal class McpApkToolkit(
         val effectiveArgs=args.deepCopy()
         if(!effectiveArgs.has("maxChars")) effectiveArgs.addProperty("maxChars",200000)
         try{if(session.isNotEmpty())writeUnsigned(workspace,session,entries(workspace,session),input)
-            return backend.decompile(input,locator,effectiveArgs).apply{addProperty("revision",revision(workspace,session))}
+            val decompiled = backend.decompile(input,locator,effectiveArgs).apply{addProperty("revision",revision(workspace,session))}
+            return writeDecompiledOutput(outputOrganizer, root, args, decompiled)
         }finally{if(session.isNotEmpty())input.delete()}
     }
     private fun listAvailable(args: JsonObject): JsonObject {
@@ -544,7 +905,18 @@ internal class McpApkToolkit(
             "changedEntries" to emptyMap<String,String>(), "classChanges" to emptyMap<String,String>(), "classChangesComplete" to true)
         File(folder, "session.json").writeText(gson.toJson(info)); return info
     }
-    private fun sessionInfo(workspace: String, session: String) = JsonParser().parse(File(sessionDir(workspace, session), "session.json").readText()).asJsonObject
+    private fun sessionInfo(workspace: String, session: String): JsonObject {
+        val folder = sessionDir(workspace, session)
+        return try {
+            JsonParser().parse(File(folder, "session.json").readText()).asJsonObject
+        } catch (error: ToolkitException) {
+            throw error
+        } catch (error: Exception) {
+            // File can vanish between the check and the read (GC/release race); still a session
+            // expiry, never an INVALID_ARGUMENT / parameter error.
+            throw sessionExpired(workspace, session)
+        }
+    }
     private fun revision(workspace: String, session: String): String = if (workspace.isEmpty()) "catalog" else if (session.isEmpty()) workspace(workspace).tString("sha256") else sessionInfo(workspace, session).tString("revision")
     /** #4：成功返回统一补当前 revision；revisionChanged 表示本次调用后是否与调用前不同（只读工具为 false）。 */
     private fun JsonObject.withRevision(workspace: String, session: String, before: String): JsonObject {
@@ -608,6 +980,21 @@ internal class McpApkToolkit(
     }
     private fun resourceTable(workspace: String, session: String): ToolkitResources = ToolkitResources(raw(workspace, session, "resources.arsc"))
     private fun optionalResources(workspace: String, session: String): ToolkitResources? = if (entries(workspace, session).contains("resources.arsc")) resourceTable(workspace, session) else null
+    /**
+     * dex 接口族调用包装：把 {@link ToolkitDexInterface.nextActionsFor} 的可执行建议
+     * 以 `details={...}` 附加到消息里，由 McpToolkitProvider 提升为 error.nextActions（MCP 更新建议 P0-1 的一级字段）。
+     */
+    private inline fun dexInterfaceValue(workspace: String, session: String,
+                                         block: (ToolkitDexInterface) -> JsonObject): JsonObject = try {
+        block(ToolkitDexInterface(dexes(workspace, session).toList()))
+    } catch (error: ToolkitException) {
+        val actions = ToolkitDexInterface.nextActionsFor(error.code)
+        if (actions.isEmpty()) throw error
+        throw ToolkitException(error.code,
+            (error.message ?: "") + " details=" + ToolkitIo.json("nextActions" to actions).toString(),
+            error.argument)
+    }
+
     private fun dexes(workspace: String, session: String): Sequence<Pair<String,ToolkitDex>> = entries(workspace, session).asSequence().filter { ToolkitApkTargets.isDex(it) }.map { it to ToolkitDex(raw(workspace, session, it)) }
     private fun dexFor(workspace: String, session: String, locator: String, requestedDex:String=""): Pair<String,ToolkitDex> {
         val found = dexes(workspace, session).filter { (entry, _) -> requestedDex.isEmpty() || requestedDex==entry }.filter { (_, dex) -> dex.classes.any { it.type == dex.type(locator) } }.toList()
@@ -708,19 +1095,22 @@ internal class McpApkToolkit(
         }; return page(workspace, session, items, args.tInt("limit", 200, 1, 1000), limitMax = 1000)
     }
     private fun page(workspace: String, session: String, items: List<JsonObject>, limit: Int, truncated: Boolean = false,
-                     kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200): JsonObject {
+                     kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200,
+                     extraActions: JsonArray = JsonArray()): JsonObject {
         val key = if (items.size > limit) ToolkitIo.fresh() else ""
         if (key.isNotEmpty()) {
             require(items.size <= 80000) { "结果过大，请缩小 prefix 或搜索范围" }
             while (pages.isNotEmpty() && (pages.size >= 16 || pages.values.sumOf { it.items.size } + items.size > 80000)) pages.remove(pages.keys.first())
             pages[key] = Page(workspace, session, revision(workspace, session), items, limit, kind, metadata, truncated, limitMax)
         }
-        return paged(workspace, session, items.take(limit), key, items.size, truncated, kind, metadata, limitMax)
+        return paged(workspace, session, items.take(limit), key, items.size, truncated, kind, metadata, limitMax, extraActions)
     }
     private fun paged(workspace: String, session: String, items: List<JsonObject>, key: String, total: Int, truncated: Boolean,
-                      kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200): JsonObject {
+                      kind: String = "items", metadata: JsonObject = JsonObject(), limitMax: Int = 200,
+                      extraActions: JsonArray = JsonArray()): JsonObject {
         val actions = JsonArray()
         if(key.isNotEmpty()) actions.add(action("apk_continue", ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "nextCursor" to key, "limit" to 200)))
+        extraActions.forEach { actions.add(it) }
         val data = ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "items" to items,
             "nextCursor" to key, "hasMore" to key.isNotEmpty(), "total" to total, "truncated" to truncated,
             "pagination" to ToolkitIo.json("hasMore" to key.isNotEmpty(), "nextCursor" to key.takeIf { it.isNotEmpty() },
@@ -740,8 +1130,18 @@ internal class McpApkToolkit(
     }
     private fun action(name: String, args: JsonObject) = ToolkitIo.json("tool" to name, "arguments" to args)
     private fun search(workspace: String, session: String, args: JsonObject): JsonObject {
+        val startedAt = System.nanoTime()
         val result = ToolkitApkSearch(entries(workspace, session), { raw(workspace, session, it) },
             { optionalResources(workspace, session) }, { dexes(workspace, session) }).search(args)
+        val elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L
+        val diagnostics = ToolkitApkSearchDiagnostics.classify(
+            partial = result.partial,
+            elapsedMs = elapsedMs,
+            hitCount = result.hits.size,
+            metadata = result.metadata,
+            args = args,
+        )
+        diagnostics.fields.entrySet().forEach { (name, value) -> result.metadata.add(name, value) }
         // B16：axml: 是搜索结果的预览 locator；真正读取 AXML 条目要用 zip_entry:。
         // locator 保持原语义，只增加可直接喂给 apk_read_text/apk_read_bytes 的 readLocator。
         result.hits.forEach { hit ->
@@ -754,7 +1154,8 @@ internal class McpApkToolkit(
                 hit.addProperty("readLocator", locator)
             }
         }
-        return page(workspace, session, result.hits, args.tInt("limit", 50, 1, 200), result.partial, "search", result.metadata)
+        return page(workspace, session, result.hits, args.tInt("limit", 50, 1, 200), result.partial, "search",
+            result.metadata, extraActions = diagnostics.nextActions)
     }
     private fun readResources(workspace: String, session: String, args: JsonObject): JsonObject {
         return ToolkitResourceReader(resourceTable(workspace, session)).read(args)

@@ -138,4 +138,22 @@ class ToolkitBackendRoutingTest {
         assertTrue(summary.contains("zip"))
         assertTrue(summary.contains("autoRoute"))
     }
+
+    /** P1-6：`sh build.sh` 属于两种后端都能跑，不能再误判成「需要 shizuku」。 */
+    @Test
+    fun shellWrapperWithScriptFileIsBothBackends() {
+        assertEquals(ToolkitBackendRouting.Requirement.BOTH, ToolkitBackendRouting.requirement("sh build.sh"))
+        assertEquals(ToolkitBackendRouting.Requirement.BOTH, ToolkitBackendRouting.requirement("bash -x build.sh"))
+        assertEquals(ToolkitBackendRouting.Requirement.BOTH, ToolkitBackendRouting.requirement("sh"))
+        assertEquals(ToolkitBackendRouting.Requirement.BOTH, ToolkitBackendRouting.requirement("sh -c \"echo hi\""))
+    }
+
+    /** 内联的 shell 专属命令仍要判 SHELL_ONLY / APP_ONLY。 */
+    @Test
+    fun shellWrapperInlineCommandKeepsInnerRequirement() {
+        assertEquals(ToolkitBackendRouting.Requirement.SHELL_ONLY, ToolkitBackendRouting.requirement("sh -c \"pm list packages\""))
+        assertEquals(ToolkitBackendRouting.Requirement.APP_ONLY, ToolkitBackendRouting.requirement("sh -c \"javac -version\""))
+        // 内联再嵌一层：仍按最内层命令判定（不会无限递归，也不会误判成 BOTH）
+        assertEquals(ToolkitBackendRouting.Requirement.SHELL_ONLY, ToolkitBackendRouting.requirement("sh -c \"sh -c \\\"pm list\\\"\""))
+    }
 }

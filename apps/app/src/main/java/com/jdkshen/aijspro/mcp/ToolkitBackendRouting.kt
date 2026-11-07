@@ -21,15 +21,46 @@ internal object ToolkitBackendRouting {
     private val SHELL_ONLY = setOf("pm", "am", "logcat", "uiautomator", "dumpsys", "su", "shizuku", "input", "settings")
     private val SHELL_WRAPPERS = setOf("sh", "bash", "dash", "ash")
 
-    fun requirement(command: String): Requirement {
+    fun requirement(command: String): Requirement = requirement(command, 0)
+
+    /**
+     * P1-6：shell 包装器不能一律判 SHELL_ONLY。
+     *
+     * <p>`sh build.sh` 只是执行一个本地脚本，**app 后端完全能跑**（过去被判 SHELL_ONLY，
+     * 于是调用方看到「该命令需要 shizuku 后端」的误判提示）；只有把 **shell 专属命令内联**
+     * 进 `-c` 时（如 `sh -c "pm list packages"`）才真的需要 shell。
+     *
+     * <p>规则：`sh [-x] -c "<inner>"` → 递归按 inner 判定（深度上限 2）；
+     * `sh script.sh` / 裸 `sh` → BOTH。
+     */
+    private fun requirement(command: String, depth: Int): Requirement {
         val tokens = normalizedTokens(command)
         val executable = tokens.firstOrNull()?.let { basename(it) }?.lowercase() ?: return Requirement.BOTH
         return when {
             executable in APP_ONLY -> Requirement.APP_ONLY
             executable in SHELL_ONLY -> Requirement.SHELL_ONLY
-            executable in SHELL_WRAPPERS -> Requirement.SHELL_ONLY
+            executable in SHELL_WRAPPERS -> wrapperRequirement(tokens, depth)
             else -> Requirement.BOTH
         }
+    }
+
+    /** 见 {@link #requirement(String, int)}：按 `-c` 内联脚本判定，否则两种后端都可以。 */
+    private fun wrapperRequirement(tokens: List<String>, depth: Int): Requirement {
+        var index = 1
+        while (index < tokens.size) {
+            val token = tokens[index]
+            if (token == "-c") {
+                val inline = tokens.getOrNull(index + 1) ?: return Requirement.BOTH
+                if (depth >= 2 || inline.isBlank()) return Requirement.BOTH
+                return requirement(inline, depth + 1)
+            }
+            if (token.startsWith("-")) {
+                index++
+                continue
+            }
+            break // 第一个非选项参数是脚本文件：本地脚本，app 后端也能执行。
+        }
+        return Requirement.BOTH
     }
 
     /** 校验 requestedBackend 是否能直接执行 command；不能时给出明确 hint/nextActions。 */

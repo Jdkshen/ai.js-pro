@@ -294,6 +294,16 @@
       },
       "limit": {
         "type": "integer"
+      },
+      "includeImplementations": {
+        "type": "boolean",
+        "default": false,
+        "description": "true=同时给出该接口/类的实现者（用 hierarchy 扫描）。"
+      },
+      "includeOverrides": {
+        "type": "boolean",
+        "default": false,
+        "description": "true=同时给出该方法的重写者（需 dex_method 定位符）。"
       }
     },
     "required": [
@@ -1772,11 +1782,21 @@
         "minimum": 1,
         "maximum": 1048576,
         "description": "单次读取窗口；省略时默认 1048576 字符；显式传值时上限 1048576（1 MiB）。"
+      },
+      "format": {
+        "type": "string",
+        "enum": [
+          "json",
+          "text"
+        ],
+        "default": "json",
+        "description": "返回形态：json（默认，保持结构化 data 原样）/ text（顶层直接给正文 text，附 chars/truncated/nextOffset，适合反编译/smali/日志这类长文本，免去二次解析）。"
       }
     },
     "required": [
       "jobId"
-    ]
+    ],
+    "description": "分块读取后台任务最终JSON结果，offset以返回nextOffset继续。 终态还会给 suggestedExportPath/exportHint（可直接 apk_job_export 落盘到默认项目目录）。"
   },
   "apk_job_export": {
     "type": "object",
@@ -2161,5 +2181,96 @@
         "description": "默认 false：无法确定创建/访问时间的工作区按“未知年龄”保护。"
       }
     }
+  },
+  "apk_dex_interface_table": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "descriptor"
+    ],
+    "properties": {
+      "descriptor": {
+        "type": "string",
+        "description": "接口 descriptor（Lpkg/IFoo; 或 pkg.IFoo，也接受 dex_class: 定位符）。"
+      },
+      "dexEntry": {
+        "type": "string",
+        "description": "可选：跨 DEX 同名类时指定 dex 条目消歧。"
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      }
+    },
+    "description": "Binder/AIDL 接口事务号表：输入接口 descriptor，输出方法/transactCode/参数/返回/oneway，并给出 Stub 与 Proxy 两侧对照。transactSource 说明编号来源（static_field 才是权威；declaration_order 只是推导）。"
+  },
+  "apk_dex_list_classes": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [],
+    "properties": {
+      "prefix": {
+        "type": "string",
+        "description": "可选：类名/descriptor 前缀过滤。"
+      },
+      "packageFilter": {
+        "type": "string",
+        "description": "可选：包名过滤。"
+      },
+      "dexEntry": {
+        "type": "string"
+      },
+      "cursor": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer",
+        "default": 50,
+        "minimum": 1,
+        "maximum": 500
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      }
+    },
+    "description": "分页列出 DEX 里的类（替代盲搜）。返回 items/total/returned/nextCursor/hasMore/truncated。"
+  },
+  "apk_dex_list_methods": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [],
+    "properties": {
+      "owner": {
+        "type": "string",
+        "description": "可选：类 descriptor 或简单类名。"
+      },
+      "prefix": {
+        "type": "string"
+      },
+      "dexEntry": {
+        "type": "string"
+      },
+      "cursor": {
+        "type": "string"
+      },
+      "limit": {
+        "type": "integer",
+        "default": 50,
+        "minimum": 1,
+        "maximum": 500
+      },
+      "workspaceId": {
+        "type": "string"
+      },
+      "editSessionId": {
+        "type": "string"
+      }
+    },
+    "description": "分页列出 DEX 里的方法（可按 owner 过滤）。返回 name/descriptor/access/returnType/paramTypes/locator + nextCursor。"
   }
 }

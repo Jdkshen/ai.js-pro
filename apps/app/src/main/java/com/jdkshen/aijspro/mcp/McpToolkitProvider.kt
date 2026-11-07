@@ -47,11 +47,24 @@ class McpToolkitProvider : ContentProvider() {
                 else -> throw IllegalArgumentException("工具进程操作无效")
             }
         } catch (failure: Exception) {
-            ToolkitIo.json("ok" to false, "data" to null, "error" to ToolkitIo.json("type" to failure.javaClass.simpleName,
+            // MCP 更新建议 P0-1：把结构化细节（ttlRemainingMs / recovery / nextActions / workspaceId…）
+            // 从 message 里「提升」为 error 的一级字段，调用方不必再解析人类可读文本。
+            val rawMessage = failure.message ?: "工具调用失败"
+            val split = liftDetails(rawMessage)
+            val error = ToolkitIo.json("type" to failure.javaClass.simpleName,
                 "code" to if(failure is ToolkitException) failure.code else if(failure is ToolkitRegex.BudgetExceeded) "REGEX_BUDGET_EXCEEDED" else if(failure is IllegalArgumentException) "INVALID_ARGUMENT" else "TOOL_FAILED",
                 "argument" to if(failure is ToolkitException) failure.argument else null,
                 "severity" to "warning", "recoverable" to true, "retrySameArguments" to false,
-                "message" to (failure.message ?: "工具调用失败").take(4000)), "nextActions" to emptyList<Any>())
+                "message" to split.first.take(4000))
+            val actions = JsonArray()
+            split.second?.let { details ->
+                error.add("details", details)
+                for (key in listOf("recovery", "ttlRemainingMs", "expiredAt", "ttlMinutes", "workspaceId", "sessionId", "workspaceState", "reason", "componentMissing")) {
+                    details.get(key)?.let { value -> if (!value.isJsonNull) error.add(key, value) }
+                }
+                details.getAsJsonArray("nextActions")?.forEach { actions.add(it) }
+            }
+            ToolkitIo.json("ok" to false, "data" to null, "error" to error, "nextActions" to actions)
         }
         val json = GsonBuilder().serializeNulls().disableHtmlEscaping().create()
         var serialized = json.toJson(payload)
@@ -145,4 +158,22 @@ class McpToolkitProvider : ContentProvider() {
     override fun insert(uri: Uri, values: ContentValues?): Uri? = throw UnsupportedOperationException()
     override fun delete(uri: Uri, s: String?, a: Array<String>?): Int = throw UnsupportedOperationException()
     override fun update(uri: Uri, values: ContentValues?, s: String?, a: Array<String>?): Int = throw UnsupportedOperationException()
+
+    /**
+     * 把 `... details={json}` 里的 JSON 提升出来；解析失败就原样返回整条 message（绝不吞错误）。
+     * 返回 (清理后的 message, 解析出的 details 或 null)。
+     */
+    private fun liftDetails(message: String): Pair<String, JsonObject?> {
+        val marker = "details="
+        val start = message.lastIndexOf(marker)
+        if (start < 0) return message to null
+        val brace = message.indexOf('{', start + marker.length)
+        if (brace < 0) return message to null
+        val end = message.lastIndexOf('}')
+        if (end <= brace) return message to null
+        val details = try { JsonParser().parse(message.substring(brace, end + 1)).asJsonObject } catch (_: Exception) { null }
+        if (details == null) return message to null
+        return message.substring(0, start).trim().trimEnd(';', ',', ' ') to details
+    }
+
 }

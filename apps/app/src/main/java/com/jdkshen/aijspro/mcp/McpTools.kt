@@ -53,6 +53,7 @@ internal class McpTools(private val context: Context, private val event: (String
         if (it != scriptsRoot && !it.path.startsWith(scriptsRoot.path + File.separator)) error("操作目录无效")
     }
     private val toolkitStore = File(File(context.filesDir, "apk-toolkit"), ToolkitIo.version(root.path.toByteArray()).take(16))
+    private val baselineVersion = McpBaselineVersion()
     private val workspaces = McpWorkspaceStore(context, root)
     private val terminalBackend = McpAndroidTerminal(context)
     private val terminals = McpTerminalJobs(root, terminalBackend::launch)
@@ -284,6 +285,19 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("node_script_command", "给出「写脚本文件再运行」的推荐命令（避免 node -e 双重转义），并说明 argv[0]=node、argv[1]=脚本、argv[2] 才是参数", objSchema("scriptPath", "args", required = arrayOf("scriptPath"))))
             add(tool("crash_buffer_semantics", "解释 logcat -b crash -c 的清理语义：只清 crash 环形缓冲、不是同步屏障、旧条目可能仍被读到；给出可核对的时间窗/PID 过滤方法", objSchema()))
             McpToolkitBridge.definitions(context, root).forEach { add(it) }
+            // P1-6/P1-7：终端描述把「权限不足」与「需要换后端」分开，并说明 app 后端看不到 shell 进程是正常现象。
+            val terminalDescriptionSuffixes = mapOf(
+                "terminal_exec" to "；后端提示是路由建议，不等于权限结论：app 后端出现「权限不足」（如 pm/am/logcat）才考虑 backend=shizuku；普通构建脚本 sh build.sh 用 app 后端，正确调用：{\"backend\":\"app\",\"command\":\"sh build.sh\"}。若报缺少 python3/aidl，先 get_build_tools 或 shell_classify_failure（COMPONENT_MISSING），不要换后端。app 后端看不到 shell/其他进程（pidof shizuku_server 空、ps 受限）是正常现象；查进程请用 backend=shizuku，不要据此判断服务挂了。",
+                "terminal_list" to "；app 后端看不到 shell/其他进程（pidof/ps 受限）是正常现象；查进程请用 terminal_exec backend=shizuku。",
+                "get_build_tools" to "；返回 ready/missing/present 就绪摘要；缺 python3/aidl 时 code=COMPONENT_MISSING，recovery 给 apk_component_install 与 localDeps 两条可执行路。",
+                "shell_classify_failure" to "；输出含 py-tree/.../python3、aidl 的 inaccessible or not found 时，返回 code=COMPONENT_MISSING 与 components/recovery/nextActions。",
+            )
+            forEach { element ->
+                val tool = element.asJsonObject
+                terminalDescriptionSuffixes[tool.get("name")?.asString]?.let { suffix ->
+                    tool.addProperty("description", tool.get("description").asString + suffix)
+                }
+            }
             // 所有会写文件的工具统一追加同一句产出目录 pointer（只改文案，不改逻辑）。
             forEach { element ->
                 val tool = element.asJsonObject
@@ -332,7 +346,8 @@ internal class McpTools(private val context: Context, private val event: (String
                 })
                 add("limits", McpLimits.describe())
                 addProperty("toolCount", McpToolCatalog.names.size)
-                add("outputConventions", McpOutputConventions.describeFor(root, toolkitStore))
+                val outputConventions = McpOutputConventions.describeFor(root, toolkitStore)
+                add("outputConventions", outputConventions)
                 addProperty("canonicalToolCount", McpToolCatalog.canonicalNames.size)
                 addProperty("scriptRoot", root.path); addProperty("writeAllowed", McpService.allowWrite)
                 addProperty("executionAllowed", McpService.allowExecution)
@@ -349,6 +364,24 @@ internal class McpTools(private val context: Context, private val event: (String
                     addProperty("unavailable", true)
                     addProperty("note", "工具进程未就绪，无法读取任务保留统计；请稍后重试 get_status 或先调用 toolkit_status")
                 })
+                // 第六章基线自检：全部为现有内存/文件读取，不新增 MCP 往返、不写盘。
+                val currentProject = outputConventions.get("defaultProject")
+                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+                val apkWorkspaces = apkWorkspaceBaseline()
+                val baselineWorkspaces = ToolkitIo.json(
+                    "script" to workspaces.list().size,
+                    "apk" to apkWorkspaces,
+                )
+                val baselineToolchain = compactToolchain()
+                val baselineJobs = ToolkitIo.json(
+                    "retention" to retentionSummary(jobsSummary),
+                    "advice" to "终态立刻 result 或 export",
+                )
+                val baseline = McpBuildTools.baselineContent(
+                    root.path, currentProject, baselineWorkspaces, baselineToolchain, baselineJobs,
+                )
+                baseline.addProperty("version", baselineVersion.versionFor(baseline))
+                add("baseline", baseline)
                 addProperty("overlayCount", OverlayStateReader.countAggregated(context))
                 addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
                 add("engineDiagnostics", engineDiagnostics())
@@ -416,11 +449,11 @@ internal class McpTools(private val context: Context, private val event: (String
             "get_mcp_log" -> toolJson(getMcpLog(args))
             "terminal_exec" -> {
                 requireExecution()
-                toolJson(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
-                    terminalEnvironment(args), terminalInt(args, "timeoutSeconds", 300), parseTerminalBackend(args)))
+                toolJson(McpBuildTools.enrichTerminalResult(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
+                    terminalEnvironment(args), terminalInt(args, "timeoutSeconds", 300), parseTerminalBackend(args))))
             }
-            "terminal_read" -> toolJson(terminals.read(args.string("jobId"), terminalLong(args, "offset", 0),
-                terminalInt(args, "maxChars", 16384), terminalInt(args, "waitMillis", 0)))
+            "terminal_read" -> toolJson(McpBuildTools.enrichTerminalResult(terminals.read(args.string("jobId"), terminalLong(args, "offset", 0),
+                terminalInt(args, "maxChars", 16384), terminalInt(args, "waitMillis", 0))))
             "terminal_write" -> {
                 val eof = args.get("eof")?.let {
                     require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) { "eof 必须是布尔值" }
@@ -437,9 +470,9 @@ internal class McpTools(private val context: Context, private val event: (String
                 require(!args.has("backend")) { "shell_rish 固定使用 shizuku 后端；如需 app 后端请用 terminal_exec" }
                 // shell_rish is only a compatibility name for the same asynchronous Shizuku job
                 // system. It must never block the MCP request or pretend to be a sync result.
-                toolJson(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
+                toolJson(McpBuildTools.enrichTerminalResult(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
                     terminalEnvironment(args), terminalInt(args, "timeoutSeconds", 300),
-                    McpTerminalJobs.BACKEND_SHIZUKU))
+                    McpTerminalJobs.BACKEND_SHIZUKU)))
             }
             "get_build_tools" -> toolJson(McpBuildTools.inspect(terminalBackend, root))
             "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
@@ -484,9 +517,12 @@ internal class McpTools(private val context: Context, private val event: (String
             in McpAppTraceTools.names -> toolJson(McpAppTraceTools.call(context, name, args))
             "shell_capabilities" -> toolJson(ToolkitShellCapabilities.matrix())
             // 辅助工具不能让参数形状问题变成 MCP「Internal error」：一律捕获并返回结构化错误。
-            "shell_classify_failure" -> toolJson(runCatching {
-                ToolkitShellCapabilities.classifyFailure(args.string("command"), args.string("output"))
-            }.getOrElse { failure -> helperError("shell_classify_failure", failure) })
+            "shell_classify_failure" -> {
+                val classified = runCatching {
+                    ToolkitShellCapabilities.classifyFailure(args.string("command"), args.string("output"))
+                }.getOrElse { failure -> helperError("shell_classify_failure", failure) }
+                toolJson(McpBuildTools.enrichComponentFailure(classified, args.string("command"), args.string("output")))
+            }
             "node_script_command" -> toolJson(runCatching {
                 // 库层已容忍「字符串 / 数组 / null」三种 args 形状（实测曾因字符串 args 报 Internal error）。
                 ToolkitShellCapabilities.nodeScriptCommandFromRaw(args.string("scriptPath"), args.get("args"))
@@ -1233,6 +1269,42 @@ internal class McpTools(private val context: Context, private val event: (String
         return value.toInt()
     }
     private fun logLevel(level: Int) = when (level) { Log.VERBOSE -> "VERBOSE"; Log.DEBUG -> "DEBUG"; Log.INFO -> "INFO"; Log.WARN -> "WARN"; Log.ERROR -> "ERROR"; Log.ASSERT -> "ASSERT"; else -> level.toString() }
+    /** baseline 的 APK 工作区统计：本地只读清单，不新增 MCP 往返、不写盘。 */
+    private fun apkWorkspaceBaseline(): JsonObject = runCatching {
+        val inventory = ToolkitWorkspaceInventory(toolkitStore).inventory(ToolkitIo.json("limit" to 1))
+        val byState = inventory.getAsJsonObject("byState")
+        ToolkitIo.json(
+            "used" to inventory.tInt("quotaUsedCount", 0),
+            "quota" to inventory.tInt("quota", 16),
+            "temporary" to (byState?.tInt("temporary", 0) ?: 0),
+            "ttlHint" to "temporary 会过期，过期后重新 open",
+        )
+    }.getOrElse {
+        ToolkitIo.json("used" to null, "quota" to null, "temporary" to null,
+            "note" to "APK 工作区统计不可用；用 apk_workspace_inventory 查询")
+    }
+
+    /** 只取 get_build_tools 的内存缓存，不在 get_status 里重新跑 PATH 探测。 */
+    private fun compactToolchain(): JsonObject {
+        val cached = McpBuildTools.cachedReadiness()
+            ?: return ToolkitIo.json("ready" to null, "missing" to JsonArray(), "present" to JsonArray(),
+                "note" to "先调用 get_build_tools 采样")
+        return ToolkitIo.json(
+            "ready" to cached.get("ready"),
+            "missing" to cached.get("missing"),
+            "present" to cached.get("present"),
+        )
+    }
+
+    /** 6h / 64 条；jobs 摘要不可用时仍给产品默认值。 */
+    private fun retentionSummary(jobs: JsonObject?): String {
+        val retention = jobs?.getAsJsonObject("retention")
+        val window = retention?.get("windowMillis")?.takeIf { it.isJsonPrimitive }?.asLong ?: (6L * 60 * 60 * 1000)
+        val max = retention?.get("maxRetainedFinished")?.takeIf { it.isJsonPrimitive }?.asInt ?: 64
+        val hours = if (window < 0) "不自动过期" else (window / 3_600_000L).toString() + "h"
+        return hours + " / " + max + " 条"
+    }
+
     private fun <T> page(all: List<T>, offset: Int, limit: Int, convert: (T) -> JsonElement) = JsonObject().apply {
         val start = offset.coerceIn(0, all.size); val size = limit.coerceIn(1, 200); val end = (start + size).coerceAtMost(all.size)
         add("items", JsonArray().apply { all.subList(start, end).forEach { add(convert(it)) } })

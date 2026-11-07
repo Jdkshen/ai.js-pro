@@ -3,6 +3,8 @@ package com.jdkshen.aijspro.mcp
 import com.google.gson.*
 import java.io.File
 import java.io.InterruptedIOException
+import java.text.SimpleDateFormat
+import java.util.*
 import java.util.concurrent.*
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -58,6 +60,10 @@ internal class ToolkitJobs internal constructor(
         // 反馈 #11：失败原因的结构化码要能在 apk_job_status/list 里看到，而不是只藏在结果正文。
         @Volatile var errorCode: String? = null
         @Volatile var warningCode: String? = null
+        /** P1-5：提示性 JADX INFO/常规注释；不抬状态，只做 notes。 */
+        @Volatile var notes: List<String> = emptyList()
+        /** P1-5：真正被判成 warning 的原因；SUCCEEDED 时为 null。 */
+        @Volatile var warningReason: String? = null
         @Volatile var resultReady = false
         @Volatile var resultBytes = 0L
         @Volatile var lostByRestart = false
@@ -260,12 +266,19 @@ internal class ToolkitJobs internal constructor(
             Character.isLowSurrogate(text[end])
         ) end--
         require(end > offset || offset == text.length) { "maxChars太小，不能容纳当前Unicode字符，请至少使用2" }
-        return ToolkitIo.json(
+        val format = args.tString("format", "json").lowercase()
+        require(format in setOf("json", "text")) { "format 必须是 json 或 text，收到：$format" }
+        val rawContent = text.substring(offset, end)
+        val textResult = format == "text"
+        val suggestedPath = suggestedExportPath(job, text = textResult || isTextOperation(job.operation))
+        val result = ToolkitIo.json(
             "jobId" to job.id,
             "operation" to job.operation,
             "state" to job.state,
-            "content" to text.substring(offset, end),
+            "format" to format,
+            "content" to rawContent,
             "nextOffset" to end,
+            "rawNextOffset" to end,
             "hasMore" to (end < text.length),
             "totalChars" to text.length,
             "resultChars" to text.length,
@@ -278,8 +291,36 @@ internal class ToolkitJobs internal constructor(
             "clientId" to job.clientId,
             "sessionId" to job.sessionId,
             "lostByRestart" to job.lostByRestart,
+            "warningCode" to job.warningCode,
+            "warningReason" to job.warningReason,
+            "notes" to job.notes,
+            "noteCount" to job.notes.size,
+            "suggestedExportPath" to suggestedPath,
+            "exportHint" to exportHint(job, suggestedPath),
             "retention" to retentionJson(),
         )
+        if (textResult) {
+            val fullText = extractTextContent(text)
+            require(offset <= fullText.length) { "结果 offset 超出正文范围（text 长度 " + fullText.length + "）" }
+            require(
+                offset == 0 || offset == fullText.length || !Character.isLowSurrogate(fullText[offset]) ||
+                    !Character.isHighSurrogate(fullText[offset - 1]),
+            ) { "结果offset不能切开UTF-16代理对，请使用nextOffset" }
+            var textEnd = minOf(fullText.length, offset + max)
+            if (textEnd in (offset + 1) until fullText.length && Character.isHighSurrogate(fullText[textEnd - 1]) &&
+                Character.isLowSurrogate(fullText[textEnd])
+            ) textEnd--
+            require(textEnd > offset || offset == fullText.length) { "maxChars太小，不能容纳当前Unicode字符，请至少使用2" }
+            val page = fullText.substring(offset, textEnd)
+            result.addProperty("text", page)
+            result.addProperty("chars", page.length)
+            result.addProperty("truncated", textEnd < fullText.length)
+            result.addProperty("nextOffset", textEnd)
+            result.addProperty("textOffset", offset)
+            result.addProperty("textTotalChars", fullText.length)
+            result.addProperty("textHasMore", textEnd < fullText.length)
+        }
+        return result
     }
 
     /**
@@ -289,6 +330,57 @@ internal class ToolkitJobs internal constructor(
      * offset/maxChars 与 apk_job_result 一样按 UTF-16 字符分页，truncated 表示还有下一页。
      * 保留窗口/墓碑仍是唯一来源：已被淘汰的任务继续报 JOB_EVICTED，重启丢失报 SERVICE_RESTARTED。
      */
+    /** 解析任务结果 envelope 的正文；兼容纯文本/旧格式，无法解析时原样返回。 */
+    private fun extractTextContent(raw: String): String {
+        val root = runCatching { JsonParser().parse(raw) }.getOrNull() ?: return raw
+        if (!root.isJsonObject) return raw
+        val obj = root.asJsonObject
+        val data = obj.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
+        fun textValue(candidate: com.google.gson.JsonElement?): String? =
+            candidate?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+        return textValue(data?.get("content"))
+            ?: textValue(data?.get("text"))
+            ?: textValue(obj.get("content"))
+            ?: raw
+    }
+
+    private fun isTextOperation(operation: String): Boolean =
+        operation.contains("decompile") || operation.contains("read_text") ||
+            operation.contains("smali") || operation.contains("log")
+
+    private fun exportKind(operation: String): String = when (operation) {
+        "apk_decompile_class" -> "class"
+        "apk_decompile_method" -> "method"
+        else -> operation.removePrefix("apk_")
+            .replace(Regex("[^A-Za-z0-9_-]"), "-")
+            .ifBlank { "result" }
+    }
+
+    /** 默认项目来自 project_folder 的 project.json；没有项目时给 root 相对建议，不伪造绝对 root。 */
+    private fun defaultProjectDir(): File? {
+        val store = folder.absoluteFile.parentFile ?: folder.absoluteFile
+        val config = File(store, "project.json")
+        if (!config.isFile) return null
+        val parsed = runCatching { JsonParser().parse(config.readText(Charsets.UTF_8)).asJsonObject }.getOrNull() ?: return null
+        val raw = parsed.get("projectDir")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+            ?: parsed.get("path")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+            ?: return null
+        val dir = runCatching { File(raw).canonicalFile }.getOrNull() ?: return null
+        return dir.takeIf { it.isDirectory }
+    }
+
+    private fun suggestedExportPath(job: Job, text: Boolean): String {
+        val extension = if (text) "txt" else "json"
+        val name = job.id + "-" + exportKind(job.operation) + "." + extension
+        val project = defaultProjectDir()
+        if (project != null) return File(project, name).path
+        val date = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date())
+        return "mcp-out-" + date + "/" + name
+    }
+
+    private fun exportHint(job: Job, suggestedPath: String): String =
+        "apk_job_export(" + ToolkitIo.json("jobId" to job.id, "outPath" to suggestedPath).toString() + ")"
+
     @Synchronized
     fun export(root: File, args: JsonObject): JsonObject {
         val job = find(args)
@@ -345,6 +437,70 @@ internal class ToolkitJobs internal constructor(
     // 执行与状态
     // ------------------------------------------------------------------
 
+    private data class SuccessClassification(
+        val state: String,
+        val warningCode: String?,
+        val warningReason: String?,
+        val notes: List<String>,
+    )
+
+    /**
+     * P1-5 判定规则（只改作业状态，不改结果文件里的 data）：
+     * - 空 warningCode 视为无 warning（旧组件常回 ""，之前会被误判）。
+     * - 提示性：正文非空且无 JADX ERROR/Method dump skipped；decompileIncomplete 仅因全局 errorsCount
+     *   或提示注释时，状态 SUCCEEDED，只进 notes/noteCount；JADX INFO 注释也只进 notes。
+     * - 真 warning：内容为空、EMPTY_RESULT/RESULT_TRUNCATED、正文含 JADX ERROR/Method dump skipped，
+     *   或其它非 DECOMPILE_INCOMPLETE 的 warningCode；才 SUCCEEDED_WITH_WARNINGS + warningReason。
+     */
+    private fun classifySuccess(data: JsonObject?, operation: String): SuccessClassification {
+
+        // 没有 data 对象（例如旧调用方回的是裸 JSON）时不做判断：不能凭空造出「正文为空」的 warning。
+        if (data == null) return SuccessClassification("SUCCEEDED", null, null, emptyList())
+        val textOperation = isTextOperation(operation)
+        val content = data?.get("content")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+            ?: data?.get("text")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+            ?: ""
+        val incomplete = data?.get("decompileIncomplete")?.takeIf { it.isJsonPrimitive }?.asBoolean == true
+        val warningCode = data?.get("warningCode")?.takeIf { it.isJsonPrimitive }?.asString
+            ?.takeIf { it.isNotBlank() }
+        val warningHint = data?.get("warningHint")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        val incompleteReason = data?.get("incompleteReason")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+        val errorsCount = data?.get("errorsCount")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+        val warningsCount = data?.get("warningsCount")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+        val infoCount = content.lineSequence()
+            .count { line -> line.trimStart().contains("JADX INFO") }
+            .coerceAtMost(100)
+        val fatal = content.contains("JADX ERROR", ignoreCase = true) ||
+            content.contains("Method dump skipped", ignoreCase = true)
+        val notes = ArrayList<String>()
+        if (infoCount > 0) notes.add("正文含 JADX INFO 提示性注释 " + infoCount + " 条；属于常规提示，不改变 SUCCEEDED")
+        if ((incomplete || warningCode == "DECOMPILE_INCOMPLETE") && !fatal && content.isNotBlank()) {
+            notes.add("decompileIncomplete/warningCode 仅由全局 errorsCount/提示触发（正文无 JADX ERROR/Method dump skipped）；按提示保留 SUCCEEDED")
+        }
+        if (errorsCount > 0) notes.add("JADX errorsCount=" + errorsCount + " 是全局计数；不等于当前类/方法正文异常")
+        if (warningsCount > 0) notes.add("JADX warningsCount=" + warningsCount + "；提示性计数，已与真 warning 分开")
+        if (fatal && content.contains("JADX ERROR", ignoreCase = true)) notes.add("正文含 JADX ERROR")
+        if (fatal && content.contains("Method dump skipped", ignoreCase = true)) notes.add("正文含 Method dump skipped")
+        if (textOperation && content.isBlank()) notes.add("正文为空，无法确认已完整反编译")
+        val hardWarning = ((textOperation || incomplete) && content.isBlank()) ||
+            warningCode == "EMPTY_RESULT" || warningCode == "RESULT_TRUNCATED" ||
+            (warningCode != null && warningCode != "DECOMPILE_INCOMPLETE") ||
+            (incomplete && fatal)
+        if (!hardWarning) {
+            return SuccessClassification("SUCCEEDED", null, null, notes.take(8).map { it.take(500) })
+        }
+        val code = warningCode ?: if (incomplete) "DECOMPILE_INCOMPLETE" else "RESULT_INCOMPLETE"
+        val reason = warningHint.ifBlank { incompleteReason.ifBlank {
+            when {
+                warningCode == "EMPTY_RESULT" -> "反编译返回空内容"
+                warningCode == "RESULT_TRUNCATED" -> "结果被 maxChars 截断"
+                fatal -> "反编译正文含 JADX ERROR/Method dump skipped"
+                else -> "任务完成但结果不完整（" + code + "）"
+            }
+        } }
+        return SuccessClassification("SUCCEEDED_WITH_WARNINGS", code, reason.take(1000), notes.take(8).map { it.take(500) })
+    }
+
     private fun runWork(job: Job, timeout: ScheduledFuture<*>) {
         job.thread = Thread.currentThread()
         job.started = clock()
@@ -358,27 +514,21 @@ internal class ToolkitJobs internal constructor(
             Thread.interrupted()
             writeResult(job, response)
             val responseData = response.get("data")?.takeIf { it.isJsonObject }?.asJsonObject
-            val decompileIncomplete = responseData?.get("decompileIncomplete")?.takeIf { it.isJsonPrimitive }
-                ?.asBoolean == true
-            // B2/B3：工具层新增的 warningCode（EMPTY_RESULT/RESULT_TRUNCATED/JADX_*）也要提升到作业状态，
-            // 否则"成功但空""被截断"在 job 层看起来仍是干净的 SUCCEEDED（.4 手册 B2/B3 的诉求）。
-            val dataWarningCode = responseData?.get("warningCode")?.takeIf { it.isJsonPrimitive }?.asString
+            val classification = classifySuccess(responseData, job.operation)
             job.state = if (job.cancelled.get() && (
                     response.get("ok")?.asBoolean == false || responseData?.get("cancelled")?.asBoolean == true
                     )
             ) "CANCELLED"
             else if (response.get("ok")?.asBoolean == false) "FAILED"
-            else if (decompileIncomplete || dataWarningCode != null) "SUCCEEDED_WITH_WARNINGS"
-            else "SUCCEEDED"
-            if (dataWarningCode != null) {
-                // 工具层已经给出更具体的码（EMPTY_RESULT/RESULT_TRUNCATED/JADX_*），优先用它。
-                job.warningCode = dataWarningCode
-                job.reason = responseData?.get("warningHint")?.takeIf { it.isJsonPrimitive }?.asString
-                    ?: "任务完成但有警告（$dataWarningCode）"
-            } else if (decompileIncomplete) {
-                job.warningCode = "DECOMPILE_INCOMPLETE"
-                job.reason = responseData?.get("incompleteReason")?.takeIf { it.isJsonPrimitive }?.asString
-                    ?: "反编译结果不完整，请改用 smali 视图"
+            else classification.state
+            if (job.state == "SUCCEEDED" || job.state == "SUCCEEDED_WITH_WARNINGS") {
+                job.notes = classification.notes
+                job.warningCode = classification.warningCode
+                job.warningReason = classification.warningReason
+                if (job.state == "SUCCEEDED_WITH_WARNINGS") {
+                    job.reason = classification.warningReason
+                        ?: "任务完成但结果不完整（" + (classification.warningCode ?: "RESULT_INCOMPLETE") + "）"
+                }
             }
         } catch (failure: Exception) {
             job.state =
@@ -460,6 +610,9 @@ internal class ToolkitJobs internal constructor(
             // 调用方只能从 reason 里猜。现在统一暴露：丢失优先 SERVICE_RESTARTED，否则用本次失败捕获到的码。
             "errorCode" to if (lost) "SERVICE_RESTARTED" else job.errorCode,
             "warningCode" to if (lost) null else job.warningCode,
+            "warningReason" to if (lost) null else job.warningReason,
+            "notes" to job.notes,
+            "noteCount" to job.notes.size,
             "errorHint" to if (lost) "任务因工具进程重启丢失，未自动重放；请确认需要后重新提交"
                 else job.errorCode?.let { "任务失败的结构化码；详细原因见 reason 与 apk_job_result 正文" },
             "metadataFromIndex" to job.metadataFromIndex,
@@ -626,6 +779,8 @@ internal class ToolkitJobs internal constructor(
             "locator" to job.locator,
             "lostByRestart" to job.lostByRestart,
             "warningCode" to job.warningCode,
+            "warningReason" to job.warningReason,
+            "notes" to job.notes,
             "timeoutSeconds" to job.timeout,
         )
         runCatching { ToolkitIo.atomic(metadataFile(job.id)) { it.writeText(metadata.toString(), Charsets.UTF_8) } }
@@ -676,6 +831,10 @@ internal class ToolkitJobs internal constructor(
             "resultAvailable" to job.resultReady,
             "resultBytes" to job.resultBytes,
             "lostByRestart" to job.lostByRestart,
+            "warningCode" to job.warningCode,
+            "warningReason" to job.warningReason,
+            "notes" to job.notes,
+            "noteCount" to job.notes.size,
         )
     }
 
@@ -801,7 +960,9 @@ internal class ToolkitJobs internal constructor(
                 job.started = source.optLong("startedAt") ?: 0L
                 job.finished = source.optLong("finishedAt") ?: 0L
                 job.reason = source.optString("reason") ?: ""
-                job.warningCode = source.optString("warningCode")
+                job.warningCode = source.optString("warningCode")?.takeIf { it.isNotEmpty() }
+                job.warningReason = source.optString("warningReason")?.takeIf { it.isNotEmpty() }
+                job.notes = source.getAsJsonArray("notes")?.mapNotNull { element -> element.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList()
                 job.lostByRestart = source.get("lostByRestart")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
                 val result = resultFile(id)
                 job.resultReady = result.isFile && result.length() > 0L
@@ -841,6 +1002,9 @@ internal class ToolkitJobs internal constructor(
                     job.finished = record.optLong("finishedAt") ?: clock()
                     job.lostByRestart = job.state == "INTERRUPTED"
                     job.reason = if (job.lostByRestart) RESTART_REASON else ""
+                    job.warningCode = record.optString("warningCode")?.takeIf { it.isNotEmpty() }
+                    job.warningReason = record.optString("warningReason")?.takeIf { it.isNotEmpty() }
+                    job.notes = record.getAsJsonArray("notes")?.mapNotNull { element -> element.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList()
                     // 反馈实测（K40 dev-1374）：恢复时只改内存状态、不回写元数据 → 元数据文件里仍是 RUNNING/QUEUED，
                     // 于是 workspace 清单的 scanActiveJobs() 永远认为有 activeJobs，apk_workspace_gc 永久保守跳过所有临时工作区
                     // （现象：10 个临时快照 1.0 GiB 一个都回收不掉）。这里把终态写回元数据，幂等。

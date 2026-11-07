@@ -44,7 +44,7 @@ class ToolkitJobsTest {
         val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
         while (System.nanoTime() < end) {
             val state = jobs.status(obj("jobId" to jobId)).get("state").asString
-            if (state in setOf("SUCCEEDED", "FAILED", "CANCELLED", "INTERRUPTED")) {
+            if (state in setOf("SUCCEEDED", "SUCCEEDED_WITH_WARNINGS", "FAILED", "CANCELLED", "INTERRUPTED")) {
                 return jobs.status(obj("jobId" to jobId))
             }
             Thread.sleep(5)
@@ -439,6 +439,85 @@ class ToolkitJobsTest {
     }
 
     @Test
+    fun resultExposesTopLevelTextAndSuggestedExportPath() {
+        val folder = temp.newFolder("jobs")
+        val root = folder.parentFile ?: error("jobs parent")
+        val project = File(root, "MCP测试").apply { mkdirs() }
+        File(root, "project.json").writeText(ToolkitIo.json(
+            "projectDir" to project.path,
+            "name" to "MCP测试",
+        ).toString())
+        val content = "package defpackage;\n\npublic class Demo {}\n"
+        val jobs = ToolkitJobs(folder) { _, _ ->
+            ToolkitIo.ok(ToolkitIo.json(
+                "content" to content,
+                "decompileIncomplete" to false,
+                "warningCode" to "",
+                "errorsCount" to 0,
+            ))
+        }
+        val jobId = jobs.start(obj(
+            "operation" to "apk_decompile_class",
+            "arguments" to ToolkitIo.json(),
+            "timeoutSeconds" to 10,
+        )).get("jobId").asString
+        waitFinal(jobs, jobId)
+        val data = jobs.result(obj("jobId" to jobId, "format" to "text"))
+        assertEquals(content, data.get("text").asString)
+        assertEquals(content.length, data.get("chars").asInt)
+        assertEquals(content.length, data.get("nextOffset").asInt)
+        assertFalse(data.get("truncated").asBoolean)
+        val suggested = data.get("suggestedExportPath").asString
+        assertTrue(suggested.startsWith(project.path))
+        assertTrue(suggested.endsWith(".txt"))
+        assertTrue(data.get("exportHint").asString.contains("apk_job_export"))
+        assertTrue(data.get("exportHint").asString.contains(jobId))
+        val page = jobs.result(obj("jobId" to jobId, "format" to "text", "maxChars" to 5))
+        assertEquals(5, page.get("chars").asInt)
+        assertTrue(page.get("truncated").asBoolean)
+        assertEquals(5, page.get("nextOffset").asInt)
+        assertTrue(page.get("text").asString.length <= 5)
+    }
+
+    @Test
+    fun infoCommentsAreNotesButRealIncompleteIsWarning() {
+        val folder = temp.newFolder("jobs")
+        fun jobs(content: String, incomplete: Boolean, warningCode: String = ""): ToolkitJobs =
+            ToolkitJobs(folder) { _, _ ->
+                ToolkitIo.ok(ToolkitIo.json(
+                    "content" to content,
+                    "decompileIncomplete" to incomplete,
+                    "warningCode" to warningCode,
+                    "errorsCount" to if (incomplete) 1 else 0,
+                    "warningsCount" to 1,
+                    "incompleteReason" to if (incomplete) "反编译结果不完整：errorsCount=1" else "",
+                ))
+            }
+        fun start(jobs: ToolkitJobs): String = jobs.start(obj(
+            "operation" to "apk_decompile_class",
+            "arguments" to ToolkitIo.json(),
+            "timeoutSeconds" to 10,
+        )).get("jobId").asString
+
+        val info = jobs("JADX INFO: regular comment\nclass Demo {}\n", incomplete = true)
+        val infoStatus = waitFinal(info, start(info))
+        assertEquals("SUCCEEDED", infoStatus.get("state").asString)
+        assertTrue(infoStatus.get("warningCode").isJsonNull)
+        assertTrue(infoStatus.get("warningReason").isJsonNull)
+        assertTrue(infoStatus.get("notes").asJsonArray.any { it.asString.contains("JADX INFO") })
+
+        val real = jobs("JADX ERROR: failed to decompile\n", incomplete = true, warningCode = "DECOMPILE_INCOMPLETE")
+        val realId = start(real)
+        val realStatus = waitFinal(real, realId)
+        assertEquals("SUCCEEDED_WITH_WARNINGS", realStatus.get("state").asString)
+        assertEquals("DECOMPILE_INCOMPLETE", realStatus.get("warningCode").asString)
+        assertTrue(realStatus.get("warningReason").asString.isNotBlank())
+        assertTrue(realStatus.get("notes").asJsonArray.any { it.asString.contains("JADX ERROR") })
+        val realResult = real.result(obj("jobId" to realId))
+        assertEquals(realStatus.get("warningReason").asString, realResult.get("warningReason").asString)
+    }
+
+    @Test
     fun exportWritesExactRawResultAndMetadata() {
         val folder = temp.newFolder("jobs")
         val root = temp.newFolder("root")
@@ -545,4 +624,5 @@ class ToolkitJobsTest {
         assertTrue(kept.isFile)
         assertEquals(keptText, kept.readText())
     }
+
 }
