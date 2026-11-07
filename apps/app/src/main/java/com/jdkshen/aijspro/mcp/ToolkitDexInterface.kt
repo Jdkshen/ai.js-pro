@@ -7,11 +7,14 @@ import org.jf.dexlib2.iface.ClassDef
 import org.jf.dexlib2.iface.Field
 import org.jf.dexlib2.iface.Method
 import org.jf.dexlib2.iface.instruction.FiveRegisterInstruction
+import org.jf.dexlib2.iface.instruction.OffsetInstruction
 import org.jf.dexlib2.iface.instruction.OneRegisterInstruction
 import org.jf.dexlib2.iface.instruction.RegisterRangeInstruction
 import org.jf.dexlib2.iface.instruction.ReferenceInstruction
+import org.jf.dexlib2.iface.instruction.SwitchPayload
 import org.jf.dexlib2.iface.instruction.WideLiteralInstruction
 import org.jf.dexlib2.iface.reference.MethodReference
+import org.jf.dexlib2.iface.reference.StringReference
 import org.jf.dexlib2.iface.value.IntEncodedValue
 import java.io.File
 import java.util.zip.ZipFile
@@ -23,10 +26,11 @@ import java.util.zip.ZipFile
  * ToolkitDexInterface(dexes(workspace, session).toList()) 构造，path 分支可用
  * ToolkitDexInterface.fromPath(root, path)。所有输出是 data JsonObject，不含 ok 包络。</p>
  *
- * <p>transactCode 推导边界：优先读 Stub/接口类里的 TRANSACTION_xxx 静态字段；没有字段时
- * 只能按当前接口 -> 父接口、各接口方法声明顺序使用 FIRST_CALL_TRANSACTION=1 推导。
- * 因此 declaration_order 不是 AIDL 编译器的可靠映射，返回值必须同时带 transactSource 和警告。
- * 本类不会执行 Binder、不会调用 onTransact，也不承诺 runtime 实际 transact 号。</p>
+ * <p>transactCode 推导有两条路：canonical descriptor 路径优先读 Stub/接口类里的 TRANSACTION_xxx
+ * 静态字段；接口类不存在、方法表为空或没有静态字段时 auto 走 string_const 兜底：
+ * 字符串池命中 writeInterfaceToken + 同一方法的 transact 立即数，或 onTransact 的 packed/sparse-switch。
+ * 两条路径都不会执行 Binder、不会调用 onTransact，也不承诺 runtime 实际 transact 号；返回值必须同时
+ * 带 transactSource、evidence、confidence 和 warnings。</p>
  */
 internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
 
@@ -67,6 +71,21 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
         var proxyTransactCode: Int? = null,
     )
 
+    private data class TransactCall(val code: Int, val methodName: String)
+
+    private data class FallbackHit(
+        val code: Int,
+        val methodName: String?,
+        val methodDescriptor: String?,
+        val callSiteLocator: String,
+        val dexEntry: String,
+        val evidence: String,
+        val confidence: String,
+        val token: String?,
+        val transactMethod: String?,
+        val side: String,
+    )
+
     private val entries: List<Entry> = dexes.map { (name, toolkit) ->
         Entry(name, toolkit, ToolkitDexSupport.classes(toolkit).sortedBy { it.type })
     }
@@ -92,8 +111,9 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
     /**
      * dex_interface_table 数据。
      *
-     * params: descriptor（Lpkg/IFoo; 或 pkg.IFoo）、dexEntry 可选。
-     * 返回 methods + server(Stub) + client(Proxy) + comparison + transactSource。
+     * params: descriptor（Lpkg/IFoo; 或 pkg.IFoo）、dexEntry、mode（auto|descriptor|string_const，默认 auto）。
+     * canonical 模式返回 methods + server(Stub) + client(Proxy) + comparison + transactSource；
+     * string_const 模式返回 code/callSiteLocator/evidence/confidence 候选。
      */
     fun interfaceTable(args: JsonObject): JsonObject {
         val raw = optionalString(args, "descriptor")
@@ -104,6 +124,39 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
                     "再传 descriptor=Lpkg/IFoo;（也接受 pkg.IFoo）。",
                 "descriptor",
             )
+        val mode = optionalString(args, "mode")?.lowercase() ?: "auto"
+        if (mode !in setOf("auto", "descriptor", "string_const")) {
+            throw ToolkitException(
+                "INVALID_ARGUMENT",
+                "mode 必须是 auto、descriptor 或 string_const（收到 " + mode + "）。nextActions: 默认 auto 即可。",
+                "mode",
+            )
+        }
+        if (mode == "descriptor") return descriptorInterfaceTable(args, raw)
+        if (mode == "string_const") return stringConstInterfaceTable(args, raw)
+
+        val canonical = runCatching { descriptorInterfaceTable(args, raw) }.getOrNull()
+        val canonicalComplete = canonical != null &&
+            (canonical.getAsJsonArray("methods")?.size() ?: 0) > 0 &&
+            canonical.get("transactSource")?.asString == "static_field"
+        if (canonicalComplete) return canonical
+        val fallback = stringConstInterfaceTable(args, raw)
+        if ((fallback.getAsJsonArray("methods")?.size() ?: 0) > 0) {
+            fallback.addProperty("canonicalTried", canonical != null)
+            return fallback
+        }
+        if (canonical != null && (canonical.getAsJsonArray("methods")?.size() ?: 0) > 0) {
+            // canonical 至少有方法；兜底没有证据时保留 canonical（declaration_order），
+            // 并把 fallback 的 warnings/nextActions 一并交给调用方。
+            canonical.addProperty("fallbackAttempted", true)
+            canonical.add("fallbackWarnings", fallback.getAsJsonArray("warnings") ?: JsonArray())
+            canonical.add("fallbackNextActions", fallback.getAsJsonArray("nextActions") ?: JsonArray())
+            return canonical
+        }
+        return fallback
+    }
+
+    private fun descriptorInterfaceTable(args: JsonObject, raw: String): JsonObject {
         val type = normalizeType(raw, "descriptor")
         val dexEntry = optionalString(args, "dexEntry")
         val target = requireClass(type, dexEntry, "descriptor")
@@ -214,9 +267,293 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
         )
     }
 
+    // ------------------------------------------------------------ string_const fallback
+
+    /**
+     * 裸 transact / 字符串常量兜底：不要求接口类存在。
+     * 只看同一方法内的 writeInterfaceToken(token) + transact(N) 立即数，以及 onTransact 的 packed/sparse-switch。
+     */
+    private fun stringConstInterfaceTable(args: JsonObject, raw: String): JsonObject {
+        val tokens = tokenCandidates(raw)
+        val dexEntry = optionalString(args, "dexEntry")
+        if (dexEntry != null && entries.none { it.name == dexEntry }) {
+            throw ToolkitException("DEX_ENTRY_NOT_FOUND", "DEX 条目不存在：" + dexEntry, "dexEntry")
+        }
+        val warnings = LinkedHashSet<String>()
+        val hits = ArrayList<FallbackHit>()
+        var stringPoolHits = 0
+        var tokenMentions = 0
+        entries.forEach entryLoop@ { entry ->
+            if (dexEntry != null && entry.name != dexEntry) return@entryLoop
+            val stringReferences = try {
+                ToolkitDexSupport.dexFile(entry.toolkit).stringReferences
+            } catch (failure: Exception) {
+                warnings.add("STRING_POOL_READ_FAILED: " + entry.name + "：" + (failure.message ?: failure.javaClass.simpleName))
+                emptyList()
+            }
+            val poolMatches = stringReferences.count { it.string in tokens }
+            stringPoolHits += poolMatches
+            if (poolMatches == 0) return@entryLoop
+            entry.classes.forEach classLoop@ { definition ->
+                definition.methods.forEach methodLoop@ { method ->
+                    val methodTokens = interfaceTokenStrings(method).filter { it in tokens }
+                    if (methodTokens.isEmpty()) return@methodLoop
+                    tokenMentions += methodTokens.size
+                    val calls = transactCalls(method)
+                    if (calls.isEmpty()) {
+                        warnings.add("WRITE_INTERFACE_TOKEN_WITHOUT_CONST_TRANSACT: " + methodId(definition.type, method))
+                    } else {
+                        calls.forEach { call ->
+                            hits.add(FallbackHit(
+                                code = call.code,
+                                methodName = method.name,
+                                methodDescriptor = methodId(definition.type, method),
+                                callSiteLocator = "dex_method:" + methodId(definition.type, method),
+                                dexEntry = entry.name,
+                                evidence = "writeInterfaceToken+transact",
+                                confidence = "high",
+                                token = methodTokens.first(),
+                                transactMethod = call.methodName,
+                                side = "client",
+                            ))
+                        }
+                    }
+                }
+                definition.methods.filter { it.name == "onTransact" }.forEach { onTransact ->
+                    val mapped = onTransactHits(definition, onTransact, entry, tokens, warnings)
+                    hits.addAll(mapped)
+                }
+            }
+        }
+        if (stringPoolHits == 0) {
+            warnings.add("STRING_POOL_TOKEN_NOT_FOUND: 没有 DEX 字符串池命中 " + tokens.joinToString())
+        } else if (tokenMentions == 0) {
+            warnings.add("STRING_POOL_ONLY: 字符串池命中 " + stringPoolHits + " 处，但没有可读的 writeInterfaceToken 参数")
+        }
+        val distinct = LinkedHashMap<String, FallbackHit>()
+        hits.forEach { hit ->
+            val key = listOf(hit.code, hit.callSiteLocator, hit.methodDescriptor ?: "", hit.evidence, hit.side).joinToString("|")
+            distinct.putIfAbsent(key, hit)
+        }
+        val sorted = distinct.values.sortedWith(compareBy({ it.code }, { it.callSiteLocator }, { it.evidence }))
+        if (sorted.isEmpty()) {
+            warnings.add("NO_STRING_CONST_TRANSACT_CANDIDATE: 没有同时命中 writeInterfaceToken+transact 或 onTransact-packed-switch 的候选")
+        }
+        val clientHits = sorted.filter { it.side == "client" }
+        val serverHits = sorted.filter { it.side == "server" }
+        val methods = JsonArray().apply { sorted.forEach { add(fallbackHitJson(it)) } }
+        return ToolkitIo.json(
+            "interface" to raw,
+            "descriptor" to raw,
+            "mode" to "string_const",
+            "firstCallTransaction" to FIRST_CALL_TRANSACTION,
+            "transactSource" to "string_const+transact_const",
+            "transactSourceNote" to "仅来自字符串常量 + transact/onTransact 立即数，不含 canonical descriptor 号表",
+            "stringTokens" to tokens.toList(),
+            "stringPoolHits" to stringPoolHits,
+            "methods" to methods,
+            "methodCount" to sorted.size,
+            "codes" to byCodeJson(sorted),
+            "server" to fallbackSide("server", serverHits),
+            "client" to fallbackSide("client", clientHits),
+            "warnings" to warnings.toList(),
+            "nextActions" to fallbackNextActions(raw),
+            "notes" to listOf(
+                "兜底模式不要求接口类存在；结果不是 canonical static_field 号表。",
+                "callSiteLocator 可直接交给 apk_decompile_method/apk_read_text 复核。",
+                "同一 code 多来源会在 methods 和 codes[].sources 中全部保留。",
+            ),
+        )
+    }
+
+    private fun tokenCandidates(raw: String): Set<String> {
+        val result = LinkedHashSet<String>()
+        val trimmed = raw.trim()
+        result.add(trimmed)
+        val type = runCatching { normalizeType(trimmed, "descriptor") }.getOrNull()
+        if (type != null) {
+            result.add(type)
+            val slash = type.removePrefix("L").removeSuffix(";")
+            result.add(slash)
+            result.add(slash.replace('/', '.'))
+        }
+        result.removeIf { it.isEmpty() }
+        return result
+    }
+
+    private fun interfaceTokenStrings(method: Method): Set<String> {
+        val instructions = method.implementation?.instructions?.toList().orEmpty()
+        val result = LinkedHashSet<String>()
+        for (index in instructions.indices) {
+            val instruction = instructions[index]
+            val reference = (instruction as? ReferenceInstruction)?.reference as? MethodReference ?: continue
+            if (!reference.name.equals("writeInterfaceToken", ignoreCase = true)) continue
+            val tokenRegister = argumentRegister(instruction, 0) ?: continue
+            val token = stringWrittenToRegisterBefore(instructions, index, tokenRegister) ?: continue
+            result.add(token)
+        }
+        return result
+    }
+
+    private fun stringWrittenToRegisterBefore(instructions: List<org.jf.dexlib2.iface.instruction.Instruction>, index: Int, register: Int): String? {
+        for (previous in (index - 1) downTo maxOf(0, index - 64)) {
+            val candidate = instructions[previous]
+            if (candidate !is OneRegisterInstruction || candidate.registerA != register) continue
+            val reference = (candidate as? ReferenceInstruction)?.reference as? StringReference ?: continue
+            return reference.string
+        }
+        return null
+    }
+
+    private fun transactCalls(method: Method): List<TransactCall> {
+        val instructions = method.implementation?.instructions?.toList().orEmpty()
+        val result = ArrayList<TransactCall>()
+        for (index in instructions.indices) {
+            val instruction = instructions[index]
+            val reference = (instruction as? ReferenceInstruction)?.reference as? MethodReference ?: continue
+            if (!(reference.name.equals("transact", ignoreCase = true) || reference.name.equals("transactRemote", ignoreCase = true))) continue
+            val codeRegister = argumentRegister(instruction, 0) ?: continue
+            val code = literalAssignedBefore(instructions, index, codeRegister) ?: continue
+            result.add(TransactCall(code, reference.name))
+        }
+        return result
+    }
+
+    private fun literalAssignedBefore(instructions: List<org.jf.dexlib2.iface.instruction.Instruction>, index: Int, register: Int): Int? {
+        for (previous in (index - 1) downTo maxOf(0, index - 64)) {
+            val candidate = instructions[previous]
+            if (candidate !is OneRegisterInstruction || candidate.registerA != register) continue
+            val literal = (candidate as? WideLiteralInstruction)?.wideLiteral ?: continue
+            return literal.toInt()
+        }
+        return null
+    }
+
+    private fun onTransactHits(
+        definition: ClassDef,
+        method: Method,
+        entry: Entry,
+        tokens: Set<String>,
+        warnings: MutableSet<String>,
+    ): List<FallbackHit> {
+        val instructions = method.implementation?.instructions?.toList().orEmpty()
+        if (instructions.isEmpty()) return emptyList()
+        val offsets = IntArray(instructions.size)
+        var cursor = 0
+        instructions.forEachIndexed { index, instruction ->
+            offsets[index] = cursor
+            cursor += instruction.codeUnits
+        }
+        val offsetToIndex = HashMap<Int, Int>()
+        offsets.forEachIndexed { index, value -> offsetToIndex.putIfAbsent(value, index) }
+        val hits = ArrayList<FallbackHit>()
+        for (index in instructions.indices) {
+            val instruction = instructions[index]
+            val opcode = instruction.opcode.name
+            if (!opcode.startsWith("packed-switch") && !opcode.startsWith("sparse-switch")) continue
+            if (instruction !is OffsetInstruction) continue
+            val payloadIndex = offsetToIndex[offsets[index] + instruction.codeOffset] ?: continue
+            val payload = instructions[payloadIndex] as? SwitchPayload ?: continue
+            payload.switchElements.forEach { element ->
+                val targetIndex = offsetToIndex[offsets[index] + element.offset] ?: return@forEach
+                val target = caseTargetInfo(instructions, targetIndex, tokens)
+                val confidence = when {
+                    target.first == null -> "low"
+                    target.third != null -> "high"
+                    else -> "medium"
+                }
+                hits.add(FallbackHit(
+                    code = element.key,
+                    methodName = target.first,
+                    methodDescriptor = target.second,
+                    callSiteLocator = "dex_method:" + methodId(definition.type, method),
+                    dexEntry = entry.name,
+                    evidence = "onTransact-packed-switch",
+                    confidence = confidence,
+                    token = target.third,
+                    transactMethod = null,
+                    side = "server",
+                ))
+            }
+        }
+        if (hits.isEmpty()) warnings.add("ONTRANSACT_SWITCH_NOT_FOUND: " + methodId(definition.type, method))
+        return hits
+    }
+
+    private fun caseTargetInfo(
+        instructions: List<org.jf.dexlib2.iface.instruction.Instruction>,
+        start: Int,
+        tokens: Set<String>,
+    ): Triple<String?, String?, String?> {
+        var token: String? = null
+        val end = minOf(instructions.size, start + 48)
+        for (index in start until end) {
+            val instruction = instructions[index]
+            if (instruction is SwitchPayload) break
+            val reference = (instruction as? ReferenceInstruction)?.reference ?: continue
+            if (reference is StringReference && reference.string in tokens) token = reference.string
+            if (reference is MethodReference) {
+                val name = reference.name
+                if (name.startsWith("<")) continue
+                if (name in IGNORED_ONTTRANSACT_CALLS) continue
+                return Triple(name, referenceId(reference), token)
+            }
+        }
+        return Triple(null, null, token)
+    }
+
+    private fun referenceId(reference: MethodReference): String =
+        reference.definingClass + "->" + reference.name + "(" +
+            reference.parameterTypes.joinToString("") + ")" + reference.returnType
+
+    private fun fallbackHitJson(hit: FallbackHit): JsonObject = ToolkitIo.json(
+        "code" to hit.code,
+        "transactCode" to hit.code,
+        "method" to hit.methodName,
+        "methodDescriptor" to hit.methodDescriptor,
+        "callSiteLocator" to hit.callSiteLocator,
+        "dexEntry" to hit.dexEntry,
+        "evidence" to hit.evidence,
+        "confidence" to hit.confidence,
+        "token" to hit.token,
+        "transactMethod" to hit.transactMethod,
+        "side" to hit.side,
+    )
+
+    private fun byCodeJson(hits: List<FallbackHit>): JsonArray = JsonArray().apply {
+        hits.groupBy { it.code }.toSortedMap().forEach { (code, values) ->
+            add(ToolkitIo.json(
+                "code" to code,
+                "sources" to values.map { fallbackHitJson(it) },
+                "method" to values.firstNotNullOfOrNull { it.methodName },
+                "confidence" to values.maxByOrNull { confidenceRank(it.confidence) }?.confidence,
+            ))
+        }
+    }
+
+    private fun confidenceRank(value: String): Int = when (value) {
+        "high" -> 3
+        "medium" -> 2
+        else -> 1
+    }
+
+    private fun fallbackSide(label: String, hits: List<FallbackHit>): JsonObject = ToolkitIo.json(
+        "side" to label,
+        "present" to hits.isNotEmpty(),
+        "methods" to hits.map { fallbackHitJson(it) },
+        "methodCount" to hits.size,
+    )
+
+    private fun fallbackNextActions(raw: String): List<String> = listOf(
+        "先用 apk_search 搜字符串 " + raw + "，确认 token 在 DEX 字符串池",
+        "对返回的 callSiteLocator 用 apk_decompile_method 或 apk_read_text 复核 transact 常量",
+        "若接口类其实存在，传 mode=descriptor 或 apk_dex_hierarchy 校验 canonical 号表",
+    )
+
     private fun transactSourceNote(source: String): String = when (source) {
         "static_field" -> "所有行都用 TRANSACTION_xxx 静态字段值"
         "declaration_order" -> "没有可用静态字段；按当前接口到父接口的声明顺序从 1 开始推导，需用 onTransact/真实调用复核"
+        "string_const+transact_const" -> "接口类不可用；从字符串池 writeInterfaceToken + transact 立即数/onTransact switch 提取，证据见 evidence"
         else -> "部分行用静态字段、部分行退化为声明顺序；mixed 结果不保证完整"
     }
 
@@ -672,6 +1009,13 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
         private const val ACC_ANNOTATION = 0x2000
         private const val ACC_ENUM = 0x4000
 
+        private val IGNORED_ONTTRANSACT_CALLS = setOf(
+            "writeInterfaceToken", "enforceInterface", "writeNoException", "readException",
+            "writeString", "readString", "writeInt", "readInt", "onTransact", "asBinder",
+            "getInterfaceDescriptor", "toString", "equals", "hashCode", "readStrongBinder",
+            "writeStrongBinder",
+        )
+
         /** 给接线层生成结构化 nextActions；错误本身仍通过 ToolkitException.code/message 进入 error 对象。 */
         fun nextActionsFor(code: String): List<String> = when (code) {
             "LOCATOR_NOT_FOUND", "LOCATOR_AMBIGUOUS" -> listOf(
@@ -828,10 +1172,19 @@ internal class ToolkitDexInterface(dexes: List<Pair<String, ToolkitDex>>) {
             return null
         }
 
-        private fun codeRegister(instruction: org.jf.dexlib2.iface.instruction.Instruction): Int? {
+        private fun codeRegister(instruction: org.jf.dexlib2.iface.instruction.Instruction): Int? =
+            argumentRegister(instruction, 0)
+
+        /** argumentIndex 不含 receiver；writeInterfaceToken/transact 都从第 0 个业务参数开始。 */
+        private fun argumentRegister(instruction: org.jf.dexlib2.iface.instruction.Instruction, argumentIndex: Int): Int? {
             return when (instruction) {
-                is FiveRegisterInstruction -> if (instruction.registerCount >= 2) instruction.registerD else null
-                is RegisterRangeInstruction -> if (instruction.registerCount >= 2) instruction.startRegister + 1 else null
+                is FiveRegisterInstruction -> {
+                    val registers = intArrayOf(instruction.registerC, instruction.registerD, instruction.registerE, instruction.registerF, instruction.registerG)
+                    registers.getOrNull(argumentIndex + 1)
+                }
+                is RegisterRangeInstruction -> {
+                    if (instruction.registerCount > argumentIndex + 1) instruction.startRegister + argumentIndex + 1 else null
+                }
                 else -> null
             }
         }

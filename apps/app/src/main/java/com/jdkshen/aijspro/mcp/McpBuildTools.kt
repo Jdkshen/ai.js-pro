@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 internal object McpBuildTools {
     private val detectedCommands = listOf(
         "sh", "clang", "clang++", "gcc", "g++", "cmake", "ninja", "make",
-        "java", "javac", "d8", "smali", "gradle", "aapt2", "zipalign", "apksigner", "app_process",
+        "java", "javac", "keytool", "d8", "smali", "gradle", "aapt2", "zipalign", "apksigner", "app_process",
         "python3", "aidl",
     )
 
@@ -22,6 +22,24 @@ internal object McpBuildTools {
 
     @Volatile
     private var lastReadiness: JsonObject? = null
+    @Volatile
+    private var lastCommandResults: Map<String, String>? = null
+
+    private val appPrivateComponents = setOf("jdk17", "aapt2", "apksigner")
+    private val failureMarkers = listOf(
+        "inaccessible or not found", "command not found", "no such file or directory", "no such file",
+        "not found", "cannot execute", "not executable", "permission denied", "cannot access",
+        "failed to execute", "error=2",
+    )
+    // 以 get_build_tools 的组件表为准；python3.14 等版本后缀按 python3 归并。
+    private val componentAliases = linkedMapOf(
+        "python3" to "python3", "python" to "python3", "aidl" to "aidl",
+        "keytool" to "jdk17", "javac" to "jdk17", "java" to "jdk17",
+        "aapt2" to "aapt2", "d8" to "d8", "zipalign" to "zipalign", "apksigner" to "apksigner",
+        "smali" to "smali", "gradle" to "gradle", "app_process" to "app_process",
+        "clang++" to "clang", "clang" to "clang", "g++" to "gcc", "gcc" to "gcc",
+        "cmake" to "cmake", "ninja" to "ninja", "make" to "make",
+    )
 
     fun inspect(backend: McpAndroidTerminal, directory: File): JsonObject {
         val result = linkedMapOf<String, String>()
@@ -45,6 +63,7 @@ internal object McpBuildTools {
         val d8BuiltIn = Build.VERSION.SDK_INT >= 26
         val readiness = readiness(result, d8BuiltIn, true)
         lastReadiness = readiness.deepCopy()
+        lastCommandResults = result.toMap()
         val missing = readiness.getAsJsonArray("missing").map { it.asString }
         return JsonObject().apply {
             addProperty("platform", "android"); addProperty("sdkInt", Build.VERSION.SDK_INT)
@@ -70,13 +89,14 @@ internal object McpBuildTools {
             add("missing", readiness.get("missing"))
             add("present", readiness.get("present"))
             add("toolchain", readiness)
+            appPrivateToolchainHint(missing)?.let { add("appPrivateToolchain", it) }
             if (missing.isNotEmpty()) {
                 val missingPayload = componentMissingPayloadFor(missing)
                 addProperty("code", "COMPONENT_MISSING")
                 if (missingPayload != null) {
                     add("componentMissing", missingPayload)
                     add("recovery", missingPayload.get("recovery"))
-                    add("nextActions", missingPayload.get("nextActions"))
+                    add("nextActions", missingPayload.getAsJsonObject("recovery")?.get("nextActions") ?: JsonArray())
                 }
             } else {
                 add("nextActions", JsonArray())
@@ -115,46 +135,43 @@ internal object McpBuildTools {
     internal fun detectMissingComponents(command: String, output: String): List<String> {
         val text = output
         val lower = text.lowercase(Locale.ROOT)
-        val markers = listOf("inaccessible or not found", "command not found", "not found", "no such file")
-        if (markers.none { lower.contains(it) }) return emptyList()
+        if (failureMarkers.none { lower.contains(it) }) return emptyList()
         val found = LinkedHashSet<String>()
-        val aliases = linkedMapOf(
-            "python3" to "python3",
-            "python" to "python3",
-            "aidl" to "aidl",
-            "javac" to "jdk17",
-            "java" to "jdk17",
-            "aapt2" to "aapt2",
-            "d8" to "d8",
-            "apksigner" to "apksigner",
-        )
         for (line in text.lineSequence()) {
             val lineLower = line.lowercase(Locale.ROOT)
-            if (markers.none { lineLower.contains(it) }) continue
-            for ((needle, component) in aliases) {
-                val boundary = Regex("(?<![A-Za-z0-9_])" + Regex.escape(needle) + "(?:\\.\\d+)?(?:\\[\\d+\\])?(?![A-Za-z0-9_])")
+            if (failureMarkers.none { lineLower.contains(it) }) continue
+            for ((needle, component) in componentAliases) {
+                val boundary = Regex("(?<![A-Za-z0-9_])" + Regex.escape(needle) +
+                    "(?:\\.\\d+)?(?:\\[\\d+\\])?(?![A-Za-z0-9_])")
                 if (boundary.containsMatchIn(lineLower)) found.add(component)
             }
             if (lineLower.contains("py-tree")) found.add("python3")
             if (lineLower.contains("aidl-tree")) found.add("aidl")
         }
         val commandName = command.trim().substringAfterLast('/').substringAfterLast('\\').lowercase(Locale.ROOT)
-        if (lower.contains("not found") && commandName.isNotBlank()) {
-            aliases[commandName]?.let { found.add(it) }
+        if (failureMarkers.any { lower.contains(it) } && commandName.isNotBlank()) {
+            componentAliases[commandName]?.let { found.add(it) }
         }
         return found.toList()
     }
 
-    internal fun componentMissingPayload(command: String, output: String): JsonObject? {
+    internal fun componentMissingPayload(command: String, output: String,
+                                              readiness: JsonObject? = cachedReadiness(),
+                                              commandResults: Map<String, String>? = lastCommandResults): JsonObject? {
         val missing = detectMissingComponents(command, output)
         if (missing.isEmpty()) return null
-        return componentMissingPayloadFor(missing, output)
+        return componentMissingPayloadFor(missing, output, readiness, commandResults)
     }
 
     /** 已知缺失组件列表时直接构造（get_build_tools 的 ready 摘要用，不依赖错误文本）。 */
-    internal fun componentMissingPayloadFor(missing: List<String>, evidence: String? = null): JsonObject? {
+    internal fun componentMissingPayloadFor(missing: List<String>, evidence: String? = null,
+                                             readiness: JsonObject? = cachedReadiness(),
+                                             commandResults: Map<String, String>? = lastCommandResults): JsonObject? {
         if (missing.isEmpty()) return null
         val recovery = componentRecovery(missing)
+        val toolchain = toolchainSummary(readiness, missing)
+        val componentState = componentState(missing, readiness)
+        val appPrivateHint = appPrivateToolchainHint(missing)
         val message = "缺少编译依赖：" + missing.joinToString("、") +
             "（app 后端 PATH 不可达）。这不是脚本语法错误；先按 recovery 恢复，再重试原命令。"
         val error = ToolkitIo.json(
@@ -162,29 +179,84 @@ internal object McpBuildTools {
             "message" to message,
             "components" to missing,
             "recovery" to recovery,
+            "toolchain" to toolchain,
+            "componentState" to componentState,
         )
-        return ToolkitIo.json(
+        appPrivateHint?.let { error.add("appPrivateToolchain", it) }
+        val payload = ToolkitIo.json(
             "code" to "COMPONENT_MISSING",
             "error" to error,
             "components" to missing,
             "missing" to missing,
             "message" to message,
             "recovery" to recovery,
+            "toolchain" to toolchain,
+            "componentState" to componentState,
             "evidence" to (evidence ?: "").take(800),
+        )
+        appPrivateHint?.let { payload.add("appPrivateToolchain", it) }
+        commandResults?.let { results ->
+            payload.add("commandState", JsonArray().apply {
+                detectedCommands.forEach { name ->
+                    add(ToolkitIo.json("name" to name, "found" to !results[name].isNullOrBlank()))
+                }
+            })
+        }
+        return payload
+    }
+
+    private fun toolchainSummary(readiness: JsonObject?, detectedMissing: List<String>): JsonObject =
+        if (readiness == null) ToolkitIo.json(
+            "ready" to false, "missing" to detectedMissing, "present" to JsonArray(),
+            "note" to "get_build_tools 缓存尚未采样；missing 来自本次报错文本；先调用 get_build_tools 取得完整 present/ready",
+        ) else ToolkitIo.json(
+            "ready" to readiness.get("ready"),
+            "missing" to readiness.get("missing"),
+            "present" to readiness.get("present"),
+        )
+
+    private fun componentState(missing: List<String>, readiness: JsonObject?): JsonArray {
+        val present = readiness?.getAsJsonArray("present")?.map { it.asString }?.toSet()
+        return JsonArray().apply {
+            requiredComponents.forEach { component ->
+                add(ToolkitIo.json(
+                    "name" to component,
+                    "found" to if (present == null) null else component in present,
+                    "required" to true,
+                    "source" to if (present == null) "unknown" else "get_build_tools",
+                ))
+            }
+        }
+    }
+
+    /** jdk17/aapt2/apksigner 在 app 后端常不可见；提示它们是私有/APK 组件，不要只看 PATH。 */
+    internal fun appPrivateToolchainHint(missing: List<String>): JsonObject? {
+        val privateMissing = missing.filter { it in appPrivateComponents }
+        if (privateMissing.isEmpty()) return null
+        return ToolkitIo.json(
+            "components" to privateMissing,
+            "hint" to "jdk17/aapt2/apksigner 属于 app 私有 toolchain/APK 组件，系统 PATH 检不到不等于没装；先 apk_component_status，再看 get_build_tools.builtIn/signing 与 commands。",
+            "statusTool" to "apk_component_status",
+            "builtInField" to "get_build_tools.builtIn",
+            "note" to "python3/aidl 不属于这个通道；按 recovery.localDeps 处理。",
         )
     }
 
-    fun enrichComponentFailure(result: JsonObject, command: String, output: String): JsonObject {
-        val payload = componentMissingPayload(command, output) ?: return result
+    fun enrichComponentFailure(result: JsonObject, command: String, output: String,
+                               readiness: JsonObject? = cachedReadiness(),
+                               commandResults: Map<String, String>? = lastCommandResults): JsonObject {
+        val payload = componentMissingPayload(command, output, readiness, commandResults) ?: return result
         if (!result.has("code")) result.addProperty("code", "COMPONENT_MISSING")
         result.add("componentMissing", payload)
         result.add("error", payload.get("error"))
+        attachToolchainFields(result, payload)
         result.add("recovery", payload.get("recovery"))
         result.add("nextActions", payload.getAsJsonObject("recovery")?.get("nextActions") ?: JsonArray())
         return result
     }
 
-    fun enrichTerminalResult(result: JsonObject): JsonObject {
+    fun enrichTerminalResult(result: JsonObject, readiness: JsonObject? = cachedReadiness(),
+                              commandResults: Map<String, String>? = lastCommandResults): JsonObject {
         val command = result.get("command")?.takeIf { it.isJsonPrimitive }?.asString ?: ""
         val backend = result.get("backend")?.takeIf { it.isJsonPrimitive }?.asString ?: ""
         correctShellWrapperRouting(result, command)
@@ -193,14 +265,27 @@ internal object McpBuildTools {
             ?: result.get("error")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
             ?: return result
         if (result.has("code")) return result
-        val payload = componentMissingPayload(result.get("command")?.asString ?: "", output) ?: return result
+        val payload = componentMissingPayload(command, output, readiness, commandResults) ?: return result
         result.addProperty("code", "COMPONENT_MISSING")
         result.add("componentMissing", payload)
         // 不覆盖 terminal job 自己的 error（字符串）；结构化错误在 componentMissing.error。
         result.add("componentError", payload.get("error"))
+        attachToolchainFields(result, payload)
         result.add("recovery", payload.get("recovery"))
         result.add("nextActions", payload.getAsJsonObject("recovery")?.get("nextActions") ?: JsonArray())
         return result
+    }
+
+    /** 顶层直接给 ready/missing/present，满足“报错时直接引用 get_build_tools 清单”。 */
+    private fun attachToolchainFields(result: JsonObject, payload: JsonObject) {
+        val toolchain = payload.getAsJsonObject("toolchain") ?: return
+        result.add("toolchain", toolchain)
+        toolchain.get("ready")?.let { result.add("ready", it) }
+        toolchain.get("missing")?.let { result.add("missing", it) }
+        toolchain.get("present")?.let { result.add("present", it) }
+        payload.get("componentState")?.let { result.add("componentState", it) }
+        payload.get("commandState")?.let { result.add("commandState", it) }
+        payload.get("appPrivateToolchain")?.let { result.add("appPrivateToolchain", it) }
     }
 
     private val shellWrapperRoutingLine = Regex(

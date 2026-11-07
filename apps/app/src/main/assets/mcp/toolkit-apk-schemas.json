@@ -9,12 +9,12 @@
       },
       "temporary": {
         "type": "boolean",
-        "description": "true 为一次性临时工作区；打开已保存工作区必须为 false。"
+        "description": "true 为一次性临时工作区；可省略，省略时=true。打开已保存工作区（aijs://workspace/<id>）必须显式传 false。",
+        "default": true
       }
     },
     "required": [
-      "path",
-      "temporary"
+      "path"
     ]
   },
   "apk_list_available_apks": {
@@ -173,41 +173,48 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：APK 工作区 ID；先用 apk_workspace_open 打开。"
       },
       "editSessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：编辑会话 ID；先 apk_session_create（只读调用也用于版本/分页绑定）。"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：条目/类/方法/资源定位符；由 apk_list、apk_search 或相关列表工具返回。"
       },
       "limit": {
         "type": "integer",
         "minimum": 1,
-        "maximum": 2000
+        "maximum": 2000,
+        "default": 500,
+        "description": "本页最多触及的逻辑行数，1..2000；可省略，省略时=500。"
       },
       "maxChars": {
         "type": "integer",
         "minimum": 1,
-        "maximum": 131072
+        "maximum": 131072,
+        "default": 49152,
+        "description": "本页最多返回的 Unicode 码点数，1..131072；可省略，省略时=49152。"
       },
       "startLine": {
         "type": "integer",
-        "minimum": 0
+        "minimum": 0,
+        "default": 0,
+        "description": "0 起始逻辑行号；可省略，省略时=0。"
       },
       "startColumn": {
         "type": "integer",
-        "minimum": 0
+        "minimum": 0,
+        "default": 0,
+        "description": "0 起始 Unicode 码点列号；可省略，省略时=0。"
       }
     },
     "required": [
       "workspaceId",
       "editSessionId",
-      "locator",
-      "limit",
-      "maxChars",
-      "startLine",
-      "startColumn"
+      "locator"
     ]
   },
   "apk_read_bytes": {
@@ -215,32 +222,35 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：APK 工作区 ID；先用 apk_workspace_open 打开。"
       },
       "editSessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：编辑会话 ID；先 apk_session_create（只读调用也用于版本/分页绑定）。"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：条目/类/方法/资源定位符；由 apk_list、apk_search 或相关列表工具返回。"
       },
       "byteOffset": {
         "type": "integer",
         "minimum": 0,
-        "description": "条目内容中的未压缩字节偏移，不是 ZIP 文件偏移。"
+        "description": "条目内容中的未压缩字节偏移，不是 ZIP 文件偏移；可省略，省略时=0。",
+        "default": 0
       },
       "maxBytes": {
         "type": "integer",
         "minimum": 1,
         "maximum": 65536,
-        "description": "单页最多返回的字节数。"
+        "description": "单页最多返回的字节数，1..65536；可省略，省略时=256。",
+        "default": 256
       }
     },
     "required": [
       "workspaceId",
       "editSessionId",
-      "locator",
-      "byteOffset",
-      "maxBytes"
+      "locator"
     ]
   },
   "apk_dex_read_class_outline": {
@@ -248,26 +258,29 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：APK 工作区 ID；先用 apk_workspace_open 打开。"
       },
       "editSessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：编辑会话 ID；先 apk_session_create（只读调用也用于版本/分页绑定）。"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：条目/类/方法/资源定位符；由 apk_list、apk_search 或相关列表工具返回。"
       },
       "limit": {
         "type": "integer",
         "minimum": 1,
         "maximum": 1000,
-        "description": "本页最多1000项，后续用apk_continue；最大值见返回pagination.limitMax。"
+        "description": "本页最多1000项，后续用apk_continue；可省略，省略时=200。",
+        "default": 200
       }
     },
     "required": [
       "workspaceId",
       "editSessionId",
-      "locator",
-      "limit"
+      "locator"
     ]
   },
   "apk_dex_xref": {
@@ -275,13 +288,16 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：APK 工作区 ID；先用 apk_workspace_open 打开。"
       },
       "editSessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：编辑会话 ID；先 apk_session_create。"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：要查交叉引用的原始 DEX locator。"
       },
       "methodResolution": {
         "type": "string",
@@ -290,10 +306,15 @@
           "slot",
           "dispatch",
           "not_applicable"
-        ]
+        ],
+        "description": "省略时按 locator 自动：dex_method 用 dispatch，其它用 not_applicable；exact/slot 为显式覆盖。"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 50,
+        "description": "本页最多返回条数，1..200；可省略，省略时=50。"
       },
       "includeImplementations": {
         "type": "boolean",
@@ -309,9 +330,7 @@
     "required": [
       "workspaceId",
       "editSessionId",
-      "locator",
-      "methodResolution",
-      "limit"
+      "locator"
     ]
   },
   "apk_resource_read": {
@@ -326,7 +345,7 @@
       },
       "reads": {
         "type": "array",
-        "description": "1..200 个独立读取；一项失败不会丢弃同批其他结果。",
+        "description": "必填：1..200 个独立读取；一项失败不会丢弃同批其他结果。",
         "minItems": 1,
         "maxItems": 200,
         "items": {
@@ -338,12 +357,12 @@
             },
             "variant": {
               "type": "string",
-              "description": "空字符串或 default 表示默认配置；否则必须精确匹配资源配置名。"
+              "description": "空字符串或 default 表示默认配置；否则必须精确匹配资源配置名。可省略，省略时=default。",
+              "default": "default"
             }
           },
           "required": [
-            "locator",
-            "variant"
+            "locator"
           ]
         }
       },
@@ -387,13 +406,16 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：APK 工作区 ID；先用 apk_workspace_open 打开。"
       },
       "editSessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：编辑会话 ID；先 apk_session_create（只读调用也用于版本绑定）。"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：条目/类/方法/资源定位符；由 apk_list、apk_search 或相关列表工具返回。"
       },
       "scopes": {
         "type": "array",
@@ -404,18 +426,26 @@
             "axml",
             "resource_table"
           ]
-        }
+        },
+        "default": [
+          "dex",
+          "axml",
+          "resource_table"
+        ],
+        "description": "搜索范围；可省略，省略时扫描 dex/axml/resource_table 全部。"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 50,
+        "description": "本页最多返回条数，1..200；可省略，省略时=50。"
       }
     },
     "required": [
       "workspaceId",
       "editSessionId",
-      "locator",
-      "scopes",
-      "limit"
+      "locator"
     ]
   },
   "apk_native_inspect": {
@@ -443,13 +473,16 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：APK 工作区 ID；先用 apk_workspace_open 打开。"
       },
       "editSessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：编辑会话 ID；先 apk_session_create（只读调用也用于版本/分页绑定）。"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：条目/类/方法/资源定位符；由 apk_list、apk_search 或相关列表工具返回。"
       },
       "itemKind": {
         "type": "string",
@@ -463,29 +496,32 @@
           "initArray",
           "finiArray",
           "relocations"
-        ]
+        ],
+        "description": "必填：要列出的 ELF 项目类型（sections/segments/symbols/imports/neededLibraries/relocations 等）；不同 kind 返回字段不同。"
       },
       "namePrefix": {
-        "type": "string"
+        "type": "string",
+        "default": "",
+        "description": "名称前缀过滤；可省略，省略时=空字符串（不过滤）。"
       },
       "demangle": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": false,
+        "description": "是否附带 C++ demangle 名称；可省略，省略时=false。"
       },
       "limit": {
         "type": "integer",
         "minimum": 1,
         "maximum": 500,
-        "description": "本页最多500项，后续用apk_continue；最大值见返回pagination.limitMax。"
+        "description": "本页最多500项，后续用apk_continue；可省略，省略时=100。",
+        "default": 100
       }
     },
     "required": [
       "workspaceId",
       "editSessionId",
       "locator",
-      "itemKind",
-      "namePrefix",
-      "demangle",
-      "limit"
+      "itemKind"
     ]
   },
   "apk_native_map_address": {
@@ -506,10 +542,12 @@
         "enum": [
           "virtual",
           "file_offset"
-        ]
+        ],
+        "description": "必填：virtual 表示虚拟地址，file_offset 表示文件偏移；决定 address 的解释，不能省略。"
       },
       "address": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：与 addressKind 对应的地址/文件偏移（通常 0x 前缀十六进制）。"
       }
     },
     "required": [
@@ -538,10 +576,12 @@
         "enum": [
           "virtual",
           "file_offset"
-        ]
+        ],
+        "description": "必填：virtual 表示虚拟地址，file_offset 表示文件偏移；决定 address 的解释，不能省略。"
       },
       "address": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：与 addressKind 对应的地址/文件偏移（通常 0x 前缀十六进制）。"
       },
       "instructionMode": {
         "type": "string",
@@ -549,7 +589,9 @@
           "auto",
           "arm",
           "thumb"
-        ]
+        ],
+        "default": "auto",
+        "description": "指令模式；可省略，省略时=auto（按地址 T-bit 推断 ARM/Thumb）。"
       },
       "scanKind": {
         "type": "string",
@@ -557,7 +599,9 @@
           "code",
           "data",
           "both"
-        ]
+        ],
+        "default": "both",
+        "description": "扫描代码/数据/两者；可省略，省略时=both。"
       },
       "referenceKinds": {
         "type": "array",
@@ -569,13 +613,28 @@
             "data",
             "unknown"
           ]
-        }
+        },
+        "default": [
+          "call",
+          "jump",
+          "data",
+          "unknown"
+        ],
+        "description": "要纳入的引用类型；可省略，省略时四种全要。"
       },
       "maxScanBytes": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 4,
+        "maximum": 8388608,
+        "default": 1048576,
+        "description": "扫描字节预算，4..8388608；可省略，省略时=1048576。"
       },
       "limit": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 50,
+        "description": "本页最多返回条数，1..200；可省略，省略时=50。"
       }
     },
     "required": [
@@ -583,12 +642,7 @@
       "editSessionId",
       "locator",
       "addressKind",
-      "address",
-      "instructionMode",
-      "scanKind",
-      "referenceKinds",
-      "maxScanBytes",
-      "limit"
+      "address"
     ]
   },
   "apk_native_disassemble": {
@@ -609,10 +663,12 @@
         "enum": [
           "virtual",
           "file_offset"
-        ]
+        ],
+        "description": "必填：virtual 表示虚拟地址，file_offset 表示文件偏移；决定 address 的解释，不能省略。"
       },
       "address": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：与 addressKind 对应的地址/文件偏移（通常 0x 前缀十六进制）。"
       },
       "instructionMode": {
         "type": "string",
@@ -620,16 +676,28 @@
           "auto",
           "arm",
           "thumb"
-        ]
+        ],
+        "default": "auto",
+        "description": "指令模式；可省略，省略时=auto。"
       },
       "stopAtSymbolBoundary": {
-        "type": "boolean"
+        "type": "boolean",
+        "default": true,
+        "description": "是否在包含地址的符号内停止；可省略，省略时=true。"
       },
       "maxBytes": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 4,
+        "maximum": 65536,
+        "default": 256,
+        "description": "最多解码字节数，4..65536；可省略，省略时=256。"
       },
       "maxInstructions": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 16384,
+        "default": 64,
+        "description": "最多返回指令数，1..16384；可省略，省略时=64。"
       }
     },
     "required": [
@@ -637,11 +705,7 @@
       "editSessionId",
       "locator",
       "addressKind",
-      "address",
-      "instructionMode",
-      "stopAtSymbolBoundary",
-      "maxBytes",
-      "maxInstructions"
+      "address"
     ]
   },
   "apk_native_analyze_control_flow": {
@@ -662,10 +726,12 @@
         "enum": [
           "virtual",
           "file_offset"
-        ]
+        ],
+        "description": "必填：virtual 表示虚拟地址，file_offset 表示文件偏移；决定 address 的解释，不能省略。"
       },
       "address": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：与 addressKind 对应的地址/文件偏移（通常 0x 前缀十六进制）。"
       },
       "instructionMode": {
         "type": "string",
@@ -673,23 +739,39 @@
           "auto",
           "arm",
           "thumb"
-        ]
+        ],
+        "default": "auto",
+        "description": "指令模式；可省略，省略时=auto。"
       },
       "outputMode": {
         "type": "string",
         "enum": [
           "full",
           "summary"
-        ]
+        ],
+        "default": "full",
+        "description": "full 返回 blocks/edges；summary 只返回汇总；可省略，省略时=full。"
       },
       "maxAnalysisBytes": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 4,
+        "maximum": 65536,
+        "default": 4096,
+        "description": "分析字节预算，4..65536；可省略，省略时=4096。"
       },
       "maxBlocks": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 4096,
+        "default": 128,
+        "description": "最多基本块数，1..4096；可省略，省略时=128。"
       },
       "maxInstructions": {
-        "type": "integer"
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 16384,
+        "default": 2048,
+        "description": "最多指令数，1..16384；可省略，省略时=2048。"
       }
     },
     "required": [
@@ -697,12 +779,7 @@
       "editSessionId",
       "locator",
       "addressKind",
-      "address",
-      "instructionMode",
-      "outputMode",
-      "maxAnalysisBytes",
-      "maxBlocks",
-      "maxInstructions"
+      "address"
     ]
   },
   "apk_continue": {
@@ -710,26 +787,29 @@
     "additionalProperties": false,
     "properties": {
       "workspaceId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：APK 工作区 ID；先用 apk_workspace_open 打开。"
       },
       "editSessionId": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：编辑会话 ID；先 apk_session_create（只读调用也用于版本/分页绑定）。"
       },
       "nextCursor": {
         "type": "string",
-        "description": "上一页返回的 nextCursor；5 分钟过期，绑定 workspaceId/editSessionId 和会话 revision，编辑后必须重新查询。"
+        "description": "必填：上一页返回的 nextCursor；5 分钟过期，绑定 workspaceId/editSessionId 和会话 revision，编辑后必须重新查询。"
       },
       "limit": {
         "type": "integer",
         "minimum": 1,
-        "maximum": 200
+        "maximum": 200,
+        "default": 200,
+        "description": "本页最多返回条数，1..200；可省略，省略时=200。"
       }
     },
     "required": [
       "workspaceId",
       "editSessionId",
-      "nextCursor",
-      "limit"
+      "nextCursor"
     ]
   },
   "apk_session_create": {
@@ -755,15 +835,16 @@
         "type": "string"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：要编辑的条目/类/方法/资源定位符。"
       },
       "targetVersion": {
         "type": "string",
-        "description": "读取结果返回的内容 SHA-256。新建目标可用 missing，并配合单个 write_target；旧版本会报内容已改变，应重新读取。"
+        "description": "必填：读取结果返回的内容 SHA-256；新建目标用 missing，并配合单个 write_target。"
       },
       "edits": {
         "type": "array",
-        "description": "1..200 个编辑；同一批基于一个不可变的 LF 归一化原文，匹配文本必须唯一。普通文本保留原行尾（CRLF/CR/LF），DEX/AXML 走编译。",
+        "description": "必填：1..200 条编辑；同一批基于一个不可变的 LF 归一化原文，匹配文本必须唯一。",
         "minItems": 1,
         "maxItems": 200,
         "items": {
@@ -842,7 +923,9 @@
               "type": "string"
             },
             "variant": {
-              "type": "string"
+              "type": "string",
+              "default": "",
+              "description": "省略时为空字符串，即默认配置；否则必须精确匹配资源配置名。"
             },
             "targetVersion": {
               "type": "string"
@@ -853,11 +936,11 @@
           },
           "required": [
             "locator",
-            "variant",
             "targetVersion",
             "valueXml"
           ]
-        }
+        },
+        "description": "必填：1..200 个资源编辑；每项必须带 locator/targetVersion/valueXml。"
       }
     },
     "required": [
@@ -900,14 +983,15 @@
                     "additionalProperties": false,
                     "properties": {
                       "variant": {
-                        "type": "string"
+                        "type": "string",
+                        "default": "",
+                        "description": "省略时为空字符串，即默认配置；否则必须精确匹配资源配置名。"
                       },
                       "valueXml": {
                         "type": "string"
                       }
                     },
                     "required": [
-                      "variant",
                       "valueXml"
                     ]
                   }
@@ -939,14 +1023,15 @@
                     "additionalProperties": false,
                     "properties": {
                       "variant": {
-                        "type": "string"
+                        "type": "string",
+                        "default": "",
+                        "description": "省略时为空字符串，即默认配置；否则必须精确匹配资源配置名。"
                       },
                       "valueXml": {
                         "type": "string"
                       }
                     },
                     "required": [
-                      "variant",
                       "valueXml"
                     ]
                   }
@@ -959,7 +1044,8 @@
               ]
             }
           ]
-        }
+        },
+        "description": "必填：1..200 个新增资源；每项按 kind/packageId/locator/values 描述。"
       }
     },
     "required": [
@@ -1002,7 +1088,8 @@
             "expectedHex",
             "replacementHex"
           ]
-        }
+        },
+        "description": "必填：1..200 个等长、互不重叠的字节补丁；先校验 expectedHex/版本再写。"
       }
     },
     "required": [
@@ -1030,19 +1117,22 @@
         "enum": [
           "virtual",
           "file_offset"
-        ]
+        ],
+        "description": "必填：virtual 表示虚拟地址，file_offset 表示文件偏移；决定 address 的解释，不能省略。"
       },
       "address": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：与 addressKind 对应的地址/文件偏移（通常 0x 前缀十六进制）。"
       },
       "instructionMode": {
         "type": "string",
-        "description": "auto 用于 AArch64/x86/x86-64，并按地址 T-bit 推断 ARM/Thumb；ARM32 可显式 arm 或 thumb。",
+        "description": "指令模式；可省略，省略时=auto。",
         "enum": [
           "auto",
           "arm",
           "thumb"
-        ]
+        ],
+        "default": "auto"
       },
       "expectedHex": {
         "type": "string",
@@ -1051,16 +1141,17 @@
       },
       "replacementAssembly": {
         "type": "string",
-        "description": "汇编指令/标签/.inst。内置汇编器只覆盖 AArch64 常见指令；ARM/Thumb/x86/x86-64 或内置未覆盖形式需要可选 clang（aijs-toolchain install cpp）。结果不得超过 expectedHex 窗口。",
+        "description": "必填：汇编源码为空无法生成补丁；内置汇编器只覆盖 AArch64 常见指令，其余需可选 clang。",
         "maxLength": 4096
       },
       "paddingMode": {
         "type": "string",
-        "description": "none 要求汇编结果与窗口等长；nop 用对应架构的 NOP 填充剩余字节。",
+        "description": "none 要求汇编结果与窗口等长；nop 用对应架构 NOP 填充。可省略，省略时=none。",
         "enum": [
           "none",
           "nop"
-        ]
+        ],
+        "default": "none"
       }
     },
     "required": [
@@ -1069,10 +1160,8 @@
       "locator",
       "addressKind",
       "address",
-      "instructionMode",
       "expectedHex",
-      "replacementAssembly",
-      "paddingMode"
+      "replacementAssembly"
     ]
   },
   "apk_native_patch_string": {
@@ -1093,10 +1182,12 @@
         "enum": [
           "virtual",
           "file_offset"
-        ]
+        ],
+        "description": "必填：virtual 表示虚拟地址，file_offset 表示文件偏移；决定 address 的解释，不能省略。"
       },
       "address": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：与 addressKind 对应的地址/文件偏移（通常 0x 前缀十六进制）。"
       },
       "expectedText": {
         "type": "string",
@@ -1109,12 +1200,13 @@
       },
       "paddingMode": {
         "type": "string",
-        "description": "none 要求等长；null_pad/space_pad 只能利用目标位置已有的 NUL/空格 padding 增长，窗口最大 4096 字节，且不调整长度/指针/重定位。",
+        "description": "none 要求等长；null_pad/space_pad 只能利用已有 padding 增长。可省略，省略时=none。",
         "enum": [
           "none",
           "null_pad",
           "space_pad"
-        ]
+        ],
+        "default": "none"
       }
     },
     "required": [
@@ -1123,8 +1215,7 @@
       "locator",
       "addressKind",
       "address",
-      "expectedText",
-      "paddingMode"
+      "expectedText"
     ]
   },
   "apk_session_check": {
@@ -1139,13 +1230,13 @@
       },
       "runBuildChecks": {
         "type": "boolean",
-        "description": "true 运行结构检查并返回 valid；false 只返回编辑摘要，valid=null。apk_build 总会重新运行检查。"
+        "description": "true 运行结构检查并返回 valid；false 只返回编辑摘要，valid=null。可省略，省略时=true；apk_build 总会重新运行检查。",
+        "default": true
       }
     },
     "required": [
       "workspaceId",
-      "editSessionId",
-      "runBuildChecks"
+      "editSessionId"
     ]
   },
   "apk_build": {
@@ -1172,11 +1263,12 @@
       },
       "overwrite": {
         "type": "boolean",
-        "description": "目标已存在时必须为 true。"
+        "description": "必填：目标已存在时必须显式传 true，避免误覆盖；不存在时可传 false/true。"
       },
       "sign": {
         "type": "boolean",
-        "description": "false 导出未签名 APK；true 使用本机 AI.js Pro 签名身份重签并移除原签名，不能沿用原作者签名。"
+        "description": "false 导出未签名 APK；true 使用本机 AI.js Pro 签名身份重签并移除原签名。可省略，省略时=false。",
+        "default": false
       },
       "organize": {
         "type": "boolean",
@@ -1187,8 +1279,7 @@
     "required": [
       "workspaceId",
       "editSessionId",
-      "overwrite",
-      "sign"
+      "overwrite"
     ]
   },
   "apk_workspace_delete": {
@@ -1225,7 +1316,8 @@
         "enum": [
           "workspace_to_local",
           "local_to_edit_session"
-        ]
+        ],
+        "description": "必填：workspace_to_local 或 local_to_edit_session，决定复制方向。"
       },
       "workspaceId": {
         "type": "string"
@@ -1234,13 +1326,16 @@
         "type": "string"
       },
       "locator": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：ZIP 条目/DEX/资源定位符来源。"
       },
       "localPath": {
-        "type": "string"
+        "type": "string",
+        "description": "必填：本地目标/源路径（工具目录内）。"
       },
       "overwrite": {
-        "type": "boolean"
+        "type": "boolean",
+        "description": "必填：目标已存在时必须显式传 true，避免误覆盖；不存在时可传 false/true。"
       }
     },
     "required": [
@@ -2202,6 +2297,16 @@
       },
       "editSessionId": {
         "type": "string"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "auto",
+          "descriptor",
+          "string_const"
+        ],
+        "default": "auto",
+        "description": "auto（默认）：接口类存在且能取到权威编号时走 descriptor；否则自动退到「字符串常量 + transact 常量」兜底。descriptor：只用 canonical AIDL 命名（static_field）。string_const：只用字符串池 + transact/onTransact 常量（不要求接口类存在，适合 R8 混淆/无接口类的样本）。"
       }
     },
     "description": "Binder/AIDL 接口事务号表：输入接口 descriptor，输出方法/transactCode/参数/返回/oneway，并给出 Stub 与 Proxy 两侧对照。transactSource 说明编号来源（static_field 才是权威；declaration_order 只是推导）。"

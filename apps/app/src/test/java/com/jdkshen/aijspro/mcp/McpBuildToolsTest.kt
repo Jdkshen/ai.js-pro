@@ -60,6 +60,78 @@ class McpBuildToolsTest {
     }
 
     @Test
+    fun broadensKnownComponentDetectionBeyondPyTreeAndAidlTree() {
+        val samples = mapOf(
+            "python3: command not found" to "python3",
+            "aidl: No such file or directory" to "aidl",
+            "keytool: inaccessible or not found" to "jdk17",
+            "aapt2: Permission denied" to "aapt2",
+            "sh: line 1: python3.14: inaccessible or not found" to "python3",
+            "zipalign: not executable" to "zipalign",
+        )
+        for ((output, component) in samples) {
+            assertEquals("component=$component output=$output", listOf(component), McpBuildTools.detectMissingComponents("sh build.sh", output))
+        }
+        assertTrue(McpBuildTools.detectMissingComponents("sh build.sh", "python3: hello").isEmpty())
+    }
+
+    @Test
+    fun terminalFailureCarriesGetBuildToolsReadinessAtTopLevel() {
+        val readiness = McpBuildTools.readiness(
+            mapOf("java" to "/system/bin/java", "javac" to "/system/bin/javac", "aapt2" to "/sdk/aapt2",
+                "apksigner" to "/sdk/apksigner"),
+            builtInD8 = true,
+            builtInSmali = true,
+        )
+        val result = ToolkitIo.json(
+            "command" to "sh build.sh",
+            "backend" to "app",
+            "output" to "sh: line 1: python3: command not found",
+        )
+        val enriched = McpBuildTools.enrichTerminalResult(result, readiness, mapOf("python3" to "", "aidl" to ""))
+        assertEquals("COMPONENT_MISSING", enriched.get("code").asString)
+        assertFalse(enriched.get("ready").asBoolean)
+        assertEquals(listOf("python3", "aidl"), enriched.getAsJsonArray("missing").map { it.asString })
+        assertEquals(listOf("jdk17", "aapt2", "d8", "apksigner"), enriched.getAsJsonArray("present").map { it.asString })
+        assertNotNull(enriched.getAsJsonObject("toolchain"))
+        val state = enriched.getAsJsonArray("componentState")
+        assertTrue(state.any { it.asJsonObject.get("name").asString == "python3" && !it.asJsonObject.get("found").asBoolean })
+        assertTrue(enriched.getAsJsonArray("commandState").any { it.asJsonObject.get("name").asString == "python3" })
+    }
+
+    @Test
+    fun shellClassificationCarriesReadinessAndTopLevelCode() {
+        val readiness = McpBuildTools.readiness(
+            mapOf("java" to "/system/bin/java", "javac" to "/system/bin/javac", "aapt2" to "/sdk/aapt2",
+                "apksigner" to "/sdk/apksigner", "python3" to ""),
+            builtInD8 = true,
+            builtInSmali = true,
+        )
+        val base = ToolkitIo.json("category" to "not_found")
+        val enriched = McpBuildTools.enrichComponentFailure(
+            base, "sh build.sh", "aidl: inaccessible or not found", readiness,
+        )
+        assertEquals("COMPONENT_MISSING", enriched.get("code").asString)
+        assertEquals("not_found", enriched.get("category").asString)
+        assertEquals(false, enriched.get("ready").asBoolean)
+        assertTrue(enriched.getAsJsonArray("missing").map { it.asString }.contains("aidl"))
+        assertNotNull(enriched.getAsJsonObject("error"))
+        assertNotNull(enriched.getAsJsonObject("toolchain"))
+    }
+
+    @Test
+    fun privateToolchainHintDoesNotClaimPathMissingMeansNotInstalled() {
+        val hint = McpBuildTools.appPrivateToolchainHint(listOf("jdk17", "aapt2", "python3"))
+        assertNotNull(hint)
+        assertEquals(listOf("jdk17", "aapt2"), hint!!.getAsJsonArray("components").map { it.asString })
+        assertTrue(hint.get("hint").asString.contains("apk_component_status"))
+        assertTrue(hint.get("hint").asString.contains("私有"))
+        val payload = McpBuildTools.componentMissingPayloadFor(listOf("jdk17", "python3"))
+        assertNotNull(payload)
+        assertNotNull(payload!!.getAsJsonObject("appPrivateToolchain"))
+    }
+
+    @Test
     fun doesNotMisclassifyOrdinaryFileNotFoundAsComponentMissing() {
         assertTrue(McpBuildTools.detectMissingComponents("sh build.sh", "main.js: No such file or directory").isEmpty())
         assertNull(McpBuildTools.componentMissingPayload("sh build.sh", "main.js: No such file or directory"))

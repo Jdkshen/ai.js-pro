@@ -179,7 +179,7 @@ internal object ToolkitNativePatches {
         val kind = addressKind(args)
         val rawAddress = ToolkitElf.number(args.tString("address"))
         val expectedText = args.tString("expectedText")
-        val replacementText = args.tString("replacementText")
+        val replacementText = args.tString("replacementText", "")
         val padding = args.tString("paddingMode", "none")
         require(padding in listOf("none", "null_pad", "space_pad")) {
             "paddingMode 必须为 none、null_pad 或 space_pad"

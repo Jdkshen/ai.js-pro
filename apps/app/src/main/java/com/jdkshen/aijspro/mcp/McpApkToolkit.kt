@@ -370,9 +370,22 @@ internal class McpApkToolkit(
                         val envelope = page(workspace, session, items, limit, items.size >= 10000)
                         // 可选：合并「接口实现者 / 方法重写者」（includeImplementations/includeOverrides）。
                         if (args.tBool("includeImplementations") || args.tBool("includeOverrides")) {
-                            val extra = dexInterfaceValue(workspace, session) { dex -> dex.xref(args) }
+                            // includeOverrides 只对 dex_method 定位符有意义：给了 class 定位符时跳过并说明，
+                            // 而不是让整个 xref 调用失败（调用方本来只是想多要一段信息）。
+                            val locator = args.tString("locator")
+                            val wantOverrides = args.tBool("includeOverrides")
+                            val overrideLocatorOk = locator.startsWith("dex_method:")
+                            val extraArgs = args.deepCopy().apply {
+                                addProperty("includeOverrides", wantOverrides && overrideLocatorOk)
+                            }
+                            val extra = dexInterfaceValue(workspace, session) { dex -> dex.xref(extraArgs) }
                             envelope.getAsJsonObject("data")?.let { data ->
                                 extra.entrySet().forEach { entryValue -> data.add(entryValue.key, entryValue.value) }
+                                if (wantOverrides && !overrideLocatorOk) {
+                                    data.addProperty("overridesNote",
+                                        "includeOverrides 需要 dex_method 定位符（本次 locator 不是），已跳过；" +
+                                            "如需重写者，请先用 apk_dex_list_methods 拿到 dex_method 定位符再调用。")
+                                }
                             }
                         }
                         envelope

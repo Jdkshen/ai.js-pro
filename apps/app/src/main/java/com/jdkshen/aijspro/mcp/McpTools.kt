@@ -124,7 +124,7 @@ internal class McpTools(private val context: Context, private val event: (String
             rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolError) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "工具调用失败", true))
+            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "工具调用失败", "TOOL_ERROR"))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolkitException) {
             // 必须先于 IllegalArgumentException 捕获（ToolkitException 是它的子类），否则 code 会被丢成纯文本。
@@ -133,7 +133,7 @@ internal class McpTools(private val context: Context, private val event: (String
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalArgumentException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolResult(e.message ?: "参数或工作区状态无效", true))
+            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "参数或工作区状态无效", "INVALID_ARGUMENT"))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalStateException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
@@ -170,8 +170,9 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun initialize(params: JsonObject?) = JsonObject().apply {
         val requested = params?.get("protocolVersion")?.takeIf { it.isJsonPrimitive }?.asString
         addProperty("protocolVersion", if (requested in SUPPORTED_PROTOCOLS) requested else "2025-06-18")
-        add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", false) });add("resources",JsonObject());add("prompts",JsonObject()) })
+        add("capabilities", JsonObject().apply { add("tools", JsonObject().apply { addProperty("listChanged", true) });add("resources",JsonObject());add("prompts",JsonObject()) })
         add("serverInfo", McpServerMetadata.toJson())
+
         addProperty("instructions", listOf(
             "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
             McpOutputConventions.INSTRUCTION,
@@ -203,6 +204,33 @@ internal class McpTools(private val context: Context, private val event: (String
             "",
             "调用失败时先看错误指出的参数名/类型，再调用 learn_autojs_skill 查对应章节；不要猜字段。",
         ).joinToString("\n"))
+
+        // 始终暴露目录指纹（便于诊断宿主到底有没有刷新）；只有"相对上次 initialize 变了"才插提示行。
+        val recordedFingerprint = catalogPrefs().getString("fingerprint", null)
+        val catalogChange = toolCatalogChange()
+        val catalogMeta = toolCatalogStatus(recordedFingerprint)
+        catalogChange?.let { change ->
+            catalogMeta.addProperty("changed", true)
+            catalogMeta.addProperty("previous", change.get("previous").asString)
+            catalogMeta.addProperty("current", change.get("current").asString)
+        }
+        if (catalogChange == null) catalogMeta.addProperty("changed", false)
+        add("_meta", JsonObject().apply { add("aiJsProToolCatalog", catalogMeta) })
+        catalogChange?.let { change ->
+            // instructions 在结果里是**单个字符串**（多行用换行连接），不是数组。
+            val instructions = get("instructions")
+            val prefix = McpToolCatalogSignal.instructionLine(change)
+            when {
+                instructions == null -> addProperty("instructions", prefix)
+                instructions.isJsonArray -> {
+                    val merged = com.google.gson.JsonArray()
+                    merged.add(com.google.gson.JsonPrimitive(prefix))
+                    instructions.asJsonArray.forEach { merged.add(it) }
+                    add("instructions", merged)
+                }
+                else -> addProperty("instructions", prefix + "\n" + instructions.asString)
+            }
+        }
     }
 
     private fun listTools() = JsonObject().apply {
@@ -287,10 +315,11 @@ internal class McpTools(private val context: Context, private val event: (String
             McpToolkitBridge.definitions(context, root).forEach { add(it) }
             // P1-6/P1-7：终端描述把「权限不足」与「需要换后端」分开，并说明 app 后端看不到 shell 进程是正常现象。
             val terminalDescriptionSuffixes = mapOf(
-                "terminal_exec" to "；后端提示是路由建议，不等于权限结论：app 后端出现「权限不足」（如 pm/am/logcat）才考虑 backend=shizuku；普通构建脚本 sh build.sh 用 app 后端，正确调用：{\"backend\":\"app\",\"command\":\"sh build.sh\"}。若报缺少 python3/aidl，先 get_build_tools 或 shell_classify_failure（COMPONENT_MISSING），不要换后端。app 后端看不到 shell/其他进程（pidof shizuku_server 空、ps 受限）是正常现象；查进程请用 backend=shizuku，不要据此判断服务挂了。",
+                "terminal_exec" to "；后端提示是路由建议，不等于权限结论：app 后端出现「权限不足」（如 pm/am/logcat）才考虑 backend=shizuku；普通构建脚本 sh build.sh 用 app 后端，正确调用：{\"backend\":\"app\",\"command\":\"sh build.sh\"}。若报缺少已知编译组件（python3/aidl/java/javac/keytool/aapt2/d8/zipalign/apksigner…），返回顶层 code=COMPONENT_MISSING，并直接附上 get_build_tools 的 ready/missing/present 与逐组件 found（复用缓存，不新增探测）；恢复见 recovery。app 后端看不到 shell/其他进程（pidof shizuku_server 空、ps 受限）是正常现象；查进程请用 backend=shizuku，不要据此判断服务挂了。",
+                "terminal_read" to "；若输出命中已知编译组件缺失，顶层返回 code=COMPONENT_MISSING + get_build_tools 的 ready/missing/present/componentState；未命中不追加失败语义。",
                 "terminal_list" to "；app 后端看不到 shell/其他进程（pidof/ps 受限）是正常现象；查进程请用 terminal_exec backend=shizuku。",
-                "get_build_tools" to "；返回 ready/missing/present 就绪摘要；缺 python3/aidl 时 code=COMPONENT_MISSING，recovery 给 apk_component_install 与 localDeps 两条可执行路。",
-                "shell_classify_failure" to "；输出含 py-tree/.../python3、aidl 的 inaccessible or not found 时，返回 code=COMPONENT_MISSING 与 components/recovery/nextActions。",
+                "get_build_tools" to "；返回 ready/missing/present 就绪摘要；缺组件时 code=COMPONENT_MISSING，recovery 给 apk_component_install/localDeps 两条可执行路；jdk17/aapt2/apksigner 缺失时 appPrivateToolchain 提示它们属于 app 私有/APK 组件，先 apk_component_status，不要只看 PATH。",
+                "shell_classify_failure" to "；输出同时含已知编译组件名与 inaccessible/command not found/No such file 等失败短语时，顶层 code=COMPONENT_MISSING，并附 get_build_tools 的 ready/missing/present/componentState/recovery；只当已知组件命中才判，普通文件缺失不误报。",
             )
             forEach { element ->
                 val tool = element.asJsonObject
@@ -316,7 +345,42 @@ internal class McpTools(private val context: Context, private val event: (String
                 "MCP 工具定义与公开目录不一致"
             }
         })
+        // v4 §10.4：应用升级后宿主侧工具绑定不会自动刷新（调用新工具会报 not a function）。
+        // 这里在 initialize 阶段主动说明「目录变了、请重新 tools/list」，并配合 capabilities.tools.listChanged=true。
         add("serverInfo", McpServerMetadata.toJson())
+    }
+
+    /** 工具目录指纹 = 工具数 + build（用于识别"升级后宿主未刷新工具表"）。 */
+    private fun toolCatalogFingerprint(): String = McpToolCatalogSignal.fingerprint(
+        McpToolCatalog.names.size, com.jdkshen.aijspro.BuildConfig.VERSION_CODE,
+        com.jdkshen.aijspro.BuildConfig.VERSION_NAME)
+
+    private fun catalogPrefs() = context.getSharedPreferences("mcp-tool-catalog", Context.MODE_PRIVATE)
+
+    /**
+     * 只读状态（供 get_status / initialize 暴露）。
+     *
+     * @param recordedFingerprint 本次 initialize **之前**记录的值（get_status 传 null 表示只报当前值）。
+     */
+    private fun toolCatalogStatus(recordedFingerprint: String? = null): JsonObject = JsonObject().apply {
+        val current = toolCatalogFingerprint()
+        addProperty("toolCount", McpToolCatalog.names.size)
+        addProperty("build", com.jdkshen.aijspro.BuildConfig.VERSION_NAME)
+        addProperty("fingerprint", current)
+        if (recordedFingerprint != null) {
+            addProperty("recordedFingerprintBeforeInitialize", recordedFingerprint)
+            addProperty("changedSinceRecorded", recordedFingerprint != current)
+        }
+    }
+
+    /** initialize 时比对并记录；目录变化时返回提示对象（客户端应重新 tools/list）。 */
+    private fun toolCatalogChange(): JsonObject? {
+        val current = toolCatalogFingerprint()
+        val prefs = catalogPrefs()
+        val previous = prefs.getString("fingerprint", null)
+        prefs.edit().putString("fingerprint", current).apply()
+        return McpToolCatalogSignal.notice(previous, current, McpToolCatalog.names.size,
+            com.jdkshen.aijspro.BuildConfig.VERSION_NAME)
     }
 
     private fun call(invocation: McpToolCall): JsonObject {
@@ -332,6 +396,7 @@ internal class McpTools(private val context: Context, private val event: (String
         return when (name) {
             "get_status" -> toolJson(JsonObject().apply {
                 // P1-9：直接回答「这是哪个 build、有多少工具、更新了什么」，不用再去 app_info 绕。
+                add("toolCatalog", toolCatalogStatus())
                 val packageInfo = runCatching {
                     if (Build.VERSION.SDK_INT >= 33) context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
                     else @Suppress("DEPRECATION") context.packageManager.getPackageInfo(context.packageName, 0)
@@ -399,7 +464,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 }
             })
             "list_scripts" -> toolJson(listFiles(resolveScript(args.stringOr("path", "")), args.intOr("offset", 0), args.intOr("limit", 100), args.booleanOr("recursive", false)))
-            "read_script" -> toolJson(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
+            "read_script" -> structuredCall { toolOk(readBytes(readTextFile(resolveScript(args.string("path"))), args.intOr("offset", 0), args.intOr("maxBytes", 65536))) }
             "search_scripts" -> toolJson(searchScripts(args.string("query"), args.stringOr("path", ""), args.intOr("limit", 50),
                 args.stringOr("scanCursor", args.stringOr("resumeCursor", args.stringOr("cursor", "")))))
             "continue_result" -> toolJson(continueResult(args.string("cursor"), args.intOr("limit", 50)))
@@ -433,7 +498,9 @@ internal class McpTools(private val context: Context, private val event: (String
             "probe_engine_api" -> probeEngineApi(args)
             "engine_api_diff" -> engineApiDiff()
             "stop_script" -> stopScript(args)
-            "coordinate_convert" -> McpCoordinateTools.call(context, args)
+            "coordinate_convert" -> toolJson(McpCoordinateTools.call(context, args)).apply {
+                if (getAsJsonObject("structuredContent")?.get("ok")?.asBoolean == false) addProperty("isError", true)
+            }
             "check_syntax" -> {
                 val code = args.string("code")
                 val engine = McpEngines.normalize(args.stringOr("engine", "")).ifEmpty {
@@ -444,7 +511,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 toolJson(if (engine == "nodejs") McpNodeSyntax.check(context, code, name)
                     else McpSyntaxChecker.check(code, engine, name))
             }
-            "learn_autojs_skill" -> toolResult(helpText())
+            "learn_autojs_skill" -> structuredCall { McpToolResultShapes.textResult("text", helpText()) }
             "stop_all_scripts" -> stopAllScripts()
             "get_mcp_log" -> toolJson(getMcpLog(args))
             "terminal_exec" -> {
@@ -459,7 +526,7 @@ internal class McpTools(private val context: Context, private val event: (String
                     require(it.isJsonPrimitive && it.asJsonPrimitive.isBoolean) { "eof 必须是布尔值" }
                     it.asBoolean
                 } ?: false
-                toolJson(terminals.write(args.string("jobId"), if (args.has("input")) args.string("input") else "", eof))
+                structuredCall { toolOk(terminals.write(args.string("jobId"), if (args.has("input")) args.string("input") else "", eof)) }
             }
             "terminal_stop" -> toolJson(terminals.stop(args.string("jobId")))
             // 反馈 #8：terminal_* 之前没有 job 层错误码/保留/所有权语义。
@@ -475,35 +542,42 @@ internal class McpTools(private val context: Context, private val event: (String
                     McpTerminalJobs.BACKEND_SHIZUKU)))
             }
             "get_build_tools" -> toolJson(McpBuildTools.inspect(terminalBackend, root))
-            "workspace_open" -> toolJson(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false))))
-            "workspace_list" -> toolJson(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) })
-            "workspace_read" -> toolJson(readBytes(workspaces.read(args.string("workspaceId"), args.string("path")), args.intOr("offset", 0), args.intOr("maxBytes", 65536)))
-            "workspace_write" -> {
+            "workspace_open" -> structuredCall { toolOk(workspaceJson(workspaces.open(args.string("path"), args.booleanOr("create", false)))) }
+            "workspace_list" -> structuredCall { toolOk(JsonObject().apply { add("items", JsonArray().apply { workspaces.list().forEach { add(workspaceJson(it)) } }) }) }
+            "workspace_read" -> structuredCall { toolOk(readBytes(workspaces.read(args.string("workspaceId"), args.string("path")), args.intOr("offset", 0), args.intOr("maxBytes", 65536))) }
+            "workspace_write" -> structuredCall {
                 requireWrite(); val bytes = args.string("content").toByteArray(Charsets.UTF_8)
-                toolJson(workspaceJson(workspaces.write(args.string("workspaceId"), args.string("path"), bytes)).apply {
+                toolOk(workspaceJson(workspaces.write(args.string("workspaceId"), args.string("path"), bytes)).apply {
                     addProperty("needsApply", true)
                     addProperty("hint", "只写进了私有工作区；真实脚本需要调用 workspace_request_apply 才会更新（目录与文件在 apply 时一起创建）")
                 })
             }
-            "workspace_delete" -> { requireWrite(); toolJson(workspaceJson(workspaces.delete(args.string("workspaceId"), args.string("path"))).apply {
+            "workspace_delete" -> structuredCall { requireWrite(); toolOk(workspaceJson(workspaces.delete(args.string("workspaceId"), args.string("path"))).apply {
                 addProperty("needsApply", true)
                 addProperty("hint", "删除只在私有工作区生效；调用 workspace_request_apply 后才会删真实文件")
             }) }
-            "workspace_diff" -> toolResult(workspaces.diff(args.string("workspaceId")))
-            "workspace_request_apply" -> {
+            "workspace_diff" -> structuredCall {
+                val workspaceId = args.string("workspaceId")
+                val diff = workspaces.diff(workspaceId)
+                McpToolResultShapes.success(
+                    ToolkitIo.json("workspaceId" to workspaceId, "diff" to diff),
+                    legacyText = diff,
+                )
+            }
+            "workspace_request_apply" -> structuredCall {
                 requireWrite()
                 val applied = workspaces.applyAuthorized(args.string("workspaceId"))
-                toolJson(workspaceJson(applied).apply {
+                toolOk(workspaceJson(applied).apply {
                     addProperty("message", "已应用到真实脚本；修改前已校验并备份，可在手机历史页回退")
                 })
             }
-            "workspace_mkdir" -> {
+            "workspace_mkdir" -> structuredCall {
                 requireWrite()
                 val created = workspaces.makeDirectory(args.string("path"))
-                toolJson(JsonObject().apply { addProperty("path", created); addProperty("created", true) })
+                toolOk(JsonObject().apply { addProperty("path", created); addProperty("created", true) })
             }
-            "workspace_cancel" -> toolJson(workspaceJson(workspaces.cancel(args.string("workspaceId"))))
-            "workspace_cleanup" -> toolJson(workspaces.cleanupPolicy(
+            "workspace_cancel" -> structuredCall { toolOk(workspaceJson(workspaces.cancel(args.string("workspaceId")))) }
+            "workspace_cleanup" -> structuredCall { toolOk(workspaces.cleanupPolicy(
                 dryRun = args.booleanOr("dryRun", true),
                 keepLatest = args.intOr("keepLatest", McpWorkspaceStore.DEFAULT_CLEANUP_KEEP_LATEST),
                 olderThanHours = args.intOr("olderThanHours", 0),
@@ -511,7 +585,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 protectApplied = if (args.has("protectApplied")) args.booleanOr("protectApplied", true)
                     else !args.booleanOr("applied", false),
                 keepAppliedHours = args.intOr("keepAppliedHours", 24),
-            ))
+            )) }
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url", "apk_install", "apk_uninstall" ->
                 toolJson(McpAppTools.handle(context, name, args) ?: throw McpInvalidParamsException("未知工具：$name"))
             in McpAppTraceTools.names -> toolJson(McpAppTraceTools.call(context, name, args))
@@ -1178,6 +1252,30 @@ internal class McpTools(private val context: Context, private val event: (String
     } catch (error: IllegalArgumentException) {
         throw ToolError(error.message ?: "路径无效")
     }
+    /**
+     * P1-A：workspace/text 成功结果统一 {ok,data}；content 文本保留旧扁平 JSON，
+     * data 内保留原字段，避免只读 content 或只读 data 的调用方同时断掉。
+     */
+    private fun toolOk(data: JsonObject, legacyText: String = data.toString()): JsonObject =
+        McpToolResultShapes.success(data, legacyText)
+
+    /**
+     * P1-A：workspace/text 分支内部失败也必须带 structuredContent。
+     * Lead 的全局 catch 已覆盖 ToolError/IllegalArgumentException；这里补 IllegalState/IOException/Security
+     * 以及 workspace 内抛出的异常，避免这些分支只留纯文本。
+     */
+    private inline fun structuredCall(block: () -> JsonObject): JsonObject = try {
+        block()
+    } catch (failure: ToolError) {
+        toolFailure(failure.message ?: "工具调用失败", "TOOL_ERROR")
+    } catch (failure: IllegalStateException) {
+        toolFailure(failure.message ?: "工作区状态冲突", "WORKSPACE_STATE_CONFLICT")
+    } catch (failure: SecurityException) {
+        toolFailure(failure.message ?: "缺少手机权限", "PERMISSION_DENIED")
+    } catch (failure: IOException) {
+        toolFailure(failure.message ?: "文件操作失败", "IO_ERROR")
+    }
+
     private fun workspaceJson(ws: McpWorkspaceStore.Workspace) = JsonObject().apply {
         addProperty("workspaceId", ws.id); addProperty("targetPath", ws.targetPath); addProperty("createdAt", ws.createdAt)
         addProperty("updatedAt", ws.updatedAt); addProperty("state", ws.state); addProperty("pendingApproval", ws.pendingApproval)
@@ -1321,6 +1419,19 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) =
         McpToolSchema.objectSchema(*names, required = required)
     private fun toolJson(json: JsonObject) = toolResult(json.toString()).apply { add("structuredContent", json) }
+    /**
+     * 失败结果：既给 content[0].text（人读），也给 structuredContent（机读）。
+     * `.4` 总报告 P1-E：以前 ToolError/IllegalArgumentException 只回纯文本，标准客户端要再写一个解析器。
+     */
+    private fun toolFailure(message: String, code: String, argument: String? = null): JsonObject =
+        toolResult(message, true, errorCode = code, argument = argument).apply {
+            add("structuredContent", ToolkitIo.json(
+                "ok" to false, "data" to null,
+                "error" to ToolkitIo.json("code" to code, "message" to message,
+                    "argument" to argument, "recoverable" to true),
+                "nextActions" to emptyList<Any>()))
+        }
+
     private fun toolResult(text: String, error: Boolean = false, errorCode: String? = null, argument: String? = null) = JsonObject().apply {
         add("content", JsonArray().apply { add(JsonObject().apply { addProperty("type", "text"); addProperty("text", text) }) })
         if (error) addProperty("isError", true)

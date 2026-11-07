@@ -148,7 +148,7 @@ class ToolkitDexInterfaceTest {
         val dex = assemble("missing", NO_FIELDS_FIXTURE)
         val api = ToolkitDexInterface(listOf("classes.dex" to ToolkitDex(dex)))
         val error = assertThrows(ToolkitException::class.java) {
-            api.interfaceTable(args("descriptor" to "Lfixture/Missing;"))
+            api.interfaceTable(args("descriptor" to "Lfixture/Missing;", "mode" to "descriptor"))
         }
         assertEquals("LOCATOR_NOT_FOUND", error.code)
         assertEquals("descriptor", error.argument)
@@ -163,7 +163,100 @@ class ToolkitDexInterfaceTest {
         assertEquals(2, table.get("methodCount").asInt)
     }
 
+    @Test
+    fun canonicalPathStillWorksWithExplicitDescriptorMode() {
+        val dex = assemble("canonical-explicit", BINDER_FIXTURE)
+        val table = ToolkitDexInterface(listOf("classes.dex" to ToolkitDex(dex)))
+            .interfaceTable(args("descriptor" to "Lfixture/IFoo;", "mode" to "descriptor"))
+        assertEquals("static_field", table.tString("transactSource"))
+        assertEquals(15, row(table, "requestPermission").get("transactCode").asInt)
+    }
+
+    @Test
+    fun stringConstFallbackFindsTransactAndOnTransactSwitch() {
+        val dex = assemble("shizuku-fallback", STRING_CONST_FIXTURE)
+        val api = ToolkitDexInterface(listOf("classes.dex" to ToolkitDex(dex)))
+        val table = api.interfaceTable(args("descriptor" to "moe.shizuku.server.IShizukuService"))
+        assertEquals("string_const+transact_const", table.tString("transactSource"))
+        assertTrue(table.get("stringPoolHits").asInt > 0)
+        val methods = table.getAsJsonArray("methods").map { it.asJsonObject }
+        val transact = methods.single { it.get("code")?.asInt == 15 && it.tString("side") == "client" }
+        assertEquals("writeInterfaceToken+transact", transact.tString("evidence"))
+        assertEquals("high", transact.tString("confidence"))
+        assertEquals("Lfixture/ShizukuClient;->call()V", transact.tString("methodDescriptor"))
+        assertTrue(transact.tString("callSiteLocator").startsWith("dex_method:Lfixture/ShizukuClient;->call"))
+        assertEquals("transact", transact.tString("transactMethod"))
+
+        val serverOne = methods.single { it.get("code")?.asInt == 1 && it.tString("side") == "server" }
+        assertEquals("onTransact-packed-switch", serverOne.tString("evidence"))
+        assertEquals("requestPermission", serverOne.tString("method"))
+        val serverTwo = methods.single { it.get("code")?.asInt == 2 && it.tString("side") == "server" }
+        assertEquals("checkSelfPermission", serverTwo.tString("method"))
+        assertEquals(1, table.getAsJsonArray("codes").map { it.asJsonObject }.count { it.get("code").asInt == 1 && it.get("sources").asJsonArray.size() >= 1 })
+    }
+
+    @Test
+    fun stringConstFallbackReturnsEmptyWarningsAndNextActionsWithoutInventingCodes() {
+        val dex = assemble("empty-fallback", NO_FIELDS_FIXTURE)
+        val api = ToolkitDexInterface(listOf("classes.dex" to ToolkitDex(dex)))
+        val table = api.interfaceTable(args("descriptor" to "no.such.IService", "mode" to "string_const"))
+        assertEquals("string_const+transact_const", table.tString("transactSource"))
+        assertEquals(0, table.get("methodCount").asInt)
+        assertTrue(table.getAsJsonArray("methods").size() == 0)
+        assertTrue(table.getAsJsonArray("warnings").any { it.asString.contains("STRING_POOL_TOKEN_NOT_FOUND") })
+        assertTrue(table.getAsJsonArray("nextActions").size() >= 1)
+        assertFalse(table.getAsJsonArray("warnings").any { it.asString.contains("code=1") })
+    }
+
     companion object {
+        private val STRING_CONST_FIXTURE = """
+            .class public Lfixture/ShizukuClient;
+            .super Ljava/lang/Object;
+            .method public call()V
+                .registers 6
+                const/4 v0, 0x0
+                const-string v1, "moe.shizuku.server.IShizukuService"
+                invoke-virtual {v0, v1}, Landroid/os/Parcel;->writeInterfaceToken(Ljava/lang/String;)V
+                const/16 v1, 0xf
+                const/4 v2, 0x0
+                const/4 v3, 0x0
+                const/4 v4, 0x0
+                invoke-interface {v0, v1, v2, v3, v4}, Landroid/os/IBinder;->transact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z
+                return-void
+            .end method
+        """.trimIndent() + "\n" + """
+            .class public Lfixture/ShizukuStub;
+            .super Landroid/os/Binder;
+            .method public requestPermission()V
+                .registers 1
+                return-void
+            .end method
+            .method public checkSelfPermission()V
+                .registers 1
+                return-void
+            .end method
+            .method public onTransact(ILandroid/os/Parcel;Landroid/os/Parcel;I)Z
+                .registers 6
+                packed-switch p1, :switch_data
+                const/4 v0, 0x0
+                return v0
+                :switch_data
+                .packed-switch 0x1
+                    :case_1
+                    :case_2
+                .end packed-switch
+                :case_1
+                const-string v0, "moe.shizuku.server.IShizukuService"
+                invoke-virtual {p0}, Lfixture/ShizukuStub;->requestPermission()V
+                const/4 v0, 0x1
+                return v0
+                :case_2
+                invoke-virtual {p0}, Lfixture/ShizukuStub;->checkSelfPermission()V
+                const/4 v0, 0x1
+                return v0
+            .end method
+        """.trimIndent()
+
         private val BINDER_FIXTURE = """
             .class public interface abstract Lfixture/IBase;
             .super Ljava/lang/Object;

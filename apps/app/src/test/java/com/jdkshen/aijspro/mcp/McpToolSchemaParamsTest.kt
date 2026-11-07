@@ -4,6 +4,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -52,6 +53,95 @@ class McpToolSchemaParamsTest {
             collect(text, "args\\.tInt\\(\"([A-Za-z0-9_]+)\"", "integer", "args.tInt", declared, tolerated, file.name, problems)
         }
         assertTrue("schema 参数类型与运行时读取不一致：\n" + problems.distinct().joinToString("\n"), problems.isEmpty())
+    }
+
+    @Test
+    fun noRequiredPropertyCarriesDefaultValueOrDefaultDescription() {
+        val problems = mutableListOf<String>()
+        if (schemaAssets.isDirectory) {
+            val apkSchemas = File(schemaAssets, "toolkit-apk-schemas.json")
+            if (apkSchemas.isFile) {
+                for ((name, value) in JsonParser().parse(apkSchemas.readText()).asJsonObject.entrySet()) {
+                    if (value.isJsonObject) collectRequiredDefaultProblems(value.asJsonObject, name, problems)
+                }
+            }
+        }
+        val temp = Files.createTempDirectory("mcp-schema-required").toFile()
+        try {
+            for ((source, definitions) in listOf(
+                "McpFileToolkit" to McpFileToolkit(temp).definitions(),
+                "McpZipToolkit" to McpZipToolkit(temp).definitions(),
+            )) {
+                for (definition in definitions) {
+                    val tool = definition.asJsonObject
+                    val name = source + "." + tool.get("name")?.asString
+                    tool.getAsJsonObject("inputSchema")?.let { collectRequiredDefaultProblems(it, name, problems) }
+                }
+            }
+        } finally {
+            temp.deleteRecursively()
+        }
+        assertTrue("required 同时带 default 或描述默认值（会把可选参数伪装成必填）：\n" + problems.distinct().joinToString("\n"), problems.isEmpty())
+    }
+
+    private fun collectRequiredDefaultProblems(schema: JsonObject, path: String, problems: MutableList<String>) {
+        val properties = schema.getAsJsonObject("properties")
+        val required = schema.getAsJsonArray("required")
+        if (properties != null && required != null) {
+            for (element in required) {
+                val name = element.asString
+                val property = properties.getAsJsonObject(name) ?: continue
+                if (property.has("default")) problems += path + "." + name + " required 但 default=" + property.get("default")
+                val description = property.get("description")?.takeIf { it.isJsonPrimitive }?.asString.orEmpty()
+                if (Regex("省略时\\s*=|默认值|默认\\s*[=:]|省略.*默认|默认.*省略").containsMatchIn(description)) {
+                    problems += path + "." + name + " required 但描述写了默认值：" + description
+                }
+            }
+        }
+        for ((key, value) in schema.entrySet()) {
+            if (key == "properties") continue
+            if (value.isJsonObject) collectRequiredDefaultProblems(value.asJsonObject, path + "." + key, problems)
+            else if (value.isJsonArray) value.asJsonArray.forEachIndexed { index, item ->
+                if (item.isJsonObject) collectRequiredDefaultProblems(item.asJsonObject, path + "." + key + "[" + index + "]", problems)
+            }
+        }
+    }
+
+    @Test
+    fun apkReadTextAndNativeListItemsAreNotOverRequired() {
+        val schemas = JsonParser().parse(File(schemaAssets, "toolkit-apk-schemas.json").readText()).asJsonObject
+        val read = schemas.getAsJsonObject("apk_read_text")
+        assertEquals(setOf("workspaceId", "editSessionId", "locator"), read.getAsJsonArray("required").map { it.asString }.toSet())
+        val readProps = read.getAsJsonObject("properties")
+        assertEquals(500, readProps.getAsJsonObject("limit").get("default").asInt)
+        assertEquals(49152, readProps.getAsJsonObject("maxChars").get("default").asInt)
+        assertEquals(0, readProps.getAsJsonObject("startLine").get("default").asInt)
+        assertEquals(0, readProps.getAsJsonObject("startColumn").get("default").asInt)
+
+        val nativeItems = schemas.getAsJsonObject("apk_native_list_items")
+        assertEquals(setOf("workspaceId", "editSessionId", "locator", "itemKind"),
+            nativeItems.getAsJsonArray("required").map { it.asString }.toSet())
+        val nativeProps = nativeItems.getAsJsonObject("properties")
+        assertEquals("", nativeProps.getAsJsonObject("namePrefix").get("default").asString)
+        assertEquals(false, nativeProps.getAsJsonObject("demangle").get("default").asBoolean)
+        assertEquals(100, nativeProps.getAsJsonObject("limit").get("default").asInt)
+
+        val window = ToolkitTextWindow.read("a\nb\n", JsonObject())
+        assertEquals(500, window.get("limit").asInt)
+        assertEquals(0, window.get("startLine").asInt)
+        assertEquals(0, window.get("startColumn").asInt)
+    }
+
+    @Test
+    fun trulyRequiredSafetyFieldsExplainWhyTheyAreRequired() {
+        val schemas = JsonParser().parse(File(schemaAssets, "toolkit-apk-schemas.json").readText()).asJsonObject
+        val build = schemas.getAsJsonObject("apk_build").getAsJsonObject("properties").getAsJsonObject("overwrite")
+        assertTrue(build.get("description").asString.contains("必填"))
+        val copy = schemas.getAsJsonObject("apk_copy_entry").getAsJsonObject("properties").getAsJsonObject("overwrite")
+        assertTrue(copy.get("description").asString.contains("必填"))
+        val patch = schemas.getAsJsonObject("apk_native_patch_instructions").getAsJsonObject("properties")
+            .getAsJsonObject("replacementAssembly")
+        assertTrue(patch.get("description").asString.contains("必填"))
     }
 
     private fun collect(text: String, pattern: String, expected: String, reader: String,
