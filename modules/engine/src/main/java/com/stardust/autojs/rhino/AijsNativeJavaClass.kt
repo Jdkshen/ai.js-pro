@@ -2,6 +2,7 @@ package com.stardust.autojs.rhino
 
 import org.mozilla.javascript.BaseFunction
 import org.mozilla.javascript.Context
+import org.mozilla.javascript.EvaluatorException
 import org.mozilla.javascript.Function
 import org.mozilla.javascript.NativeJavaArray
 import org.mozilla.javascript.NativeJavaClass
@@ -33,10 +34,56 @@ internal class AijsNativeJavaClass(scope: Scriptable, private val targetClass: C
             // 直接构造 java.lang.Class 的 JavaObject；不能再走 Context.javaToJS（会被本 WrapFactory 再包成 NativeJavaClass）。
             return NativeJavaObject(start, targetClass, Class::class.java)
         }
-        val value = super.get(name, start)
+        // 回归修复（dev-1383）：本类替换了 Rhino 默认把 Class 包成 NativeJavaObject 的行为，
+        // 而 NativeJavaClass 只解析“静态成员”，于是 `obj.getClass().getName()/getSimpleName()`
+        // 这类 **Class 实例 API** 全部失效（真机实测报 has no public instance field or method named "getName"，
+        // 直接打挂打包版 UI：__ui__.js:408 就是 view.getClass().getName()）。
+        // 这里把 java.lang.Class 的公开成员作为第一优先级补回来。
+        // 静态成员优先：`java.lang.reflect.Array.newInstance` 与已废弃的 `Class.newInstance` 同名，
+        // 若无条件走 Class 实例 API 会把静态方法抢走（单测实测：报 Can't find method java.lang.Class.newInstance）。
+        // 只有「是 Class 的实例 API」且「本类没有同名静态成员」时，才先走实例语义。
+        if (name in CLASS_API_NAMES && name !in staticMemberNames) {
+            val instanceMember = classInstanceMember(start, name)
+            if (instanceMember !== Scriptable.NOT_FOUND) return instanceMember
+        }
+        val value = try {
+            super.get(name, start)
+        } catch (missing: EvaluatorException) {
+            // NativeJavaClass 找不到静态成员时会抛（不是返回 NOT_FOUND）；再给一次 Class 实例成员的机会。
+            val instanceMember = classInstanceMember(start, name)
+            if (instanceMember !== Scriptable.NOT_FOUND) return instanceMember
+            throw missing
+        }
         return if (value is Function && value !is NativeJavaClass) {
             AijsJavaStaticMethod(targetClass, name, value)
         } else value
+    }
+
+    /** has/`in` 运算符与 get 保持一致，避免 `"getName" in cls` 得到 false。 */
+    override fun has(name: String, start: Scriptable): Boolean =
+        name in CLASS_API_NAMES || super.has(name, start)
+
+    /** 把 targetClass 当作 java.lang.Class 的实例来查成员（getName/getSimpleName/getDeclaredMethods…）。 */
+    private fun classInstanceMember(start: Scriptable, name: String): Any? =
+        (classView ?: NativeJavaObject(this, targetClass, Class::class.java).also { classView = it }).get(name, start)
+
+    @Volatile
+    private var classView: NativeJavaObject? = null
+
+    /** targetClass 暴露的静态成员名：用于避免 Class 实例 API 抢走同名静态方法（如 Array.newInstance）。 */
+    private val staticMemberNames: Set<String> by lazy {
+        buildSet {
+            targetClass.methods.forEach { if (Modifier.isStatic(it.modifiers)) add(it.name) }
+            targetClass.fields.forEach { if (Modifier.isStatic(it.modifiers)) add(it.name) }
+        }
+    }
+
+    private companion object {
+        /** java.lang.Class 的公开**实例**方法/字段名（getName/getSimpleName/isAssignableFrom/…）。 */
+        val CLASS_API_NAMES: Set<String> = buildSet {
+            Class::class.java.methods.forEach { if (!Modifier.isStatic(it.modifiers)) add(it.name) }
+            Class::class.java.fields.forEach { if (!Modifier.isStatic(it.modifiers)) add(it.name) }
+        }
     }
 }
 

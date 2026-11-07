@@ -68,6 +68,37 @@ public class AijsNativeJavaClassTest {
         assertEquals("1.5", evaluate("String(Packages.java.lang.String.valueOf(1.5))"));
     }
 
+    /**
+     * 线上回归（dev-1380~1382）：WrapFactory 把所有 Class 包成 AijsNativeJavaClass 后，
+     * 只剩“静态成员”语义，`obj.getClass().getName()` 这类 **Class 实例 API** 全挂 ——
+     * 用户打包版就是死在 __ui__.js:408 的 `view.getClass().getName()`。
+     */
+    @Test
+    public void classInstanceApiStaysReachableOnWrappedClasses() {
+        // 用户场景的等价写法：普通对象实例 -> getClass() -> Class 实例 API
+        assertEquals("java.util.ArrayList", evaluate("String(new java.util.ArrayList().getClass().getName())"));
+        assertEquals("ArrayList", evaluate("String(new java.util.ArrayList().getClass().getSimpleName())"));
+        assertEquals("java.lang.String", evaluate("String(Packages.java.lang.String.getName())"));
+        // 类引用上的 getClass() 在原生 Rhino 下也返回 java.lang.Class（保持不回归、不报错）
+        assertEquals("java.lang.Class", evaluate("String(Packages.java.lang.String.getClass().getName())"));
+        assertEquals("false", evaluate("String(Packages.java.lang.String.class.isInterface())"));
+        assertEquals("true", evaluate("String(Packages.java.lang.String.class.isAssignableFrom(Packages.java.lang.String.class))"));
+    }
+
+    @Test
+    public void classApiNamesAreVisibleToTheInOperator() {
+        assertEquals("true", evaluate("String('getName' in Packages.java.lang.String)"));
+        assertEquals("true", evaluate("String('getSimpleName' in java.lang.String)"));
+        // 静态成员仍然可见（不能被 Class 实例 API 遮蔽）。
+        assertEquals("true", evaluate("String('valueOf' in Packages.java.lang.String)"));
+    }
+
+    @Test
+    public void staticFieldsAndMethodsStillResolveAfterFallback() {
+        assertEquals("2147483647", evaluate("String(Packages.java.lang.Integer.MAX_VALUE)"));
+        assertEquals("123", evaluate("String(Packages.java.lang.String.valueOf(123))"));
+    }
+
     @Test
     public void reflectArraySetUsesComponentTypeInsteadOfDouble() {
         Object result = evaluate(
