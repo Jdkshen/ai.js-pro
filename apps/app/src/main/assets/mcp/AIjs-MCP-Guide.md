@@ -750,7 +750,7 @@ apk_inject_gadget 的 preloadMode 只有两个取值：provider（默认）和 d
 - 成功时以 preload.applied=true、earlyLoad=true、preloadImplemented=true、sizeUnchanged=true、verified=true、targetPath 为准；只有这些字段都成立才算提前加载。只有 provider 时是 earlyLoad=false、preloadImplemented=false。
 - 失败时不要伪造成功：顶层通常是 PRELOAD_DT_NEEDED_FAILED（旧版/模式不可用可能是 PRELOAD_MODE_UNAVAILABLE），错误信息里带 preload 计划（applied=false）；reason 举例：DYNAMIC_NO_SPARE_NULL（没有可替换且后续仍保留 DT_NULL 的槽）、DYNSTR_NO_ROOM（尾部 NUL 余量不足）、NO_DYNAMIC_SEGMENT（没有可读 PT_DYNAMIC/.dynamic）、NOT_ELF/UNSUPPORTED_ENDIAN/UNSUPPORTED_ELF_CLASS 等；完整清单以错误/计划里的 preload.targets[].reason/reasons 为准，不要把这里当成全集。
 - 失败/不支持时的正确路径：对目标 .so 的副本执行外部 patchelf --add-needed libaijsgadget.so --page-size 16384 <目标.so>（page-size 按目标/设备页大小，16 KiB 用 16384），再回填 APK、重签并用 apk_verify 复核；这不是工具自动完成的步骤。
-- 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED/PRELOAD_MODE_UNAVAILABLE 及任何细分 reason；不要反复试到“看起来成功”。
+- 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED 及任何细分 reason；不要反复试到“看起来成功”。
 - 边界：目标 .so 必须在壳初始化前被 linker 加载；多 .so/多 ABI/分包、加固壳自定义 linker、页对齐不满足的包不保证成功。provider 模式仍可作为兼容回退，但它不解决“早于 attachBaseContext”的问题。
 
 ### #18 `apk_build` 增加 `detail=summary`

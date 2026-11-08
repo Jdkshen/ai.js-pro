@@ -91,7 +91,7 @@ preloadMode 只有 provider（默认）和 dt_needed；providerProcess 是另一
 - provider：ContentProvider.onCreate 路径，在 Application.attachBaseContext 之后，对加固壳可能太晚；成功时 preload.earlyLoad=false / preload.preloadImplemented=false，不能声称已提前加载。
 - dt_needed（支持时）：可选 preloadTarget 指定目标 .so（省略自动选择第一个可安全 patch 的 lib/*/*.so，排除 gadget/config）；就地给 .dynamic 增加 DT_NEEDED=libaijsgadget.so、.dynstr 追加库名或复用同名串，让 linker 在壳之前加载 Gadget。成功保证：只用已有可替换 DT_NULL 空槽（保留终止符）和 .dynstr 尾部 NUL 余量，不移动节/PT_LOAD、文件大小不变；原子写出，失败不留半坏产物、不改原文件。成功看 preload.applied/earlyLoad/preloadImplemented/sizeUnchanged/verified/targetPath。
 - 不支持/失败时：顶层通常 PRELOAD_DT_NEEDED_FAILED（旧版/模式不可用可能 PRELOAD_MODE_UNAVAILABLE），错误信息里带 preload 计划（applied=false）；reason 举例 DYNAMIC_NO_SPARE_NULL、DYNSTR_NO_ROOM、NO_DYNAMIC_SEGMENT、NOT_ELF、UNSUPPORTED_ENDIAN/UNSUPPORTED_ELF_CLASS，完整清单看错误/计划里的 preload.targets[].reason/reasons，不要当全集。不要伪造成功；对目标 .so 副本用外部 patchelf --add-needed libaijsgadget.so --page-size 16384 <目标.so>（page-size 按目标/设备页大小），回填 APK、重签并 apk_verify 复核。
-- 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED/PRELOAD_MODE_UNAVAILABLE 及任何细分 reason；不要反复试到看起来成功。
+- 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED 及任何细分 reason；不要反复试到看起来成功。
 - 边界：目标 .so 必须在壳初始化前被 linker 加载；多 .so/多 ABI/分包、自定义 linker、页对齐不满足不保证成功。若返回失败，不会生成半成品。
 
 ## 文件与 APK 工具：读取 → 修改 → 检查 → 构建
