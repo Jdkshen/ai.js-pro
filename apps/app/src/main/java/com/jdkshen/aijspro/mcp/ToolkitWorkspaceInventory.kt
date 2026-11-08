@@ -22,6 +22,13 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         const val QUOTA = 16
         const val DEFAULT_EXPIRED_AFTER_MINUTES = 24 * 60
         const val DEFAULT_MIN_AGE_MINUTES = 60
+        /** 服务端默认身份：未显式传 owner 时的 caller 身份，也是新工作区写入的 owner。 */
+        const val SERVER_DEFAULT_OWNER = "mcp-host"
+        /** 与 SERVER_DEFAULT_OWNER 配套的 clientId 语义：与任何 caller 相容（只表示「没记客户端身份」）。 */
+        const val SERVER_DEFAULT_CLIENT_ID = "server-default"
+        /** 一次能真正生效的放宽命令（.4 的 Bug2：旧提示照抄仍是 0 命中）。 */
+        const val GC_RELAXED_PREVIEW =
+            "apk_workspace_gc{\"dryRun\":true,\"includeTemporary\":true,\"minAgeMinutes\":0,\"includeEditSessions\":true}"
         private const val MAX_SCAN = 512
         private const val JOBS_DIR = "jobs"
     }
@@ -55,6 +62,7 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         val ownerSource: String?,
         val clientId: String?,
         val sessionId: String?,
+        val sessionIds: List<String>,
     )
 
     private data class Scan(
@@ -118,7 +126,10 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
                 add(JsonPrimitive("旧记录 owner=null 时 GC 必须显式 includeUnknownOwner=true；clientId 仍可选"))
                 add(JsonPrimitive("lastAccessAt 旧记录回退 filesystem_mtime，不是真实读取时间"))
                 add(JsonPrimitive("orphanDirs/danglingEntries 只报告，不自动删除"))
-                add(JsonPrimitive("配额报满时应先查本清单，再用 apk_workspace_gc dryRun=true 预览"))
+                add(JsonPrimitive("配额报满时先查本清单；能真正生效的放宽预览（含编辑会话在内）：" + GC_RELAXED_PREVIEW +
+                    "，确认后把 dryRun 改 false；只释放会话不删快照用 apk_session_release{\"workspaceId\":\"<id>\"}"))
+                add(JsonPrimitive("旧记录 owner=null 时还需 includeUnknownOwner=true；owner=mcp-host/ownerSource=server-default 的服务端记录不需要它"))
+                add(JsonPrimitive("GC 仍删不动就逐个删：apk_workspace_delete{\"workspaceId\":\"<id>\"}（会连编辑会话一起删，确认无用再用）"))
             }
         )
     }
@@ -139,8 +150,15 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         val expiredAfter = args.tInt("expiredAfterMinutes", DEFAULT_EXPIRED_AFTER_MINUTES, 1, 525600)
         val minAge = args.tInt("minAgeMinutes", DEFAULT_MIN_AGE_MINUTES, 0, 525600)
         val protectedIds = stringSet(args, "protectedIds")
-        val callerOwner = optionalString(args, "owner")
-        val callerClientId = optionalString(args, "clientId")
+        val includeEditSessions = args.tBool("includeEditSessions", false)
+        // Bug2（.4）：不传 owner/clientId 时 caller 就是**服务端默认身份**，否则我们自己的
+        // owner=mcp-host/ownerSource=server-default 记录会被判 other_owner、clientId=null 再判
+        // unknown_client —— 「照提示跑 dryRun」永远是 0 命中。显式传值时下面的判定与旧实现逐条一致。
+        val explicitOwner = optionalString(args, "owner")
+        val explicitClientId = optionalString(args, "clientId")
+        val callerOwner = explicitOwner ?: SERVER_DEFAULT_OWNER
+        val callerClientId = explicitClientId ?: SERVER_DEFAULT_CLIENT_ID
+        val callerIdentitySource = if (explicitOwner == null && explicitClientId == null) "server-default" else "explicit"
         val inv = inventory(ToolkitIo.json("expiredAfterMinutes" to expiredAfter,
             "limit" to MAX_SCAN), active)
         val now = System.currentTimeMillis()
@@ -161,7 +179,12 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             val itemClient = optionalString(item, "clientId")
             val sessionCount = item.get("sessionCount")?.asInt ?: 0
             val pendingCleanup = item.get("pendingCleanup")?.asBoolean == true
-            val releaseEditSessions = relaxedCleanup && state == "expired" && pendingCleanup
+            // 默认保守：只有显式 includeEditSessions=true 才会「连编辑会话一起释放」；
+            // 覆盖 temporary 与 expired 两种可回收态（expired 就是「超过 TTL 的临时工作区」，
+            // 只认字面 temporary 会让最常见的 expired 仍然删不掉——.4 的 Bug2 就是这样卡住的）。
+            // 旧的 relaxedCleanup（includeUnknownOwner+includeTemporary+minAge=0）仍只覆盖 expired+pendingCleanup。
+            val releaseEditSessions = (relaxedCleanup && state == "expired" && pendingCleanup) ||
+                (includeEditSessions && (state == "temporary" || state == "expired"))
             val reasons = ArrayList<String>()
             if (id in protectedIds) reasons.add("protected_ids")
             if (item.get("current")?.asBoolean == true) reasons.add("current_workspace")
@@ -171,19 +194,37 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             if (state == "dangling" || state == "corrupt") reasons.add(state)
             if (state != "expired" && !(includeTemporary && state == "temporary")) reasons.add("not_expired")
             if (activeJobs > 0) reasons.add("active_jobs_workspace_unknown")
-            val serverDefaultOwner = itemOwner == "mcp-host" && itemOwnerSource == "server-default"
+            val serverDefaultOwner = itemOwner == SERVER_DEFAULT_OWNER && itemOwnerSource == "server-default"
             if (itemOwner == null) {
                 if (!includeUnknownOwner) reasons.add("unknown_owner")
-            } else if (callerOwner != null && itemOwner == callerOwner) {
-                // exact caller-owned workspace
-            } else if (serverDefaultOwner && includeUnknownOwner) {
-                // server-default owner: explicit includeUnknownOwner opts in
+            } else if (explicitOwner != null) {
+                // 显式传 owner：行为与旧实现逐条一致（只有 exact 命中或 includeUnknownOwner 才放行）
+                if (itemOwner == explicitOwner) {
+                    // exact caller-owned workspace
+                } else if (serverDefaultOwner && includeUnknownOwner) {
+                    // server-default owner: explicit includeUnknownOwner opts in
+                } else {
+                    reasons.add("other_owner")
+                }
+            } else if (itemOwner == SERVER_DEFAULT_OWNER || serverDefaultOwner) {
+                // 未显式传 owner：caller 即服务端默认身份，服务端写下的记录就是「本方的」
             } else {
                 reasons.add("other_owner")
             }
+            val ownerIsMine = itemOwner != null && (
+                (explicitOwner != null && itemOwner == explicitOwner) ||
+                    (explicitOwner == null && (itemOwner == SERVER_DEFAULT_OWNER || serverDefaultOwner))
+                )
             if (itemClient == null) {
-                if (!includeUnknownOwner) reasons.add("unknown_client")
-            } else if (itemClient != callerClientId) {
+                // clientId 本来就是可选的（见类注释）：归属已确认是本人时不再重复拦截；
+                // 归属不明/他人时保持旧的保守语义。
+                if (!ownerIsMine && !includeUnknownOwner) reasons.add("unknown_client")
+            } else if (explicitClientId != null) {
+                // 显式传 clientId：行为与旧实现逐条一致
+                if (itemClient != explicitClientId) reasons.add("other_client")
+            } else if (itemClient == SERVER_DEFAULT_CLIENT_ID) {
+                // server-default 只表示「没记客户端身份」，与任何 caller 相容
+            } else {
                 reasons.add("other_client")
             }
             val createdAt = item.get("createdAt")?.takeIf { !it.isJsonNull }?.asLong
@@ -196,6 +237,7 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
                 "state" to state, "action" to if (canDelete) "delete" else "skip",
                 "protectedReasons" to unique, "owner" to itemOwner, "ownerSource" to itemOwnerSource,
                 "clientId" to itemClient, "sessionCount" to sessionCount,
+                "sessionIds" to (item.getAsJsonArray("sessionIds") ?: JsonArray()),
                 "wouldReleaseEditSessions" to if (canDelete) sessionCount else 0)
             if (canDelete) {
                 planned.add(row); wouldDelete.add(id)
@@ -203,6 +245,56 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
                 wouldReleaseEditSessions += sessionCount
                 wouldReclaim += item.get("bytes")?.asLong ?: 0L
             } else skipped.add(row)
+        }
+        // ---- C：把「为什么被挡」和「接下来具体跑什么」变成可执行载荷 ----
+        val blockedCounts = LinkedHashMap<String, Int>()
+        skipped.forEach { row ->
+            row.asJsonObject.getAsJsonArray("protectedReasons")?.forEach { reason ->
+                val key = reason.asString
+                blockedCounts[key] = (blockedCounts[key] ?: 0) + 1
+            }
+        }
+        val blockedBy = JsonObject()
+        blockedCounts.forEach { (reason, count) -> blockedBy.addProperty(reason, count) }
+        val nextActions = JsonArray()
+        val skippedRows = skipped.map { it.asJsonObject }
+        fun reasonOf(row: JsonObject) = row.getAsJsonArray("protectedReasons")?.map { it.asString } ?: emptyList()
+        if (skippedRows.isNotEmpty()) {
+            val withSessions = skippedRows.filter { "edit_session" in reasonOf(it) }
+            if (withSessions.isNotEmpty()) {
+                nextActions.add(JsonPrimitive("要连同编辑会话一起释放：" + GC_RELAXED_PREVIEW +
+                    "（确认后把 dryRun 改 false；被挡会话见 skipped[].sessionIds）"))
+                withSessions.take(5).forEach { row ->
+                    val id = row.tString("workspaceId")
+                    nextActions.add(JsonPrimitive("apk_session_release{\"workspaceId\":\"" + id +
+                        "\"} → 释放该工作区全部编辑会话（不删快照），之后重跑同一 dryRun 即可回收"))
+                }
+            }
+            val foreign = skippedRows.filter { row ->
+                reasonOf(row).any { it in setOf("other_owner", "other_client", "unknown_owner", "unknown_client") }
+            }
+            if (foreign.isNotEmpty()) {
+                nextActions.add(JsonPrimitive("归属不同的工作区：" + foreign.take(5).joinToString("、") { it.tString("workspaceId") } +
+                    "；确认要动别人的记录就显式传 owner/clientId（apk_workspace_gc{\"dryRun\":true,\"owner\":\"<owner>\",\"clientId\":\"<clientId>\",\"includeTemporary\":true,\"minAgeMinutes\":0}）；旧记录 owner=null 需要 includeUnknownOwner=true"))
+            }
+            if (skippedRows.any { "too_young" in reasonOf(it) }) {
+                nextActions.add(JsonPrimitive("有工作区还没到 minAgeMinutes（当前 " + minAge +
+                    "）：确认无用就把 minAgeMinutes 设为 0 重跑"))
+            }
+            if (skippedRows.any { row -> reasonOf(row).any { it in setOf("saved_workspace", "current_workspace", "active_reference", "dangling", "corrupt", "protected_ids", "active_jobs_workspace_unknown") } }) {
+                nextActions.add(JsonPrimitive("保存/当前/活动引用/dangling/corrupt/protectedIds/活动任务相关的工作区不会被 GC 删除；确认无用再逐个删：apk_workspace_delete{\"workspaceId\":\"<id>\"}（会连编辑会话一起删）"))
+            }
+            // 兜底：只要还有被挡的，就必须给一条一定能走通的路（.4 的诉求：别让人原地打转）
+            if (nextActions.none { it.asString.contains("apk_workspace_delete") }) {
+                nextActions.add(JsonPrimitive("GC 不肯删的（被上面任一条保护）确认无用就逐个删：apk_workspace_delete{\"workspaceId\":\"<skipped[].workspaceId>\"}（会连编辑会话一起删）"))
+            }
+        }
+        if (wouldDelete.isNotEmpty()) {
+            nextActions.add(JsonPrimitive("本次计划可回收 " + wouldDelete.size + " 个工作区（" + wouldReclaim +
+                " 字节）：把 dryRun 改成 false 执行"))
+        }
+        if (nextActions.size() == 0) {
+            nextActions.add(JsonPrimitive("当前没有可回收也没有被挡的工作区（可能都被删掉了或配额本来就空）；用 apk_workspace_inventory{} 复查"))
         }
         val deleted = ArrayList<String>()
         var reclaimed = 0L
@@ -238,8 +330,15 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             "expiredAfterMinutes" to expiredAfter,
             "minAgeMinutes" to minAge,
             "protectedIds" to protectedIds.toList(),
+            "includeEditSessions" to includeEditSessions,
             "callerOwner" to callerOwner,
             "callerClientId" to callerClientId,
+            "callerIdentitySource" to callerIdentitySource,
+            "explicitOwner" to explicitOwner,
+            "explicitClientId" to explicitClientId,
+            "blockedCount" to skipped.size(),
+            "blockedBy" to blockedBy,
+            "nextActions" to nextActions,
             "wouldDeleteCount" to wouldDelete.size,
             "wouldDeleteIds" to wouldDelete,
             "wouldReleaseEditSessions" to wouldReleaseEditSessions,
@@ -254,7 +353,8 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             "orphanDirs" to inv.get("orphanDirs"),
             "danglingEntries" to inv.get("danglingEntries"),
             "warnings" to inv.get("warnings"),
-            "note" to "只删除 dryRun=false 且 canDelete=true 的过期临时工作区；orphan/dangling 永不自动删除"
+            "note" to "只删除 dryRun=false 且 canDelete=true 的工作区；默认保守（includeTemporary/includeUnknownOwner/includeEditSessions 默认 false）；" +
+                "owner/clientId 不传时按服务端默认身份（" + SERVER_DEFAULT_OWNER + "/" + SERVER_DEFAULT_CLIENT_ID + "）比较；orphan/dangling 永不自动删除"
         )
     }
 
@@ -301,7 +401,8 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
                     "workspace_json" else "filesystem_mtime",
                 temporary = temporary,
                 state = if (!basePresent) "dangling" else if (!temporary) "saved" else "temporary",
-                sessionCount = countSessions(dir),
+                sessionCount = sessionIds(dir).size,
+                sessionIds = sessionIds(dir),
                 baseApkPresent = basePresent,
                 owner = optionalString(parsed, "owner"),
                 ownerSource = optionalString(parsed, "ownerSource"),
@@ -353,6 +454,7 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
             "activeRefCount" to activeRefs,
             "current" to current,
             "sessionCount" to entry.sessionCount,
+            "sessionIds" to entry.sessionIds,
             "baseApkPresent" to entry.baseApkPresent,
             "pendingCleanup" to pending,
             "protectedReasons" to reasons,
@@ -400,9 +502,12 @@ internal class ToolkitWorkspaceInventory(private val store: File) {
         return max
     }
 
-    private fun countSessions(dir: File): Int {
+    /** 编辑会话 id（sessions/<id>/session.json），GC 的 nextActions 要点名到具体会话。 */
+    private fun sessionIds(dir: File): List<String> {
         val sessions = File(dir, "sessions")
-        return sessions.listFiles()?.count { File(it, "session.json").isFile } ?: 0
+        return sessions.listFiles()
+            ?.filter { it.isDirectory && File(it, "session.json").isFile }
+            ?.map { it.name }?.sorted() ?: emptyList()
     }
 
     private fun deleteDirectory(dir: File) {

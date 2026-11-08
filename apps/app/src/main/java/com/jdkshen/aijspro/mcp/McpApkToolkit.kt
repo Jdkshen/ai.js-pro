@@ -317,7 +317,7 @@ internal class McpApkToolkit(
                 ToolkitIo.ok(ToolkitIo.json("workspaceId" to id, "deleted" to true))
             }
             "apk_continue" -> continuePage(args)
-            "apk_read_signature" -> ToolkitIo.ok(readSignature(snapshot(args.tString("workspaceId"))).apply { addProperty("workspaceId", args.tString("workspaceId")) })
+            "apk_read_signature" -> ToolkitIo.ok(readSignature(snapshot(args.tString("workspaceId")), args.tBool("verify", false)).apply { addProperty("workspaceId", args.tString("workspaceId")) })
             else -> {
                 val workspace = args.tString("workspaceId"); workspace(workspace)
                 val session = args.tString("editSessionId", "")
@@ -444,6 +444,7 @@ internal class McpApkToolkit(
     }
     private fun description(name: String): String = when(name) {
         "apk_verify" -> "只读检查真实APK：密码学验签、普通Stored4B/原生库ZIP16KB、ELF LOAD段及Manifest。返回独立检查证据，不保证安装/业务行为。"
+        "apk_read_signature" -> "只读 APK 的 V1/V2/V3/V3.1 证书与方案元数据；**默认不做密码学验签**：此时 verified=false 且 verification=not_run（=「没跑验签」，不是「验签失败」）、verificationReason 说明原因、verifyWith 指向真正能验签的调用。要密码学验签与逐方案状态用 apk_verify{workspaceId}（同一 ToolkitApkVerifier 的完整报告），或本工具 verify=true 在同一次调用里跑验签并返回 signature.schemes/errors/backendDiagnosis。"
         "apk_dex_search_members" -> "按方法名/描述符/字符串/引用搜索，返回精确方法locator、dexEntry和行/指令锚点；有预算，truncated表示需要缩小查询。"
         "apk_search" -> "跨 ZIP/resources/dex/native 语义目标搜索；返回 stopReason（COMPLETE/TIME_BUDGET/BUDGET）、partialTargets、budgetNote 与 zeroResultMeaning。只有 stopReason=COMPLETE 且 total=0 才是“没有命中”。"
         "apk_dex_call_graph" -> "跨DEX向内/向外调用图，限定深度/节点/边；dexEntry消歧，动态和反射目标明确报告不完整。"
@@ -474,7 +475,7 @@ internal class McpApkToolkit(
         "apk_set_open_member" -> "选中分包成员创建独立只读APK快照，保留容器来源；可继续原APK工具链。"
         "apk_workspace_open" -> "创建 APK 只读快照。path 在工具目录内；temporary=true 为一次性工作区（默认 TTL 24h）。同路径+同sha256幂等复用并续期（reused/reopened/reuseReason）；后续修改先 apk_session_create。"
         "apk_workspace_inventory" -> "解释 APK 工作区配额占用：列出保存/临时/过期/dangling 工作区、实际字节、owner/clientId/sessionId、活动引用、orphanDirs 与 danglingEntries；配额 16，统计范围见 quotaScope。"
-        "apk_workspace_gc" -> "受控清理过期临时 APK 工作区：默认 dryRun=true 只预览；支持 protectedIds/minAgeMinutes/owner/clientId 过滤，保存/活动引用/编辑会话/未知所有权默认全部保护；orphan/dangling 永不自动删除。"
+        "apk_workspace_gc" -> "受控清理 APK 工作区：默认 dryRun=true 只预览；保存/当前/活动引用/编辑会话/dangling/未知所有权默认全部保护。放宽要显式传：includeTemporary=true 才动临时工作区，includeEditSessions=true 才允许连同编辑会话一起释放（默认 false，返回 releasedEditSessions/releasedSessionIds），includeUnknownOwner=true 才动 owner=null 的旧记录，minAgeMinutes 控制最年轻可删。owner/clientId 不传时按服务端默认身份（mcp-host/server-default）比较——服务端自己写下的记录不再被判 other_owner；显式传值时与旧行为一致。返回 blockedBy（按 protectedReasons 计数）+ 点名 workspaceId/sessionIds 的 nextActions；orphan/dangling 永不自动删除。"
         "apk_session_release" -> "释放 APK 工作区的编辑会话（workspaceId 或 all=true）；只删除 sessions/ 下会话，不删除工作区/快照；返回 releasedSessions/releasedBytes/remainingSessions，重复调用幂等。"
         "apk_read_text" -> "读取文本：普通条目；DEX 类/方法（smali）；axml: 或 zip_entry: 的二进制 XML/Manifest 会解码成可读 XML。分页字段统一为 Unicode 码点：offset/nextOffset 与 startLine/startColumn/nextLine/nextColumn 二选一，同时传时 offset 优先；普通 zip_entry 文本传 offset 会真正切正文，续读用返回的 nextOffset（不要自己猜 startLine）。AXML 读取会返回 text/targetVersion，下一步用同一个 axml: locator 调 apk_edit_text。"
         "apk_edit_text" -> "按 targetVersion 原子编辑会话文本：普通条目、DEX 类/方法 smali、axml: 或 zip_entry: 的二进制 XML/Manifest（内部 ToolkitResources.encodeXml，拒绝 DOCTYPE/ENTITY）；AXML 先 apk_read_text(locator=axml:<entry>) 再传完整 XML 到 write_target。"
@@ -605,11 +606,12 @@ internal class McpApkToolkit(
      */
     private fun workspaceQuotaHint(): String =
         "；可复制执行：apk_workspace_inventory {}；" +
-            "apk_workspace_gc {\"dryRun\":true,\"includeUnknownOwner\":true,\"includeTemporary\":true,\"minAgeMinutes\":0} 先预览，" +
-            "确认后执行 apk_workspace_gc {\"dryRun\":false,\"includeUnknownOwner\":true,\"includeTemporary\":true,\"minAgeMinutes\":0}；" +
-            "apk_workspace_delete {\"workspaceId\":\"<id>\"}；" +
-            "apk_session_release {\"workspaceId\":\"<id>\"} 或 {\"all\":true} 释放编辑会话。" +
-            "旧记录 owner=null 时必须带 includeUnknownOwner=true；新记录 owner=mcp-host/ownerSource=server-default。"
+            "apk_workspace_gc {\"dryRun\":true,\"includeTemporary\":true,\"minAgeMinutes\":0,\"includeEditSessions\":true} 先预览（编辑会话也算进可回收），" +
+            "确认后执行 apk_workspace_gc {\"dryRun\":false,\"includeTemporary\":true,\"minAgeMinutes\":0,\"includeEditSessions\":true}；" +
+            "只想释放会话不删快照：apk_session_release {\"workspaceId\":\"<id>\"}（或 {\"all\":true}）；" +
+            "GC 仍删不动就逐个删：apk_workspace_delete {\"workspaceId\":\"<id>\"}（会连编辑会话一起删）；" +
+            "owner/clientId 不传时按服务端默认身份（mcp-host/server-default）比较，服务端记录不再需要 includeUnknownOwner；" +
+            "旧记录 owner=null 仍必须带 includeUnknownOwner=true；返回里的 blockedBy/nextActions 会点名具体 workspaceId/sessionId。"
 
     private fun directory(id: String) = File(store, ToolkitIo.id(id))
     private fun workspaceMetadata(id: String): JsonObject? = runCatching {
@@ -783,7 +785,9 @@ internal class McpApkToolkit(
             }.getOrElse { failure ->
                 ToolkitIo.json("attempted" to true,"error" to (failure.message ?: failure.javaClass.simpleName),
                     "note" to "autoGc 执行失败；未删除任何未知内容，下面仍按配额报错",
-                    "nextActions" to listOf("apk_workspace_inventory 查看","apk_workspace_gc{dryRun:false,includeTemporary:true,includeUnknownOwner:true,minAgeMinutes:0}"))
+                    "nextActions" to listOf("apk_workspace_inventory 查看",
+                        "apk_workspace_gc{dryRun:true,includeTemporary:true,minAgeMinutes:0,includeEditSessions:true} 先预览，确认后把 dryRun 改 false",
+                        "旧记录 owner=null 再加 includeUnknownOwner=true；仍删不动用 apk_workspace_delete{workspaceId} 逐个删"))
             }
             workspaceCount = workspaces().size
         }
@@ -1736,10 +1740,48 @@ internal class McpApkToolkit(
             require(!found.isDirectory && found.size >= 0) { "需要普通 ZIP 文件条目" }; found.size
         }
     }
-    private fun readSignature(apk: File): JsonObject {
+    /**
+     * 读取签名信息。默认**只读证书元数据**（ToolkitSignatures），此时 verified=false 表示「没跑验签」而不是
+     * 「验签失败」——用 verification=not_run/verificationReason/verifyWith 把这件事说清楚（.4 §4.2 的入口误导）。
+     * verify=true 才在同一次调用里复用 [ToolkitApkVerifier] 跑密码学验签，并把逐方案状态/errors/backendDiagnosis 一并返回。
+     */
+    private fun readSignature(apk: File, verify: Boolean = false): JsonObject {
         val signature = ToolkitSignatures.read(apk)
-        return ToolkitIo.json("signature" to signature, "certificates" to signature.get("certificates"),
-            "verified" to false, "coverage" to "V1/V2/V3/V3.1 certificate metadata")
+        val metadata = ToolkitIo.json("signature" to signature, "certificates" to signature.get("certificates"),
+            "coverage" to "V1/V2/V3/V3.1 certificate metadata")
+        if (!verify) {
+            return metadata.apply {
+                addProperty("verified", false)
+                addProperty("verification", "not_run")
+                addProperty("verificationReason", "apk_read_signature 只读证书元数据，不做密码学验签；verified=false 表示「没有跑验签」，不是「验签失败」")
+                addProperty("verifyWith", "apk_verify{workspaceId}（同一 ToolkitApkVerifier 的完整报告：逐方案状态 + backendDiagnosis），或本工具 verify=true")
+            }
+        }
+        val report = runCatching { ToolkitApkVerifier.inspect(apk) }.getOrElse { failure ->
+            return metadata.apply {
+                addProperty("verified", false)
+                addProperty("verification", "backend_error")
+                addProperty("verificationReason", "ToolkitApkVerifier 不可用/失败：" + (failure.message ?: failure.javaClass.simpleName))
+                addProperty("verifyWith", "apk_verify{workspaceId}")
+            }
+        }
+        val section = runCatching { report.getAsJsonObject("signature") }.getOrNull()
+        val verified = section?.get("verified")?.takeIf { it.isJsonPrimitive }?.asBoolean == true
+        return metadata.apply {
+            addProperty("verified", verified)
+            addProperty("verification", "executed")
+            addProperty("verificationBackend", "com.android.apksig.ApkVerifier（与 apk_verify 同一实现）")
+            addProperty("verifyWith", "apk_verify{workspaceId}（同类报告，含 ZIP/ELF/Manifest 检查）")
+            addProperty("verificationStatus", section?.get("status")?.takeIf { it.isJsonPrimitive }?.asString)
+            addProperty("verdict", section?.get("verdict")?.takeIf { it.isJsonPrimitive }?.asString)
+            addProperty("coverage", section?.get("coverage")?.takeIf { it.isJsonPrimitive }?.asString
+                ?: "apksig 密码学验证（未提供 coverage 字段）")
+            section?.get("schemes")?.let { add("schemes", it) }
+            section?.get("errors")?.let { add("errors", it) }
+            section?.get("backendDiagnosis")?.let { add("backendDiagnosis", it) }
+            section?.get("checkedPlatform")?.let { add("checkedPlatform", it) }
+            report.get("issues")?.let { add("issues", it) }
+        }
     }
     private fun copyBounded(input: InputStream, output: OutputStream, max: Long): Long {
         val buffer = ByteArray(65536); var copied = 0L

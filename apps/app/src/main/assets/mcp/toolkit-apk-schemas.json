@@ -1316,7 +1316,12 @@
     "properties": {
       "workspaceId": {
         "type": "string",
-        "description": "读取该工作区 APK 的 V1/V2/V3/V3.1 证书与方案元数据；verified 始终为 false，不是密码学验签，不保证可安装或未被篡改。"
+        "description": "读取该工作区 APK 的 V1/V2/V3/V3.1 证书与方案元数据。默认只读元数据：verified=false 且 verification=not_run 表示「没有跑验签」，不是「验签失败」；verificationReason/verifyWith 会说明该去调什么。密码学验签请用 apk_verify{workspaceId} 或本工具 verify=true。"
+      },
+      "verify": {
+        "type": "boolean",
+        "default": false,
+        "description": "默认 false：只读证书元数据（verification=not_run）。true 时在同一次调用里复用 ToolkitApkVerifier 跑密码学验签，额外返回 verification=executed、verificationStatus/verdict、schemes（逐方案 V1/V2/V3/V3.1/V4 状态）、errors、backendDiagnosis、issues；验签后端不可用时如实返回 verification=backend_error 与原因。"
       }
     },
     "required": [
@@ -2273,11 +2278,11 @@
       },
       "owner": {
         "type": "string",
-        "description": "只处理该 owner 的工作区；其它 owner 一律跳过。"
+        "description": "显式指定 caller 身份：只处理该 owner 的工作区，其它 owner 一律 other_owner 跳过。省略时按服务端默认身份 mcp-host 比较（服务端自己写下的 ownerSource=server-default 记录即视为本方），所以省略不再等于「什么都不放行」。"
       },
       "clientId": {
         "type": "string",
-        "description": "只处理该 clientId 的工作区；其它 client 一律跳过。"
+        "description": "显式指定 caller 的 clientId：只处理该 clientId 的工作区，其它 client 一律 other_client 跳过。省略时按 server-default 比较：clientId=server-default 或未记录 clientId 且归属已确认是本人的记录不被拦截，真实的第三方 clientId 仍然拦截。"
       },
       "includeTemporary": {
         "type": "boolean",
@@ -2285,7 +2290,12 @@
       },
       "includeUnknownOwner": {
         "type": "boolean",
-        "description": "默认 false：旧记录没有 owner/clientId/sessionId 时全部保护；显式 true 才允许清理。"
+        "description": "默认 false：旧记录没有 owner/clientId/sessionId 时全部保护；显式 true 才允许清理。注意 owner=mcp-host/ownerSource=server-default 的服务端记录**不需要**它（不传 owner/clientId 时就按服务端默认身份比较）。"
+      },
+      "includeEditSessions": {
+        "type": "boolean",
+        "default": false,
+        "description": "默认 false：带编辑会话的工作区一律视作被 edit_session 保护；显式 true 才允许连同编辑会话一起释放（覆盖 temporary 与 expired；返回 releasedEditSessions/releasedSessionIds 如实计数）。要连会话释放的常用组合：{dryRun:true,includeTemporary:true,minAgeMinutes:0,includeEditSessions:true}。"
       },
       "allowUnknownAge": {
         "type": "boolean",

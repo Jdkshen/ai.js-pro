@@ -310,6 +310,7 @@ class ToolkitWorkspaceInventoryTest {
             "minAgeMinutes",
             "apk_workspace_delete",
             "apk_session_release",
+            "includeEditSessions",
             "owner=null",
         )) {
             assertTrue("quota hint missing " + marker + ": " + message, message.contains(marker))
@@ -337,4 +338,198 @@ class ToolkitWorkspaceInventoryTest {
         assertEquals("server-default", info.get("ownerSource").asString)
         assertFalse(info.has("clientId"))
     }
+
+    // ---------------------------------------------------------------- Bug2（.4）：A/B/C/D 正反例
+
+    /** Lead 的验收场景：owner=mcp-host/clientId=null/sessionCount>0 的临时工作区。 */
+    @Test fun serverDefaultWorkspaceWithSessionsBecomesReclaimableUnderExplicitRelaxation() {
+        init()
+        val old = now - 2 * 24 * 60 * 60_000L
+        workspace("id-server-edit", true, old, 5, owner = "mcp-host", ownerSource = "server-default", sessions = 2)
+        // 默认（保守）：只被 edit_session 挡住，不再出现 other_owner / unknown_client
+        val conservative = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 0, "expiredAfterMinutes" to 60,
+        ))
+        assertEquals("mcp-host", conservative.get("callerOwner").asString)
+        assertEquals("server-default", conservative.get("callerClientId").asString)
+        assertEquals("server-default", conservative.get("callerIdentitySource").asString)
+        val blocked = conservative.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-server-edit" }
+        val reasons = blocked.getAsJsonArray("protectedReasons").map { it.asString }
+        assertEquals(listOf("edit_session"), reasons)
+        assertEquals(0, conservative.get("wouldDeleteCount").asInt)
+        // 显式放宽（带 includeEditSessions）：可回收
+        val relaxed = inventory.gc(ToolkitIo.json(
+            "dryRun" to false, "includeTemporary" to true, "minAgeMinutes" to 0,
+            "includeEditSessions" to true, "expiredAfterMinutes" to 60,
+        ))
+        assertTrue(relaxed.get("wouldDeleteCount").asInt >= 1)
+        assertEquals(1, relaxed.get("deletedCount").asInt)
+        assertEquals(2, relaxed.get("releasedEditSessions").asInt)
+        assertFalse(File(store, "id-server-edit").exists())
+    }
+
+    /** A 反例：显式传 owner/clientId 时行为与旧实现一致（别人的记录仍受保护）。 */
+    @Test fun explicitOwnerAndClientIdKeepForeignRecordsProtected() {
+        init()
+        val old = now - 2 * 24 * 60 * 60_000L
+        workspace("id-server", true, old, 3, owner = "mcp-host", ownerSource = "server-default")
+        workspace("id-foreign-client", true, old, 2, owner = "mcp-host", ownerSource = "server-default", clientId = "clientX")
+        val foreignOwner = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "owner" to "ownerA", "includeTemporary" to true, "minAgeMinutes" to 0,
+            "expiredAfterMinutes" to 60,
+        ))
+        assertEquals("explicit", foreignOwner.get("callerIdentitySource").asString)
+        assertEquals("ownerA", foreignOwner.get("callerOwner").asString)
+        assertEquals("ownerA", foreignOwner.get("explicitOwner").asString)
+        assertTrue(foreignOwner.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-server" }
+            .get("protectedReasons").asJsonArray.any { it.asString == "other_owner" })
+        // 显式传自己（mcp-host）时仍可回收 → 与旧行为相同
+        val mine = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "owner" to "mcp-host", "includeTemporary" to true, "minAgeMinutes" to 0,
+            "expiredAfterMinutes" to 60,
+        ))
+        assertTrue(mine.getAsJsonArray("planned").any { it.asJsonObject.get("workspaceId").asString == "id-server" })
+        // 显式 clientId 不匹配 → other_client；另一个未显式传值时也不放宽真实第三方 clientId
+        val foreignClient = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "clientId" to "clientY", "includeTemporary" to true, "minAgeMinutes" to 0,
+            "expiredAfterMinutes" to 60,
+        ))
+        assertTrue(foreignClient.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-foreign-client" }
+            .get("protectedReasons").asJsonArray.any { it.asString == "other_client" })
+        val implicit = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 0, "expiredAfterMinutes" to 60,
+        ))
+        assertTrue(implicit.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-foreign-client" }
+            .get("protectedReasons").asJsonArray.any { it.asString == "other_client" })
+        // clientId=server-default 表示「没记客户端身份」→ 与任何 caller 相容
+        workspace("id-server-default-client", true, old, 2, owner = "mcp-host", ownerSource = "server-default",
+            clientId = "server-default")
+        val compatible = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 0, "expiredAfterMinutes" to 60,
+        ))
+        assertTrue(compatible.getAsJsonArray("planned").any {
+            it.asJsonObject.get("workspaceId").asString == "id-server-default-client"
+        })
+        // 旧记录 owner=null 仍保守（必须显式 includeUnknownOwner）
+        workspace("id-legacy", true, old, 1)
+        val legacy = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 0, "expiredAfterMinutes" to 60,
+        ))
+        val legacyReasons = legacy.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-legacy" }
+            .getAsJsonArray("protectedReasons").map { it.asString }
+        assertTrue(legacyReasons.contains("unknown_owner"))
+        assertTrue(legacyReasons.contains("unknown_client"))
+    }
+
+    /** B 正反例：默认不放松，显式 includeEditSessions 才连会话释放。 */
+    @Test fun includeEditSessionsIsConservativeByDefaultAndRelaxesOnlyWhenExplicit() {
+        init()
+        val old = now - 2 * 24 * 60 * 60_000L
+        // 用服务端默认身份的记录，隔离出「只有 edit_session 挡着」这一条（owner=null 会被 unknown_owner 挡住，
+        // 那是另一条保护，见 explicitOwnerAndClientIdKeepForeignRecordsProtected）。
+        workspace("id-edit", true, old, 4, owner = "mcp-host", ownerSource = "server-default", sessions = 2)
+        // 旧记录（owner=null）即便显式 includeEditSessions 也不该被回收
+        workspace("id-legacy-edit", true, old, 1, sessions = 1)
+        val conservative = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 0, "expiredAfterMinutes" to 60,
+        ))
+        assertFalse(conservative.get("includeEditSessions").asBoolean)
+        assertTrue(conservative.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-edit" }
+            .get("protectedReasons").asJsonArray.any { it.asString == "edit_session" })
+        assertEquals(0, conservative.get("wouldDeleteCount").asInt)
+        val explicit = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 0,
+            "includeEditSessions" to true, "expiredAfterMinutes" to 60,
+        ))
+        assertTrue(explicit.get("includeEditSessions").asBoolean)
+        assertEquals(1, explicit.get("wouldDeleteCount").asInt)
+        assertEquals(2, explicit.get("wouldReleaseEditSessions").asInt)
+        assertTrue(File(store, "id-edit").isDirectory)
+        // 旧记录 owner=null：includeEditSessions 不放宽 unknown_owner
+        val legacy = explicit.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-legacy-edit" }
+        val legacyReasons = legacy.getAsJsonArray("protectedReasons").map { it.asString }
+        assertTrue(legacyReasons.contains("unknown_owner"))
+        // includeEditSessions 只是不再把「有会话」当阻塞理由；旧记录仍因 unknown_owner 留在 skipped、不会被删
+        assertTrue(explicit.getAsJsonArray("skipped").any {
+            it.asJsonObject.get("workspaceId").asString == "id-legacy-edit"
+        })
+        assertFalse(legacyReasons.contains("other_owner"))
+    }
+
+    /** B 反例：includeEditSessions 不放松任何其它保护。 */
+    @Test fun includeEditSessionsDoesNotRelaxOtherProtections() {
+        init()
+        val old = now - 2 * 24 * 60 * 60_000L
+        workspace("id-saved", false, old, 7, sessions = 1)
+        workspace("id-current", true, old, 3)
+        workspace("id-page", true, old, 4)
+        workspace("id-dangling", true, old, 0, basePresent = false)
+        workspace("id-young", true, now - 60_000L, 2)
+        val active = ToolkitWorkspaceInventory.ActiveReferences(
+            currentWorkspaceId = "id-current",
+            pageReferences = mapOf("id-page" to 1),
+        )
+        val data = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 60,
+            "includeEditSessions" to true, "expiredAfterMinutes" to 60,
+        ), active)
+        assertEquals(0, data.get("wouldDeleteCount").asInt)
+        val rows = data.getAsJsonArray("skipped").map { it.asJsonObject }
+            .associateBy { it.get("workspaceId").asString }
+        fun reasons(id: String) = rows.getValue(id).getAsJsonArray("protectedReasons").map { it.asString }
+        assertTrue(reasons("id-saved").contains("saved_workspace"))
+        assertTrue(reasons("id-current").contains("current_workspace"))
+        assertTrue(reasons("id-page").contains("active_reference"))
+        assertTrue(reasons("id-dangling").contains("dangling"))
+        assertTrue(reasons("id-young").contains("too_young"))
+        assertTrue(File(store, "id-saved").isDirectory)
+    }
+
+    /** C：blockedBy 计数 + 点名 workspaceId/sessionId 的可执行 nextActions。 */
+    @Test fun gcReportsBlockedByAndNamesConcreteNextActions() {
+        init()
+        val old = now - 2 * 24 * 60 * 60_000L
+        workspace("id-edit", true, old, 4, sessions = 2)
+        workspace("id-other", true, old, 3, owner = "ownerB", clientId = "clientB")
+        val data = inventory.gc(ToolkitIo.json(
+            "dryRun" to true, "includeTemporary" to true, "minAgeMinutes" to 0, "expiredAfterMinutes" to 60,
+        ))
+        assertEquals(2, data.get("blockedCount").asInt)
+        val blockedBy = data.getAsJsonObject("blockedBy")
+        assertTrue(blockedBy.get("edit_session").asInt >= 1)
+        assertTrue(blockedBy.get("other_owner").asInt >= 1)
+        val row = data.getAsJsonArray("skipped").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-edit" }
+        assertEquals(listOf("session-0", "session-1"), row.getAsJsonArray("sessionIds").map { it.asString })
+        val actions = data.getAsJsonArray("nextActions").map { it.asString }
+        assertTrue(actions.any { it.contains("includeEditSessions") })
+        assertTrue(actions.any { it.contains("apk_session_release") && it.contains("id-edit") })
+        assertTrue(actions.any { it.contains("apk_workspace_delete") })
+        assertTrue(actions.any { it.contains("id-other") })
+    }
+
+    /** D：inventory 的 notes 与 items 也要给出能生效的命令 + sessionIds。 */
+    @Test fun inventoryExposesSessionIdsAndWorkingGcCommands() {
+        init()
+        val old = now - 2 * 24 * 60 * 60_000L
+        workspace("id-edit", true, old, 4, sessions = 1)
+        val data = inventory.inventory(ToolkitIo.json("expiredAfterMinutes" to 60))
+        val notes = data.getAsJsonArray("notes").map { it.asString }.joinToString(" ")
+        assertTrue(notes, notes.contains("includeEditSessions"))
+        assertTrue(notes, notes.contains("apk_workspace_delete"))
+        assertTrue(notes, notes.contains("apk_session_release"))
+        assertTrue(notes, notes.contains("owner=null"))
+        val item = data.getAsJsonArray("items").map { it.asJsonObject }
+            .first { it.get("workspaceId").asString == "id-edit" }
+        assertEquals(listOf("session-0"), item.getAsJsonArray("sessionIds").map { it.asString })
+        assertEquals(1, item.get("sessionCount").asInt)
+    }
 }
+
