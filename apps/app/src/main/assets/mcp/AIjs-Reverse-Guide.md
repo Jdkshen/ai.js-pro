@@ -63,7 +63,7 @@ Authorization: Bearer <LAN_TOKEN>
 
 `<LAN_TOKEN>` 从 App 的 MCP 设置页读取，**不要把真实 token 嵌进本文、脚本或对话**。当前构建在可信局域网内即使不带 `Authorization` 也可能接受请求，但不要把它当作可依赖的鉴权保证；客户端配置里仍使用同一个 LAN token。`Accept` 同时列出 `application/json` 和 `text/event-stream` 以兼容 Streamable HTTP 客户端；本服务没有 SSE，`GET /mcp` 带 `Accept: text/event-stream` 会返回 405，改用 `POST` JSON-only。
 
-**连不上 / 503 的排查顺序**：① 先调 `get_status.mcp` 看 `listening`（**进程内真实监听**，不是心跳推断）与 `port`；② 连接被拒或超时通常是 **App 进程没在跑**（此时 `listening=false` 并附带 `recovery`），不要先怀疑网络；③ 若返回 **503**，说明**连接队列满**（4 worker + 16 队列），body 是结构化 JSON（`error.code` 与顶层 `errorCode` 均为 `service_busy`、`recovery`、`retryAfterMs=1000`），按 `retryAfterMs` 重试即可——**503 不代表真实负载，也不代表工具失败**。
+**连不上 / 503 的排查顺序**：① 先调 `get_status.mcp` 看 `listening`（**进程内真实监听** = 服务实例活着 **且 accept 循环在跑**，不是心跳推断）与 `port`；② `listening=false` 时再看 `status`：**`degraded` 表示服务实例在、但 accept 循环已经死了**（看 `listener.alive=false` 与 `listener.lastFailure`，如 `respond_503: OutOfMemoryError: …`）→ 重开 App / 重开 MCP 服务，不是网络问题；`stopped`/`stale`/`error` 才是 **App 进程没在跑或服务没起来**（此时附带 `recovery`，含「**30 秒**后自动重试」；旧的「失败过就永不再试」已废）；③ **不要用 `persistedRunning` 判断健康**（它是旧的持久化布尔，进程被回收后仍可能为 true；`running` 已与 `listening` 同源，只有 `listening=true` 时才是 true）；④ 若返回 **503**，说明**连接队列满**（4 worker + 16 队列），body 是结构化 JSON（`error.code` 与顶层 `errorCode` 均为 `service_busy`、`recovery`、`retryAfterMs=1000`），按 `retryAfterMs` 重试即可——**503 不代表真实负载，也不代表工具失败**。
 
 ### 1. 看指南索引与计划
 

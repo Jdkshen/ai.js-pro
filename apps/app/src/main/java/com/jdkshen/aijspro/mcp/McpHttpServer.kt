@@ -43,6 +43,25 @@ class McpHttpServer(
     private var workers: ThreadPoolExecutor? = null
     private var acceptThread: Thread? = null
 
+    /**
+     * 监听循环是否还在跑（进程内真实状态）：start() 置 true，循环退出/stop() 置 false。
+     * get_status.mcp 用它区分「服务实例还在但 accept 循环已死」与真正在监听（W4 task-10 A/B）。
+     */
+    @Volatile var acceptLoopAlive = false
+        private set
+    /** 监听侧最近一次失败摘要（accept 抛异常 / 503 写失败，含 Error）；null=本次进程内没失败过。 */
+    @Volatile var lastListenerFailure: String? = null
+        private set
+    /** 监听侧失败次数——用于区分「从没失败」与「失败过但还活着」（不许变静默僵尸）。 */
+    @Volatile var listenerFailureCount = 0
+        private set
+
+    /** 记录监听侧失败。只记录不抛出：调用方决定是否继续循环（这里一律继续）。 */
+    private fun noteListenerFailure(where: String, failure: Throwable) {
+        listenerFailureCount += 1
+        lastListenerFailure = where + ": " + failure.javaClass.simpleName + ": " + (failure.message ?: "")
+    }
+
     /** The bound port; supports port zero for isolated JVM tests. -1 means stopped. */
     val localPort: Int get() = listener?.localPort ?: -1
 
@@ -72,6 +91,7 @@ class McpHttpServer(
         )
         listener = server
         workers = executor
+        acceptLoopAlive = true
         acceptThread = Thread({ acceptConnections(server, executor) }, "mcp-http-accept").apply {
             isDaemon = true
             start()
@@ -82,6 +102,7 @@ class McpHttpServer(
     fun stop() {
         listener?.let { runCatching { it.close() } }
         listener = null
+        acceptLoopAlive = false
         workers?.shutdownNow()
         workers = null
         connections.forEach { runCatching { it.close() } }
@@ -95,48 +116,59 @@ class McpHttpServer(
      * 「accept() 抛一次瞬时 IOException 之后是否还能继续 accept」（W4 task-5 A 的 seam）。运行时行为不变。
      */
     internal fun acceptConnections(server: ServerSocket, executor: ThreadPoolExecutor) {
-        while (!server.isClosed) {
-            val socket = try { server.accept() } catch (_: IOException) {
-                // W4 task-5 A：这里以前是裸 break。accept() 只要抛一次瞬时 IOException
-                // （EMFILE/ENFILE、ECONNABORTED），循环就永久退出：listener 仍占端口、
-                // McpService.running/listeningPort 仍为真，get_status.mcp 继续报 listening=true，
-                // 但端点再也不 accept；start() 见 listener!=null 直接 return、McpAutoLifecycle
-                // 只在 !running 时拉起 → 没有任何自愈路径。
-                // 保守改法：只有本 socket 已被 close()（stop() 的路径）才退出，否则短退避后重试。
-                if (server.isClosed) break
-                try { Thread.sleep(ACCEPT_RETRY_DELAY_MS) } catch (_: InterruptedException) {
-                    Thread.currentThread().interrupt()
-                    break
+        try {
+            while (!server.isClosed) {
+                val socket = try { server.accept() } catch (failure: IOException) {
+                    // W4 task-5 A：这里以前是裸 break。accept() 只要抛一次瞬时 IOException
+                    // （EMFILE/ENFILE、ECONNABORTED），循环就永久退出：listener 仍占端口、
+                    // McpService.running/listeningPort 仍为真，get_status.mcp 继续报 listening=true，
+                    // 但端点再也不 accept；start() 见 listener!=null 直接 return、McpAutoLifecycle
+                    // 只在 !running 时拉起 → 没有任何自愈路径。
+                    // 保守改法：只有本 socket 已被 close()（stop() 的路径）才退出，否则短退避后重试。
+                    if (server.isClosed) break
+                    // W4 task-10 A：失败既要重试也必须可见——记录后 get_status.mcp.listener 能查到。
+                    noteListenerFailure("accept", failure)
+                    try { Thread.sleep(ACCEPT_RETRY_DELAY_MS) } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                    continue
                 }
-                continue
-            }
-            connections.add(socket)
-            try {
-                if (server.isClosed) {
-                    socket.close()
-                    connections.remove(socket)
-                    break
-                }
-                socket.soTimeout = READ_TIMEOUT_MS
-                executor.execute {
-                    try { socket.use { serve(it) } } finally { connections.remove(socket) }
-                }
-            } catch (_: RejectedExecutionException) {
-                // `.4` P1-G：503 也要给结构化 body（含恢复建议），别让调用方靠超时猜。
-                // ⚠️ 必须 runCatching：respondJson 要写 socket，对端已断开时抛 IOException；该异常
-                // 不受同级 catch 覆盖 → 会穿出 while、杀死 accept 线程且无人重启（listener 仍占端口
-                // 却再也不 accept，比 503 更糟）。close/remove 一律放 finally。
+                connections.add(socket)
                 try {
-                    respondJson(socket, 503, serviceBusyBody(), null)
-                } catch (_: Exception) {
-                } finally {
+                    if (server.isClosed) {
+                        socket.close()
+                        connections.remove(socket)
+                        break
+                    }
+                    socket.soTimeout = READ_TIMEOUT_MS
+                    executor.execute {
+                        try { socket.use { serve(it) } } finally { connections.remove(socket) }
+                    }
+                } catch (failure: RejectedExecutionException) {
+                    // `.4` P1-G：503 也要给结构化 body（含恢复建议），别让调用方靠超时猜。
+                    // ⚠️ 写 socket 会抛异常（对端已断开时 IOException；OOM 时是 Error），绝不能让它穿出
+                    // while —— 那会杀死 accept 线程且无人重启（listener 仍占端口却再也不 accept，比 503 更糟）。
+                    // W4 task-10 A：这里从 catch (_: Exception) 扩到 Throwable（覆盖 Error），并且**记录失败**：
+                    // 记录 = 不会变成静默僵尸（get_status.mcp.listener.lastFailure/failureCount 可查），
+                    // 继续循环 = 不回到「占着端口再也不 accept」。close/remove 一律放 finally。
+                    try {
+                        respondJson(socket, 503, serviceBusyBody(), null)
+                    } catch (writeFailure: Throwable) {
+                        noteListenerFailure("respond_503", writeFailure)
+                    } finally {
+                        runCatching { socket.close() }
+                        connections.remove(socket)
+                    }
+                } catch (failure: IOException) {
+                    noteListenerFailure("prepare_socket", failure)
                     runCatching { socket.close() }
                     connections.remove(socket)
                 }
-            } catch (_: IOException) {
-                runCatching { socket.close() }
-                connections.remove(socket)
             }
+        } finally {
+            // 循环真的退出了（stop() 或 break）：get_status.mcp 必须能看出「已不在监听」。
+            acceptLoopAlive = false
         }
     }
 
@@ -450,8 +482,11 @@ class McpHttpServer(
         })
         addProperty("errorCode", "service_busy")
         addProperty("recovery", "稍后重试；若持续出现，先 get_status.mcp 看服务状态（listening/port/lastError），必要时重开 App 让服务拉起")
-        addProperty("retryAfterMs", 1000)
+        addProperty("retryAfterMs", BUSY_RETRY_AFTER_MS)
     }
+
+    /** Retry-After 的单位是整秒（向上取整），保证不低估退避时间。 */
+    private fun busyRetryAfterSeconds(): Long = (BUSY_RETRY_AFTER_MS + 999L) / 1000L
 
     private fun respondJson(socket: Socket, status: Int, body: JsonObject, origin: String?) {
         respond(socket, status, reasonPhraseFor(status),
@@ -517,6 +552,8 @@ class McpHttpServer(
             if (body.isNotEmpty()) append("Content-Type: application/json; charset=utf-8\r\n")
             if (status == 401) append("WWW-Authenticate: Bearer realm=\"AI.js Pro MCP\"\r\n")
             if (status == 405) append("Allow: POST\r\n")
+            // W4 task-12 A：503 补标准退避头（Retry-After 单位是秒），与 body.retryAfterMs 同源。
+            if (status == 503) append("Retry-After: " + busyRetryAfterSeconds() + "\r\n")
             append("\r\n")
         }.toByteArray(Charsets.US_ASCII)
         socket.getOutputStream().apply { write(header); write(body); flush() }
@@ -533,6 +570,8 @@ class McpHttpServer(
         private const val READ_TIMEOUT_MS = 5000
         private const val WORKER_COUNT = 4
         private const val QUEUED_CONNECTIONS = 16
+        /** 503 的退避建议（毫秒）：body.retryAfterMs 与 HTTP Retry-After 头同源（W4 task-12 A）。 */
+        private const val BUSY_RETRY_AFTER_MS = 1000L
         /** accept() 瞬时失败后的重试间隔；只影响异常路径，正常 accept 不等待。 */
         private const val ACCEPT_RETRY_DELAY_MS = 50L
         private const val HEADER_NAME_CHARS = "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"

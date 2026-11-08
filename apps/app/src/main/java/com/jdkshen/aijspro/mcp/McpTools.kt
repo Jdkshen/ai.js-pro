@@ -482,11 +482,17 @@ internal class McpTools(private val context: Context, private val event: (String
                 // P1-9：直接回答「这是哪个 build、有多少工具、更新了什么」，不用再去 app_info 绕。
                 add("toolCatalog", toolCatalogStatus())
                 // `.4` P1-G：把 MCP 服务自身状态也报出来（监听地址/端口/心跳/最后错误/恢复建议）。
+                // W4 task-10 A/B：把进程内监听侧健康（accept 循环是否还活着 / 失败次数 / 最近失败）带进状态，
+                // 顶层 running/listening 由它决定，避免「服务实例在、accept 循环已死」被报成健康。
+                val listenerHealth = com.jdkshen.aijspro.mcp.McpService.listenerHealth()
                 add("mcp", com.jdkshen.aijspro.mcp.McpStateStore.statusJson(
                     context,
                     com.jdkshen.aijspro.mcp.McpService.autoStarted,
                     com.jdkshen.aijspro.mcp.McpService.running,
-                    com.jdkshen.aijspro.mcp.McpService.listeningPort))
+                    com.jdkshen.aijspro.mcp.McpService.listeningPort,
+                    listenerHealth?.alive ?: false,
+                    listenerHealth?.failureCount ?: 0,
+                    listenerHealth?.lastFailure))
                 // `.4` 的坑：打包会优先用 /sdcard/template.apk 或宿主缓存，可能仍是旧引擎。
                 // 这里只读摘要：最终会用哪份模板、它的 sha256、以及是否含 dev-1401 的 require 修复标记。
                 runCatching {

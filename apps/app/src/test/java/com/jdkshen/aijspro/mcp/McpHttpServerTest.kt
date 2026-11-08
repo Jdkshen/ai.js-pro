@@ -9,6 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.IOException
+import java.io.OutputStream
 import java.net.BindException
 import java.net.ServerSocket
 import java.net.Socket
@@ -395,6 +396,9 @@ class McpHttpServerTest {
             assertTrue(body.getAsJsonObject("error").get("recoverable").asBoolean)
             assertTrue(body.getAsJsonObject("error").get("retrySameArguments").asBoolean)
             assertEquals(1000, body.get("retryAfterMs").asInt)
+            // W4 task-12 A：503 必须有标准退避头，且与 body.retryAfterMs 同源（秒 = ceil(ms/1000)）。
+            assertEquals("1", busy.headers["retry-after"])
+            assertEquals(body.get("retryAfterMs").asLong, busy.headers["retry-after"]!!.toLong() * 1000)
             assertTrue(body.get("recovery").asString.isNotEmpty())
             // 被拒绝的请求没有进入 handler（与 body 里「本次请求未进入处理」一致）：
             // 打出 503 的那次探测前后 handler 计数不变。
@@ -437,8 +441,10 @@ class McpHttpServerTest {
         val fake = FlakyServerSocket(unwritable)
         val saturating = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1))
         val release = CountDownLatch(1)
-        saturating.execute { release.await() } // worker 占住
-        saturating.execute { release.await() } // 排队槽占住 → 下一次 execute 必然被 AbortPolicy 拒绝
+        // 显式 Runnable：测试结束 shutdownNow() 时不留下未捕获的 InterruptedException 噪声。
+        val hold = Runnable { try { release.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() } }
+        saturating.execute(hold) // worker 占住
+        saturating.execute(hold) // 排队槽占住 → 下一次 execute 必然被 AbortPolicy 拒绝
         val loop = Thread { server.acceptConnections(fake, saturating) }
         loop.isDaemon = true
         loop.start()
@@ -483,6 +489,9 @@ class McpHttpServerTest {
             Thread.sleep(300)
             val retries = flaky.acceptCalls.get() - first
             assertTrue("accept 重试疑似忙等：300ms 内 $retries 次", retries in 1..100)
+            // task-10 A：失败必须被记录，否则「重试但没人知道」等于静默僵尸。
+            assertTrue("accept 失败没有被记录", server.listenerFailureCount >= 1)
+            assertTrue("lastFailure 应标明位置", server.lastListenerFailure.orEmpty().startsWith("accept"))
         } finally {
             flaky.close()
             loop.join(3000)
@@ -528,6 +537,55 @@ class McpHttpServerTest {
     }
 
     /**
+     * W4 task-10 A：503 写失败以前只 catch Exception —— Error（OOM 等）仍会穿出 while、杀死 accept
+     * 线程。现在扩到 Throwable 并记录：循环必须活着，且 get_status 能从 listener.alive/failureCount/
+     * lastFailure 看到它（不许变静默僵尸）。
+     */
+    @Test
+    fun acceptLoopSurvivesErrorWhileWriting503AndRecordsIt() {
+        val fake = OneShotThenBlockingServerSocket(ErrorSocket())
+        val saturating = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1))
+        val release = CountDownLatch(1)
+        // 显式 Runnable：测试结束 shutdownNow() 时不留下未捕获的 InterruptedException 噪声。
+        val hold = Runnable { try { release.await() } catch (_: InterruptedException) { Thread.currentThread().interrupt() } }
+        saturating.execute(hold) // worker 占住
+        saturating.execute(hold) // 排队槽占住 → 下一个连接必然走 503 分支
+        val loop = Thread { server.acceptConnections(fake, saturating) }
+        loop.isDaemon = true
+        loop.start()
+        try {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (fake.acceptCalls.get() < 2 && System.nanoTime() < deadline) Thread.sleep(10)
+            assertTrue(
+                "写 503 抛 Error 后 accept 循环退出了：accept() 只被调用 ${fake.acceptCalls.get()} 次",
+                fake.acceptCalls.get() >= 2
+            )
+            // 第二次 accept 在阻塞、不会再记录，所以这里能精确断言「那次 Error 被记录了」。
+            assertEquals(1, server.listenerFailureCount)
+            assertTrue(
+                "lastFailure 应指出 Error 类型与位置，实际：${server.lastListenerFailure}",
+                server.lastListenerFailure.orEmpty().startsWith("respond_503") &&
+                    server.lastListenerFailure.orEmpty().contains("OutOfMemoryError")
+            )
+        } finally {
+            release.countDown()
+            fake.close()
+            saturating.shutdownNow()
+            loop.join(3000)
+        }
+    }
+
+    /** W4 task-10 A/B：accept 循环的真实存活状态必须与 start()/stop() 同步（get_status 靠它判 listening）。 */
+    @Test
+    fun acceptLoopAliveTracksStartAndStop() {
+        assertTrue("start() 之后 accept 循环应在跑", server.acceptLoopAlive)
+        server.stop()
+        assertFalse("stop() 之后 acceptLoopAlive 必须为 false", server.acceptLoopAlive)
+        server.start()
+        assertTrue("重新 start() 之后应恢复", server.acceptLoopAlive)
+    }
+
+    /**
      * 只用于 task-5 A/C 的 seam：第一次 accept() 返回 first（若非 null），之后永远抛瞬时
      * IOException，直到测试 close() 它。
      */
@@ -537,6 +595,30 @@ class McpHttpServerTest {
             val call = acceptCalls.incrementAndGet()
             if (call == 1 && first != null) return first
             throw IOException("transient accept failure (EMFILE)")
+        }
+    }
+
+    /** 未连接、未关闭的 Socket，但取输出流时抛 Error：模拟 503 写响应期间的 OOM。 */
+    private class ErrorSocket : Socket() {
+        override fun getOutputStream(): OutputStream =
+            throw OutOfMemoryError("simulated OOM while writing 503")
+    }
+
+    /**
+     * 第一次 accept() 返回 first，之后阻塞直到测试 close()：这样「第一次失败」的记录不会被后续
+     * 失败覆盖，可以精确断言 lastFailure（task-10 A）。
+     */
+    private class OneShotThenBlockingServerSocket(private val first: Socket) : ServerSocket() {
+        val acceptCalls = AtomicInteger()
+        override fun accept(): Socket {
+            if (acceptCalls.incrementAndGet() == 1) return first
+            while (!isClosed) {
+                try { Thread.sleep(20) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+            throw IOException("socket closed")
         }
     }
 

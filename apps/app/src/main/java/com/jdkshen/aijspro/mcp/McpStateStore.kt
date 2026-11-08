@@ -130,28 +130,56 @@ object McpStateStore {
     /**
      * 只读摘要给 `get_status.mcp`：`.4` P1-G。
      *
-     * 语义（`.4` 复核 J5 修正）：
-     * - `listening`：**进程内真实监听**（服务实例活着 + 已绑到端口），不是心跳推断；
+     * 语义（`.4` 复核 J5 修正 + W4 task-10 A/B）：
+     * - `listening`：**进程内真实监听** = 服务实例活着 && accept 循环在跑（`McpHttpServer.acceptLoopAlive`）；
+     * - `running`：与 `listening` **同源**（旧实现直接回持久化布尔，进程被回收后仍是 true → 只看 running 的
+     *   调用方会误判）；旧值仍可从 `persistedRunning` 读到，信息不丢；
      * - `fresh` / `heartbeatAgeMs`：心跳新鲜度（心跳跑在主 looper 上，主线程被阻塞时可能短暂为 false）；
-     * - `status`：优先看 `listening`，其次看持久化的显式 state（starting/running/stopped/error）。
+     * - `status`：服务活着但 accept 循环已死 → `degraded`（不许变静默僵尸）；否则优先进程内监听，
+     *   其次看持久化的显式 state（starting/running/stopped/error）；
+     * - `listener`：accept 循环的 alive / failureCount / degraded / lastFailure。
      */
     @Synchronized
     fun statusJson(
         context: Context,
         autoStarted: Boolean = false,
         liveListening: Boolean = false,
-        livePort: Int = 0
+        livePort: Int = 0,
+        listenerAlive: Boolean = liveListening,
+        listenerFailureCount: Int = 0,
+        listenerLastFailure: String? = null
+    ): com.google.gson.JsonObject = statusJson(
+        read(context), System.currentTimeMillis(), autoStarted, liveListening, livePort,
+        listenerAlive, listenerFailureCount, listenerLastFailure)
+
+    /** 纯函数重载（不碰 Android）：便于单测钉住 `get_status.mcp` 的字段契约（W4 task-10 B）。 */
+    fun statusJson(
+        state: State,
+        now: Long,
+        autoStarted: Boolean,
+        liveListening: Boolean,
+        livePort: Int,
+        listenerAlive: Boolean,
+        listenerFailureCount: Int,
+        listenerLastFailure: String?
     ): com.google.gson.JsonObject {
-        val state = read(context)
-        val now = System.currentTimeMillis()
         val age = if (state.updatedAt > 0) now - state.updatedAt else -1L
         val fresh = state.fresh(now)
         val port = if (livePort > 0) livePort else state.port
+        // B：真实监听 = 服务实例活着 + accept 循环在跑；顶层 running 与它同源，不得在未监听时为 true。
+        val listening = liveListening && listenerAlive
         return com.google.gson.JsonObject().apply {
-            addProperty("status", statusLabel(liveListening, state.state, fresh))
-            addProperty("listening", liveListening)
+            addProperty("status", statusLabel(liveListening, state.state, fresh, listenerAlive))
+            addProperty("listening", listening)
             addProperty("fresh", fresh)
-            addProperty("running", state.running)
+            addProperty("running", listening)
+            addProperty("persistedRunning", state.running)
+            add("listener", com.google.gson.JsonObject().apply {
+                addProperty("alive", listenerAlive)
+                addProperty("failureCount", listenerFailureCount)
+                addProperty("degraded", listenerFailureCount > 0)
+                addProperty("lastFailure", listenerLastFailure)
+            })
             addProperty("port", port)
             addProperty("localUrl", if (port > 0) "http://127.0.0.1:" + port + "/mcp" else state.localUrl)
             addProperty("lanUrl", state.lanUrl)
@@ -165,10 +193,12 @@ object McpStateStore {
             addProperty("foregroundService", true)
             addProperty("sticky", true)
             addProperty("state", state.state.ifEmpty { if (state.running) "running" else "stopped" })
-            if (!liveListening) {
+            if (!listening) {
                 addProperty("recovery",
                     "本次进程内没有在监听的 MCP 服务实例：打开 AI.js Pro 让服务自动拉起" +
                     "（前台服务 + START_STICKY 也会重建），或稍等 1~2 秒重试。" +
+                    "若刚刚启动失败过（例如端口被占），自动拉起会在 " +
+                    (McpAutoStartPolicy.RETRY_AFTER_MS / 1000) + " 秒后重试，期间请在 MCP 页面手动开启。" +
                     "注意：能拿到本响应说明服务其实是活的；连接被拒/超时通常表示 App 进程没在跑" +
                     "（也可能是端口占用或网络问题）。")
             }
@@ -177,8 +207,11 @@ object McpStateStore {
 
     /**
      * status 文案判定（纯函数，便于单测）：优先进程内监听，其次显式 state，最后看心跳。
+     * W4 task-10 A：服务实例还在但 accept 循环已死 → `degraded`，不能继续报 running（静默僵尸）。
+     * `acceptLoopAlive` 默认 true，老调用方（3 参）语义不变。
      */
-    fun statusLabel(liveListening: Boolean, persistedState: String, fresh: Boolean): String {
+    fun statusLabel(liveListening: Boolean, persistedState: String, fresh: Boolean, acceptLoopAlive: Boolean = true): String {
+        if (liveListening && !acceptLoopAlive) return "degraded"
         if (liveListening) return "running"
         return when {
             persistedState == "error" -> "error"

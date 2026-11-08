@@ -103,6 +103,7 @@ class McpService : Service() {
             }
             tools = router
             server = startedEndpoint
+            activeServer = startedEndpoint
             val localUrl = "http://127.0.0.1:" + boundPort + "/mcp"
             val lanUrl = lanAddress(boundPort)
             listeningPort = boundPort
@@ -148,6 +149,7 @@ class McpService : Service() {
         tools = null
         server?.stop()
         server = null
+        activeServer = null
         McpStateStore.saveStopped(this, lastError)
         record(if (autoStopped) "服务已停止 · 自动" else "服务已停止")
         autoStopped = false
@@ -260,7 +262,15 @@ class McpService : Service() {
         @Volatile var running = false
             private set
         @Volatile var lastError: String? = null
+            private set(value) {
+                field = value
+                lastErrorAt = if (value == null) 0L else System.currentTimeMillis()
+            }
+        /** lastError 的写入时刻（0=当前无错误）；W4 task-10 C 的自动拉起冷却用它。 */
+        @Volatile var lastErrorAt = 0L
             private set
+        /** 当前进程内正在监听的实例（onDestroy 清空）；只用于给 get_status.mcp 报监听侧健康。 */
+        @Volatile private var activeServer: McpHttpServer? = null
         @Volatile var allowWrite = false
         @Volatile var allowExecution = false
         @Volatile var requestCount = 0
@@ -286,6 +296,23 @@ class McpService : Service() {
             McpStateStore.saveStopped(context)
             context.applicationContext.stopService(Intent(context, McpService::class.java))
         }
+
+        /**
+         * W4 task-10 A：给 `get_status.mcp.listener` 用的进程内监听侧健康快照。
+         * null = 本进程没有活着的 MCP 服务实例（此时 listening 必为 false）。
+         */
+        data class ListenerHealth(val alive: Boolean, val failureCount: Int, val lastFailure: String?)
+
+        fun listenerHealth(): ListenerHealth? = activeServer?.let {
+            ListenerHealth(it.acceptLoopAlive, it.listenerFailureCount, it.lastListenerFailure)
+        }
+
+        /**
+         * W4 task-10 C：App 回前台是否允许自动拉起（策略是纯函数 [McpAutoStartPolicy]）。
+         * 不再是「失败过就永不再试」——失败后冷却 RETRY_AFTER_MS 再允许，与 recovery 文案一致。
+         */
+        fun canAutoStart(): Boolean =
+            McpAutoStartPolicy.shouldAutoStart(running, lastError, System.currentTimeMillis() - lastErrorAt)
 
         // task-105：状态以持久化 + 心跳为准（UI 不再只信 running 内存布尔）。
         fun readState(context: Context): McpStateStore.State = McpStateStore.read(context)

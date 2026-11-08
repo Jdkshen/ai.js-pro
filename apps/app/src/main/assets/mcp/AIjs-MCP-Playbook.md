@@ -47,15 +47,26 @@ INVALID_ARGUMENT / 缺参数时，message 仍有人类可读的「可用参数/�
 
 连接被拒 / 超时 / 静默无响应时，**先看 `get_status.mcp.listening`，不要先怀疑网络**：
 
-- `listening`：**进程内真实监听**（服务实例活着且已绑定端口），**不是心跳推断**；
+- `listening`：**进程内真实监听** = 服务实例活着 **且 accept 循环在跑**（`listener.alive`），**不是心跳推断**；
+- `running`：**与 `listening` 同源**——`listening=true` 才 `running=true`。进程被回收或 accept 循环死掉时，**同一次响应里 `running` 不会再是 true**；旧实现直接回持久化布尔，只看 `running` 的调用方会误判；
+- `persistedRunning`：持久化布尔（**旧 `running` 的值**）。它只说明「上次记录是运行中」，**不能当健康判据**（进程被回收后仍可能为 true）；
+- `status`：`starting|running|stopped|error|degraded|stale`。**`degraded` = 服务实例还在、但 accept 循环已经死了**——占着端口却不再 accept 的「静默僵尸」，此时 `listening=false`、`listener.alive=false`，必须看 `listener.lastFailure`；
+- `listener{alive,failureCount,degraded,lastFailure}`：accept 循环现场。`alive`=循环在跑；`failureCount`=监听侧失败次数；**`listener.degraded=true` 只表示「失败过」（`failureCount>0`），不代表循环已死**——不要与 `status=degraded` 混为一谈；`lastFailure` 形如 `respond_503: OutOfMemoryError: …` 或 `prepare_socket: <异常类>: <消息>`（写 503 响应失败连 `Error` 也记录、且不再让循环退出）；
 - `fresh` / `heartbeatAgeMs`：心跳新鲜度（5s 一跳、10s 超时；心跳跑在主 looper 上，主线程被阻塞时可能短暂为 false）；
-- `running` / `state`：持久化的显式状态 `starting|running|stopped|error`（不再靠「干净停止」猜）；
+- `state`：持久化的显式状态 `starting|running|stopped|error`——**与顶层 `status` 不是一回事**；
 - `startReason` / `autoStarted`：本次是 `auto`（回前台等自动拉起）还是 `manual`；
 - `port` / `localUrl` / `lanUrl` / `updatedAt` / `lastError`；`heartbeatIntervalMs=5000`、`heartbeatTimeoutMs=10000`；
 - `foregroundService:true` / `sticky:true`：前台服务 + `START_STICKY` 保活；
-- `recovery`：**只有** `listening=false` 时才出现（能拿到这个响应本身就说明服务活着；被拒/超时通常是 App 进程没在跑）。
+- `recovery`：**只有** `listening=false` 时才出现。文案已含「若刚刚启动失败过（例如端口被占），自动拉起会在 **30 秒**后重试，期间请在 MCP 页面手动开启」——旧的「失败过就永不再试」已废（失败后冷却 `RETRY_AFTER_MS=30000` 再允许自动拉起，手动开启不受冷却限制）。
 
-> 报警组合：`listening=false` + 有 `recovery` → App 进程没在跑或服务没起来；`listening=true` 却仍连不上 → 核对 `port` 是不是你连的那个，以及 ADB forward / 局域网地址是否正确。
+**判读顺序（照这个来）**：
+
+1. 先看 `listening`。`true` → 服务在 accept（通常 `status=running`）；若此时仍连不上，核对 `port` 是不是你连的那个，以及 ADB forward / 局域网地址。
+2. `listening=false` + `status=degraded` → **服务实例在但 accept 循环死了**（看 `listener.alive=false` 与 `listener.lastFailure`）→ 重开 App / 重开 MCP 服务，不要当作网络问题。
+3. `listening=false` + `status=stopped|stale|error` → **App 进程没在跑或服务没起来**；`recovery` 会说明 30 秒后自动重试，也可在 MCP 页面手动开启。
+4. **任何时候都不要用 `persistedRunning` 判健康**（它不含 accept 循环状态，进程被回收后也可能为 true）。
+
+> 版本边界：`running` 同源、`persistedRunning`、`listener{...}`、`status=degraded`、`recovery` 的 30 秒冷却都是 **dev-1414 起** 的语义。**dev-1413 及更早为旧契约**：`running` 是持久化布尔、没有 `persistedRunning`/`listener`、`status` 没有 `degraded`（那时 `recovery` 也没有 30 秒冷却）。
 
 （顺带）`get_status` 还有 `toolCatalog{toolCount,build,fingerprint}`、顶层 `toolCount`/`canonicalToolCount`（dev-1412 实测 **219 / 210**）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`、`toolCategories{}`、`baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
 

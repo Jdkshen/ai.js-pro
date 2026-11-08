@@ -35,7 +35,7 @@ node tools/mcp-smoke/smoke.mjs --base http://127.0.0.1:18768/mcp
 
 | `coordinate.*` | `coordinate_convert` 有 `content`；未知空间名报 `INVALID_ARGUMENT`；标定只对它那一对生效且不匹配给 `calibrationNote` | dev-1392 的 P0-1（协议级）+ dev-1398 的两处诚实性修复 |
 | `edit.*` | `file_edit_text` 的 `write_target` **不传 `matchText`** 也能写 | P1-C：skill 文档示例曾经照抄必失败 |
-| `status.*` / `build.*` | `get_status.baseline`、`get_build_tools` 的 `ready/missing/present` | 基线自检与组件可见性（P0-2） |
+| `status.*` / `build.*` | `get_status.baseline`；`status.mcp`（`listening`/`status`/`state`/`startReason`/`port`/`listener.alive`，且 `running` 与 `listening` 同源；服务未就绪或老 build 缺字段时自动 SKIP）；`get_build_tools` 的 `ready/missing/present` | 基线自检与组件可见性（P0-2）；task-10 B / task-12 B：`running` 曾经是持久化布尔，进程被回收后会与 `listening` 矛盾 |
 | `apk.*`（可选） | 最小 `apk_read_text`、`axml:` 定位符读回 XML、dex 游标 `cursorTool` + 跨工具点名 | P1-B/P1-F/P1-E；设备上没有 APK 时自动 `SKIP` |
 
 ## 设计约定

@@ -282,6 +282,30 @@ check("status.baseline", "get_status.baseline 基线自检在", async () => {
   has(b, "workspaces", "baseline");
   has(b, "outputRule", "baseline");
 });
+/**
+ * task-10 B / task-12 B：get_status.mcp 必须与「进程内真实监听」同源。
+ * 服务未就绪 / 老 build 没有这些字段 → SKIP（不误报 FAIL）；只有能连上且声称在监听时才做断言。
+ */
+check("status.mcp", "get_status.mcp 与真实监听同源（listening/status/state/startReason/port/listener/running）", async () => {
+  const r = await call("get_status", {});
+  if (r.isError) return `SKIP: get_status 调用失败（${r.text.slice(0, 120)}）`;
+  const payload = (r.body && (r.body.data || r.body)) || {};
+  const mcp = payload.mcp;
+  if (!mcp || typeof mcp !== "object") return "SKIP: 该 build 的 get_status 没有 mcp 块（需要 dev-1411+ P1-G）";
+  if (!mcp.listener || typeof mcp.listener !== "object") return "SKIP: 该 build 没有 mcp.listener（需要 dev-1413+）";
+  if (mcp.state === "starting") return "SKIP: MCP 服务正在启动（state=starting）";
+  if (mcp.listening !== true) {
+    return `SKIP: 当前不在监听（listening=${JSON.stringify(mcp.listening)} status=${JSON.stringify(mcp.status)} state=${JSON.stringify(mcp.state)} listener.alive=${JSON.stringify(mcp.listener.alive)}）`;
+  }
+  eq(mcp.status, "running", "mcp.status");
+  eq(mcp.state, "running", "mcp.state");
+  ok(mcp.startReason === "auto" || mcp.startReason === "manual", `mcp.startReason 应为 auto|manual，实际 ${JSON.stringify(mcp.startReason)}`);
+  // 8765 是默认端口；被占时 McpService 会顺延到 8766..8795（已知行为），届时这行需要放宽。
+  eq(mcp.port, 8765, "mcp.port");
+  eq(mcp.listener.alive, true, "mcp.listener.alive");
+  // task-10 B 的核心不变量：顶层 running 与 listening 同源（旧实现回持久化布尔，进程被回收后会矛盾）。
+  eq(mcp.running, mcp.listening, "mcp.running 必须与 mcp.listening 一致");
+});
 check("build.tools", "get_build_tools 给 ready/missing/present 三件套", async () => {
   const r = await call("get_build_tools", {});
   const payload = r.body.data || r.body;

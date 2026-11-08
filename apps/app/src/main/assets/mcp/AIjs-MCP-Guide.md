@@ -615,11 +615,25 @@ Rhino 下 `require("./脚本.js")` 相对路径解析失败时，不再只回 Rh
 
 > **版本门禁（重要）**：这条诊断在仓库工作树的模板里**已重建但尚未发布**；**当前发布的 dev-1412 打包产物仍是旧文案**（其模板 `assets/modules/jvm-npm.js` 不含该诊断）。要让打包版拿到它，必须用含该修复的模板**重新打包**；`get_status.template.engineRequireRootFix` 只能证明 require 根修复，**不能**证明诊断存在——判断依据是模板内 `assets/modules/jvm-npm.js` 是否含「找不到模块」。
 
+## MCP 状态面：running / listener / degraded（dev-1414 起）
+
+`get_status.mcp` 这一批有 5 处语义变化，**字段名基本不变但判读方式变了**（完整字段表与判读顺序见 Playbook「get_status.mcp」）：
+
+1. **`running` 与 `listening` 同源**：都等于「服务实例活着 **且 accept 循环在跑**」。进程被回收、或 accept 循环死掉时，**同一次响应里 `running` 不再为 true**（旧实现直接回持久化布尔，只看 `running` 的调用方会误判成健康）。
+2. **新增 `persistedRunning`**：持久化布尔，即**旧 `running` 的值**。它只代表「上次记录是运行中」，**不是健康判据**（进程被回收后仍可能为 true）。
+3. **新增 `listener{alive,failureCount,degraded,lastFailure}`**：accept 循环现场。`alive`=循环在跑；`failureCount`=监听侧失败次数；`lastFailure` 形如 `respond_503: OutOfMemoryError: …`、`prepare_socket: <异常类>: <消息>`（写 503 响应失败连 `Error` 也会被记录，且**不再让 accept 循环退出**）。注意 **`listener.degraded=true` 只表示「失败过」（`failureCount>0`），不等于循环已死**——别和 `status=degraded` 混为一谈。
+4. **`status` 新增 `degraded`**：完整枚举 `starting|running|stopped|error|degraded|stale`。**`degraded` = 服务实例还在、但 accept 循环已经死了**（占着端口却不再 accept 的「静默僵尸」）→ 此时 `listening=false`、`listener.alive=false`，排查看 `listener.lastFailure`。
+5. **`recovery` 改为 30 秒冷却**：`recovery` 仍只在 `listening=false` 时出现，但文案已改为「若刚刚启动失败过（例如端口被占），自动拉起会在 **30 秒**后重试，期间请在 MCP 页面手动开启」。旧的「失败过就永不再试、除非手动重启」已废：失败后冷却 `RETRY_AFTER_MS=30000` 就允许自动拉起（手动开启不受冷却限制）。
+
+**判读顺序**：① 先看 `listening`；② `listening=false` 时再看 `status`——`degraded` = 实例在但 accept 循环死了（看 `listener.lastFailure`），`stopped`/`stale`/`error` = 进程没跑或服务没起来（看 `recovery`）；③ **任何时候都不要用 `persistedRunning` 判健康**。
+
+> 版本边界：以上是 **dev-1414 起** 的语义。**dev-1413 及更早为旧契约**：`running` 是持久化布尔、没有 `persistedRunning`/`listener`、`status` 没有 `degraded`、`recovery` 也没有 30 秒冷却。
+
 ## dev-1409~1412 行为变化（dev-1409~1412 新增项；上一节见 dev-1368）
 
 | 工具/字段 | 现在的行为 |
 |---|---|
-| `get_status.mcp` | **新增**（dev-1411 P1-G / dev-1412 J3-J5）：`status`/`listening`/`fresh`/`running`/`port`/`localUrl`/`lanUrl`/`updatedAt`/`heartbeatAgeMs`/`heartbeatIntervalMs`/`heartbeatTimeoutMs`/`lastError`/`startReason`/`autoStarted`/`foregroundService`/`sticky`/`state`，仅 `listening=false` 时多一个 `recovery`。`listening` 是**进程内真实监听**（不是心跳推断）。K40 dev-1412 实测：`status=running`/`listening=true`/`state=running`/`startReason=auto`/`heartbeatAgeMs≈0.9s` |
+| `get_status.mcp` | **新增**（dev-1411 P1-G / dev-1412 J3-J5；**dev-1414 起字段与判读方式有变 → 见上一节**）：`status`（`starting|running|stopped|error|degraded|stale`）/`listening`/`fresh`/`running`（**与 `listening` 同源**）/`persistedRunning`（旧 `running` 的值）/`listener{alive,failureCount,degraded,lastFailure}`/`port`/`localUrl`/`lanUrl`/`updatedAt`/`heartbeatAgeMs`/`heartbeatIntervalMs`/`heartbeatTimeoutMs`/`lastError`/`startReason`/`autoStarted`/`foregroundService`/`sticky`/`state`，仅 `listening=false` 时多一个 `recovery`。`listening` 是**进程内真实监听**（= 实例活着 **且 accept 循环在跑**），不是心跳推断。K40 dev-1412 实测：`status=running`/`listening=true`/`state=running`/`startReason=auto`/`heartbeatAgeMs≈0.9s` |
 | `get_status.template` | **新增**（dev-1404）：`source`（`bundled_assets`/`host_cache`/`sdcard`）、`path`、`sizeBytes`、`sha256`、`engineRequireRootFix`、`templateStale`、`warnings`、`nextActions` |
 | HTTP **503** | body 改为**结构化 JSON**（`error.code` + 顶层 `errorCode` = `service_busy`、`recovery`、`retryAfterMs`）；503 的原因是**连接队列满**（4 worker + 16 队列），**不代表真实负载**，也不代表工具失败 |
 | 相对 `require` 失败 | 先给可执行诊断（解析后绝对路径 + 目录现有 `.js/.json` + 自更新脚本排查提示），见上节 |
