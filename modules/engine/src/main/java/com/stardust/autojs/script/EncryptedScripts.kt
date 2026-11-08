@@ -112,7 +112,7 @@ object EncryptedScripts {
             }
             EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE ->
                 QuickJsBytecodeSource(name, plain, executionMode)
-            else -> StringScriptSource(name, String(plain, Charsets.UTF_8))
+            else -> StringScriptSource(name, String(plain, Charsets.UTF_8), scriptPath)
         }
     }
 

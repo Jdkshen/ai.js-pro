@@ -118,11 +118,16 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         val dir = when (source) {
             is com.stardust.autojs.script.JavaScriptFileSource -> source.file?.parentFile?.absolutePath
             // 编译型（受保护产物）入口没有文本源码，但 EncryptedScripts.toSource(file) 带上了原始路径。
+            is com.stardust.autojs.script.StringScriptSource ->
+                source.scriptPath?.let { java.io.File(it).parentFile?.absolutePath }
             is com.stardust.autojs.script.CompiledJavaScriptSource ->
                 source.scriptPath?.let { java.io.File(it).parentFile?.absolutePath }
             else -> null
         } ?: cwd()
         if (dir.isNullOrEmpty()) return
+        // 第二道网：原生 require 的相对 ID 兜底（只有 jvm-npm 解析不到时才会走到）。
+        installedRequire?.setBaseDir(dir)
+
         val setter = ScriptableObject.getProperty(mScriptable, "__ajsSetRequireRoot")
         if (setter is org.mozilla.javascript.Function) {   // kotlin.Function 会遮蔽 mozilla 的
             try {
@@ -229,10 +234,14 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
         val provider = TemplateLiteralModuleSourceProvider(
                 AssetAndUrlModuleSourceProvider(mAndroidContext, MODULES_PATH,
                         listOf<URI>(File("/").toURI())))
-        PathAwareRequire(context, scope, SoftCachingModuleScriptProvider(provider))
-                .install(scope)
-
+        // 留住实例：作用域不是 ModuleScope 时 Rhino 原生 require 不解析相对 ID，
+        // 需要我们在每次执行前把「脚本自身目录」写进去（`.4` 报错的最后一层兜底）。
+        installedRequire = PathAwareRequire(context, scope, SoftCachingModuleScriptProvider(provider))
+                .also { it.install(scope) }
     }
+
+    /** initRequireBuilder 安装的原生 require；用于刷新相对 ID 的 baseDir。 */
+    private var installedRequire: PathAwareRequire? = null
 
     protected fun createScope(context: Context): TopLevelScope {
         val topLevelScope = TopLevelScope()

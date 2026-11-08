@@ -12,6 +12,8 @@ import java.io.Reader;
 public class StringScriptSource extends JavaScriptSource {
 
     private String mScript;
+    /** 原始脚本文件路径（加密文本载荷也走这里；Rhino 执行前要用它刷新 require 根）。 */
+    private String mScriptPath;
 
     public StringScriptSource(String script) {
         super("Tmp");
@@ -19,8 +21,17 @@ public class StringScriptSource extends JavaScriptSource {
     }
 
     public StringScriptSource(String name, String script) {
+        this(name, script, null);
+    }
+
+    public StringScriptSource(String name, String script, String scriptPath) {
         super(name);
         mScript = script;
+        mScriptPath = scriptPath;
+    }
+
+    public String getScriptPath() {
+        return mScriptPath;
     }
 
     @Override
