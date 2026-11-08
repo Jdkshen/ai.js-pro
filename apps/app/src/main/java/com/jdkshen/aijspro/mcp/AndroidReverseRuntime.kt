@@ -229,8 +229,18 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
     }
 
     private fun frida(name:String,args:JsonObject,temp:File):JsonObject {
-        val c=native("frida");val endpoint=args.tString("endpoint","127.0.0.1:27042")
+        val endpoint=args.tString("endpoint","127.0.0.1:27042")
         require(endpoint.matches(Regex("[A-Za-z0-9_.-]{1,253}:[0-9]{1,5}"))&&endpoint.substringAfterLast(':').toInt() in 1..65535){"endpoint 必须为host:port"}
+        // 主动探测放在组件解析**之前**：即使 frida 客户端组件缺失/被策略限制，也能拿到端口证据
+        // （refused=没有监听者 / timeout=可能被静默丢弃），未装组件的设备（如 K40）也能判读。
+        val probe=ToolkitFridaPortProbe.probeEndpoint(endpoint,
+            args.tInt("probeTimeoutMs",ToolkitFridaPortProbe.DEFAULT_TIMEOUT_MS,ToolkitFridaPortProbe.MIN_TIMEOUT_MS,ToolkitFridaPortProbe.MAX_TIMEOUT_MS))
+        val c=try{native("frida")}catch(failure:ToolkitException){
+            // 不改 errorCode，只在可读信息里附上端口证据（设备4 ★①：不要因为读不到 /proc 就说组件没装）。
+            throw ToolkitException(failure.code,
+                (failure.message?:"")+"（主动探测 probe="+probe.get("probeResult").asString+"，elapsedMs="+probe.get("elapsedMs").asLong+
+                    "ms；应用域读不到 /proc/net/tcp 是预期，端口状态以 probe 为准）",failure.argument)
+        }
         val request=ToolkitIo.json("operation" to name.removePrefix("frida_"),"endpoint" to endpoint,"timeoutMs" to 12000)
         val token=args.tString("token","")
         require(token.isEmpty()||token.matches(Regex("[A-Za-z0-9_-]{16,128}"))){"token 必须是16..128位字母数字、横线或下划线"}
@@ -239,14 +249,31 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         if(name=="frida_eval") { val script=args.tString("script");require(script.toByteArray(Charsets.UTF_8).size<=65536){"Frida脚本超过64KiB"}
             request.addProperty("pid",args.tInt("pid",0,1,Int.MAX_VALUE));request.addProperty("script",script);request.addProperty("durationMs",args.tInt("durationMs",1000,1,10000)) }
         val input=File(temp,"request.json").apply{writeText(request.toString(),Charsets.UTF_8)}
-        // T1：自动采集 /proc/net/tcp[6] 证据（调用方给的 tcpText/tcp6Text 优先；读不到就留空，不猜）。
-        // 注意 sameUid 不能从 tcp 文件推断，仍需调用方比较 UID。
         val gadgetPort=endpoint.substringAfterLast(':').toInt()
+        // 设备4 Bug3 证据链 ★①：/proc/net/tcp[6] 降级为**可选补充**（probe 已在函数开头跑完；
+        // 应用域读不到 /proc 是 SELinux proc_net_tcp_udp 的预期拒绝，不得据此报「组件未装」）。
+        // T1：/proc/net/tcp[6] 证据（调用方给的 tcpText/tcp6Text 优先；读不到就留空，不猜）。
+        // 注意 sameUid 不能从 tcp 文件推断，仍需调用方比较 UID。
+        val tcpArg=args.tString("tcpText","")
+        val tcp6Arg=args.tString("tcp6Text","")
+        val tcpFromFile=if(tcpArg.isEmpty()) runCatching{File(ToolkitProcNetTcp.PROC_TCP).readText()}.getOrNull() else null
+        val tcp6FromFile=if(tcp6Arg.isEmpty()) runCatching{File(ToolkitProcNetTcp.PROC_TCP6).readText()}.getOrNull() else null
         val tcpEvidence=ToolkitProcNetTcp.forDiagnosis(
-            args.tString("tcpText","").ifEmpty{runCatching{File(ToolkitProcNetTcp.PROC_TCP).readText()}.getOrDefault("")},
-            args.tString("tcp6Text","").ifEmpty{runCatching{File(ToolkitProcNetTcp.PROC_TCP6).readText()}.getOrDefault("")}.ifEmpty{null},
+            tcpArg.ifEmpty{tcpFromFile.orEmpty()},
+            tcp6Arg.ifEmpty{tcp6FromFile.orEmpty()}.ifEmpty{null},
             gadgetPort)
-        val evidencePortListening=args.tBool("portListening",tcpEvidence.get("portListening")?.asBoolean?:false)
+        val tcpReadable=tcpArg.isNotEmpty()||tcpFromFile!=null
+        tcpEvidence.addProperty("readable",tcpReadable)
+        tcpEvidence.addProperty("supplement",true)
+        tcpEvidence.addProperty("authoritative","probe")
+        tcpEvidence.addProperty("evidenceNote","/proc/net/tcp[6] 只是可选补充证据；应用域读不到是预期行为（SELinux proc_net_tcp_udp），端口状态请以 probe 为准。")
+        if(!tcpReadable){
+            // 关键：读不到 ≠ 端口未监听 ≠ 组件未装。这里只如实记录读取失败。
+            tcpEvidence.addProperty("readError","应用域读不到 /proc/net/tcp[6]（SELinux 对 proc_net_tcp_udp 的拒绝是预期行为）；这不代表组件缺失，端口状态以 probe 为准。")
+        }
+        // 证据优先级：调用方显式传入 > 主动探测 > /proc 文本。
+        val probeListening=ToolkitFridaPortProbe.reachable(probe)
+        val evidencePortListening=args.tBool("portListening",probeListening||(tcpEvidence.get("portListening")?.asBoolean?:false))
         val evidenceSynSent=args.tBool("synSentObserved",tcpEvidence.get("synSentObserved")?.asBoolean?:false)
         val response=try{
             runner(listOf(File(c,"bin/aijs-frida").path,input.path),temp,c,args)
@@ -254,12 +281,13 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             // Bug 3：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT）。
             // 超时/被丢弃不是「组件没装」，这里必须把可执行的下一步写进错误信息。
             val diagnosis=ToolkitFridaDiagnosis.classifyConnectFailure(failure.message?:"",
-                evidencePortListening,evidenceSynSent,args.tBool("sameUid",false))
+                evidencePortListening,evidenceSynSent,args.tBool("sameUid",false),probe)
             if(diagnosis.get("selinuxLoopbackSuspect")?.asBoolean==true){
                 throw ToolkitException(failure.code?:"FRIDA_CONNECT_FAILED",
                     "Frida listen 连接超时：跨 UID loopback 可能被 SELinux 静默 DROP（confidence="+diagnosis.get("confidence").asString+
                         "），这不代表组件没装。下一步：改用 Gadget interactionType=script（不碰网络）或把执行端放进目标同 UID；"+
-                        "先 grep -i ':" + ToolkitProcNetTcp.hexPort(gadgetPort) + "' /proc/net/tcp 确认 state=0A(LISTEN) 再 cat /proc/<client-pid>/net/tcp 看是否 SYN_SENT(02)。"+
+                        "端口状态以主动探测 probe="+probe.get("probeResult").asString+" 为准（应用域读不到 /proc/net/tcp 是预期：SELinux 拒绝 proc_net_tcp_udp）；"+
+                        "有 root/shizuku 时可再 grep -i ':" + ToolkitProcNetTcp.hexPort(gadgetPort) + "' /proc/net/tcp 交叉核对 state=0A(LISTEN) 与连接侧 SYN_SENT(02)。"+
                         "（本次自动解析：portHex=" + tcpEvidence.get("portHex")?.asString + " portListening=" + evidencePortListening +
                         " synSentObserved=" + evidenceSynSent + "）"+
                         "原始错误："+failure.message,
@@ -283,10 +311,12 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 add("listenModeLimits",ToolkitFridaDiagnosis.listenModeLimits())
                 add("gadgetScriptMode",ToolkitFridaDiagnosis.gadgetScriptModeGuidance())
             }
-            if(name=="frida_status"||name=="frida_eval"){
+            if(name=="frida_status"||name=="frida_processes"||name=="frida_eval"){
+                // probe 是权威证据；tcpEvidence 只是可选补充（应用域读不到 /proc/net/tcp 是预期）。
+                add("probe",probe)
                 add("tcpEvidence",tcpEvidence)
                 add("connectDiagnosis",ToolkitFridaDiagnosis.classifyConnectFailure("",
-                    evidencePortListening,evidenceSynSent,args.tBool("sameUid",false)))
+                    evidencePortListening,evidenceSynSent,args.tBool("sameUid",false),probe))
             }
         }
     }

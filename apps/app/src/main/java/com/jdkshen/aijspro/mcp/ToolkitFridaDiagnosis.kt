@@ -25,6 +25,8 @@ internal object ToolkitFridaDiagnosis {
     const val CLASSIFICATION_COMPONENT_MISSING = "component_missing_or_command_error"
     const val CLASSIFICATION_SAME_UID = "same_uid_connect_failure"
     const val CLASSIFICATION_CONNECTION_REFUSED = "connection_refused"
+    /** 主动探测（socket.connect）证明端口可达：SELinux 静默 DROP 这个假设被否掉。 */
+    const val CLASSIFICATION_PORT_REACHABLE = "port_reachable"
     const val CLASSIFICATION_UNKNOWN = "unknown"
 
     /** #11：frida_status 失败时给 job/工具层使用的结构化错误码；reason 仍保留原文。 */
@@ -61,25 +63,55 @@ internal object ToolkitFridaDiagnosis {
         "connect 超时/SYN_SENT 不能直接当成「组件没装」：超时是连接层现象；若已看到 SYN_SENT，说明客户端存在并成功发出了 connect，只是 SYN 被静默丢弃。"
 
     /**
+     * 设备4 Bug3 证据链 ★①：应用域（untrusted_app）在部分 ROM 上读不了 /proc/net/tcp[6]
+     * （SELinux 拒绝 proc_net_tcp_udp），而 frida_* 跑在 app 进程 —— 读不到是**预期**，
+     * 不是组件缺失；端口状态以主动探测（probe）为准。
+     */
+    const val PROC_NET_TCP_EXPECTED =
+        "应用域读不到 /proc/net/tcp[6] 是预期行为（SELinux 对 proc_net_tcp_udp 的拒绝），它只是可选补充证据：不要因为读不到就判断组件缺失或端口未监听，请以 probe（主动 socket.connect）为准。"
+
+    /** 无论哪种分类都仍然推荐的免网络路径。 */
+    const val SCRIPT_MODE_HINT =
+        "仍建议改用 Gadget interaction.type=script（启动即加载脚本，不监听端口、不碰 loopback），它不受跨 UID loopback 的 SELinux 静默 DROP 影响。"
+
+    /**
      * 判定一次 connect 失败更像什么原因。
      *
      * selinuxLoopbackSuspect 的条件（与任务定义一致）：portListening=true 且
      * (synSentObserved=true 或 错误文本是 connect 超时) 且 sameUid=false。
-     * 证据不足时返回 unknown，不猜 SELinux；错误文本明确是「not found/命令不存在」
-     * 且没有 SYN_SENT 时按组件/命令问题处理，不判 SELinux。
+     * **主动探测（[probe]）优先**：probe=timeout + 跨 UID 也算 SELinux 嫌疑
+     * （loopback 上关闭的端口会立刻 refused，超时才是被静默丢弃的特征）；probe=reachable
+     * 则否掉 SELinux 假设（分类 port_reachable）。证据不足时返回 unknown，不猜 SELinux；
+     * 错误文本明确是「not found/命令不存在」且没有 SYN_SENT 时按组件/命令问题处理，不判 SELinux。
+     *
+     * @param probe [ToolkitFridaPortProbe.probeEndpoint] 的结果；为 null 时保持旧行为
+     *              （只看调用方 flags 与错误文本），旧调用方与旧测试不受影响
      */
     fun classifyConnectFailure(
         errorText: String,
         portListening: Boolean,
         synSentObserved: Boolean,
         sameUid: Boolean,
+        probe: JsonObject? = null,
     ): JsonObject {
         val text = errorText.trim().take(2000)
-        val timeoutObserved = TIMEOUT_PATTERN.containsMatchIn(text)
+        // 主动探测（设备4 ★①）：应用域读不到 /proc/net/tcp，端口状态以 probe 为准；
+        // probe 为 null 时保持旧行为（只看调用方 flags + 错误文本），旧调用方/旧测试不受影响。
+        val probeResult = ToolkitFridaPortProbe.probeResultOf(probe)
+        val probeReachable = probeResult == ToolkitFridaPortProbe.RESULT_LISTENING_REACHABLE
+        val probeTimeout = probeResult == ToolkitFridaPortProbe.RESULT_TIMEOUT
+        val probeRefused = probeResult == ToolkitFridaPortProbe.RESULT_REFUSED
+        // 探测本身失败（unknown host / no route / endpoint 非法）：既不能证明端口未监听，也不能证明组件没装。
+        val probeInconclusive = probe != null && ToolkitFridaPortProbe.inconclusive(probe)
+        val timeoutObserved = TIMEOUT_PATTERN.containsMatchIn(text) || probeTimeout
         val componentMissingHint = COMPONENT_MISSING_PATTERN.containsMatchIn(text)
-        val refusedObserved = REFUSED_PATTERN.containsMatchIn(text)
+        val refusedObserved = REFUSED_PATTERN.containsMatchIn(text) || probeRefused
         val synSentDropSignature = portListening && synSentObserved && !sameUid
-        val suspect = portListening && (synSentObserved || timeoutObserved) && !sameUid
+        val effectivePortListening = portListening || probeReachable
+        val probeDropSignature = probeTimeout && !sameUid
+        // probe 连上了端口就否掉「跨 UID 静默 DROP」：同一条 loopback 路径刚刚被证明可用。
+        val suspect = !probeReachable &&
+            ((effectivePortListening && (synSentObserved || timeoutObserved) && !sameUid) || probeDropSignature)
         val evidenceConflict = sameUid && synSentObserved
 
         val classification: String
@@ -89,29 +121,49 @@ internal object ToolkitFridaDiagnosis {
             suspect -> {
                 classification = CLASSIFICATION_SELINUX_SUSPECT
                 confidence = if (synSentObserved) "high" else "medium"
-                reason = "端口处于 LISTEN" +
-                    (if (synSentObserved) "，且连接侧看到 SYN_SENT：SYN 被静默丢弃（防火墙拒绝通常是 RST/CLOSE）" else "，跨 UID 的 connect 超时") +
-                    "；符合跨 UID loopback 被 SELinux DROP 的特征。这是结构性网络限制，不是组件没装，换 UID 也救不了。"
+                reason = (if (probeDropSignature)
+                    "主动探测在 loopback 上超时（probe=timeout，且跨 UID）：loopback 上关闭的端口会立刻 refused，超时说明 SYN 被静默丢弃"
+                else
+                    "端口处于 LISTEN" +
+                        (if (synSentObserved) "，且连接侧看到 SYN_SENT：SYN 被静默丢弃（防火墙拒绝通常是 RST/CLOSE）" else "，跨 UID 的 connect 超时")) +
+                    "；符合跨 UID loopback 被 SELinux DROP 的特征。这是结构性网络限制，不是组件没装，换 UID 也救不了。" +
+                    "（" + PROC_NET_TCP_EXPECTED + "）"
             }
             componentMissingHint && !synSentObserved -> {
                 classification = CLASSIFICATION_COMPONENT_MISSING
                 confidence = "medium"
-                reason = "错误文本更像客户端/命令缺失（not found/no such file 等）；先核对组件或可执行文件。若文本其实指目标进程不存在，请先检查 pid/进程存活，不要据此判断 SELinux。"
-            }
-            !portListening && text.isNotEmpty() -> {
-                classification = CLASSIFICATION_PORT_NOT_LISTENING
-                confidence = "medium"
-                reason = "端口未 LISTEN：先确认 Gadget 注入/启动是否成功、应用默认进程是否存活、是否被系统重启；这不是 loopback 连通性问题，也不能仅凭超时判定组件没装。"
+                reason = "错误文本更像客户端/命令缺失（not found/no such file 等）；先核对组件或可执行文件。若文本其实指目标进程不存在，请先检查 pid/进程存活，不要据此判断 SELinux。" +
+                    "注意：应用域读不到 /proc/net/tcp 属于预期（SELinux 拒绝），**不是**「组件缺失」的证据。"
             }
             refusedObserved -> {
                 classification = CLASSIFICATION_CONNECTION_REFUSED
                 confidence = "medium"
-                reason = "出现 connection refused/RST 类错误：说明对端明确拒绝，而不是 SYN 被静默丢弃；先核对端口 LISTEN 状态、端口十六进制、目标进程/命名空间与注入是否最新。"
+                reason = if (probeRefused)
+                    "主动探测被明确拒绝（ECONNREFUSED/RST）：对端没有监听者，而不是 SYN 被静默丢弃；先确认 Gadget 注入/启动与目标应用默认进程是否存活，再核对端口十六进制与是否连到旧包。"
+                else
+                    "出现 connection refused/RST 类错误：说明对端明确拒绝，而不是 SYN 被静默丢弃；先核对端口 LISTEN 状态、端口十六进制、目标进程/命名空间与注入是否最新。"
+            }
+            probeReachable -> {
+                classification = CLASSIFICATION_PORT_REACHABLE
+                confidence = "high"
+                reason = "主动探测已连上该端口（probe=listening_reachable）：端口上有进程在监听，同一条 loopback 路径可用，跨 UID 静默 DROP 的假设已被 probe 否掉。" +
+                    "若客户端仍失败，方向是 token/endpoint/目标 pid/客户端版本或握手层，不是网络可达性，也不是组件没装。"
+            }
+            !effectivePortListening && !probeTimeout && !probeInconclusive && text.isNotEmpty() -> {
+                classification = CLASSIFICATION_PORT_NOT_LISTENING
+                confidence = "medium"
+                reason = "端口未 LISTEN：先确认 Gadget 注入/启动是否成功、应用默认进程是否存活、是否被系统重启；这不是 loopback 连通性问题，也不能仅凭超时判定组件没装。" +
+                    "（本次主动探测 probe=" + (probeResult ?: "未执行") + "；应用域读不到 /proc/net/tcp 是预期，不等于组件缺失。）"
             }
             sameUid && (timeoutObserved || synSentObserved) -> {
                 classification = CLASSIFICATION_SAME_UID
                 confidence = "medium"
                 reason = "同 UID 仍 connect 超时：通常指向客户端组件/版本、目标应用 INTERNET 权限、endpoint/token 或 Gadget 尚未就绪；同 UID 不符合跨 UID SELinux 的典型条件。超时本身不能证明组件没装。"
+            }
+            probeInconclusive && text.isEmpty() -> {
+                classification = CLASSIFICATION_UNKNOWN
+                confidence = "unknown"
+                reason = "主动探测本身失败（probe=" + probeResult + "）：这既不能证明端口未监听，也不能证明组件没装；先按 probe.errorClass 排查探测侧（endpoint 主机名/网络命名空间），必要时用 tcpText 传入 /proc 原文补充证据。"
             }
             text.isEmpty() -> {
                 classification = CLASSIFICATION_UNKNOWN
@@ -129,8 +181,8 @@ internal object ToolkitFridaDiagnosis {
         }
 
         val componentVerdict = when {
-            suspect -> "not_the_cause"
             classification == CLASSIFICATION_COMPONENT_MISSING -> "possible_missing"
+            suspect || probeReachable || probeRefused -> "not_the_cause"
             else -> "unknown"
         }
         return ToolkitIo.json(
@@ -138,9 +190,17 @@ internal object ToolkitFridaDiagnosis {
             "selinuxLoopbackSuspect" to suspect,
             "confidence" to confidence,
             "portListening" to portListening,
+            "effectivePortListening" to effectivePortListening,
             "synSentObserved" to synSentObserved,
             "sameUid" to sameUid,
             "timeoutObserved" to timeoutObserved,
+            "probeResult" to probeResult,
+            "probeReachable" to probeReachable,
+            "probeTimeoutObserved" to probeTimeout,
+            "probeRefusedObserved" to probeRefused,
+            "probeInconclusive" to probeInconclusive,
+            "probe" to probe,
+            "evidenceSource" to evidenceSource(probeReachable, probeTimeout, probeRefused, probeInconclusive, portListening, synSentObserved),
             "componentMissingHint" to componentMissingHint,
             "rstOrRefusedObserved" to refusedObserved,
             "componentVerdict" to componentVerdict,
@@ -148,16 +208,27 @@ internal object ToolkitFridaDiagnosis {
             "errorCode" to errorCodeForClassification(classification),
             "reasonCode" to errorCodeForClassification(classification),
             "reason" to reason,
-            "wordingGuidance" to NOT_COMPONENT_MISSING,
+            "wordingGuidance" to (NOT_COMPONENT_MISSING + " " + PROC_NET_TCP_EXPECTED),
             "evidence" to ToolkitIo.json(
                 "synSentDropSignature" to synSentDropSignature,
                 "listenStateHint" to TCP_STATE_LISTEN,
                 "synSentStateHint" to TCP_STATE_SYN_SENT,
                 "interpretation" to "LISTEN(0A)+连接侧 SYN_SENT(02) 表示 SYN 被静默丢弃；若是防火墙拒绝会看到 RST/连接被拒绝，而不是停在 SYN_SENT。",
+                "probe" to probe,
+                "probeResult" to probeResult,
                 "errorText" to text,
             ),
             "nextActions" to actionsFor(classification),
+            "recommendations" to recommendationsFor(classification, probeResult, probeReachable, probeTimeout, probeRefused, probeInconclusive),
+            "recovery" to ToolkitIo.json(
+                "authoritativeEvidence" to "probe（主动 socket.connect；probeTimeoutMs 默认 " + ToolkitFridaPortProbe.DEFAULT_TIMEOUT_MS + "ms）",
+                "procNetTcp" to "可选补充：应用域读不到 /proc/net/tcp[6] 是预期（SELinux proc_net_tcp_udp），不代表组件缺失或端口未监听",
+                "componentMissing" to (componentVerdict == "possible_missing"),
+                "classification" to classification,
+                "steps" to recoverySteps(classification),
+            ),
             "evidenceCommands" to defaultEvidenceCommands(),
+            "evidenceCommandsNote" to "上面的 /proc 命令需要 root/shizuku（或调用方自己传入 tcpText）；应用域读不到是预期行为，端口状态请以 probe 为准。",
         )
     }
 
@@ -325,6 +396,83 @@ internal object ToolkitFridaDiagnosis {
         )
     }
 
+    /** 本轮判定的证据来源：优先主动探测（probe），其次调用方 flags / /proc 文本。 */
+    private fun evidenceSource(
+        probeReachable: Boolean,
+        probeTimeout: Boolean,
+        probeRefused: Boolean,
+        probeInconclusive: Boolean,
+        portListening: Boolean,
+        synSentObserved: Boolean,
+    ): String = when {
+        probeReachable || probeTimeout || probeRefused -> "active_probe"
+        probeInconclusive -> "active_probe_inconclusive"
+        portListening || synSentObserved -> "caller_flags_or_proc_net_tcp"
+        else -> "insufficient"
+    }
+
+    /**
+     * 结构化建议：第一条永远是「应用域读不到 /proc/net/tcp 是预期、以 probe 为准」，
+     * 最后一条永远是「仍建议走 Gadget script 模式」。
+     */
+    private fun recommendationsFor(
+        classification: String,
+        probeResult: String?,
+        probeReachable: Boolean,
+        probeTimeout: Boolean,
+        probeRefused: Boolean,
+        probeInconclusive: Boolean,
+    ): JsonArray = JsonArray().apply {
+        add(PROC_NET_TCP_EXPECTED)
+        add(when (classification) {
+            CLASSIFICATION_SELINUX_SUSPECT ->
+                if (probeTimeout)
+                    "probe=timeout：loopback 上关闭的端口会立刻 refused，超时才是「SYN 被静默丢弃」的特征；不要靠加大 probeTimeoutMs 反复重试，直接换成不碰网络的路径。"
+                else "已看到 LISTEN + SYN_SENT/超时：按结构性网络限制处理，不要当成组件没装。"
+            CLASSIFICATION_PORT_REACHABLE ->
+                "probe=listening_reachable：端口可达已由主动探测证明；核对 token（用最新 apk_inject_gadget 输出）、endpoint 端口、目标 pid 与 frida 客户端版本。"
+            CLASSIFICATION_CONNECTION_REFUSED ->
+                if (probeRefused)
+                    "probe=refused：目标端口没有监听者。确认注入产物已安装、目标应用默认进程已启动、Gadget 已加载，并核对端口与注入配置一致。"
+                else "错误文本是 refused/RST：对端明确拒绝，先核对端口与注入，不要按 SELinux 静默丢弃处理。"
+            CLASSIFICATION_PORT_NOT_LISTENING -> "probe/证据指向端口未监听：先查注入/启动/默认进程存活。"
+            CLASSIFICATION_COMPONENT_MISSING -> "错误文本指向客户端/命令缺失：先核对 frida 客户端组件与可执行文件；这与「读不到 /proc」无关。"
+            CLASSIFICATION_SAME_UID -> "同 UID 仍失败：查客户端组件/版本、目标应用 INTERNET 权限、endpoint/token；超时本身不能证明组件没装。"
+            else ->
+                if (probeInconclusive) "主动探测不可用（probe=" + probeResult + "）：这不代表组件没装；先修探测侧（endpoint 主机名/网络命名空间），必要时用 tcpText 补充证据。"
+                else "证据不足：补齐 probe、客户端错误原文与目标/客户端 UID 后再判定。"
+        })
+        add(SCRIPT_MODE_HINT)
+    }
+
+    /** 可执行的恢复步骤（每条都是动作，不是结论）。 */
+    private fun recoverySteps(classification: String): JsonArray = JsonArray().apply {
+        add("先看 probe：四态 listening_reachable/refused/timeout/error:* —— refused=没在听、timeout=可能被策略静默丢弃、error=探测侧问题；应用域读不到 /proc/net/tcp 不影响 probe。")
+        when (classification) {
+            CLASSIFICATION_SELINUX_SUSPECT -> {
+                add("改用 Gadget interactionType=script（apk_inject_gadget 已支持），或把执行端放进目标同 UID；listen 路径在跨 UID 下结构性不可靠。")
+                add("仍要用 listen：用 root/shizuku 读 /proc/net/tcp 与连接侧 SYN_SENT(02) 交叉核对（应用域读不到是预期）。")
+            }
+            CLASSIFICATION_PORT_REACHABLE -> {
+                add("重跑 frida_status{endpoint,token,probeTimeoutMs}，确认 token 来自最新注入输出、端口与目标 pid 一致。")
+                add("核对 frida 客户端组件版本与目标应用是否仍在运行（应用重启后 pid/端口会变）。")
+            }
+            CLASSIFICATION_CONNECTION_REFUSED -> {
+                add("确认注入产物已安装到目标应用并已启动其默认进程：Gadget 只在默认进程加载。")
+                add("核对端口十六进制与注入配置（on_port_conflict=fail 时端口冲突不会起监听）。")
+            }
+            CLASSIFICATION_PORT_NOT_LISTENING -> {
+                add("确认注入包来自最新 outPath、已安装并已冷启动目标应用。")
+                add("ps -A 确认目标默认进程存活；被系统杀死后端口消失。")
+            }
+            CLASSIFICATION_COMPONENT_MISSING ->
+                add("核对 frida 客户端组件（apk_component_status{id:frida}）与可执行文件；必要时安装/更新。")
+            CLASSIFICATION_SAME_UID -> add("核对客户端组件/版本、目标应用 INTERNET 权限、endpoint/token 与目标 pid。")
+            else -> add("补齐证据后再判定：probe + 客户端错误原文 + 目标/客户端 UID + 目标进程存活。")
+        }
+        add(SCRIPT_MODE_HINT)
+    }
+
     private fun actionsFor(classification: String): JsonArray = JsonArray().apply {
         when (classification) {
             CLASSIFICATION_SELINUX_SUSPECT -> {
@@ -346,6 +494,17 @@ internal object ToolkitFridaDiagnosis {
                     "argsHint" to ToolkitIo.json("endpoint" to "127.0.0.1:27042", "token" to "<token>"),
                     "hint" to "确认 endpoint/端口/token 与注入结果一致，可加大超时后重试"))
                 addAll(defaultListenActions())
+            }
+            CLASSIFICATION_PORT_REACHABLE -> {
+                add(ToolkitIo.json("action" to "recheck_token_endpoint_and_target", "tool" to "frida_status", "priority" to 1,
+                    "argsHint" to ToolkitIo.json("endpoint" to "127.0.0.1:27042", "token" to "<token>"),
+                    "hint" to "probe=listening_reachable 已证明端口可达：核对 token（最新 apk_inject_gadget 输出）、endpoint 端口、目标 pid/进程存活与 frida 客户端版本；不要再按 SELinux DROP 排查"))
+                add(ToolkitIo.json("action" to "check_target_process", "tool" to "terminal_exec", "backend" to "app|shizuku",
+                    "command" to "ps -A | grep <target-package>",
+                    "hint" to "端口可达但 attach 失败时，确认目标默认进程仍存活、pid 未变（应用重启会换 pid）", "priority" to 2))
+                add(ToolkitIo.json("action" to "switch_to_gadget_script_mode", "tool" to "apk_inject_gadget", "priority" to 3,
+                    "argsHint" to ToolkitIo.json("interactionType" to "script", "scriptPath" to "<目标应用可读的脚本路径>"),
+                    "hint" to "listen 路径已证明可用；若想彻底避开 loopback/端口，仍可改用 script 模式"))
             }
             CLASSIFICATION_PORT_NOT_LISTENING -> {
                 add(ToolkitIo.json("action" to "check_gadget_component_and_injection", "tool" to "apk_component_status",
