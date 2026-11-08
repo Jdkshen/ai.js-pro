@@ -23,4 +23,13 @@ internal object McpToolResultShapes {
     /** 裸文本类（workspace_diff / learn_autojs_skill）：旧文本放 content，文本同时放 data 字段。 */
     fun textResult(field: String, text: String): JsonObject =
         success(ToolkitIo.json(field to text), legacyText = text)
+
+    /**
+     * P0-2：terminal_* 历史上是扁平 structuredContent（jobId 在顶层）。在保留全部旧顶层字段的同时，
+     * 补一份 data 镜像，让按 structuredContent.data.jobId 解析的新客户端不再 TypeError。
+     * 仅用于扁平 job 结果；已有 data 的结果不重复包。
+     */
+    fun flatWithDataMirror(flat: JsonObject): JsonObject = flat.apply {
+        if (!has("data")) add("data", deepCopy())
+    }
 }

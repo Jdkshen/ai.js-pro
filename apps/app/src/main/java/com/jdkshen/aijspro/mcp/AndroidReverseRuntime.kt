@@ -67,7 +67,9 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             val work=File(context.cacheDir,"r2-resident-"+ToolkitIo.fresh()).apply{require(mkdirs())}
             val builder=ProcessBuilder(listOf(File(c,"bin/radare2").path)+argv)
             builder.directory(work)
-            builder.environment().putAll(env(c))
+            val r2ghidra=runCatching{component("r2ghidra")}.getOrNull()
+            val pluginEnv=if(r2ghidra?.let{File(it,"lib/core_ghidra.so").isFile}==true) mapOf("SLEIGHHOME" to File(r2ghidra,"share/r2ghidra").path) else emptyMap()
+            builder.environment().putAll(env(c)+pluginEnv)
             builder.redirectErrorStream(true)
             val process=builder.start()
             return object : R2PipeHandle {
@@ -128,12 +130,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "native_emulate"->emulate(args,temp)
             "frida_status","frida_processes","frida_eval"->frida(name,args,temp)
             "frida_session_open","frida_session_read","frida_session_close","frida_session_list"->fridaSession(name,args)
-            "native_resident_open"->{
-                val requested=args.tString("path")
-                val resolved=runCatching{ToolkitIo.resolve(root,requested).path}.getOrDefault(requested)
-                r2Resident.open(resolved,args.tString("sha256"),args.tBool("relocsApply",true))
-            }
-            "native_resident_command"->r2Resident.command(args.tString("sessionId"),args.tString("command"),args.tInt("timeoutMillis",30000,1,300000).toLong())
+            "native_resident_open"->residentOpen(args)
+            "native_resident_command"->residentCommand(args)
             "native_resident_batch"->r2Resident.batch(args.tString("sessionId"),
                 args.getAsJsonArray("commands")?.mapNotNull{element->element?.takeIf{it.isJsonPrimitive}?.asString}?:emptyList(),
                 args.tInt("timeoutMillis",30000,1,300000).toLong())
@@ -196,6 +194,40 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         }}
         return runner(command,temp,c,args).apply{addProperty("backend","unicorn");addProperty("fullAndroidEnvironment",false)}
     }
+    /** P2-1：resident r2 也要显式加载 r2ghidra；否则 pdg 报“install plugin”，而 native_decompile 手动 L 后正常。 */
+    private fun residentOpen(args:JsonObject):JsonObject {
+        val requested=args.tString("path")
+        val resolved=runCatching{ToolkitIo.resolve(root,requested).path}.getOrDefault(requested)
+        val opened=r2Resident.open(resolved,args.tString("sha256"),args.tBool("relocsApply",true))
+        val plugin=runCatching{component("r2ghidra")}.getOrNull()
+        val library=plugin?.let{File(it,"lib/core_ghidra.so")}
+        val pluginState=when {
+            library==null||!library.isFile -> ToolkitIo.json("installed" to false,"loaded" to false,
+                "hint" to "r2ghidra 未安装/不完整；pdg 在 resident/native_decompile 都不可用。先 apk_component_status 后 apk_component_install(component=r2ghidra)。")
+            else -> {
+                val loaded=runCatching{r2Resident.command(opened.tString("sessionId"),"L "+library.path,15000)}
+                val output=loaded.getOrNull()?.get("output")?.takeIf{it.isJsonPrimitive}?.asString.orEmpty()
+                val failed=loaded.isFailure||output.contains("cannot",true)||output.contains("error",true)
+                ToolkitIo.json("installed" to true,"loaded" to !failed,"pluginPath" to library.path,
+                    "hint" to if(failed) "resident r2 加载 r2ghidra 失败：${loaded.exceptionOrNull()?.message ?: output.take(300)}；pdg 不可用，先检查组件/ABI，再重建会话" else "resident r2 已自动加载 r2ghidra，pdg 可用",
+                    "loadError" to loaded.exceptionOrNull()?.message, "loadOutput" to output.take(300))
+            }
+        }
+        opened.add("r2ghidra",pluginState)
+        return opened
+    }
+
+    private fun residentCommand(args:JsonObject):JsonObject = try {
+        r2Resident.command(args.tString("sessionId"),args.tString("command"),args.tInt("timeoutMillis",30000,1,300000).toLong())
+    } catch(failure:ToolkitException){
+        if(args.tString("command").contains("pdg")){
+            throw ToolkitException(failure.code,
+                failure.message+"；resident r2 与 native_decompile 的插件加载状态不同：pdg 需要 r2ghidra 插件被 L 加载。先 native_resident_open（会尝试自动 L），失败时用 native_decompile 或检查 apk_component_status.r2ghidra。",
+                failure.argument)
+        }
+        throw failure
+    }
+
     private fun frida(name:String,args:JsonObject,temp:File):JsonObject {
         val c=native("frida");val endpoint=args.tString("endpoint","127.0.0.1:27042")
         require(endpoint.matches(Regex("[A-Za-z0-9_.-]{1,253}:[0-9]{1,5}"))&&endpoint.substringAfterLast(':').toInt() in 1..65535){"endpoint 必须为host:port"}
@@ -242,11 +274,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             )
         }
         return response.apply{
-            if(name=="frida_eval"){
-                val errors=getAsJsonArray("messages")?.count{it.isJsonObject&&it.asJsonObject.tString("type","")=="error"}?:0
-                addProperty("scriptErrorCount",errors);addProperty("scriptSucceeded",errors==0)
-                if(errors>0)throw ToolkitException("FRIDA_SCRIPT_ERROR",toString().take(12000),"script")
-            }
+            if(name=="frida_eval"){ ToolkitFridaEval.normalize(this) }
             if(name=="frida_status"){
                 // §10：native 客户端可用 ≠ Java.perform 可用；java-bridge 必须单独报告。
                 val bridgePresent=runCatching{component("frida-java-bridge").let{it.isDirectory||it.isFile}}.getOrDefault(false)
@@ -270,11 +298,23 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         require(!destination.exists()&&destination.parentFile?.isDirectory==true){"outPath 必须为父目录存在的新文件"}
         val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk")
         val interaction=args.tString("interactionType","listen")
+        require(interaction in setOf("listen","script")){"interactionType 只能是 listen 或 script"}
+        val preloadMode=args.tString("preloadMode","provider")
+        val preload=ToolkitGadgetPreload.assessment(preloadMode)
+        if(preloadMode.trim()!="provider") throw ToolkitException("PRELOAD_MODE_UNAVAILABLE", preload.toString(), "preloadMode")
         val unsigned=File(temp,"gadget-unsigned.apk")
+        var scriptInfo:JsonObject?=null
+        val effectiveScriptPath=if(interaction=="script"){
+            val raw=args.tString("scriptPath","").ifEmpty{throw ToolkitException("SCRIPT_NOT_MATERIALIZED","script 模式必须提供 scriptPath","scriptPath")}
+            val pkg=ToolkitGadget.packageName(input)
+            val materialized=materializeGadgetScript(raw,pkg)
+            scriptInfo=materialized
+            materialized.tString("targetPath").also{require(it.isNotBlank()){"script 路径为空"}}
+        } else null
         val info=ToolkitGadget.prepare(input,unsigned,temp,component("frida-gadget"),args.tInt("port",27042,1024,65535),
             android.os.Build.SUPPORTED_ABIS.firstOrNull()?:"unknown",
             interaction,
-            args.tString("scriptPath","").ifEmpty{null},
+            effectiveScriptPath,
             // 反馈接线：schema 收了 providerProcess，调用方必须真传，否则逃生口/显式指定形同虚设。
             args.tString("providerProcess","").ifEmpty{null})
         ToolkitArchiveAlignment.align(unsigned)
@@ -311,7 +351,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 "upstream" to false,"impact" to "may-block-load","messages" to listOf(failure.message ?: failure.javaClass.simpleName)))
             val schemes=runCatching{ToolkitSignatures.read(target).getAsJsonArray("schemes") ?: JsonArray()}.getOrDefault(JsonArray())
             val note="可安装但注入验证未完成（" + (failure.message ?: failure.javaClass.simpleName) + "）：产物已重签，可直接安装后自行核对 Gadget 是否加载" + gadgetPartialNote(reasons)
-            if(detail=="summary") return gadgetSummary(target,info,signerLabel,schemes,true,true,note).apply { this.withOrganized(organized) }
+            if(detail=="summary") return gadgetSummary(target,info,signerLabel,schemes,true,true,note,preload).apply { this.withOrganized(organized) }
             return ToolkitIo.json(
                 "outputPath" to target.path, "path" to target.path, "size" to target.length(),
                 "sha256" to runCatching{ToolkitIo.sha(target)}.getOrNull(),
@@ -337,8 +377,10 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             "已重签并可安装；静态验证 status=" + verificationStatus + "，详见 partialReasons/verification；只有 warning 的检查不会造成 partial"
         else "已重签并通过静态验证；安装/启动仍需实测"
         val noteWithUpstream=note + gadgetPartialNote(partialReasons)
-        if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,noteWithUpstream).apply { this.withOrganized(organized) }
+        if(detail=="summary") return gadgetSummary(destination,info,signerLabel,schemes,partial,true,noteWithUpstream,preload).apply { this.withOrganized(organized) }
         verification?.add("partialReasons",partialReasons)
+        scriptInfo?.let { info.add("script", it) }
+        info.add("preload", preload)
         return info.apply {
             addProperty("path",destination.path);addProperty("size",destination.length());addProperty("sha256",ToolkitIo.sha(destination))
             addProperty("signed",true);addProperty("installable",true);addProperty("partial",partial)
@@ -366,13 +408,77 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             }
         }
     }
-    private fun gadgetSummary(apk:File,info:JsonObject,signer:String,schemes:JsonArray,partial:Boolean,installable:Boolean,note:String):JsonObject =
+    /**
+     * P1-2：把调用方给的脚本尽量放到目标 App 可达的 external files 目录，并把绝对路径写进 Gadget 配置。
+     * best-effort：Android 11+ scoped storage 可能不允许我们的 UID 写别的 App 的 Android/data；
+     * 失败时明确报错并给 chmod/迁移提示，不返回「看起来成功但实际不可达」的路径。
+     */
+    private fun materializeGadgetScript(raw:String, packageName:String):JsonObject {
+        val source = runCatching { ToolkitIo.resolve(root, raw) }.getOrNull()?.takeIf { it.isFile }
+            ?: File(raw).takeIf { it.isAbsolute && it.isFile }
+            ?: throw ToolkitException(
+                "SCRIPT_NOT_MATERIALIZED",
+                "scriptPath 不是工具目录内的文件，也不是可读的绝对文件：$raw",
+                "scriptPath")
+        val target = ToolkitGadget.scriptTargetPath(packageName, source.name)
+        val targetDir = target.parentFile
+        val existed = target.isFile
+        if(source.absoluteFile == target.absoluteFile && source.isFile) {
+            return ToolkitIo.json(
+                "sourcePath" to source.path,"targetPath" to target.absolutePath,"materialized" to true,
+                "alreadyExisted" to true,"mode" to "already-at-app-external-files",
+                "checks" to ToolkitIo.json("fileExists" to true,"readableByMcpUid" to source.canRead(),
+                    "readableByTargetApp" to null,
+                    "note" to "传入的已是目标路径；未复制。目标 App UID 可达性只能安装后验证，不能仅凭本进程可读推断。")
+            )
+        }
+        val error = runCatching {
+            if (!targetDir.isDirectory && !targetDir.mkdirs()) error("mkdirs failed: ${targetDir.path}")
+            targetDir.setReadable(true, false); targetDir.setExecutable(true, false); targetDir.setWritable(true, false)
+            source.copyTo(target, overwrite = true)
+            target.setReadable(true, false)
+            target.setExecutable(false, false)
+            require(target.isFile && target.length() == source.length()) { "copied size mismatch" }
+            require(target.canRead()) { "target not readable by current process" }
+            // Do not claim the target app can read it: our UID is not the target UID.
+        }.exceptionOrNull()
+        if (error != null) {
+            throw ToolkitException(
+                "SCRIPT_NOT_MATERIALIZED",
+                "无法把脚本写到目标 App 可达路径：source=" + source.path + " target=" + target.path + " error=" + error.message + "; " +
+                    "Android 11+ 的 /sdcard/Android/data/<pkg>/files 可能只允许目标 App 自己或 shell 写；" +
+                    "请用 Shizuku/文件管理器把 source 复制到 target 并 chmod 644 文件/755 目录，" +
+                    "或显式传一个已在目标 App files 目录且可读的绝对 scriptPath。",
+                "scriptPath")
+        }
+        return ToolkitIo.json(
+            "sourcePath" to source.path,
+            "targetPath" to target.absolutePath,
+            "materialized" to true,
+            "alreadyExisted" to existed,
+            "directory" to targetDir.absolutePath,
+            "mode" to "copy-to-app-external-files",
+            "checks" to ToolkitIo.json(
+                "fileExists" to target.isFile, "readableByMcpUid" to target.canRead(),
+                "readableByTargetApp" to null,
+                "note" to "readableByTargetApp=null：MCP UID 已确认自己可读；目标 App UID 的可达性只能安装后看 logcat/脚本执行，不能伪造。"
+            ),
+            "nextActions" to JsonArray().apply {
+                add("若目标 App 仍报 Permission denied：用 Shizuku 执行 chmod 644 ${target.path} 与 chmod 755 ${targetDir.path}，或把脚本迁到目标 App 自己创建/拥有的 files 路径")
+                add("不要使用相对路径；配置中必须是绝对路径")
+            }
+        )
+    }
+
+    private fun gadgetSummary(apk:File,info:JsonObject,signer:String,schemes:JsonArray,partial:Boolean,installable:Boolean,note:String,preload:JsonObject?=null):JsonObject =
         ToolkitIo.json(
             "path" to apk.path, "size" to apk.length(),
             "sha256" to runCatching{ToolkitIo.sha(apk)}.getOrNull(),
             "signed" to true, "signer" to signer, "schemesApplied" to schemes,
             "providerProcess" to info.get("providerProcess"), "providerProcessSource" to info.get("providerProcessSource"),
             "partial" to partial, "installable" to installable, "note" to note,
+            "script" to info.get("script"),
+            "preload" to preload,
         )
     private fun radare(name:String,args:JsonObject,temp:File):JsonObject {
         val c=native("radare2");val input=stage(file(args),temp,"target.bin")

@@ -97,8 +97,8 @@ internal class McpZipToolkit(private val root: File) {
 
     fun definitions(): JsonArray = JsonArray().apply {
         add(definition(
-            "zip_list", "列出 ZIP 条目",
-            "分页列出 ZIP 中的文件和目录，包含由文件路径隐含的目录。目录以 / 结尾；名称区分大小写并原样保留前导 /、. 与 ..。recursive=true 时按名称深度优先返回；page 之间保持 ZIP 不变并使用返回的 continuation。列表不校验 CRC。",
+            "zip_list", "列出 ZIP 条目（listing 字符串兼容 + items 结构化）",
+            "分页列出 ZIP 中的文件和目录，包含由文件路径隐含的目录。目录以 / 结尾；名称区分大小写并原样保留前导 /、. 与 ..。返回 items[]（name/path/relativePath/fullPath/isDirectory/size/compressedSize/encrypted/method/crc32…）和旧 listing（每行“压缩后 原始 加密 路径”）；两者同一页同序，推荐用 items。recursive=true 时按名称深度优先返回；page 之间保持 ZIP 不变并使用返回的 continuation。列表不校验 CRC。",
             listSchema(), readOnly = true,
         ))
         add(definition(
@@ -410,10 +410,14 @@ internal class McpZipToolkit(private val root: File) {
                     else add(archive.detailLine(name, entryPath))
                 }
             }
+            val items = JsonArray().apply { page.forEach { relative -> add(archive.item(relative, entryPath)) } }
             val data = JsonObject().apply {
                 addProperty("path", archive.file.path)
                 addProperty("entryPath", entryPath)
+                // listing 是旧字符串行（压缩后 原始 加密 路径），items 是结构化同源数据；两者保留兼容。
                 add("listing", listing)
+                add("items", items)
+                addProperty("itemCount", items.size())
                 add("pagination", JsonObject().apply {
                     addProperty("hasMore", hasMore)
                     addProperty("nextCursor", nextCursor)
@@ -1569,6 +1573,35 @@ internal class McpZipToolkit(private val root: File) {
                 }
             }
             return result
+        }
+
+        /** P0-2：与 listing 同源的机器可读条目；listing 字符串保留兼容。 */
+        fun item(relative: String, entryPath: String): JsonObject {
+            val full = entryPath + relative
+            val directory = full.endsWith("/")
+            val entry = byName[full]
+            val aggregate = if (directory) aggregates[full] ?: LongArray(2) else null
+            val size = entry?.size ?: aggregate?.get(0) ?: -1L
+            val compressed = entry?.compressedSize ?: aggregate?.get(1) ?: -1L
+            val relativeName = relative.removeSuffix("/")
+            val fullName = full.removeSuffix("/")
+            return ToolkitIo.json(
+                "name" to relativeName,
+                "path" to fullName,
+                "relativePath" to relativeName,
+                "fullPath" to fullName,
+                "entryPath" to entryPath,
+                "baseName" to fullName.substringAfterLast('/'),
+                "isDirectory" to directory,
+                "size" to size,
+                "compressedSize" to compressed,
+                "encrypted" to (entry?.encrypted ?: false),
+                "symlink" to (entry?.symlink ?: false),
+                "method" to (entry?.method ?: -1),
+                "crc32" to (entry?.crc ?: -1L),
+                "modifiedAt" to (entry?.let { timeOf(it) } ?: null),
+                "comment" to (entry?.let { commentOf(it) } ?: null),
+            )
         }
 
         fun detailLine(relative: String, entryPath: String): String {

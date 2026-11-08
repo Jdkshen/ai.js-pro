@@ -133,6 +133,19 @@ class McpApkToolkitTest {
         assertEquals(1, second.getAsJsonArray("items").size())
     }
 
+    @Test fun readTextZipEntryHonorsOffsetAndReturnsContinuationFields() {
+        val locator = "zip_entry:assets/test.txt"
+        val full = invoke("apk_read_text", "locator" to locator)
+        assertEquals("中文\nsecond\n", full.tString("text"))
+        val tail = invoke("apk_read_text", "locator" to locator, "offset" to 3, "maxChars" to 100)
+        assertEquals("second\n", tail.tString("text"))
+        assertEquals(3, tail.get("offset").asInt)
+        assertEquals(10, tail.get("nextOffset").asInt)
+        assertTrue(tail.get("offsetApplied").asBoolean)
+        assertTrue(tail.tString("pagingHint").contains("nextOffset"))
+        assertEquals(10, tail.getAsJsonObject("textWindow").get("nextOffset").asInt)
+    }
+
     @Test fun editsInvalidateContinuationAndCrossSessionReuseIsRejected() {
         val first = invoke("apk_list","view" to "zip_entries","limit" to 1); val cursor = first.tString("nextCursor")
         assertTrue(cursor.isNotEmpty())

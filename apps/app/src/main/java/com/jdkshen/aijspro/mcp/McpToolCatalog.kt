@@ -80,7 +80,10 @@ internal object McpToolCatalog {
         "shell_classify_failure",
         "node_script_command",
         "crash_buffer_semantics"
-    ) + McpToolkitCatalog.names
+    ) + McpToolkitCatalog.names +
+        // `.4` P0-1：schema 自描述入口。**必须排在 McpToolkitCatalog.names 之后**，
+        // 否则与 listTools() 的添加顺序不一致 → 启动自检 check() 失败 → MCP 停止监听（dev-1402 踩过）。
+        listOf("tool_schema")
 
     /**
      * Pro compatibility names advertised by tools/list, alongside the engine tools.
@@ -96,7 +99,7 @@ internal object McpToolCatalog {
         "stopAllScripts" to "stop_all_scripts",
         "getMcpLog" to "get_mcp_log",
         "listOverlays" to "list_overlays",
-        "closeOverlays" to "close_overlays"
+        "closeOverlays" to "close_overlays",
     )
 
     /**

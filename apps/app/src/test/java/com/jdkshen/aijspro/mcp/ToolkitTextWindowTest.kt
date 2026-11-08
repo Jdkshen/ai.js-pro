@@ -52,6 +52,28 @@ class ToolkitTextWindowTest {
     }
 
     @Test
+    fun offsetOverridesLineAndSlicesByUnicodeCodePoint() {
+        val source = "😀中文\nsecond\n"
+        val first = ToolkitTextWindow.read(source, ToolkitIo.json(
+            "offset" to 1, "startLine" to 1, "startColumn" to 2, "maxChars" to 2, "limit" to 500,
+        ))
+        assertEquals("中文", first.tString("text"))
+        assertTrue(first.get("offsetApplied").asBoolean)
+        assertEquals(1, first.get("offset").asInt)
+        assertEquals(3, first.get("nextOffset").asInt)
+        assertTrue(first.tString("pagingHint").contains("offset"))
+        val window = first.getAsJsonObject("textWindow")
+        assertEquals(1, window.get("offset").asInt)
+        assertEquals(3, window.get("nextOffset").asInt)
+
+        val second = ToolkitTextWindow.read(source, ToolkitIo.json(
+            "offset" to first.get("nextOffset").asInt, "maxChars" to 100, "limit" to 500,
+        ))
+        assertEquals("\nsecond\n", second.tString("text"))
+        assertEquals(first.get("nextOffset").asInt, second.get("offset").asInt)
+    }
+
+    @Test
     fun pagingAdvancesAcrossConsecutiveNewlinesWithoutRepeatingAPosition() {
         val source = "a\n\nb\n"
         val expected = ToolkitTextEdits.normalize(source)

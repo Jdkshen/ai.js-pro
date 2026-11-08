@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.mcp
 
 import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -35,6 +36,24 @@ class McpWorkspaceToolResultTest {
         val structured = result.getAsJsonObject("structuredContent")
         assertTrue(structured.get("ok").asBoolean)
         assertEquals(diff, structured.getAsJsonObject("data").tString("diff"))
+    }
+
+    @Test
+    fun flatTerminalResultKeepsTopLevelJobIdAndAddsDataMirror() {
+        val flat = ToolkitIo.json(
+            "jobId" to "terminal-1234",
+            "status" to "RUNNING",
+            "nextOffset" to 7,
+            "items" to listOf(ToolkitIo.json("jobId" to "terminal-1234")),
+        )
+        val mirrored = McpToolResultShapes.flatWithDataMirror(flat)
+        assertEquals("terminal-1234", mirrored.tString("jobId"))
+        val data = mirrored.getAsJsonObject("data")
+        assertEquals("terminal-1234", data.tString("jobId"))
+        assertEquals("RUNNING", data.tString("status"))
+        assertEquals(7, data.get("nextOffset").asInt)
+        assertEquals(1, data.getAsJsonArray("items").size())
+        assertFalse(data.has("data"))
     }
 
     @Test

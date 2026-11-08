@@ -622,6 +622,12 @@ internal class ToolkitJobs internal constructor(
             "errorCode" to if (lost) "SERVICE_RESTARTED" else job.errorCode,
             "warningCode" to if (lost) null else job.warningCode,
             "warningReason" to if (lost) null else job.warningReason,
+            "stateSemantics" to ToolkitIo.json(
+                "SUCCEEDED_WITH_WARNINGS" to "任务完成但结果不完整；看 warningCode/warningReason 和结果正文",
+                "decompileIncomplete" to "反编译专用字段，只在 apk_decompile_* 结果中表示正文不完整；与 frida scriptErrorCount 无关",
+                "FAILED_BUT_PARTIAL" to "执行失败但结果/消息有产出；partial=true，先读结果再决定重跑",
+                "FAILED" to "失败且无产出；不把 messages 当成功",
+            ),
             "notes" to job.notes,
             "noteCount" to job.notes.size,
             "errorHint" to if (lost) "任务因工具进程重启丢失，未自动重放；请确认需要后重新提交"

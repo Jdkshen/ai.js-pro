@@ -369,7 +369,7 @@ stopAllScripts 影响整个应用；只处理一个任务时使用 stop_script(e
 1. `toolkit_status` 确认工具可用性与限制；`apk_list_available_apks` 找包。
 2. `apk_workspace_open` 建不可变快照：`temporary=true` 为一次性工作区；已保存工作区用 `temporary=false` 打开。已有 APK 上下文可用 `path="aijs://current-apk"` 取回（没有上下文时先按实际路径打开）；保存后的工作区路径是 `aijs://workspace/<workspaceId>`。公开写法只使用 `aijs://`；旧 URI 输入和旧 `mt_*` 工具名仅作兼容，不应写进新配置。
 3. `apk_session_create` 建写时复制编辑会话；之后的浏览、读取和修改都在会话视图上完成，不会改源 APK。
-4. 先读取再修改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；编辑时原样传回。DEX 类/方法先用 `apk_read_text` 的 `dex_class:`/`dex_method:` 定位符读取文本，再编辑。`apk_edit_text` 新建目标用 `targetVersion="missing"` 加唯一 `write_target`（可新建 DEX 类或普通文本条目）；`write_target` 的 `matchText` 必须为空串（可省略，默认空串），其它模式必须唯一匹配。
+4. 先读取再修改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；编辑时原样传回。`apk_read_text` 的 `offset`/`nextOffset` 是 **Unicode 码点**，普通 `zip_entry:` 文本也会真正按 offset 切；续读优先用 `nextOffset`，`offset` 与 `startLine/startColumn` 二选一（同时传 offset 优先）。DEX 类/方法先用 `apk_read_text` 的 `dex_class:`/`dex_method:` 定位符读取文本，再编辑。`apk_edit_text` 新建目标用 `targetVersion="missing"` 加唯一 `write_target`（可新建 DEX 类或普通文本条目）；`write_target` 的 `matchText` 必须为空串（可省略，默认空串），其它模式必须唯一匹配。
 5. 修改后调用 `apk_session_check(runBuildChecks=true)`；`apk_build` 会再检查一次，失败不导出。构建默认不签名；`sign=true` 使用本机 AI.js Pro 身份重签并移除原签名，不能沿原作者签名。
 6. 保留条目保护：普通 `zip_entry:` 的 `apk_patch_bytes` 不能处理 `classes*.dex`、`resources.arsc`、二进制 AXML/Manifest；`apk_delete_target` 不能删除 `classes*.dex`/`resources.arsc`，源码包中这些保留条目被移除时 `apk_session_check` 也会失败。DEX 用 `dex_class:`/`dex_method:`，资源用 `apk_resource_*`，**AXML/Manifest 用 `apk_read_text(locator="axml:...")` + `apk_edit_text(locator="axml:...", ...)`**（不要拿 `apk_resource_*` 改 AXML）。
 ### 改打包版应用资源（.4 实战反馈：解包→改资源→回编→重签→安装）
@@ -432,7 +432,7 @@ apk_workspace_open → apk_session_create → apk_resource_read（拿 targetVers
 - `zip_extract`：显式 `entryPath→destinationPath` 映射；拒绝绝对路径、`..`、反斜线、重复/冲突目标、符号链接和不安全覆盖，`overwrite=true` 才能替换普通文件。解压前检查 50,000 条目、512MiB 声明总量和 250:1 压缩比（小文件按 256KiB 阈值判断）。
 - `zip_create`：Stored/Deflate，level 0..9；输出不能位于源目录内或同时作为输入；最多 50,000 条目，写入/源数据预算 2GiB。
 - `zip_update`：操作无序且不能形成链、交换或竞争目标；`targetVersion` 可选，传入时先校验，省略时也在写入期间检查源未变化。
-- `zip_list`：每页 1..1000；分页游标 30 分钟过期且绑定 ZIP 版本，源变化后必须从空 cursor 重新列出。
+- `zip_list`：每页 1..1000；`listing` 保留旧字符串行（“压缩后 原始 加密 路径”），新增同页同序的 `items[]`（name/path/relativePath/fullPath/isDirectory/size/compressedSize/encrypted/method/crc32 等），推荐按 `items` 解析；分页游标 30 分钟过期且绑定 ZIP 版本，源变化后必须从空 cursor 重新列出。
 
 ### 签名：只读元数据，不是验签
 

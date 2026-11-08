@@ -124,16 +124,16 @@ internal class McpTools(private val context: Context, private val event: (String
             rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolError) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "工具调用失败", "TOOL_FAILED"))
+            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "工具调用失败"), "TOOL_FAILED"))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolkitException) {
             // 必须先于 IllegalArgumentException 捕获（ToolkitException 是它的子类），否则 code 会被丢成纯文本。
             event("$eventName · 失败 · ${e.code} · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "工具调用失败", e.code, e.argument))
+            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "工具调用失败"), e.code, e.argument))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalArgumentException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolFailure(e.message ?: "参数或工作区状态无效", "INVALID_ARGUMENT"))
+            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "参数或工作区状态无效"), "INVALID_ARGUMENT"))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalStateException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
@@ -291,12 +291,12 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("call_engine_api", "在指定真实引擎调用全局或模块函数，支持 JSON args 和 Promise；回调、UI、Java 对象组合使用 run_script", McpToolSchema.callApiSchema()))
             add(tool("list_overlays", "列出各进程登记中的浮窗（pid/ownerEngineId/engine/kind/touchable/ageMs），用于诊断 stop 后是否有 View 残留"))
             add(tool("close_overlays", "关闭浮窗：指定 executionId 等同 stop_script；省略则等同 stop_all_scripts；返回剩余 overlayCount", objSchema("executionId")))
-            add(tool("terminal_exec", "在手机终端底层异步运行 shell 命令，立即返回 jobId；backend=app（默认，普通应用 UID，注入 rish/i 函数入口）或 shizuku（需 Shizuku 已运行并授权，以授权身份执行且不回退 app）。非 PTY，stdout/stderr 合并。workingDirectory 在操作目录内；命令本身可访问应用有权限的文件。env 为字符串对象，不能包含内部后端变量。timeoutSeconds 默认 300、最大 3600，到期终止进程组（shizuku 由远端 UserService 清理）；先 get_build_tools 查编译器。" + ToolkitBackendRouting.capabilitySummary() + "；用错后端时输出首行会写明「该命令需要 X 后端」（autoRoute=true 时仅对只读白名单自动切换并标注 routedFrom/routedTo）", McpToolSchema.terminalSchema()))
-            add(tool("terminal_read", "读取终端状态/输出；offset=上次 nextOffset（UTF-16 字符偏移），maxChars 默认 16384/最大 65536；waitMillis=0..10000 长轮询。仅保留最近 256Ki 字符，truncated=true 表示旧输出已淘汰；processActive=false 才表示清理完成（shizuku 任务需远端进程组销毁）", objSchema("jobId", "offset", "maxChars", "waitMillis", required = arrayOf("jobId"))))
+            add(tool("terminal_exec", "在手机终端底层异步运行 shell 命令，立即返回 jobId（同时在 structuredContent.data.jobId 给一份镜像；顶层 jobId 保留）；backend=app（默认，普通应用 UID，注入 rish/i 函数入口）或 shizuku（需 Shizuku 已运行并授权，以授权身份执行且不回退 app）。非 PTY，stdout/stderr 合并。workingDirectory 在操作目录内；命令本身可访问应用有权限的文件。env 为字符串对象，不能包含内部后端变量。timeoutSeconds 默认 300、最大 3600，到期终止进程组（shizuku 由远端 UserService 清理）；先 get_build_tools 查编译器。" + ToolkitBackendRouting.capabilitySummary() + "；用错后端时输出首行会写明「该命令需要 X 后端」（autoRoute=true 时仅对只读白名单自动切换并标注 routedFrom/routedTo）", McpToolSchema.terminalSchema()))
+            add(tool("terminal_read", "读取终端状态/输出（structuredContent.data 同时镜像 jobId/offset/output 等字段，顶层字段保留）；offset=上次 nextOffset（UTF-16 字符偏移），maxChars 默认 16384/最大 65536；waitMillis=0..10000 长轮询。仅保留最近 256Ki 字符，truncated=true 表示旧输出已淘汰；processActive=false 才表示清理完成（shizuku 任务需远端进程组销毁）", objSchema("jobId", "offset", "maxChars", "waitMillis", required = arrayOf("jobId"))))
             add(tool("terminal_write", "向运行中的终端排队写入 stdin；input 不自动添加换行，eof=true 关闭输入。返回 accepted 仅表示入队，写入失败见 terminal_read.inputError", objSchema("jobId", "input", "eof", required = arrayOf("jobId"))))
-            add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程；不会停止三个脚本引擎。shizuku 任务调用 ShizukuShell 的 process.destroy() 由 UserService 终止远端进程组；processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
-            add(tool("terminal_list", "列出本 MCP 服务创建的终端任务（最多 3 个并发、保留 16 条，服务停止会终止任务）；每项 backend 为 app 或 shizuku"))
-            add(tool("shell_rish", "兼容工具：以 Shizuku 后端异步运行 shell 命令并立即返回 jobId（等价 terminal_exec backend=shizuku）；需 Shizuku 已运行并授权，不回退应用 UID。与 terminal_exec 共用任务表，用 terminal_read/terminal_write/terminal_stop 管理，timeoutSeconds 默认 300、最大 3600，不做同步 600 秒等待", McpToolSchema.shellRishSchema()))
+            add(tool("terminal_stop", "停止指定终端任务及其同组编译子进程（structuredContent.data 镜像 jobId/status，顶层保留）；不会停止三个脚本引擎。shizuku 任务调用 ShizukuShell 的 process.destroy() 由 UserService 终止远端进程组；processActive 反映清理状态", objSchema("jobId", required = arrayOf("jobId"))))
+            add(tool("terminal_list", "列出本 MCP 服务创建的终端任务（最多 3 个并发、保留 16 条，服务停止会终止任务；structuredContent.data.items 镜像顶层 items）；每项 backend 为 app 或 shizuku"))
+            add(tool("shell_rish", "兼容工具：以 Shizuku 后端异步运行 shell 命令并立即返回 jobId（等价 terminal_exec backend=shizuku；structuredContent.data.jobId 镜像顶层 jobId）；需 Shizuku 已运行并授权，不回退应用 UID。与 terminal_exec 共用任务表，用 terminal_read/terminal_write/terminal_stop 管理，timeoutSeconds 默认 300、最大 3600，不做同步 600 秒等待", McpToolSchema.shellRishSchema()))
             add(tool("get_build_tools", "检测手机终端 PATH 的编译工具，返回可选 C/C++ 组件状态及终端安装命令、内置 D8/Smali 入口；此查询不会下载或运行编译器"))
             add(tool("app_list", "列出已安装应用（PackageManager，无 root）；query 过滤 label/包名，includeSystem 默认 true，limit 最大 200", McpToolSchema.appListSchema()))
             add(tool("app_info", "读取单个应用版本、SDK、安装路径与启动入口", McpToolSchema.appInfoSchema()))
@@ -349,6 +349,10 @@ internal class McpTools(private val context: Context, private val event: (String
                     tool.addProperty("description", McpOutputConventions.appendPointer(tool.get("description").asString))
                 }
             }
+            // `.4` P0-1：参数 schema 自描述入口（inputSchema 太大不便预读时，用它单查一个工具）。
+            add(tool("tool_schema", "查看某个工具的完整参数表：描述、每个参数的类型/说明/默认值、必填项与别名。" +
+                "工具名写错时返回最接近的名字；等价于从 tools/list 里取该工具的 inputSchema",
+                objSchema("tool", required = arrayOf("tool"))))
             McpToolCatalog.aliases.forEach { (alias, canonical) ->
                 val original = first { it.asJsonObject.get("name").asString == canonical }.asJsonObject
                 add(original.deepCopy().apply {
@@ -455,6 +459,8 @@ internal class McpTools(private val context: Context, private val event: (String
         if(name=="reverse_plan")return toolJson(ToolkitIo.ok(reverseGuide.plan(args)))
         if (name in McpToolkitCatalog.names) {
             val result = McpToolkitBridge.call(context, root, name, args)
+            // `.4` P0-1：桥接（:tools 进程）里的参数类报错不经过外层 catch，这里补同一份提示。
+            enrichBridgedFailure(name, result)
             return toolJson(result).apply {
                 if (result.get("ok")?.asBoolean == false) {
                     addProperty("isError", true)
@@ -468,6 +474,7 @@ internal class McpTools(private val context: Context, private val event: (String
         }
         if (McpAutomationTransport.supports(name)) return McpAutomationTransport.call(context, name, args)
         return when (name) {
+            "tool_schema" -> toolJson(toolSchema(args))
             "get_status" -> toolJson(JsonObject().apply {
                 // P1-9：直接回答「这是哪个 build、有多少工具、更新了什么」，不用再去 app_info 绕。
                 add("toolCatalog", toolCatalogStatus())
@@ -595,10 +602,10 @@ internal class McpTools(private val context: Context, private val event: (String
             "get_mcp_log" -> toolJson(getMcpLog(args))
             "terminal_exec" -> {
                 requireExecution()
-                toolJson(McpBuildTools.enrichTerminalResult(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
+                terminalJson(McpBuildTools.enrichTerminalResult(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
                     terminalEnvironment(args), terminalInt(args, "timeoutSeconds", 300), parseTerminalBackend(args))))
             }
-            "terminal_read" -> toolJson(McpBuildTools.enrichTerminalResult(terminals.read(args.string("jobId"), terminalLong(args, "offset", 0),
+            "terminal_read" -> terminalJson(McpBuildTools.enrichTerminalResult(terminals.read(args.string("jobId"), terminalLong(args, "offset", 0),
                 terminalInt(args, "maxChars", 16384), terminalInt(args, "waitMillis", 0))))
             "terminal_write" -> {
                 val eof = args.get("eof")?.let {
@@ -607,16 +614,16 @@ internal class McpTools(private val context: Context, private val event: (String
                 } ?: false
                 structuredCall { toolOk(terminals.write(args.string("jobId"), if (args.has("input")) args.string("input") else "", eof)) }
             }
-            "terminal_stop" -> toolJson(terminals.stop(args.string("jobId")))
+            "terminal_stop" -> terminalJson(terminals.stop(args.string("jobId")))
             // 反馈 #8：terminal_* 之前没有 job 层错误码/保留/所有权语义。
             // listReport() 带 retention / evicted[] / tombstoneCount / ownershipEnforced / service（旧 list() 仍在，供 get_status 计数用）。
-            "terminal_list" -> toolJson(terminals.listReport())
+            "terminal_list" -> terminalJson(terminals.listReport())
             "shell_rish" -> {
                 requireExecution()
                 require(!args.has("backend")) { "shell_rish 固定使用 shizuku 后端；如需 app 后端请用 terminal_exec" }
                 // shell_rish is only a compatibility name for the same asynchronous Shizuku job
                 // system. It must never block the MCP request or pretend to be a sync result.
-                toolJson(McpBuildTools.enrichTerminalResult(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
+                terminalJson(McpBuildTools.enrichTerminalResult(terminals.execute(args.string("command"), args.stringOr("workingDirectory", ""),
                     terminalEnvironment(args), terminalInt(args, "timeoutSeconds", 300),
                     McpTerminalJobs.BACKEND_SHIZUKU)))
             }
@@ -1501,7 +1508,91 @@ internal class McpTools(private val context: Context, private val event: (String
     }
     private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) =
         McpToolSchema.objectSchema(*names, required = required)
-    private fun toolJson(json: JsonObject) = toolResult(json.toString()).apply { add("structuredContent", json) }
+    private fun toolJson(json: JsonObject) = toolResult(json.toString()).apply {
+        // P0-2：统一返回结构。扁平 structuredContent 中带 jobId/items/listing 的工具保留旧顶层字段，
+        // 同时补 data 镜像；已有 {ok,data} 信封的 toolOk 结果不受影响。
+        val structured = if (!json.has("data") && (json.has("jobId") || json.has("items") || json.has("listing")))
+            McpToolResultShapes.flatWithDataMirror(json) else json
+        add("structuredContent", structured)
+    }
+    /** P0-2：terminal_* 扁平 structuredContent 保留旧顶层字段，同时补 data 镜像（data.jobId/data.items…）。 */
+    private fun terminalJson(json: JsonObject) = toolJson(McpToolResultShapes.flatWithDataMirror(json))
+    /** 名称 → 工具定义（首次使用时构建；定义在单个 build 内是静态的）。 */
+    private val toolDefinitionsByName: Map<String, JsonObject> by lazy {
+        listTools(null).getAsJsonArray("tools")
+            .map { it.asJsonObject }
+            .associateBy { it.get("name").asString }
+    }
+
+    /** 桥接失败（`:tools` 进程）同样补参数提示：那里抛的错不会经过 handle() 的 catch。 */
+    private fun enrichBridgedFailure(toolName: String, payload: JsonObject) {
+        if (payload.get("ok")?.asBoolean != false) return
+        val error = payload.getAsJsonObject("error") ?: return
+        val message = error.get("message")?.asString ?: return
+        val enriched = withArgumentHint(toolName, message)
+        if (enriched != message) error.addProperty("message", enriched)
+    }
+
+    /** `.4` P0-1：参数类报错附「可用参数 / 必填 / schema 入口」，省掉穷举试错。 */
+    private fun withArgumentHint(toolName: String, message: String): String {
+        if (!looksLikeArgumentProblem(message)) return message
+        val canonical = runCatching { McpToolCatalog.canonicalName(toolName) }.getOrDefault(toolName)
+        val definition = toolDefinitionsByName[toolName] ?: toolDefinitionsByName[canonical] ?: return message
+        val schema = definition.getAsJsonObject("inputSchema") ?: return message
+        val properties = schema.getAsJsonObject("properties")?.keySet()?.toList().orEmpty()
+        val required = schema.getAsJsonArray("required")?.map { it.asString }.orEmpty()
+        if (properties.isEmpty()) return message
+        return buildString {
+            append(message)
+            append("\n可用参数：").append(properties.joinToString("、"))
+            if (required.isNotEmpty()) append("\n必填：").append(required.joinToString("、"))
+            append("\n提示：tool_schema{\"tool\":\"").append(definition.get("name").asString)
+            append("\"} 可看每个参数的说明与默认值。")
+        }
+    }
+
+    private fun looksLikeArgumentProblem(message: String): Boolean =
+        message.contains("参数") || message.contains("缺少") || message.contains("必须") ||
+            message.contains("未知") || message.contains("required")
+
+    /** `tool_schema{tool}`：单查一个工具的 schema（含别名解析与近邻建议）。 */
+    private fun toolSchema(args: JsonObject): JsonObject {
+        val requested = args.string("tool").trim()
+        val canonical = runCatching { McpToolCatalog.canonicalName(requested) }.getOrDefault(requested)
+        val definition = toolDefinitionsByName[requested] ?: toolDefinitionsByName[canonical]
+        if (definition == null) {
+            val near = McpToolSuggest.suggest(requested, McpToolCatalog.names)
+            throw ToolError(buildString {
+                append("未知工具：").append(requested)
+                if (near.isNotEmpty()) append("。最接近的：").append(near.joinToString("、"))
+            })
+        }
+        val name = definition.get("name").asString
+        val schema = definition.getAsJsonObject("inputSchema")
+        val required = schema?.getAsJsonArray("required")?.map { it.asString }.orEmpty()
+        return ToolkitIo.ok(JsonObject().apply {
+            addProperty("tool", name)
+            addProperty("canonical", McpToolCatalog.canonicalName(name))
+            addProperty("description", definition.get("description")?.asString.orEmpty())
+            add("aliases", JsonArray().apply {
+                McpToolCatalog.aliases.filterValues { it == McpToolCatalog.canonicalName(name) }.keys.forEach { add(it) }
+            })
+            if (schema != null) add("inputSchema", schema)
+            add("required", JsonArray().apply { required.forEach { add(it) } })
+            add("parameters", JsonArray().apply {
+                schema?.getAsJsonObject("properties")?.entrySet()?.forEach { (paramName, spec) ->
+                    add(JsonObject().apply {
+                        addProperty("name", paramName)
+                        addProperty("type", spec.asJsonObject.get("type")?.asString ?: "object")
+                        spec.asJsonObject.get("description")?.asString?.let { addProperty("description", it) }
+                        spec.asJsonObject.get("default")?.let { add("default", it) }
+                        addProperty("required", paramName in required)
+                    })
+                }
+            })
+        })
+    }
+
     /**
      * 失败结果：既给 content[0].text（人读），也给 structuredContent（机读）。
      * `.4` 总报告 P1-E：以前 ToolError/IllegalArgumentException 只回纯文本，标准客户端要再写一个解析器。

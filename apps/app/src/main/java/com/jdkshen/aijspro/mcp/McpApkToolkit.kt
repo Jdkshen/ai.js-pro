@@ -342,6 +342,7 @@ internal class McpApkToolkit(
                     "apk_read_text" -> {
                         val data = readText(workspace, session, args); val actions = JsonArray()
                         if(data.tBool("hasMore")) actions.add(action("apk_read_text", args.deepCopy().apply {
+                            add("offset", data.get("nextOffset"))
                             add("startLine", data.get("nextLine")); add("startColumn", data.get("nextColumn"))
                         }))
                         ToolkitIo.ok(data, actions)
@@ -475,7 +476,7 @@ internal class McpApkToolkit(
         "apk_workspace_inventory" -> "解释 APK 工作区配额占用：列出保存/临时/过期/dangling 工作区、实际字节、owner/clientId/sessionId、活动引用、orphanDirs 与 danglingEntries；配额 16，统计范围见 quotaScope。"
         "apk_workspace_gc" -> "受控清理过期临时 APK 工作区：默认 dryRun=true 只预览；支持 protectedIds/minAgeMinutes/owner/clientId 过滤，保存/活动引用/编辑会话/未知所有权默认全部保护；orphan/dangling 永不自动删除。"
         "apk_session_release" -> "释放 APK 工作区的编辑会话（workspaceId 或 all=true）；只删除 sessions/ 下会话，不删除工作区/快照；返回 releasedSessions/releasedBytes/remainingSessions，重复调用幂等。"
-        "apk_read_text" -> "读取文本：普通条目；DEX 类/方法（smali）；axml: 或 zip_entry: 的二进制 XML/Manifest 会解码成可读 XML。AXML 读取会返回 text/targetVersion，下一步用同一个 axml: locator 调 apk_edit_text。"
+        "apk_read_text" -> "读取文本：普通条目；DEX 类/方法（smali）；axml: 或 zip_entry: 的二进制 XML/Manifest 会解码成可读 XML。分页字段统一为 Unicode 码点：offset/nextOffset 与 startLine/startColumn/nextLine/nextColumn 二选一，同时传时 offset 优先；普通 zip_entry 文本传 offset 会真正切正文，续读用返回的 nextOffset（不要自己猜 startLine）。AXML 读取会返回 text/targetVersion，下一步用同一个 axml: locator 调 apk_edit_text。"
         "apk_edit_text" -> "按 targetVersion 原子编辑会话文本：普通条目、DEX 类/方法 smali、axml: 或 zip_entry: 的二进制 XML/Manifest（内部 ToolkitResources.encodeXml，拒绝 DOCTYPE/ENTITY）；AXML 先 apk_read_text(locator=axml:<entry>) 再传完整 XML 到 write_target。"
         "apk_patch_bytes" -> "等长原始字节补丁，只适用于普通条目；classes*.dex、resources.arsc、二进制 AXML/AndroidManifest.xml 会被拒绝。改 AXML 用 apk_read_text + apk_edit_text（axml: locator），或 apk_decode_project → file_edit_text → apk_build_project。"
         "apk_resource_read", "apk_resource_edit", "apk_resource_add" -> "只操作 resources.arsc 的资源表/资源 XML，不包含 AXML/AndroidManifest.xml；AXML 请用 apk_read_text/apk_edit_text 的 axml: locator。"
@@ -764,9 +765,32 @@ internal class McpApkToolkit(
         }
         val hash = ToolkitIo.sha(source)
         reuseWorkspace(source.path, hash, temporary)?.let { return it }
-        val workspaceCount = workspaces().size
+        var workspaceCount = workspaces().size
         val quotaHint = workspaceQuotaHint()
-        require(workspaceCount < 16) { "最多保留 16 个 APK 工作区，当前 " + workspaceCount + " 个" + quotaHint }
+        var autoGc:JsonObject?=null
+        if(workspaceCount >= 16 && args.tBool("autoGc", true)) {
+            // P2-3：配额满时先按 apk_workspace_gc 的判定回收「过期/临时/无主」；活动引用、当前工作区、
+            // 编辑会话仍由 inventory 保护。失败不假装清理成功，原样把错误带回。
+            autoGc=runCatching {
+                workspaceGc(ToolkitIo.json(
+                    "dryRun" to false,
+                    "includeTemporary" to true,
+                    "includeUnknownOwner" to true,
+                    "minAgeMinutes" to 0,
+                    "expiredAfterMinutes" to 1440,
+                    "allowUnknownAge" to true,
+                ))
+            }.getOrElse { failure ->
+                ToolkitIo.json("attempted" to true,"error" to (failure.message ?: failure.javaClass.simpleName),
+                    "note" to "autoGc 执行失败；未删除任何未知内容，下面仍按配额报错",
+                    "nextActions" to listOf("apk_workspace_inventory 查看","apk_workspace_gc{dryRun:false,includeTemporary:true,includeUnknownOwner:true,minAgeMinutes:0}"))
+            }
+            workspaceCount = workspaces().size
+        }
+        require(workspaceCount < 16) {
+            "最多保留 16 个 APK 工作区，当前 " + workspaceCount + " 个" + quotaHint +
+                autoGc?.let { "；已尝试 autoGc=" + it.toString().take(1200) } .orEmpty()
+        }
         val existingSize = workspaces().sumOf { it.get("size").asLong }
         require(existingSize + source.length() <= 1024L * 1024 * 1024) {
             "APK 快照总量超过 1 GiB（当前 " + existingSize + " 字节，新增 " + source.length() + " 字节）" + quotaHint
@@ -782,6 +806,7 @@ internal class McpApkToolkit(
             }
             val info = ToolkitIo.json("workspaceId" to id, "path" to "aijs://workspace/$id", "sourcePath" to source.path,
                 "temporary" to temporary, "sha256" to hash, "size" to copy.length(), "createdAt" to System.currentTimeMillis())
+            autoGc?.let { info.add("autoGc", it) }
             addClientMetadata(args, info)
             markRebuiltFromUnusableSnapshot(info, source.path, hash, temporary)
             val signature = ToolkitSignatures.read(copy)

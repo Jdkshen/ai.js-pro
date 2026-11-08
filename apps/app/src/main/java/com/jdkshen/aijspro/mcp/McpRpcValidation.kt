@@ -40,7 +40,13 @@ internal object McpRpcValidation {
         if (requestedName.isBlank()) throw McpInvalidParamsException("参数 name 不能为空")
         val canonicalName = McpToolCatalog.canonicalName(requestedName)
         if (canonicalName !in McpToolCatalog.canonicalNames) {
-            throw McpInvalidParamsException("未知工具：$requestedName")
+            throw McpInvalidParamsException(buildString {
+            append("未知工具：").append(requestedName)
+            // `.4` P0-1：只报「未知工具」时调用方只能穷举；给出近邻名 + schema 入口。
+            val near = McpToolSuggest.suggest(requestedName, McpToolCatalog.names)
+            if (near.isNotEmpty()) append("。最接近的：").append(near.joinToString("、"))
+            append("；用 tool_schema{\"tool\":\"<名字>\"} 可看参数与必填项。")
+        })
         }
         val arguments = when (val element = paramsObject.get("arguments")) {
             null -> JsonObject()

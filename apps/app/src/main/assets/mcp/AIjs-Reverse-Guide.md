@@ -374,7 +374,7 @@ jadx, apk-resources, apktool, radare2, r2ghidra, yara, unicorn, frida
 {"jsonrpc":"2.0","id":36,"method":"tools/call","params":{"name":"apk_read_text","arguments":{"workspaceId":"${WORKSPACE_ID}","editSessionId":"${EDIT_SESSION_ID}","locator":"dex_method:Lcom/example/Foo;->bar(I)V","limit":500,"maxChars":49152,"startLine":0,"startColumn":0}}}
 ```
 
-返回的 `data.text` 就是方法 Smali；`data.locator`/`targetVersion`/`editable` 原样保留。方法大于一页时看 `hasMore`/`nextLine`/`nextColumn`，用 `startLine`/`startColumn` 续读（不要用 `offset` 猜码点）。
+返回的 `data.text` 就是方法 Smali；`data.locator`/`targetVersion`/`editable` 原样保留。方法大于一页时看 `hasMore`/`nextOffset` 或 `nextLine`/`nextColumn`：续读优先用 `offset=nextOffset`（Unicode 码点），也可用 `startLine`/`startColumn`；普通 `zip_entry:` 文本的 offset 现在会真正切片，不再从文件头返回整段。
 
 **步骤 3：在 Smali 里读 switch 表和 opcode**：
 
@@ -627,6 +627,48 @@ AXML 不是普通文本，但也有**已接通**的读写路径：
 - 自动加载发生于应用默认进程Provider初始化，早于Application.onCreate，但晚于attachBaseContext；其他进程不自动加载。Provider加载失败会记录AIjsGadget日志，保留应用启动。
 - `frida_eval`脚本≤64KiB、durationMs≤10000；结束时卸载脚本/分离，取消只终止本次客户端进程组。
 - **Frida17不内置Java桥**：直接 `Java.perform()` 会报Java未定义；需要用frida-java-bridge和frida-compile打包脚本后传入。本工具不冒充已内置Java桥编译器。
+
+### Frida 17 API 迁移对照（P0-3）
+
+Frida 17 起，一批 Module 静态方法被移除，不是函数本身消失。遇到 TypeError: ... is not a function，先按 API 迁移排查，不要把它当成“目标函数不存在”。
+
+| 旧写法（Frida 16 / 旧 typings） | Frida 17 写法 |
+|---|---|
+| Module.getExportByName("libc.so", "syscall") | Process.getModuleByName("libc.so").getExportByName("syscall") |
+| Module.findExportByName("libc.so", "open") | Process.getModuleByName("libc.so").findExportByName("open") |
+| Module.findBaseAddress("libc.so") | Process.getModuleByName("libc.so").base |
+| Module.getBaseAddress("libc.so") | Process.getModuleByName("libc.so").base |
+| Module.getSymbolByName("libc.so", "open") | Process.getModuleByName("libc.so").getSymbolByName("open") |
+| Module.getSymbolByName(null, "open") | Module.getGlobalExportByName("open") |
+| Module.findSymbolByName("libc.so", "open") | Process.getModuleByName("libc.so").findSymbolByName("open") |
+| Module.enumerateExports("libc.so") | Process.getModuleByName("libc.so").enumerateExports() |
+| Module.ensureInitialized() | 不再需要；直接使用 Process.getModuleByName(...) |
+| Interceptor.attach(Module.findExportByName("libc.so", "open"), {...}) | Interceptor.attach(Process.getModuleByName("libc.so").getExportByName("open"), {...}) |
+| Interceptor.replace(Module.findExportByName(...), ...) | 先把目标解析成 NativePointer（同上）；replace/revert 和 onEnter/onLeave 本身没有改名 |
+| Interceptor.revert(originalPointer) | 不变；仍传原函数指针 |
+
+首选先拿 Module 对象再取多个符号：
+
+    const libc = Process.getModuleByName("libc.so");
+    const syscall = libc.getExportByName("syscall");
+    const open = libc.findExportByName("open"); // 找不到返回 null，不抛
+
+只要看到 Module.xxx is not a function / TypeError: not a function，先查本表；若是 Process.getModuleByName 抛 module not found，那才是模块名/进程问题。
+
+### Interceptor 两个隐蔽陷阱（P1-1）
+
+(a) 不要用 onLeave 的 x0 判断短函数 patch 是否生效。 对被 patch 成 mov w0,#1; ret 之类的极短函数 attach 时，入口 trampoline 会改动/保存寄存器；onLeave 读到的 x0 可能是 trampoline 的临时值，而不是目标函数语义返回值。先直接调用该函数并检查返回值，或用 Memory.patchCode/反汇编核对入口字节，再决定 patch 成功与否。
+
+(b) 不要 attach 到调用指令地址。 例如对 blr x27 这条指令地址 attach，Interceptor 会改写该指令来接管控制流，结果目标函数可能根本不被调用，表现为“流程没走到”。要 hook 的是函数入口（Process.getModuleByName(...).getExportByName(...) 的 NativePointer，或已解析的函数地址）；需要观察调用点/调用者时，用 Stalker 或 hook 被调函数入口，不要改调用指令。
+
+结论：只 hook 函数入口，不 hook 调用点，不对被 patch 的短函数用 onLeave 做成功判据。
+
+### Gadget on_load="wait" 与 resume（P1-3；先看代码事实）
+
+- 我们生成的包不使用 wait：ToolkitGadget.prepare 对 listen 和 script 两种 interaction 都固定写 on_load:"resume"（ToolkitGadget.kt:83-88，结果中的 onLoad 也是 resume，:74）。所以用当前 apk_inject_gadget 生成的 APK 不会在启动早期卡住，也不需要额外 resume。
+- on_load:"wait" 是 Frida Gadget 的上游默认行为，适用于“要赶在 Application 启动前 attach”的早期抢占；它会让目标在早期阻塞，直到控制端明确 resume。我们的 frida_runner.c 只有 attach/load/eval/unload/detach，没有 frida_session_resume 调用（tools/reverse-native/frida_runner.c:1019 是 frida_device_attach_sync，:1190-1192 是 detach）；从我们的代码角度，frida_eval 既没有 %resume 也没有 session resume 调用，detach 也不是 resume，所以 wait 包不能依赖本工具自动放行，需要外部控制端或改回 resume。
+- 如果你手工把配置改成 on_load:"wait"：不要指望断开连接自动恢复；frida_eval 的 unload/detach 不是 resume。要用支持 resume 的 Frida 控制端（CLI 的 %resume 或 API 的 Session.resume()/Device.resume()），或把配置改回 on_load:"resume" 后重新注入并启动。上游文档：https://frida.re/docs/gadget/（on_load 默认 wait，wait 时连接后要 resume）。
+- 需要“启动早期就加载脚本”而不是“启动时阻塞”时，优先用 interactionType=script（配置同样 on_load:"resume"，不做网络监听）；它靠脚本在启动时运行，不靠 on_load:wait。
 
 ### 当前边界
 

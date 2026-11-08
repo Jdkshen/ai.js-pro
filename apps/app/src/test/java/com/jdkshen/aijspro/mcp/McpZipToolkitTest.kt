@@ -92,6 +92,17 @@ class McpZipToolkitTest {
             assertEquals("", data.get("entryPath").asString)
             assertNotNull(data.get("version").asString)
             data.getAsJsonArray("listing").forEach { names.add(it.asString) }
+            val items = data.getAsJsonArray("items")
+            assertEquals(data.getAsJsonArray("listing").size(), items.size())
+            assertEquals(items.size(), data.get("itemCount").asInt)
+            items.forEach { element ->
+                val item = element.asJsonObject
+                listOf("name", "path", "relativePath", "fullPath", "entryPath", "isDirectory", "size", "compressedSize").forEach {
+                    assertTrue("zip_list item 缺少 " + it, item.has(it))
+                }
+                assertTrue(item.get("size").asLong >= -1L)
+                assertTrue(item.get("compressedSize").asLong >= -1L)
+            }
             val pagination = data.getAsJsonObject("pagination")
             cursor = pagination.get("nextCursor").asString
             val hasMore = pagination.get("hasMore").asBoolean

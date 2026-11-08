@@ -11,6 +11,11 @@
         "type": "boolean",
         "description": "true 为一次性临时工作区；可省略，省略时=true。打开已保存工作区（aijs://workspace/<id>）必须显式传 false。",
         "default": true
+      },
+      "autoGc": {
+        "type": "boolean",
+        "default": true,
+        "description": "配额满时是否先自动回收过期/临时/无主工作区（沿用 apk_workspace_gc 判定；活动引用/当前/编辑会话受保护）。默认 true；false 则直接报配额错误。"
       }
     },
     "required": [
@@ -209,6 +214,12 @@
         "minimum": 0,
         "default": 0,
         "description": "0 起始 Unicode 码点列号；可省略，省略时=0。"
+      },
+      "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 10000000,
+        "description": "可选：Unicode 码点偏移，直接切正文（普通 zip_entry 文本同样生效）；存在时优先于 startLine/startColumn。续读用返回的 nextOffset，不要传 startLine 再猜。"
       }
     },
     "required": [

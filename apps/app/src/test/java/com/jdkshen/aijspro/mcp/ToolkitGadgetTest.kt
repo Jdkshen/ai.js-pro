@@ -14,7 +14,7 @@ import java.util.zip.ZipOutputStream
 class ToolkitGadgetTest {
     @get:Rule val temp = TemporaryFolder()
     private val component by lazy { temp.newFolder("component").apply {
-        ToolkitGadget.ABIS.forEach { abi -> File(this,"gadget/$abi/libfrida-gadget.so").apply { parentFile.mkdirs();writeBytes(elf(abi)) } }
+        ToolkitGadget.ABIS.forEach { abi -> File(this,"gadget/$abi/libfrida-gadget.so").apply { parentFile?.mkdirs();writeBytes(elf(abi)) } }
     } }
     private fun elf(abi:String,alignment:Int=16384):ByteArray {
         val bytes=ByteArray(256);val b=java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
@@ -103,6 +103,24 @@ class ToolkitGadgetTest {
         assertNull(app.getElement("provider").searchAttributeByName("process"))
         assertEquals(Int.MAX_VALUE,app.getElement("provider").searchAttributeByName("initOrder").data)
     }
+    @Test fun scriptTargetIsAbsoluteAppExternalFilesPath() {
+        val target=ToolkitGadget.scriptTargetPath("com.x浏览器","X浏览器-5.6.4/hook.js")
+        val normalized=target.path.replace('\\','/')
+        assertTrue(normalized.startsWith("/sdcard/Android/data/"))
+        assertEquals("/sdcard/Android/data/com.x浏览器/files/aijs-gadget/hook.js",normalized)
+        assertEquals("com.example.gadgettest",ToolkitGadget.packageName(fixture()))
+    }
+    @Test fun preloadAssessmentNeverClaimsEarlyLoadWasImplemented() {
+        val provider=ToolkitGadgetPreload.assessment("provider")
+        assertFalse(provider.tBool("preloadImplemented",true))
+        assertFalse(provider.tBool("earlyLoad",true))
+        assertEquals("provider_only",provider.tString("status"))
+        assertTrue(provider.getAsJsonObject("dtNeeded").tString("status").contains("feasibility"))
+        val dt=ToolkitGadgetPreload.assessment("dt_needed")
+        assertEquals("PRELOAD_MODE_UNAVAILABLE",dt.tString("status"))
+        assertFalse(dt.tBool("preloadImplemented",true))
+    }
+
     @Test fun apkVerificationRecognizesConfigurationButStillRejectsMalformedNativeFiles() {
         for(valid in listOf(true,false)) {
             val apk=File(temp.root,"config-$valid.apk")

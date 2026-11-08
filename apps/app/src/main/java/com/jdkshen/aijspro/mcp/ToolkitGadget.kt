@@ -26,6 +26,16 @@ internal object ToolkitGadget {
     const val LIBRARY = "aijsgadget"
     val ABIS = setOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
 
+    /** Read package name without writing/compiling; used to choose a Gadget script target path. */
+    internal fun packageName(input: File): String = ZipFile(input).use { zip ->
+        val entry = zip.getEntry("AndroidManifest.xml") ?: error("缺少AndroidManifest.xml")
+        val bytes = zip.getInputStream(entry).use { ToolkitIo.read(it, 4 * 1024 * 1024) }
+        require(ToolkitResources.isBinaryXml(bytes)) { "输入APK的Manifest必须为二进制AXML" }
+        val xml = ResXmlDocument().apply { readBytes(ByteArrayInputStream(bytes)) }
+        val manifest = xml.documentElement ?: error("Manifest根节点不存在")
+        manifest.searchAttributeByName("package")?.valueAsString ?: error("Manifest缺少包名")
+    }
+
     fun prepare(input: File, output: File, scratch: File, component: File, port: Int, defaultAbi: String,
                 interactionType: String = "listen", scriptPath: String? = null,
                 providerProcess: String? = null): JsonObject {
@@ -113,6 +123,12 @@ internal object ToolkitGadget {
             }
         }
         return info
+    }
+
+    /** P1-2：目标 App 外部 files 目录下的 Gadget 脚本路径（绝对路径）。 */
+    internal fun scriptTargetPath(packageName: String, sourceName: String): File {
+        val safe = File(sourceName).name.replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "gadget-script.js" }
+        return File("/sdcard/Android/data/$packageName/files/aijs-gadget", safe)
     }
 
     internal fun signatureEntry(name: String) = name.uppercase().let {

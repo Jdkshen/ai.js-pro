@@ -170,6 +170,14 @@ check("shape.failure.workspaceExpired", "失败：过期工作区给 WORKSPACE_E
   assertFailureEnvelope(r, "WORKSPACE_EXPIRED", "apk_search");
   ok(Array.isArray(r.body.nextActions), "信封 nextActions 应该是数组");
 });
+check("arg.hint", "参数类报错要自带「可用参数/必填」（`.4` P0-1）", async () => {
+  const r = await call("native_decompile", { path: "/x", address: "0x1", sha256: "dead" });
+  ok(r.isError, "应该失败");
+  const message = (r.body && r.body.error && r.body.error.message) || "";
+  ok(/可用参数/.test(message), `参数报错应给可用参数列表，实际：${message.slice(0, 120)}`);
+  return "NOTE" + message.split("\n")[1];
+});
+
 check("shape.failure.cursor", "失败：无效游标是信封而不是纯文本", async () => {
   assertFailureEnvelope(await call("continue_result", { cursor: "smoke-bogus-cursor" }), "TOOL_FAILED", "continue_result");
 });

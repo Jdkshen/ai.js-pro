@@ -36,7 +36,7 @@
 ## 文件与 APK 工具：读取 → 修改 → 检查 → 构建
 
 - 快照/会话：`apk_workspace_open` 建不可变快照（已有 APK 上下文可用 `aijs://current-apk` 取回，没有上下文时先按实际路径打开；已保存工作区用 `aijs://workspace/<id>` 且 `temporary=false`），`apk_session_create` 建写时复制会话。会话不会改源 APK。
-- 先读后改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；DEX 类/方法用 `apk_read_text` 的 `dex_*` 定位符读取文本；`apk_edit_text`/`apk_resource_edit` 原样传回。`apk_edit_text` 新建目标用 `targetVersion="missing"` + 单个 `write_target`，且 `write_target` 的 `matchText` 必须为空串（可省略，默认空串）。看到“内容已改变”重新读取，不要重试旧参数。
+- 先读后改：`apk_read_text`/`apk_read_bytes`/`apk_resource_read` 返回 `targetVersion`；DEX 类/方法用 `apk_read_text` 的 `dex_*` 定位符读取文本；`apk_edit_text`/`apk_resource_edit` 原样传回。`apk_read_text` 的 `offset`/`nextOffset` 是 **Unicode 码点**，普通 `zip_entry:` 文本也会真正按 offset 切；续读优先用 `nextOffset`，`offset` 与 `startLine/startColumn` 二选一（同时传 offset 优先）。`apk_edit_text` 新建目标用 `targetVersion="missing"` + 单个 `write_target`，且 `write_target` 的 `matchText` 必须为空串（可省略，默认空串）。看到“内容已改变”重新读取，不要重试旧参数。
 - 输出路径坑（dev-1374）：`apk_build.outputName` 只接受**纯文件名或绝对路径**，相对子目录（如 `autojs_crack/_mcp_test/x.apk`）会被拒；`apk_inject_gadget.outPath` **不建父目录**，父目录必须已存在。先 `file_create_directory` 建目录，再传绝对路径；详见 Guide「dev-1373 已修」的 #18/#12。
 - 两个易错参数（B12）：`zip_create` 的**文件源** `entryPath` 不能以 `/` 结尾（传 `脚本/` 会报错）；输出 ZIP 不能位于任一源目录内。`file_edit_text` 新建文件必须 `targetVersion="missing"`（`"new"` 会报 INVALID_ARGUMENT），且 `edits` 只能有一个 `write_target`；`write_target` 的 `matchText` 必须为空串（可省略，默认空串），其它模式必须唯一匹配。详见 Guide「dev-1380 手册补丁」B12。
 - gadget 瘦身/partial（dev-1379 更正归因）：`detail=summary` 只回关键字段（同一云镜样本 42 KB→480 字符，**不含 `partialReasons`**）；看 `partialReasons[].entry`/`scope`（`target`=目标包自带的库，`injected`=本工具注入的 Gadget；`upstream`/`impact` 辅助）必须用 `detail=full`。K40 云镜样本 5 条实为 target 的 `lib/arm64-v8a/libroot_automator.so`（3 段）+ `libyj_aj_02_309.so`（2 段），**未注入原包同样 5 条**；注入的 `libaijsgadget.so` arm64 3 段全过。① target 库只能由目标方用 NDK r27+ 重编，不要直接改 `p_align`（32 位段不同余，要连带 p_vaddr/p_offset 或重链接）；② injected Gadget 只有 32 位 ABI 不合规，64 位已合规，16 KiB 设备是 arm64、当前无需重编；③ 4096 页设备不影响加载（K40/`.4` `getconf PAGE_SIZE=4096`，无真实 16K 加载失败证据，16K 硬件仍需实测）。验证：full 注入看 `entry/scope`，再对原包 vs 注入包跑 `apk_verify` 对比 native 告警是否仅在注入后新增。
@@ -48,6 +48,34 @@
 - 资源：`apk_resource_read` 每项独立错误，默认 `variant=default`；`maxValueXmlChars` 超预算时 `valueXml=null`，不要写回半截 XML；`resolveDepth=1` 只解析一级直接引用。AXML/资源 XML 的写入/编辑拒绝 DOCTYPE/ENTITY。**AXML/AndroidManifest 不在 `apk_resource_*` 范围内：读用 `apk_read_text(locator="axml:...")`，改用 `apk_edit_text` 同一 locator + targetVersion。**
 - 原生：指令分析在原生库可用时用 Capstone 覆盖 AArch64/ARM/Thumb/x86/x86-64，不可用时只回退有界 AArch64 子集。指令补丁支持四架构，但内置汇编器只有 AArch64 常见子集；ARM/Thumb/x86/x86-64 或内置未覆盖形式要可选 clang（`aijs-toolchain install cpp`）。字符串增长只利用已有 NUL/空格 padding，不改长度/指针/重定位。
 - 容量：APK 快照单包 512MiB、总量 1GiB；单条分析 64MiB、文本 10MiB；单工作区 8 会话、2000 变更条目/512MiB。旧 `mt_*` 名称不注册为规范工具。
+
+## Frida 17 / Interceptor / Gadget 避坑（P0-3 / P1-1 / P1-3）
+
+### Frida 17 API 迁移（遇到 TypeError: not a function 先查这里）
+
+- Module 静态方法在 Frida 17 被移除，不代表目标导出不存在：
+  - Module.getExportByName("libc.so","open") → Process.getModuleByName("libc.so").getExportByName("open")
+  - Module.findExportByName(...) → Process.getModuleByName(...).findExportByName(...)
+  - Module.findBaseAddress("libc.so") / Module.getBaseAddress(...) → Process.getModuleByName("libc.so").base
+  - Module.getSymbolByName(null,"open") → Module.getGlobalExportByName("open")
+  - Module.enumerateExports(...) → Process.getModuleByName(...).enumerateExports()
+  - Interceptor.attach(Module.findExportByName(...), cb) → Interceptor.attach(Process.getModuleByName(...).getExportByName(...), cb)
+- Interceptor.attach/replace/revert 和 onEnter/onLeave 回调本身没有改名；变的是目标指针的解析方式。
+- 先缓存 const libc = Process.getModuleByName("libc.so")，再多次 libc.getExportByName(...)；不要每次重复查模块。
+- TypeError 可能是“静态 API 被移除”，不是拼写错误，也不是目标函数缺失。
+
+### Interceptor 两个隐蔽陷阱
+
+(a) 不要用 onLeave 的 x0 判断被 patch 的极短函数（如 mov w0,#1; ret）是否生效：入口 trampoline 可能让 x0 读到临时值。应直接调用并检查返回值，或反汇编/核对入口字节。
+
+(b) 不要 attach 到调用指令地址（如 blr x27）：Interceptor 会改写该指令，目标函数可能根本不被调用。只 hook 函数入口；需要观察调用者用 Stalker，不要改调用点。
+
+### Gadget on_load=wait 与 resume 的代码事实
+
+- 当前 ToolkitGadget.prepare 对 listen 和 script 都固定生成 on_load:"resume"（ToolkitGadget.kt:74、83-88）；用 apk_inject_gadget 生成的包不会因 wait 卡在启动早期，也不需要手动 resume。
+- Frida 上游默认 on_load:"wait" 会阻塞目标启动，直到控制端明确 resume；我们的 frida_runner.c 只做 attach/load/eval/unload/detach，没有 frida_session_resume（frida_runner.c:1019 attach、:1190-1192 detach）；代码里既没有 %resume 也没有 session resume，detach 不是 resume，所以 wait 包需要外部控制端放行或改回 resume。
+- 手工改成 wait 时：不要依赖断开连接自动恢复；unload/detach 不是 resume。用支持 resume 的 Frida 控制端（CLI %resume / API Session.resume() 或 Device.resume()），或改回 on_load:"resume" 重新注入。上游：https://frida.re/docs/gadget/
+- 想要“启动早期加载脚本”而不是“启动时阻塞”：优先 interactionType=script（同样 on_load:"resume"），不要用 wait。
 
 ## 附录 A · 坑表（症状 → 根因 → 正确做法）
 
