@@ -63,6 +63,7 @@ public final class EmbeddedTerminalActivity extends Activity {
     /** 命令历史（↑/↓ 回溯），最多 {@link #HISTORY_LIMIT} 条。 */
     private final java.util.List<String> mHistory = new java.util.ArrayList<>();
     private int mHistoryCursor = -1;
+    private String mDraft = "";
     private static final int HISTORY_LIMIT = 50;
     private static final int CONSOLE_MAX_CHARS = 200_000;
     private static final String HISTORY_PREFS = "terminal_history";
@@ -124,6 +125,8 @@ public final class EmbeddedTerminalActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         // 运行状态行：空闲给 cwd，运行中给 jobId + 计时，结束后给退出码 + 耗时。
         mRunStatus = new TextView(this);
+        mRunStatus.setSingleLine(true);
+        mRunStatus.setEllipsize(android.text.TextUtils.TruncateAt.END);
         mRunStatus.setTextColor(mPalette.textSecondary);
         mRunStatus.setTextSize(12f);
         mRunStatus.setPadding(0, Math.max(4, padding / 2), 0, 0);
@@ -167,7 +170,7 @@ public final class EmbeddedTerminalActivity extends Activity {
         quickRow.setOrientation(LinearLayout.HORIZONTAL);
         String[][] quicks = {
                 {"pwd", "pwd"}, {"ls -l", "ls -l"}, {"id", "id"},
-                {"top", "logcat -d -t 200"},
+                {"日志", "logcat -d -t 200"},
                 {"前台", "dumpsys window | grep -i mCurrentFocus"},
                 {"端口", "ss -tlnp"},
         };
@@ -188,11 +191,13 @@ public final class EmbeddedTerminalActivity extends Activity {
         // ↑/↓ 回溯历史命令（运行中不打断输入转发）。
         mCommand.setOnKeyListener((view, keyCode, event) -> {
             if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return browseHistory(-1);
-            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return browseHistory(1);
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return browseHistory(1);    // 更旧
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return browseHistory(-1);  // 更新/回到草稿
             return false;
         });
         loadHistory();
+        // 手机上软键盘没有方向键：长按输入框弹历史（`.4` 复核 I8）。
+        mCommand.setOnLongClickListener(v -> { showHistoryDialog(); return true; });
 
         // 用户在控制台里上翻时暂停跟随，滚回底部自动恢复。
         mScrollView.setOnScrollChangeListener((v, scrollX, scrollY, oldX, oldY) ->
@@ -230,7 +235,8 @@ public final class EmbeddedTerminalActivity extends Activity {
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         mClear = terminalButton("清空");
-        mClear.setOnClickListener(v -> { mConsole.setText(""); mFollowTail = true; appendPrompt(); });
+        mClear.setOnClickListener(v -> { mConsole.setText(""); mFollowTail = true;
+            mTruncationNoted = false; showIdleStatus(); appendPrompt(); });
         mCopy = terminalButton("复制全部");
         mCopy.setOnClickListener(v -> {
             android.content.ClipboardManager clipboard =
@@ -266,8 +272,10 @@ public final class EmbeddedTerminalActivity extends Activity {
     private void submitCommand() {
         String command = mCommand.getText().toString().trim();
         if (TextUtils.isEmpty(command)) return;
-        rememberCommand(command);
+        // 运行中的输入是给正在跑的程序当 stdin 的，不进命令历史（`.4` 复核 I2）。
+        if (!mRunning) rememberCommand(command);
         mCommand.setText("");
+        mHistoryCursor = -1;
         appendLine(command);
         if (mRunning) {
             try {
@@ -335,7 +343,7 @@ public final class EmbeddedTerminalActivity extends Activity {
             postTerminal(() -> {
                 stopStatusTicker();
                 if (mRunStatus != null) {
-                    mRunStatus.setText("上次命令 · " + (ok ? "成功" : "退出 " + status)
+                    mRunStatus.setText("上次命令 · " + (ok ? "成功" : (exitCode > 0 ? "非零退出" : "失败 " + status))
                             + (exitCode >= 0 ? " · exit=" + exitCode : "")
                             + " · " + String.format(java.util.Locale.US, "%.2f s", elapsedMs / 1000.0)
                             + " · cwd " + mWorkingDirectory.getAbsolutePath());
@@ -489,12 +497,36 @@ public final class EmbeddedTerminalActivity extends Activity {
         return button;
     }
 
+    /** 长按输入框时的历史选择（软键盘也能用）。 */
+    private void showHistoryDialog() {
+        if (mHistory.isEmpty()) { appendLine("[暂无命令历史]"); return; }
+        final String[] items = mHistory.toArray(new String[0]);
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("命令历史（最近 " + items.length + " 条）")
+                .setItems(items, (dialog, which) -> {
+                    mCommand.setText(items[which]);
+                    mCommand.setSelection(items[which].length());
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
     /** ↑/↓ 浏览历史；返回 true 表示已消费按键。 */
+    /**
+     * ↑/↓ 浏览历史。`mHistory` 是「新→旧」（0=最近一条），因此 **↑ = +1（更旧）**、**↓ = -1（更新）**；
+     * `-1` 表示草稿槽（进入浏览前的输入内容）。`.4` 复核 I1：旧实现方向反了，↓ 还会直接清空输入。
+     */
     private boolean browseHistory(int delta) {
         if (mHistory.isEmpty()) return false;
-        if (mHistoryCursor < 0) mHistoryCursor = mHistory.size();
-        mHistoryCursor = Math.max(0, Math.min(mHistory.size(), mHistoryCursor + delta));
-        String value = mHistoryCursor >= mHistory.size() ? "" : mHistory.get(mHistoryCursor);
+        if (mHistoryCursor < 0) {
+            mDraft = mCommand.getText().toString();
+            mHistoryCursor = -1;
+        }
+        int next = mHistoryCursor + delta;
+        if (next < -1) next = -1;
+        if (next > mHistory.size() - 1) next = mHistory.size() - 1;
+        mHistoryCursor = next;
+        String value = mHistoryCursor < 0 ? mDraft : mHistory.get(mHistoryCursor);
         mCommand.setText(value);
         mCommand.setSelection(value.length());
         return true;
@@ -549,15 +581,21 @@ public final class EmbeddedTerminalActivity extends Activity {
         mConsole.append(text);
         // 只保留尾部一段：超出上限时截断，并一次性提示（避免刷屏）。
         if (mConsole.length() > CONSOLE_MAX_CHARS) {
-            mConsole.setText(mConsole.getText()
-                    .subSequence(mConsole.length() - CONSOLE_MAX_CHARS, mConsole.length()));
+            // 一次多丢（降到上限一半）避免每块输出都做 O(200k) 重排（`.4` 复核 I4）。
+            int keep = CONSOLE_MAX_CHARS / 2;
+            mConsole.setText(mConsole.getText().subSequence(mConsole.length() - keep, mConsole.length()));
             if (!mTruncationNoted) {
                 mTruncationNoted = true;
-                mConsole.setText("[已截断较早输出，仅保留最近部分]\n" + mConsole.getText());
+                // 提示放状态行：它不随日志滚动，不会被截断掉（`.4` 复核 I3）。
+                if (mRunStatus != null) {
+                    mRunStatus.setText("控制台已截断，仅保留最近约 " + (CONSOLE_MAX_CHARS / 2 / 1000) + "k 字符");
+                }
             }
         }
-        // 仅当用户本来就在底部时才跟随；上翻阅读时不打扰。
-        if (mFollowTail) mScrollView.post(() -> mScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+        // 仅当用户本来就在底部时才跟随；上翻阅读时不打扰（post 里再判一次，避免排队期间被抢回底部 —— I5）。
+        if (mFollowTail) {
+            mScrollView.post(() -> { if (mFollowTail) mScrollView.fullScroll(ScrollView.FOCUS_DOWN); });
+        }
     }
 
     private void appendPrompt() {

@@ -106,14 +106,16 @@ class McpHttpServer(
                 }
             } catch (_: RejectedExecutionException) {
                 // `.4` P1-G：503 也要给结构化 body（含恢复建议），别让调用方靠超时猜。
-                respondJson(socket, 503, com.google.gson.JsonObject().apply {
-                    addProperty("error", "service_busy")
-                    addProperty("message", "MCP 连接队列已满（等待上限 " + QUEUED_CONNECTIONS + "），本次请求未进入处理")
-                    addProperty("recovery", "稍后重试；若持续出现，先 get_status.mcp 看服务是否在心跳窗口内，必要时重开 App 让服务拉起")
-                    addProperty("retryAfterMs", 1000)
-                }, null)
-                runCatching { socket.close() }
-                connections.remove(socket)
+                // ⚠️ 必须 runCatching：respondJson 要写 socket，对端已断开时抛 IOException；该异常
+                // 不受同级 catch 覆盖 → 会穿出 while、杀死 accept 线程且无人重启（listener 仍占端口
+                // 却再也不 accept，比 503 更糟）。close/remove 一律放 finally。
+                try {
+                    respondJson(socket, 503, serviceBusyBody(), null)
+                } catch (_: Exception) {
+                } finally {
+                    runCatching { socket.close() }
+                    connections.remove(socket)
+                }
             } catch (_: IOException) {
                 runCatching { socket.close() }
                 connections.remove(socket)
@@ -402,8 +404,40 @@ class McpHttpServer(
         add("error", JsonObject().apply { addProperty("code", code); addProperty("message", message) })
     }
 
+    /** HTTP 原因短语：503 之前会被写成 “503 Bad Request”（`.4` 复核 J2）。 */
+    private fun reasonPhraseFor(status: Int): String = when (status) {
+        200 -> "OK"
+        204 -> "No Content"
+        400 -> "Bad Request"
+        403 -> "Forbidden"
+        404 -> "Not Found"
+        405 -> "Method Not Allowed"
+        406 -> "Not Acceptable"
+        415 -> "Unsupported Media Type"
+        417 -> "Expectation Failed"
+        500 -> "Internal Server Error"
+        503 -> "Service Unavailable"
+        else -> if (status in 200..299) "OK" else "Error"
+    }
+
+    /**
+     * 503 的结构化 body：字段形状与工具失败信封一致（`error` 是对象 + 顶层 `errorCode`），
+     * 这样客户端可以像处理工具失败一样处理它（`.4` 复核 J6）。
+     */
+    private fun serviceBusyBody() = JsonObject().apply {
+        add("error", JsonObject().apply {
+            addProperty("code", "service_busy")
+            addProperty("message", "MCP 连接队列已满（等待上限 $QUEUED_CONNECTIONS），本次请求未进入处理")
+            addProperty("recoverable", true)
+            addProperty("retrySameArguments", true)
+        })
+        addProperty("errorCode", "service_busy")
+        addProperty("recovery", "稍后重试；若持续出现，先 get_status.mcp 看服务状态（listening/port/lastError），必要时重开 App 让服务拉起")
+        addProperty("retryAfterMs", 1000)
+    }
+
     private fun respondJson(socket: Socket, status: Int, body: JsonObject, origin: String?) {
-        respond(socket, status, if (status == 200) "OK" else "Bad Request",
+        respond(socket, status, reasonPhraseFor(status),
             body.toString().toByteArray(Charsets.UTF_8), origin)
     }
 

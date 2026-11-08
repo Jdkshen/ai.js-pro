@@ -105,7 +105,8 @@ class McpService : Service() {
             server = startedEndpoint
             val localUrl = "http://127.0.0.1:" + boundPort + "/mcp"
             val lanUrl = lanAddress(boundPort)
-            McpStateStore.saveRunning(this, boundPort, localUrl, lanUrl)
+            listeningPort = boundPort
+            McpStateStore.saveRunning(this, boundPort, localUrl, lanUrl, autoStarted)
             running = true
             lastError = null
             // task-118：MCP 由用户手动/自动开启即视为完整授权——不再要求额外打开「编辑/运行授权」开关。
@@ -139,6 +140,7 @@ class McpService : Service() {
     override fun onDestroy() {
         stopHeartbeat()
         running = false
+        listeningPort = 0
         allowWrite = false
         allowExecution = false
         tools?.stopRuns()
@@ -266,6 +268,9 @@ class McpService : Service() {
         @Volatile var toolCount = 0
             private set
         @Volatile var autoStarted = false   // 本次启动是否为自动触发（App 回前台）
+        /** 进程内真实监听端口（0=未监听）；`get_status.mcp.listening` 用它，而不是心跳推断。 */
+        @Volatile var listeningPort = 0
+            private set
         @Volatile var autoStopped = false   // 本次停止是否为自动触发（退后台超时）
         @Volatile var lastRequestAt = 0L    // 最近一次 MCP 请求时间（用于自动停止感知活跃连接）
         private val events = CopyOnWriteArrayList<String>()
