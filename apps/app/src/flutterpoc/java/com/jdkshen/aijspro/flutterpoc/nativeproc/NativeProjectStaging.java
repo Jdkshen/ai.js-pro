@@ -15,6 +15,8 @@ import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Locale;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 /**
  * 把「不在应用私有目录里的脚本项目」整棵复制到应用私有目录，再从那里执行。
@@ -153,30 +155,42 @@ public final class NativeProjectStaging {
 
         File stagingRoot = new File(filesRoot, stagingRootName);
         File target = new File(stagingRoot, hashOf(project.getPath()));
-        // 每次运行前清掉同 hash 旧副本：上一次运行留下的 .so/旧文件不能混进本次项目。
-        if (!deleteRecursively(target) || target.exists()) {
-            throw new IOException("暂存项目失败：无法清理旧的项目副本：" + target.getPath());
-        }
-        if (!target.mkdirs() && !target.isDirectory()) {
+        // 不再整目录删除重建：很多脚本会把**自己的依赖下载/写到运行目录**（如自更新脚本把
+        // 脚本.js、任务脚本写到 cwd），整目录重建会在下一次 RUN 时把它们清掉，导致
+        // require("./脚本.js") 报 Module not found。改为「清单化合并」：
+        //   1) 读上次复制清单；2) 只删「上次从源拷过、这次源里已没有」的文件；
+        //   3) 覆盖式复制本次源文件；脚本自己写下的文件（不在清单里）一律保留。
+        if (!target.isDirectory() && !target.mkdirs()) {
             throw new IOException("暂存项目失败：无法创建私有目录：" + target.getPath());
+        }
+        for (String relative : readCopiedManifest(target)) {
+            if (new File(project, relative).exists()) {
+                continue;
+            }
+            File stale = new File(target, relative);
+            if (stale.isFile() && !stale.delete()) {
+                Log.w(TAG, "旧副本中的陈旧文件删除失败：" + stale.getPath());
+            }
         }
 
         CopyStats stats = new CopyStats();
+        stats.root = target;
         try {
             copyProjectContents(project, target, stats);
             // Stable source mapping lets settings and rebuilt UI resources survive staged runs.
             try (FileOutputStream output = new FileOutputStream(new File(target, ".aijs-staging-origin.json"))) {
                 String origin = new org.json.JSONObject().put("schemaVersion", 1)
                         .put("sourceDirectory", project.getPath()).put("stagedDirectory", target.getPath()).toString();
+        writeCopiedManifest(target, stats.copied);
                 output.write(origin.getBytes(StandardCharsets.UTF_8));
             } catch (org.json.JSONException error) {
                 throw new IOException("无法记录项目源目录", error);
             }
         } catch (IOException error) {
-            deleteRecursively(target);
+            // 不再 deleteRecursively(target)：会连脚本自己下载/写入的文件一起删掉。
             throw error;
         } catch (RuntimeException error) {
-            deleteRecursively(target);
+            // 同上：保留脚本自己写下的文件。
             throw new IOException("暂存项目失败：复制项目内容出错：" + error, error);
         }
         Log.i(TAG, "已把项目复制到私有目录：" + project.getPath() + " -> " + target.getPath()
@@ -315,6 +329,9 @@ public final class NativeProjectStaging {
             closeQuietly(output);
         }
         stats.files++;
+        if (stats.root != null) {
+            stats.copied.add(relativePath(stats.root, target));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -419,9 +436,61 @@ public final class NativeProjectStaging {
         return String.format(Locale.US, "%.1fMB", bytes / (1024.0 * 1024.0));
     }
 
+    /** 上次复制清单文件名（记录从源项目复制过去的相对路径）。 */
+    private static final String MANIFEST_NAME = ".aijs-staging-manifest.txt";
+
+    private static Set<String> readCopiedManifest(File target) {
+        Set<String> result = new LinkedHashSet<>();
+        File manifest = new File(target, MANIFEST_NAME);
+        if (!manifest.isFile()) {
+            return result;
+        }
+        try {
+            for (String line : new String(java.nio.file.Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8).split("\n")) {
+                String trimmed = line.trim();
+                if (!trimmed.isEmpty()) {
+                    result.add(trimmed);
+                }
+            }
+        } catch (IOException error) {
+            Log.w(TAG, "读取暂存清单失败（按空清单处理）：" + error);
+        }
+        return result;
+    }
+
+    private static void writeCopiedManifest(File target, Set<String> copied) {
+        File manifest = new File(target, MANIFEST_NAME);
+        StringBuilder builder = new StringBuilder();
+        java.util.List<String> sorted = new java.util.ArrayList<>(copied);
+        java.util.Collections.sort(sorted);
+        for (String relative : sorted) {
+            builder.append(relative).append('\n');
+        }
+        try {
+            try (FileOutputStream output = new FileOutputStream(manifest)) {
+                output.write(builder.toString().getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (IOException error) {
+            Log.w(TAG, "写入暂存清单失败（下次会保守清理）：" + error);
+        }
+    }
+
+    /** 目标文件的相对路径（用于清单）。 */
+    private static String relativePath(File root, File file) {
+        try {
+            return root.toURI().relativize(file.toURI()).getPath();
+        } catch (RuntimeException error) {
+            return file.getName();
+        }
+    }
+
     /** 复制统计：日志里报告文件数与总字节数。 */
     private static final class CopyStats {
         long bytes;
         int files;
+        /** 本次真正复制过去的文件（相对目标根），下次据此清理陈旧源文件。 */
+        final Set<String> copied = new LinkedHashSet<>();
+        /** 复制目标根，用于计算相对路径。 */
+        File root;
     }
 }

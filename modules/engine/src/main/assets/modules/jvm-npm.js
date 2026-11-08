@@ -30,6 +30,23 @@ module = (typeof module === 'undefined') ? {} : module;
     NativeRequire.require = require;
   }
 
+  /** 目录内容速览：给「找不到模块」的报错用（最多 8 个 .js/.json，避免刷屏）。 */
+  function briefDirListing(dir) {
+    try {
+      var names = files.listDir(dir) || [];
+      var picked = [];
+      for (var i = 0; i < names.length && picked.length < 8; i++) {
+        var name = String(names[i]);
+        if (name.charAt(0) === '.') continue;   // 跳过 .mcp-*/.aijs-* 等内部文件
+        if (/\.(js|json)$/.test(name)) picked.push(name);
+      }
+      if (!picked.length) return '(没有 .js/.json 文件)';
+      return picked.join(', ') + (names.length > picked.length ? ', …共 ' + names.length + ' 项' : '');
+    } catch (error) {
+      return '(无法列出该目录：' + error + ')';
+    }
+  }
+
   function Module(id, parent, core) {
     this.id = id;
     this.core = core;
@@ -85,6 +102,24 @@ module = (typeof module === 'undefined') ? {} : module;
     var file = Require.resolve(id, parent);
 
     if (!file) {
+      // `.4` 的 Nycspro 场景：相对依赖缺失时旧实现直接回落 NativeRequire.require(id)，
+      // 抛出的是 Rhino 那句「Can't resolve relative module ID … outside of a module」，
+      // 完全看不出「在哪个目录找、那个目录里有什么」。这里先给出可执行的诊断。（自更新类脚本
+      // 常把依赖下载到运行目录，缺文件时最需要看到的就是这两个信息。）
+      try {
+        if (typeof id === 'string' && (id.indexOf('./') === 0 || id.indexOf('../') === 0)) {
+          var diagRoot = (typeof Require !== 'undefined' && Require.root) ? Require.root : files.cwd();
+          var diagTarget = String(files.join(diagRoot, id)).replace('/./', '/');
+          if (!files.exists(diagTarget)) {
+            throw new ModuleError('找不到模块 "' + id + '"：相对 ' + diagRoot + ' 解析为 ' + diagTarget
+                + '，该文件不存在。该目录下现有：' + briefDirListing(diagRoot)
+                + '。若这是「云端下载 / 自更新」类脚本，请确认依赖已下载成功，且下载与运行使用同一个工作目录。',
+                'MODULE_NOT_FOUND');
+          }
+        }
+      } catch (diagError) {
+        if (diagError instanceof ModuleError) throw diagError;
+      }
       if (typeof NativeRequire.require === 'function') {
         if (Require.debug) {
           System.out.println(['Cannot resolve', id, 'defaulting to native'].join(' '));
