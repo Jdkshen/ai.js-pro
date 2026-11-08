@@ -97,6 +97,7 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
             } catch (e: RhinoException) {
                 throw EngineSyntaxHint.decorate(e, text)
             }
+            applyRequireRootFor(source)
             return runScript(script)
         } catch (e: IOException) {
             throw UncheckedIOException(e)
@@ -104,7 +105,27 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
 
     }
 
-    /**
+    /**
+     * 入口脚本 = 顶层裸脚本（没有 CommonJS 的 module 包装），jvm-npm 只能用 `Require.root` 解析相对路径；
+     * 而那个值在加载 jvm-npm 时就固定成当时的 `files.cwd()`。打包版里 cwd 常与脚本目录不同 →
+     * `require("./脚本.js")` 直接报 "Can't resolve relative module ID … outside of a module"（`.4` 实测）。
+     * 这里每次执行前按**脚本自身目录**刷新（拿不到路径时退回引擎 cwd，与旧行为一致）。
+     */
+    private fun applyRequireRootFor(source: JavaScriptSource) {
+        val dir = (source as? com.stardust.autojs.script.JavaScriptFileSource)?.file?.parentFile?.absolutePath
+            ?: cwd()
+        if (dir.isNullOrEmpty()) return
+        val setter = ScriptableObject.getProperty(mScriptable, "__ajsSetRequireRoot")
+        if (setter is org.mozilla.javascript.Function) {   // kotlin.Function 会遮蔽 mozilla 的
+            try {
+                setter.call(context, mScriptable, mScriptable, arrayOf<Any>(dir))
+            } catch (e: Exception) {
+                Log.w(LOG_TAG, "applyRequireRootFor failed: $dir", e)
+            }
+        }
+    }
+
+    /**
      * continuation 只决定脚本入口用哪套 API 执行：Rhino 在解释器模式下天然支持挂起/恢复，
      * 不需要 project.json 里配置 features —— 否则普通脚本里 continuation.await 会报
      * "Cannot capture continuation from JavaScript code not called directly by executeScriptWithContinuations"。

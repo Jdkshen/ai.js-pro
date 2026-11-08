@@ -233,6 +233,21 @@ runtime.init();
     Module = require("jvm-npm.js");
     require = Module.require;
 
+    // 入口脚本是「顶层裸脚本」，没有 CommonJS 的 module 包装：jvm-npm 的 findRoot(parent) 在
+    // parent 缺失时只能用 Require.root（加载 jvm-npm 那一刻的 files.cwd()）。打包版里 cwd 未必
+    // 等于脚本所在目录，于是 require("./脚本.js") 解析不到，回落到 Rhino 原生 require 就报
+    // "Can't resolve relative module ID ... when require() is used outside of a module"。
+    // 因此由引擎在每次执行入口脚本前，把 root 刷成「脚本自己的目录」。
+    global.__ajsSetRequireRoot = function (dir) {
+        try {
+            if (dir) {
+                require.root = String(dir);
+            }
+        } catch (e) {
+            // 引擎侧只做尽力而为：失败不影响脚本执行。
+        }
+    };
+
 
 })();
 
