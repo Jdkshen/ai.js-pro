@@ -22,6 +22,8 @@ internal object ToolkitGadget {
         val packageName: String,
         val providerProcess: String,
         val providerProcessSource: String,
+        /** clinit 模式：改写前的 application@name（null=Manifest 未声明，运行时即 android.app.Application）。 */
+        val originalApplication: String? = null,
     )
     const val MARKER = "assets/aijs-gadget.json"
     const val LIBRARY = "aijsgadget"
@@ -39,7 +41,8 @@ internal object ToolkitGadget {
 
     fun prepare(input: File, output: File, scratch: File, component: File, port: Int, defaultAbi: String,
                 interactionType: String = "listen", scriptPath: String? = null,
-                providerProcess: String? = null, patchedEntries: Map<String, ByteArray> = emptyMap()): JsonObject {
+                providerProcess: String? = null, patchedEntries: Map<String, ByteArray> = emptyMap(),
+                clinit: ClinitHook? = null): JsonObject {
         require(interactionType == "listen" || interactionType == "script") { "interactionType 只能是 listen 或 script" }
         if (interactionType == "script") {
             // 跨 UID 的 loopback 可能被 SELinux 静默 DROP（实测停在 SYN_SENT），script 模式不碰网络。
@@ -65,7 +68,18 @@ internal object ToolkitGadget {
             require(zip.getEntry(MARKER) == null && entries.none { it.name.endsWith("/lib$LIBRARY.so") || it.name.endsWith("/lib$LIBRARY.config.so") }) { "此APK已包含AI.js Gadget，请从原APK重新生成" }
             val manifestEntry = zip.getEntry("AndroidManifest.xml") ?: error("缺少AndroidManifest.xml")
             val manifest = zip.getInputStream(manifestEntry).use { ToolkitIo.read(it, 4 * 1024 * 1024) }
-            val patched = patchManifest(manifest, provider, suffix, providerProcess)
+            // clinit 模式额外把 application@name 指向生成类；Manifest 其它字节不变，失败按专属码抛出（不产出 APK）。
+            val patched = if (clinit == null) {
+                patchManifest(manifest, provider, suffix, providerProcess)
+            } else {
+                try {
+                    patchManifest(manifest, provider, suffix, providerProcess, clinit.className)
+                } catch (failure: Throwable) {
+                    if (failure is VirtualMachineError) throw failure
+                    throw ToolkitException("PRELOAD_CLINIT_MANIFEST_PATCH_FAILED",
+                        "clinit 模式改写 AndroidManifest.xml 失败：" + (failure.message ?: failure.javaClass.simpleName), "preloadMode")
+                }
+            }
             val nativeAbis = entries.filter { it.name.matches(Regex("lib/[^/]+/[^/]+\\.so")) }.map { it.name.split('/')[1] }.toSet()
             require(nativeAbis.all { it in ABIS }) { "不支持的目标ABI：${nativeAbis - ABIS}" }
             val abis = nativeAbis.ifEmpty { setOf(defaultAbi) }
@@ -74,9 +88,12 @@ internal object ToolkitGadget {
             libraries.forEach { (abi, library) -> validateElf(library.inputStream().use { source -> ByteArray(65536).let { head -> val n=source.read(head); head.copyOf(n.coerceAtLeast(0)) } },abi) }
             require(expanded + libraries.values.sumOf { it.length() } < ToolkitIo.MAX_APK) { "加入Gadget后展开超过512MiB" }
             val dexNumbers = entries.mapNotNull { e -> Regex("classes([0-9]*)\\.dex").matchEntire(e.name)?.groupValues?.get(1)?.let { if (it.isEmpty()) 1 else it.toInt() } }
-            val nextDex = (dexNumbers.maxOrNull() ?: 0) + 1
-            require(nextDex <= 32) { "最多支持32个DEX" }
-            val dexName = if (nextDex == 1) "classes.dex" else "classes$nextDex.dex"
+            val usedDex = dexNumbers.toSet()
+            val freeDex = generateSequence(1) { it + 1 }.filter { it !in usedDex }.take(if (clinit == null) 1 else 2).toList()
+            require(freeDex.last() <= 32) { "最多支持32个DEX" }
+            fun dexEntryName(number: Int) = if (number == 1) "classes.dex" else "classes$number.dex"
+            val dexName = dexEntryName(freeDex[0])
+            val clinitDexName = if (clinit == null) null else dexEntryName(freeDex[1])
             val dex = compileProvider(provider, scratch)
             info = ToolkitIo.json("schemaVersion" to 1, "mode" to "rootless-gadget", "requiresRoot" to false,
                 "packageName" to patched.packageName, "providerClass" to provider,
@@ -90,6 +107,12 @@ internal object ToolkitGadget {
             else {
                 info.addProperty("endpoint", "127.0.0.1:$port")
                 info.addProperty("token", token ?: error("listen 模式缺少令牌"))
+            }
+            // clinit 模式：诚实记录生成类/父类/DEX 条目（provider 仍在，两个钩子并存；二次 loadLibrary 是同 classloader no-op）。
+            if (clinit != null) {
+                info.addProperty("clinitClass", clinit.className)
+                info.addProperty("clinitOriginalApplication", clinit.originalApplication)
+                info.addProperty("clinitDexEntry", clinitDexName)
             }
             val config = ToolkitIo.json("interaction" to if (interactionType == "script") {
                 ToolkitIo.json("type" to "script", "path" to scriptPath, "on_load" to "resume")
@@ -122,7 +145,9 @@ internal object ToolkitGadget {
                     }
                     out.closeEntry()
                 }
-                add("AndroidManifest.xml", patched.bytes); add(dexName, dex); add(MARKER, info.toString().toByteArray(Charsets.UTF_8))
+                add("AndroidManifest.xml", patched.bytes); add(dexName, dex)
+                if (clinit != null && clinitDexName != null) add(clinitDexName, clinit.dex)
+                add(MARKER, info.toString().toByteArray(Charsets.UTF_8))
                 libraries.forEach { (abi, library) ->
                     out.putNextEntry(ZipEntry("lib/$abi/lib$LIBRARY.so"))
                     library.inputStream().use { source -> val buffer=ByteArray(65536);while(true){ToolkitIo.ensureActive();val n=source.read(buffer);if(n<0)break;out.write(buffer,0,n)} };out.closeEntry()
@@ -178,7 +203,7 @@ internal object ToolkitGadget {
     }
 
     internal fun patchManifest(bytes: ByteArray, provider: String, suffix: String,
-                               requestedProviderProcess: String?): ManifestPatch {
+                               requestedProviderProcess: String?, clinitClass: String? = null): ManifestPatch {
         require(ToolkitResources.isBinaryXml(bytes)) { "输入APK的Manifest必须为二进制AXML" }
         val xml = ResXmlDocument().apply { readBytes(ByteArrayInputStream(bytes)) }
         val manifest = xml.documentElement ?: error("Manifest根节点不存在")
@@ -202,6 +227,12 @@ internal object ToolkitGadget {
         if (manifest.listElements("uses-permission").none { it.searchAttributeByResourceId(0x01010003)?.valueAsString == "android.permission.INTERNET" }) {
             manifest.newElementAt(0, "uses-permission").getOrCreateAndroidAttribute("name", 0x01010003).setValueAsString("android.permission.INTERNET")
         }
+        // clinit 模式：**只**改 application@name 一个属性；原值回传，用于生成 .super 与诚实报告。
+        val originalApplication = if (clinitClass == null) null else {
+            val existing = app.searchAttributeByName("name")?.valueAsString?.trim().orEmpty()
+            app.getOrCreateAndroidAttribute("name", 0x01010003).setValueAsString(clinitClass)
+            existing.ifEmpty { null }
+        }
         app.newElement("provider").apply {
             getOrCreateAndroidAttribute("name", 0x01010003).setValueAsString(provider)
             if (processChoice.second != "default") getOrCreateAndroidAttribute("process", 0x01010011).setValueAsString(processChoice.first)
@@ -211,7 +242,7 @@ internal object ToolkitGadget {
             getOrCreateAndroidAttribute("initOrder", 0x0101001a).apply { setType(0x10.toByte()); data = Int.MAX_VALUE }
         }
         xml.refreshFull()
-        return ManifestPatch(xml.bytes, packageName, processChoice.first, processChoice.second)
+        return ManifestPatch(xml.bytes, packageName, processChoice.first, processChoice.second, originalApplication)
     }
 
     private fun resolveProviderProcess(app: ResXmlElement, requested: String?): Pair<String, String> {
@@ -306,5 +337,141 @@ internal object ToolkitGadget {
         source.writeText(text, Charsets.UTF_8)
         require(Smali.assemble(SmaliOptions().apply { outputDexFile = output.path; apiLevel = 21; jobs = 1 }, listOf(source.path))) { "Gadget加载器DEX编译失败" }
         return output.readBytes()
+    }
+
+    // ------------------------------------------------------------------ clinit 提前加载（P1-4 的另一半）
+
+    /** clinit 模式生成的 Application 子类名（固定，便于真机/单测核对）。 */
+    const val CLINIT_CLASS = "com.aijs.instrumentation.AijsApplication"
+
+    /** clinit 模式要追加的类：dex 字节 + 父类（原 application@name，已展开为全限定名）。 */
+    internal data class ClinitHook(val className: String, val originalApplication: String, val dex: ByteArray)
+
+    /** 只读解析出的 application 关键字段。 */
+    internal data class ManifestApplication(val packageName: String, val applicationName: String?, val appComponentFactory: String?)
+
+    /** 只读 Manifest 关键字段；不改任何字节。 */
+    internal fun readApplicationDetails(bytes: ByteArray): ManifestApplication {
+        require(ToolkitResources.isBinaryXml(bytes)) { "输入APK的Manifest必须为二进制AXML" }
+        val xml = ResXmlDocument().apply { readBytes(ByteArrayInputStream(bytes)) }
+        val manifest = xml.documentElement ?: error("Manifest根节点不存在")
+        require(manifest.name == "manifest") { "Manifest根节点无效" }
+        val packageName = manifest.searchAttributeByName("package")?.valueAsString ?: error("Manifest缺少包名")
+        val app = manifest.getElement("application") ?: error("Manifest缺少application")
+        return ManifestApplication(packageName,
+            app.searchAttributeByName("name")?.valueAsString?.trim()?.takeIf { it.isNotEmpty() },
+            app.searchAttributeByName("appComponentFactory")?.valueAsString?.trim()?.takeIf { it.isNotEmpty() })
+    }
+
+    /** Manifest 里的相对类名（.Foo）按包名展开。 */
+    internal fun expandClassName(packageName: String, raw: String): String =
+        if (raw.startsWith(".")) packageName + raw else raw
+
+    /**
+     * clinit 提前加载的**预检 + 生成**：只读输入 APK，校验父类可继承后用进程内 smali 汇编生成新 DEX。
+     * 失败抛 ToolkitException(PRELOAD_CLINIT_*)，调用方据此**不产出任何 APK**。
+     */
+    internal fun prepareClinitHook(input: File, scratch: File, explicitTarget: String? = null): ClinitHook {
+        ZipFile(input).use { zip ->
+            val manifestEntry = zip.getEntry("AndroidManifest.xml")
+                ?: throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "clinit 需要完整单APK：缺少 AndroidManifest.xml", "clinitTarget")
+            val manifest = zip.getInputStream(manifestEntry).use { ToolkitIo.read(it, 4 * 1024 * 1024) }
+            val details = try {
+                readApplicationDetails(manifest)
+            } catch (failure: Throwable) {
+                if (failure is VirtualMachineError) throw failure
+                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    "无法读取 application 信息：" + (failure.message ?: failure.javaClass.simpleName), "clinitTarget")
+            }
+            val raw = explicitTarget?.trim()?.takeIf { it.isNotEmpty() } ?: details.applicationName
+            val original = raw?.let { expandClassName(details.packageName, it) } ?: "android.app.Application"
+            if (details.appComponentFactory != null) {
+                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    "目标声明了 android:appComponentFactory=" + details.appComponentFactory + "：它可能自己实例化 Application，application@name 不可靠", "clinitTarget")
+            }
+            if (original == CLINIT_CLASS) {
+                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "父类不能是本工具生成的类 " + CLINIT_CLASS, "clinitTarget")
+            }
+            if (!original.matches(Regex("[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+"))) {
+                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "application@name 不是合法类名：" + original, "clinitTarget")
+            }
+            val originalType = "L" + original.replace('.', '/') + ";"
+            val clinitType = "L" + CLINIT_CLASS.replace('.', '/') + ";"
+            var superFound = original == "android.app.Application"
+            var clinitPresent = false
+            for (entry in zip.entries().asSequence().filter { it.name.matches(Regex("classes[0-9]*\\.dex")) }) {
+                val dex = try {
+                    ToolkitDex(zip.getInputStream(entry).use { ToolkitIo.read(it, ToolkitIo.MAX_ENTRY) })
+                } catch (failure: Throwable) {
+                    if (failure is VirtualMachineError) throw failure
+                    throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                        "无法解析 " + entry.name + "（可能被壳加密/损坏），不能确认父类可继承：" + (failure.message ?: failure.javaClass.simpleName), "clinitTarget")
+                }
+                for (definition in dex.classes) {
+                    if (definition.type == clinitType) clinitPresent = true
+                    if (definition.type == originalType) {
+                        superFound = true
+                        if (definition.accessFlags and 0x10 != 0) {
+                            throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "父类 " + original + " 是 final，无法继承", "clinitTarget")
+                        }
+                        if (definition.accessFlags and 0x200 != 0) {
+                            throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "父类 " + original + " 是接口，无法继承", "clinitTarget")
+                        }
+                    }
+                }
+            }
+            if (!superFound) {
+                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    "在 APK 的 DEX 集里找不到 " + original + "（壳可能动态加载/加密），无法确认能否继承；可用 clinitTarget 显式指定", "clinitTarget")
+            }
+            if (clinitPresent) {
+                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "APK 里已存在 " + CLINIT_CLASS + "，请从原 APK 重新生成", "clinitTarget")
+            }
+            return ClinitHook(CLINIT_CLASS, original, compileClinitApplication(original, scratch))
+        }
+    }
+
+    /**
+     * 生成 Application 子类：<init> 只调父构造；<clinit> 里 loadLibrary，整段 .catch Throwable 只 Log.e
+     * （与 provider 模板同构：加载失败绝不崩启动）。进程内 smali 汇编，不改动任何既有 DEX。
+     */
+    private fun compileClinitApplication(superName: String, scratch: File): ByteArray {
+        val type = "L" + CLINIT_CLASS.replace('.', '/') + ";"
+        val superType = "L" + superName.replace('.', '/') + ";"
+        val source = File(scratch, "aijs-clinit-application.smali")
+        val output = File(scratch, "aijs-clinit-application.dex")
+        val text = """
+.class public $type
+.super $superType
+.method public constructor <init>()V
+    .locals 0
+    invoke-direct {p0}, $superType-><init>()V
+    return-void
+.end method
+.method static constructor <clinit>()V
+    .locals 3
+    :start
+    const-string v0, "$LIBRARY"
+    invoke-static {v0}, Ljava/lang/System;->loadLibrary(Ljava/lang/String;)V
+    :end
+    return-void
+    .catch Ljava/lang/Throwable; {:start .. :end} :failed
+    :failed
+    move-exception v1
+    const-string v0, "AIjsGadget"
+    const-string v2, "clinit preload failed; check ABI, configuration and port"
+    invoke-static {v0, v2, v1}, Landroid/util/Log;->e(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Throwable;)I
+    return-void
+.end method
+""".trimIndent()
+        return try {
+            source.writeText(text, Charsets.UTF_8)
+            if (!Smali.assemble(SmaliOptions().apply { outputDexFile = output.path; apiLevel = 21; jobs = 1 }, listOf(source.path))) {
+                throw ToolkitException("PRELOAD_CLINIT_DEX_ASSEMBLY_FAILED", "clinit dex 汇编失败（smali assemble 返回 false）", "clinitTarget")
+            }
+            output.readBytes()
+        } finally {
+            source.delete(); output.delete()
+        }
     }
 }

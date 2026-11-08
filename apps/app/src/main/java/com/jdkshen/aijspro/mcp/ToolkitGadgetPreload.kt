@@ -91,8 +91,61 @@ internal object ToolkitGadgetPreload {
     }
 
 
+    /** clinit 模式的预检结果：hook 非空才能继续注入；json 是给客户端的诚实载荷。 */
+    data class ClinitPlan(val applied: Boolean, val hook: ToolkitGadget.ClinitHook?, val json: JsonObject)
+
+    /**
+     * clinit 模式的预检 + 生成（P1-4 的另一半）：只读输入 APK，生成 Application 子类 DEX
+     * （不改既有 DEX、不重编资源）。失败返回 applied=false + reason=PRELOAD_CLINIT_*，
+     * 调用方据此明确失败且**不产出任何 APK**。
+     */
+    fun planClinit(input: File, scratch: File, explicitTarget: String? = null): ClinitPlan = try {
+        val hook = ToolkitGadget.prepareClinitHook(input, scratch, explicitTarget)
+        ClinitPlan(true, hook, ToolkitIo.json(
+            "mode" to "clinit", "applied" to true, "earlyLoad" to true, "preloadImplemented" to true,
+            "soname" to ToolkitElfNeeded.DEFAULT_LIBRARY,
+            "method" to "application_clinit_loadLibrary",
+            "clinitClass" to hook.className, "originalApplication" to hook.originalApplication,
+            "targetSource" to (if (explicitTarget.isNullOrBlank()) "application@name" else "clinitTarget"),
+            "scope" to "main_process_application_class_init",
+            "runtimeVerified" to false, "verificationScope" to "static_dex_manifest_only",
+            "timingNote" to "保证早于 Application.attachBaseContext；父类先初始化，故不保证早于加固壳自身的 native 初始化",
+            "reason" to null, "reasons" to emptyList<String>(), "nextActions" to emptyList<String>()))
+    } catch (failure: ToolkitException) {
+        ClinitPlan(false, null, ToolkitIo.json(
+            "mode" to "clinit", "applied" to false, "earlyLoad" to false, "preloadImplemented" to true,
+            "method" to "application_clinit_loadLibrary",
+            "stage" to "prepare_clinit_hook",
+            "reason" to failure.code, "reasons" to listOf(failure.message ?: failure.code),
+            "argument" to failure.argument,
+            "runtimeVerified" to false, "verificationScope" to "static_dex_manifest_only",
+            "detail" to "未产出任何 APK；clinit 只改 application@name 并新增一个 DEX，不重编资源",
+            "nextActions" to listOf(
+                "改 preloadMode=provider（不提前加载）或 dt_needed（在 dlopen 阶段提前加载目标 .so）",
+                "若目标 Application 是 final / 被壳加密或动态加载 / 声明了 appComponentFactory，clinit 路径不适用")))
+    }
+
     fun assessment(requested: String = "provider"): com.google.gson.JsonObject {
         val mode = requested.trim().lowercase()
+        val clinitImplemented = mode == "clinit"
+        // 注意：这个对象**同时**挂在顶层 (classInitializer) 与 dtNeeded.classInitializer 上。
+        // 历史形态（dev-1413/1414）里它嵌在 dtNeeded 内，顶层读 classInitializer 的调用方拿不到；
+        // 现在两处同源，向后兼容且顶层可读。
+        val classInitializer = ToolkitIo.json(
+            "implemented" to true,
+            "status" to "available",
+            "approach" to "追加一个新 DEX：Lcom/aijs/instrumentation/AijsApplication;（.super=原 application@name）的 <clinit> 里 System.loadLibrary(\"aijsgadget\")，整段 .catch Throwable 只 Log.e；Manifest 只改 application@name 一个属性，既有 DEX 与资源一个字节不动",
+            "blockers" to listOf(
+                "只覆盖 Java 初始化路径；父类先初始化（JLS 12.4.2），加固壳可在 native 或自身 <clinit> 中抢跑，仍不保证早于所有 native 初始化",
+                "目标 Application 是 final / 在 DEX 集里找不到（壳加密或动态加载）/ 声明了 appComponentFactory 时不适用，工具会明确失败（PRELOAD_CLINIT_UNSUPPORTED_APPLICATION）",
+                "新增 DEX 与重签会改变签名；壳若自校验 DEX/签名会检测到",
+            ),
+            "method" to "application_clinit_loadLibrary",
+            "clinitClass" to ToolkitGadget.CLINIT_CLASS,
+            "runtimeVerified" to false,
+            "verificationScope" to "static_dex_manifest_only",
+            "nextStep" to "preloadMode=clinit（可选 clinitTarget 覆盖父类）；失败码 PRELOAD_CLINIT_UNSUPPORTED_APPLICATION / PRELOAD_CLINIT_MANIFEST_PATCH_FAILED / PRELOAD_CLINIT_DEX_ASSEMBLY_FAILED，失败不产出 APK；真机判据：Frida: Listening 早于 attachBaseContext、不崩、零资源漂移",
+        )
         val dt = ToolkitIo.json(
             "implemented" to true,
             "status" to "available_in_place",
@@ -103,26 +156,26 @@ internal object ToolkitGadgetPreload {
                 "需要完整 ELF 写入器/patchelf；当前 ToolkitGadget 只读 ELF",
                 "直接改页对齐/段偏移易破坏签名后加载，必须做 PT_LOAD/16K 对齐校验",
             ),
-            "classInitializer" to ToolkitIo.json(
-                "implemented" to false,
-                "status" to "feasibility_only",
-                "approach" to "改目标 DEX 中 Application/<clinit> 的 smali，插入 System.loadLibrary(\"aijsgadget\")",
-                "blockers" to listOf("只覆盖 Java 初始化路径；加固壳可在 native 中抢跑，仍不保证早于所有 native 初始化", "需要改 DEX/重签，且目标类可能被壳加密/动态加载", "必须保留原 <clinit> 语义，否则可能直接启动失败"),
-                "nextStep" to "若必须尝试，作为独立高风险选项：用现有 apk_edit_text(dex_class/dex_method) 生成候选包，apk_verify + 真机启动验证；验证通过前标 unverified",
-            ),
-            "nextStep" to "使用 preloadMode=dt_needed；工具会在 APK 内就地选择目标 .so，检查 dynstr/dynamic 余量后写入并自校验；不足时明确失败并建议外部 patchelf",
+            // 历史形态保留（同一对象，见上方注释）
+            "classInitializer" to classInitializer,
+            "nextStep" to "提前加载有两条真实现路径：dt_needed（在目标 .so 的 dlopen 阶段，工具就地选 .so 检查 dynstr/dynamic 余量后写入并自校验，不足时明确失败并建议外部 patchelf）与 clinit（在 Application 类初始化时，新增一个 DEX + 只改 application@name，不重编资源）；provider 路径不提前加载",
         )
         return ToolkitIo.json(
             "requestedMode" to requested,
-            "effectiveMode" to when { mode == "provider" -> "provider"; mode == "dt_needed" -> "dt_needed"; else -> null },
-            "preloadImplemented" to false,
+            "effectiveMode" to when { mode == "provider" -> "provider"; mode == "dt_needed" -> "dt_needed"; mode == "clinit" -> "clinit"; else -> null },
+            // 只有真正实现的路径才敢说 preloadImplemented/earlyLoad=true；provider 模式保持原来的诚实语义。
+            "preloadImplemented" to clinitImplemented,
             "providerModeAvailable" to (mode == "provider" && requested == "provider"),
-            "earlyLoad" to false,
+            "earlyLoad" to clinitImplemented,
             "providerTiming" to "ContentProvider.onCreate 在 Application.attachBaseContext 之后；不是 JNI_OnLoad 前",
-            "status" to when { mode == "provider" -> "provider_only"; mode == "dt_needed" -> "dt_needed_available"; else -> "INVALID_PRELOAD_MODE" },
-            "note" to "这是能力评估，不是提前加载实现；provider 模式仍可能在加固壳初始化后才执行。",
+            "clinitTiming" to "Application 类初始化早于 attachBaseContext；父类先初始化，故不保证早于加固壳自身的 native 初始化",
+            "status" to when { mode == "provider" -> "provider_only"; mode == "dt_needed" -> "dt_needed_available"; mode == "clinit" -> "clinit_available"; else -> "INVALID_PRELOAD_MODE" },
+            "note" to "这是能力评估：provider 模式不提前加载（earlyLoad=false）；dt_needed 在目标 .so 的 dlopen 阶段提前加载；clinit 在 Application 类初始化时提前加载（早于 attachBaseContext，但不保证早于加固壳 native）。",
             "dtNeeded" to dt,
+            // 顶层 + dtNeeded 内两处同源：顶层是本轮新增的兼容读取路径，dtNeeded 内是 dev-1413/1414 的历史位置。
+            "classInitializer" to classInitializer,
             "nextActions" to listOf(
+                "clinit：preloadMode=clinit（可选 clinitTarget）；成功才 earlyLoad=true，失败不产出 APK（PRELOAD_CLINIT_*）",
                 "如需在加固壳初始化前介入：调用 preloadMode=dt_needed（可选 preloadTarget），成功才 earlyLoad=true",
                 "provider 路径仍不提前加载；失败时不会伪造 earlyLoad=true",
             ),

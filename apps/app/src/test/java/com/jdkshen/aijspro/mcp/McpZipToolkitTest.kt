@@ -916,6 +916,73 @@ class McpZipToolkitTest {
         assertFalse(explicitExtract.has("organized"))
     }
 
+    /**
+     * W4 task-18（C 类）：zip_list 的 recursive/simple/limit 补 schema default，与运行时缺省同源。
+     * 覆盖「只传最小参数能成功」+「显式 recursive/simple/limit 仍生效」。
+     */
+    @Test
+    fun zipListSchemaDefaultsMatchRuntimeAndExplicitValuesStillWin() {
+        newToolkit()
+        val zip = File(root, "list.zip")
+        writeZip(zip, listOf("a.txt" to "a".toByteArray(), "dir/b.txt" to "b".toByteArray()))
+
+        // 最小参数：只传 path；缺省 recursive=false → 只看根（不出现子目录里的 b.txt）
+        val minimal = call("zip_list", obj("path" to "list.zip")).getAsJsonObject("data")
+        val minimalNames = minimal.getAsJsonArray("listing").map { it.asString }
+        assertTrue("缺省不递归，不应出现子目录条目：$minimalNames", minimalNames.none { it.contains("b.txt") })
+        assertTrue("应列出根下条目：$minimalNames", minimalNames.any { it.endsWith("a.txt") })
+
+        // 显式 recursive=true + simple=true + limit=1 仍生效
+        val explicit = call("zip_list", obj(
+            "path" to "list.zip",
+            "recursive" to true,
+            "simple" to true,
+            "limit" to 1,
+        )).getAsJsonObject("data")
+        assertEquals(1, explicit.get("itemCount").asInt)
+
+        // schema 的 default 与常量同源；required 仍只有 path
+        val schema = toolkit.definitions().map { it.asJsonObject }
+            .first { it.get("name").asString == "zip_list" }.getAsJsonObject("inputSchema")
+        val properties = schema.getAsJsonObject("properties")
+        assertEquals(McpZipToolkit.DEFAULT_ZIP_LIST_RECURSIVE,
+            properties.getAsJsonObject("recursive").get("default").asBoolean)
+        assertEquals(McpZipToolkit.DEFAULT_ZIP_LIST_SIMPLE,
+            properties.getAsJsonObject("simple").get("default").asBoolean)
+        assertEquals(McpZipToolkit.DEFAULT_ZIP_LIST_LIMIT,
+            properties.getAsJsonObject("limit").get("default").asInt)
+        assertEquals(listOf("path"), schema.getAsJsonArray("required").map { it.asString })
+    }
+
+    /** W4 task-18：zip_create.level 移出 required + default=6；显式 level=0（仅存储）仍生效。 */
+    @Test
+    fun zipCreateLevelDefaultsToDeflateAndExplicitStoredStillWins() {
+        newToolkit()
+        File(root, "src.txt").writeText("x".repeat(2000))
+        fun sources() = JsonArray().apply { add(obj("sourcePath" to "src.txt", "entryPath" to "src.txt")) }
+
+        // 最小参数：省略 level（overwrite 仍必填）
+        call("zip_create", obj("outputPath" to "default.zip", "sources" to sources(), "overwrite" to false))
+        val defaultItem = call("zip_list", obj("path" to "default.zip"))
+            .getAsJsonObject("data").getAsJsonArray("items")[0].asJsonObject
+        assertEquals(ZipEntry.DEFLATED, defaultItem.get("method").asInt)
+
+        // 显式 level=0 → 仅存储
+        call("zip_create", obj("outputPath" to "stored.zip", "sources" to sources(), "overwrite" to false, "level" to 0))
+        val storedItem = call("zip_list", obj("path" to "stored.zip"))
+            .getAsJsonObject("data").getAsJsonArray("items")[0].asJsonObject
+        assertEquals(ZipEntry.STORED, storedItem.get("method").asInt)
+
+        // schema：level 非必填 + default=6；overwrite 保留必填（安全闸）
+        val schema = toolkit.definitions().map { it.asJsonObject }
+            .first { it.get("name").asString == "zip_create" }.getAsJsonObject("inputSchema")
+        val required = schema.getAsJsonArray("required").map { it.asString }
+        assertFalse(required.contains("level"))
+        assertTrue("overwrite 必须保留必填（安全闸）", required.contains("overwrite"))
+        assertEquals(McpZipToolkit.DEFAULT_ZIP_CREATE_LEVEL,
+            schema.getAsJsonObject("properties").getAsJsonObject("level").get("default").asInt)
+    }
+
     // ---------------------------------------------------------------------------------------------
     // helpers
     // ---------------------------------------------------------------------------------------------

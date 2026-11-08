@@ -282,6 +282,202 @@ class McpFileToolkitTest {
         assertEquals(listOf("f0.txt", "f1.txt", "f2.txt", "f3.txt", "f4.txt", "sub"), names)
     }
 
+    /**
+     * W4 task-15：file_list 的 recursive/limit 曾是假必填（实调 `file_list{path,recursive:false}`
+     * 报「缺少参数 limit」）。现在只传 path 就能列目录；schema 里两者都不在 required，且 default
+     * 与运行时常量同源（McpFileToolkit.DEFAULT_LIST_*）。
+     */
+    @Test
+    fun fileListAcceptsPathOnlyAndSchemaDropsFakeRequiredFields() {
+        val (toolkit, root) = newToolkit()
+        File(root, "a.txt").writeText("a")
+        File(root, "b.txt").writeText("b")
+
+        val list = data(toolkit.call("file_list", obj("path" to "")))
+        assertEquals(2, list.get("count").asInt)
+        assertTrue("只有两条时不该有下一页", list.get("nextCursor").isJsonNull)
+
+        val schema = toolkit.definitions().map { it.asJsonObject }
+            .first { it.get("name").asString == "file_list" }
+            .getAsJsonObject("inputSchema")
+        val required = schema.getAsJsonArray("required").map { it.asString }
+        assertTrue("file_list 不应有必填参数，实际=$required", required.isEmpty())
+        val properties = schema.getAsJsonObject("properties")
+        assertEquals(
+            McpFileToolkit.DEFAULT_LIST_RECURSIVE,
+            properties.getAsJsonObject("recursive").get("default").asBoolean
+        )
+        assertEquals(
+            McpFileToolkit.DEFAULT_LIST_LIMIT,
+            properties.getAsJsonObject("limit").get("default").asInt
+        )
+        // 上限没被放宽/收紧：显式 limit 仍是 1..1000。
+        assertEquals(1L, properties.getAsJsonObject("limit").get("minimum").asLong)
+        assertEquals(1000L, properties.getAsJsonObject("limit").get("maximum").asLong)
+    }
+
+    /**
+     * schema 的 default 必须就是运行时缺省：造 DEFAULT_LIST_LIMIT+5 个条目，省略 limit 时应当
+     * 恰好返回 DEFAULT_LIST_LIMIT 条并给 nextCursor（运行时若用了别的缺省值就会露馅）。
+     */
+    @Test
+    fun fileListWithoutLimitUsesTheSchemaDefaultPageSize() {
+        val (toolkit, root) = newToolkit()
+        repeat(McpFileToolkit.DEFAULT_LIST_LIMIT + 5) { File(root, "f%04d.txt".format(it)).writeText("x") }
+
+        val list = data(toolkit.call("file_list", obj("path" to "")))
+        assertEquals(McpFileToolkit.DEFAULT_LIST_LIMIT, list.get("count").asInt)
+        assertTrue("还有剩页时必须给 nextCursor", !list.get("nextCursor").isJsonNull)
+        assertTrue(list.get("truncated").asBoolean)
+    }
+
+    /** 显式 recursive / limit 仍然生效（不被新缺省值盖掉）。 */
+    @Test
+    fun fileListExplicitRecursiveAndLimitStillWin() {
+        val (toolkit, root) = newToolkit()
+        File(root, "top.txt").writeText("top")
+        File(root, "sub").mkdirs()
+        File(root, "sub/inner.txt").writeText("inner")
+
+        val flat = data(toolkit.call("file_list", obj("path" to "", "recursive" to false, "limit" to 10)))
+        assertEquals(2, flat.get("count").asInt)
+        val names = flat.getAsJsonArray("entries").map { it.asJsonObject.get("name").asString }
+        assertEquals(listOf("sub", "top.txt"), names.sorted())
+
+        val recursive = data(toolkit.call("file_list", obj("path" to "", "recursive" to true, "limit" to 10)))
+        assertEquals(3, recursive.get("count").asInt)
+        val recursiveNames = recursive.getAsJsonArray("entries").map { it.asJsonObject.get("name").asString }
+        assertTrue("递归应包含子目录内容：$recursiveNames", recursiveNames.contains("inner.txt"))
+
+        // 显式 limit=1 必须压过缺省 200。
+        val one = data(toolkit.call("file_list", obj("path" to "", "recursive" to false, "limit" to 1)))
+        assertEquals(1, one.get("count").asInt)
+        assertTrue("limit=1 且有更多条目时必须给 nextCursor", !one.get("nextCursor").isJsonNull)
+    }
+
+    private fun schemaOf(toolkit: McpFileToolkit, tool: String): JsonObject = toolkit.definitions()
+        .map { it.asJsonObject }
+        .first { it.get("name").asString == tool }
+        .getAsJsonObject("inputSchema")
+
+    private fun requiredOf(toolkit: McpFileToolkit, tool: String): List<String> =
+        schemaOf(toolkit, tool).getAsJsonArray("required").map { it.asString }
+
+    /**
+     * W4 task-18：file_search.recursive 移出 required + default=true（与 file_discover_apk 同族）。
+     * 覆盖「只传最小参数能成功」+「显式 recursive=false 仍生效」。
+     */
+    @Test
+    fun fileSearchDefaultsToRecursiveAndExplicitFalseStillWins() {
+        val (toolkit, root) = newToolkit()
+        File(root, "top.txt").writeText("needle")
+        File(root, "sub").mkdirs()
+        File(root, "sub/deep.txt").writeText("needle")
+
+        val minimal = data(toolkit.call("file_search", obj("path" to ".")))
+        val minimalNames = minimal.getAsJsonArray("entries").map { it.asJsonObject.get("name").asString }
+        assertTrue("缺省 recursive=true 应扫到子目录：$minimalNames", minimalNames.contains("deep.txt"))
+        assertEquals(2, minimal.get("count").asInt)
+
+        val shallow = data(toolkit.call("file_search", obj("path" to ".", "recursive" to false)))
+        val shallowNames = shallow.getAsJsonArray("entries").map { it.asJsonObject.get("name").asString }
+        assertEquals(listOf("top.txt"), shallowNames)
+
+        assertFalse(requiredOf(toolkit, "file_search").contains("recursive"))
+        assertEquals(
+            McpFileToolkit.DEFAULT_SEARCH_RECURSIVE,
+            schemaOf(toolkit, "file_search").getAsJsonObject("properties").getAsJsonObject("recursive").get("default").asBoolean
+        )
+    }
+
+    /** W4 task-18：file_copy.overwrite 移出 required + default=false（与孪生 file_move 一致）。 */
+    @Test
+    fun fileCopyDefaultsToRefusingOverwriteAndExplicitTrueStillWins() {
+        val (toolkit, root) = newToolkit()
+        File(root, "src.txt").writeText("hello")
+
+        // 最小参数 + 目标不存在 → 成功
+        data(toolkit.call("file_copy", obj("sourcePath" to "src.txt", "destinationPath" to "fresh.txt")))
+        assertEquals("hello", File(root, "fresh.txt").readText())
+
+        // 目标已存在 + 省略 overwrite → 缺省 false 必须拒绝，且不破坏目标
+        File(root, "dst.txt").writeText("old")
+        val refused = runCatching {
+            toolkit.call("file_copy", obj("sourcePath" to "src.txt", "destinationPath" to "dst.txt"))
+        }.exceptionOrNull()
+        assertTrue("缺省 overwrite=false 应拒绝已存在目标，实际 $refused", refused is IOException)
+        assertEquals("old", File(root, "dst.txt").readText())
+
+        // 显式 overwrite=true 仍生效
+        data(toolkit.call("file_copy", obj("sourcePath" to "src.txt", "destinationPath" to "dst.txt", "overwrite" to true)))
+        assertEquals("hello", File(root, "dst.txt").readText())
+
+        assertFalse(requiredOf(toolkit, "file_copy").contains("overwrite"))
+        assertEquals(
+            McpFileToolkit.DEFAULT_COPY_OVERWRITE,
+            schemaOf(toolkit, "file_copy").getAsJsonObject("properties").getAsJsonObject("overwrite").get("default").asBoolean
+        )
+    }
+
+    /** W4 task-18：file_replace_text.expectedReplacements 移出 required + default=-1（禁用检查）。 */
+    @Test
+    fun fileReplaceTextDefaultsToDisabledCheckAndExplicitValueStillWins() {
+        val (toolkit, root) = newToolkit()
+        val file = File(root, "r.txt").apply { writeText("one two two") }
+
+        fun version(): String =
+            data(toolkit.call("file_stat", obj("path" to file.name))).get("targetVersion").asString
+
+        // 最小参数：省略 expectedReplacements → 缺省 -1 禁用检查，替换成功
+        val first = data(toolkit.call("file_replace_text", obj(
+            "path" to file.name,
+            "targetVersion" to version(),
+            "encoding" to "utf-8",
+            "contentPattern" to "two",
+            "writeText" to "2",
+            "replacementMode" to "literal",
+            "replaceMode" to "all",
+        )))
+        assertEquals("one 2 2", file.readText())
+        assertTrue(first.get("changed").asBoolean)
+        assertEquals(2L, first.get("replacements").asLong)
+
+        // 显式 expectedReplacements 仍生效：给错的期望值必须报错且不写盘
+        val mismatch = runCatching {
+            toolkit.call("file_replace_text", obj(
+                "path" to file.name,
+                "targetVersion" to version(),
+                "encoding" to "utf-8",
+                "contentPattern" to "2",
+                "writeText" to "two",
+                "replacementMode" to "literal",
+                "replaceMode" to "all",
+                "expectedReplacements" to 5,
+            ))
+        }.exceptionOrNull()
+        assertTrue("expectedReplacements=5 与实际不符应报错，实际 $mismatch", mismatch is IllegalArgumentException)
+        assertEquals("one 2 2", file.readText())
+
+        // 显式正确值仍生效
+        data(toolkit.call("file_replace_text", obj(
+            "path" to file.name,
+            "targetVersion" to version(),
+            "encoding" to "utf-8",
+            "contentPattern" to "2",
+            "writeText" to "two",
+            "replacementMode" to "literal",
+            "replaceMode" to "all",
+            "expectedReplacements" to 2,
+        )))
+        assertEquals("one two two", file.readText())
+
+        assertFalse(requiredOf(toolkit, "file_replace_text").contains("expectedReplacements"))
+        assertEquals(
+            McpFileToolkit.DEFAULT_REPLACE_EXPECTED,
+            schemaOf(toolkit, "file_replace_text").getAsJsonObject("properties").getAsJsonObject("expectedReplacements").get("default").asLong
+        )
+    }
+
     @Test
     fun recursiveDeleteNeedsFlagAndRootIsAlwaysProtected() {
         val (toolkit, root) = newToolkit()

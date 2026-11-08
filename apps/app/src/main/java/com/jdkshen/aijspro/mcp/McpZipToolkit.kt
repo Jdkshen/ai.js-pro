@@ -89,6 +89,12 @@ internal class McpZipToolkit(private val root: File) {
 
         private const val METHOD_STORED = 0
         private const val METHOD_DEFLATED = 8
+        /** zip_list / zip_create 的缺省参数（W4 task-18）：schema 的 default 与运行时缺省同源。 */
+        internal const val DEFAULT_ZIP_LIST_RECURSIVE = false
+        internal const val DEFAULT_ZIP_LIST_SIMPLE = false
+        internal const val DEFAULT_ZIP_LIST_LIMIT = 1000
+        /** zip_create 的压缩级别缺省：6 = Deflate 常规档（0=仅存储仍可显式传）。 */
+        internal const val DEFAULT_ZIP_CREATE_LEVEL = 6
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -152,10 +158,11 @@ internal class McpZipToolkit(private val root: File) {
     private fun listSchema(): JsonObject = schema(
         "path" to str("ZIP 文件路径，root 相对或 root 内绝对路径"),
         "entryPath" to str("ZIP 内目录，必须以 / 结尾；空字符串表示 ZIP 根；/ 表示名称恰为 / 的目录"),
-        "recursive" to bool("是否递归包含全部后代"),
-        "simple" to bool("true 只返回相对名称；false 返回大小/加密/名称"),
+        // W4 task-18（C 类）：补上 default，与运行时缺省同源（DEFAULT_ZIP_LIST_*）。
+        "recursive" to bool("是否递归包含全部后代；省略时=false。", DEFAULT_ZIP_LIST_RECURSIVE),
+        "simple" to bool("true 只返回相对名称；false 返回大小/加密/名称；省略时=false。", DEFAULT_ZIP_LIST_SIMPLE),
         "cursor" to str("首页传空字符串；续页传返回的分页游标"),
-        "limit" to int("每页条目数", 1, 1000),
+        "limit" to int("每页条目数；省略时=" + DEFAULT_ZIP_LIST_LIMIT + "。", 1, 1000, DEFAULT_ZIP_LIST_LIMIT),
         // 审计修正：只有 path 是必需的；entryPath 空=ZIP 根，recursive/simple/cursor/limit 都有缺省。
         required = arrayOf("path"),
     )
@@ -228,10 +235,16 @@ internal class McpZipToolkit(private val root: File) {
             })
         },
         "overwrite" to bool("是否允许替换已存在的普通输出文件"),
-        "level" to int("0 仅存储；1..9 使用 Deflate，数字越大压缩越强", 0, 9),
+        "level" to int(
+            "0 仅存储；1..9 使用 Deflate，数字越大压缩越强；省略时=" + DEFAULT_ZIP_CREATE_LEVEL + "。",
+            0,
+            9,
+            DEFAULT_ZIP_CREATE_LEVEL,
+        ),
         "password" to str("可选；空字符串或省略不加密；非空时文件条目使用 AES-256 加密"),
         "organize" to bool("默认 true：裸文件名或直接落在操作根的 outputPath 会改写进默认项目 mcp-out-YYYYMMDD；显式子目录/项目内路径不动。false 保持原路径。"),
-        required = arrayOf("outputPath", "sources", "overwrite", "level"),
+        // W4 task-18：level 有自然默认（6）→ 移出 required；overwrite 保留必填（显式允许覆盖的安全闸）。
+        required = arrayOf("outputPath", "sources", "overwrite"),
     )
 
     private fun updateSchema(): JsonObject = schema(
@@ -326,16 +339,18 @@ internal class McpZipToolkit(private val root: File) {
         add("enum", JsonArray().apply { add(value) })
     }
 
-    private fun bool(description: String): JsonObject = JsonObject().apply {
+    private fun bool(description: String, default: Boolean? = null): JsonObject = JsonObject().apply {
         addProperty("type", "boolean")
         addProperty("description", description)
+        default?.let { addProperty("default", it) }
     }
 
-    private fun int(description: String, min: Int, max: Int): JsonObject = JsonObject().apply {
+    private fun int(description: String, min: Int, max: Int, default: Int? = null): JsonObject = JsonObject().apply {
         addProperty("type", "integer")
         addProperty("description", description)
         addProperty("minimum", min)
         addProperty("maximum", max)
+        default?.let { addProperty("default", it) }
     }
 
     private fun long(description: String, min: Long, max: Long): JsonObject = JsonObject().apply {
@@ -380,11 +395,12 @@ internal class McpZipToolkit(private val root: File) {
     private fun zipList(args: JsonObject): JsonObject {
         val rawPath = args.requiredString("path")
         // 审计修正：entryPath 空=ZIP 根；recursive/simple/cursor/limit 均有缺省。
+        // W4 task-18：缺省值与 schema 的 default 同源（DEFAULT_ZIP_LIST_*）。
         val entryPath = args.optionalString("entryPath")
-        val recursive = args.optionalBoolean("recursive")
-        val simple = args.optionalBoolean("simple")
+        val recursive = args.optionalBoolean("recursive", DEFAULT_ZIP_LIST_RECURSIVE)
+        val simple = args.optionalBoolean("simple", DEFAULT_ZIP_LIST_SIMPLE)
         val cursor = args.optionalString("cursor")
-        val limit = args.optionalInt("limit", 1, 1000, 1000)
+        val limit = args.optionalInt("limit", 1, 1000, DEFAULT_ZIP_LIST_LIMIT)
         if (entryPath.isNotEmpty() && !entryPath.endsWith("/")) {
             throw IllegalArgumentException("entryPath 必须是空字符串或以 / 结尾的目录路径")
         }
@@ -909,8 +925,9 @@ internal class McpZipToolkit(private val root: File) {
     private fun zipCreate(args: JsonObject): JsonObject {
         val rawOutput = args.requiredString("outputPath")
         val sourcesJson = args.requiredArray("sources")
-        val overwrite = args.requiredBoolean("overwrite")
-        val level = args.requiredInt("level", 0, 9)
+        val overwrite = args.requiredBoolean("overwrite") // W4 task-18：保留必填（安全闸）
+        // W4 task-18：level 缺省 6（与 schema default 同源）。
+        val level = args.optionalInt("level", 0, 9, DEFAULT_ZIP_CREATE_LEVEL)
         val password = args.optionalString("password")
         if (sourcesJson.size() == 0) throw IllegalArgumentException("sources 不能为空")
 
@@ -3428,8 +3445,11 @@ internal class McpZipToolkit(private val root: File) {
         return value
     }
 
-    private fun JsonObject.optionalBoolean(key: String): Boolean =
-        get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: false
+    private fun JsonObject.optionalBoolean(key: String): Boolean = optionalBoolean(key, false)
+
+    /** 带显式缺省的重载（W4 task-18：缺省与 schema 的 default 同源）。 */
+    private fun JsonObject.optionalBoolean(key: String, default: Boolean): Boolean =
+        get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: default
 
     private fun JsonObject.optionalLong(key: String): Long =
         try { get(key)?.asLong ?: 0L } catch (_: Exception) { 0L }

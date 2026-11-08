@@ -83,6 +83,19 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
         private const val SEARCH_TIME_BUDGET_NANOS = 3000L * 1000L * 1000L
         private const val MAX_SEARCH_WARNINGS = 20
         private const val MAX_LIST_LIMIT = 1000
+        /**
+         * file_list 的缺省参数（W4 task-15 假必填清零）：schema 的 default 与运行时缺省**同源**，
+         * 两边都读这两个常量，避免「schema 说 A、运行时按 B」。
+         * 200 与同族 file_search.limit 的既有缺省一致；页大小上限仍是 MAX_LIST_LIMIT（显式 limit 不受影响）。
+         */
+        internal const val DEFAULT_LIST_LIMIT = 200
+        internal const val DEFAULT_LIST_RECURSIVE = false
+        /** file_search 的 recursive 缺省（W4 task-18）：与同族 file_discover_apk 的「省略时=true」一致。 */
+        internal const val DEFAULT_SEARCH_RECURSIVE = true
+        /** file_copy 的 overwrite 缺省（W4 task-18）：与孪生 file_move 的 default=false 对齐。 */
+        internal const val DEFAULT_COPY_OVERWRITE = false
+        /** file_replace_text 的 expectedReplacements 缺省（W4 task-18）：-1 = 禁用替换数检查。 */
+        internal const val DEFAULT_REPLACE_EXPECTED = -1L
         private const val MAX_SEARCH_LIMIT = 1000
         private const val MAX_SEARCH_TEXT_LIMIT = 200
         private const val MAX_SEARCH_TEXT_CONTEXT = 100
@@ -243,12 +256,19 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
                 "按深度优先顺序列出 root 内目录；path 为空表示 root。包含隐藏项，不跟随符号链接。" +
                     "分页 cursor 绑定目录、递归开关与页大小，不能跨目录复用。",
                 schema(
-                    listOf("recursive", "limit"),
+                    // W4 task-15：recursive/limit 都有自然默认，移出 required（path 本来就可省略=root）。
+                    // 缺省与运行时同源：DEFAULT_LIST_RECURSIVE / DEFAULT_LIST_LIMIT。
+                    emptyList(),
                     props(
                         "path" to stringField("绝对路径或相对 root 的目录；省略或空字符串表示 root。"),
-                        "recursive" to boolField("是否递归进入可读子目录。"),
+                        "recursive" to boolField("是否递归进入可读子目录；省略时=false。", DEFAULT_LIST_RECURSIVE),
                         "cursor" to stringField("省略或空字符串表示第一页；后续原样复制上一页返回的 cursor。"),
-                        "limit" to intField("每页条目数，1..1000。", 1, MAX_LIST_LIMIT.toLong(), null),
+                        "limit" to intField(
+                            "每页条目数，1..1000；省略时=" + DEFAULT_LIST_LIMIT + "。",
+                            1,
+                            MAX_LIST_LIMIT.toLong(),
+                            DEFAULT_LIST_LIMIT.toLong(),
+                        ),
                     ),
                 ),
             )
@@ -347,11 +367,12 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
                 "以原始字节复制一个普通文件；目标父目录必须存在。overwrite=false 拒绝已存在目标，" +
                     "overwrite=true 只替换普通文件。复制通过同目录临时文件完成。",
                 schema(
-                    listOf("sourcePath", "destinationPath", "overwrite"),
+                    // W4 task-18：overwrite 有自然默认（false，与孪生 file_move 一致），移出 required。
+                    listOf("sourcePath", "destinationPath"),
                     props(
                         "sourcePath" to stringField("非空源文件路径。"),
                         "destinationPath" to stringField("非空目标路径，不能与源相同。"),
-                        "overwrite" to boolField("是否允许替换已存在的普通文件。"),
+                        "overwrite" to boolField("是否允许替换已存在的普通文件；省略时=false。", DEFAULT_COPY_OVERWRITE),
                     ),
                 ),
             )
@@ -407,10 +428,11 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
                     "不跟随符号链接。每页有节点与时间预算，结果显式返回 truncated/stopReason、scannedEntries/scannedBytes/stoppedAt；" +
                     "截断时返回 scanCursor（同 nextCursor），原样传回即可继续；未扫完≠不存在。",
                 schema(
-                    listOf("path", "recursive"),
+                    // W4 task-18：recursive 有自然默认（true，与 file_discover_apk 同族），移出 required。
+                    listOf("path"),
                     props(
                         "path" to stringField("绝对或相对 root 的目录；用 . 表示 root，空字符串无效。"),
-                        "recursive" to boolField("是否递归搜索子目录。"),
+                        "recursive" to boolField("是否递归搜索子目录；省略时=true。", DEFAULT_SEARCH_RECURSIVE),
                         "namePattern" to stringField("匹配文件名（含扩展名）；省略或空字符串=禁用名称过滤，* 不是通配符。", maxLength = MAX_SEARCH_PATTERN_CHARS),
                         "namePatternType" to stringField("名称表达式类型；可省略，省略时=literal。", default = "literal", enumValues = listOf("literal", "regex")),
                         "nameMatchMode" to stringField("exact 全名匹配；contains 子串或正则查找；可省略，省略时=contains。", default = "contains", enumValues = listOf("exact", "contains")),
@@ -434,9 +456,10 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
                 "在已有普通文件中按字面量或正则替换，保留编码、BOM 和原有换行。" +
                     "先校验版本、匹配数和替换模板，全部通过后才写临时文件并原子发布。",
                 schema(
+                    // W4 task-18：expectedReplacements 有自然默认（-1 = 禁用检查），移出 required。
                     listOf(
                         "path", "targetVersion", "encoding", "contentPattern", "writeText",
-                        "replacementMode", "replaceMode", "expectedReplacements"
+                        "replacementMode", "replaceMode"
                     ),
                     props(
                         "path" to stringField("非空已有普通文件路径。"),
@@ -448,7 +471,12 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
                         "writeText" to stringField("替换文本；空字符串表示删除匹配，不自动加换行。"),
                         "replacementMode" to stringField("literal 原样写入；template 仅正则并支持数字组、花括号数字/命名组与反斜杠转义。", enumValues = listOf("literal", "template")),
                         "replaceMode" to stringField("first 只替换首个非重叠匹配；all 替换全部。", enumValues = listOf("first", "all")),
-                        "expectedReplacements" to intField("期望替换数，-1 禁用检查。", -1, MAX_SAFE_INTEGER),
+                        "expectedReplacements" to intField(
+                            "期望替换数，-1 禁用检查；省略时=-1。",
+                            -1,
+                            MAX_SAFE_INTEGER,
+                            DEFAULT_REPLACE_EXPECTED,
+                        ),
                     ),
                 ),
             )
@@ -1555,9 +1583,10 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
 
     private fun listFiles(args: JsonObject): ToolResult {
         val rawPath = args.optionalString("path")
-        val recursive = args.requiredBoolean("recursive")
+        // W4 task-15：recursive/limit 改为可选，缺省与 schema 的 default 同源（DEFAULT_LIST_*）。
+        val recursive = args.optionalBoolean("recursive", DEFAULT_LIST_RECURSIVE)
         val cursor = args.optionalString("cursor")
-        val limit = args.requiredInt("limit")
+        val limit = args.optionalInt("limit", DEFAULT_LIST_LIMIT)
         checkRange(limit.toLong(), "limit", 1, MAX_LIST_LIMIT.toLong())
 
         val directory = requireExistingDirectory(resolvePath(rawPath, allowEmpty = true))
@@ -2296,7 +2325,8 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
     private fun copyFile(args: JsonObject): ToolResult {
         val source = requireExistingFile(resolvePath(args.requiredString("sourcePath"), allowEmpty = false))
         val destination = resolvePath(args.requiredString("destinationPath"), allowEmpty = false)
-        val overwrite = args.requiredBoolean("overwrite")
+        // W4 task-18：overwrite 缺省 false（与 schema default、孪生 file_move 同源）。
+        val overwrite = args.optionalBoolean("overwrite", DEFAULT_COPY_OVERWRITE)
         if (samePath(source, destination)) throw IllegalArgumentException("源与目标不能相同")
         requireParentDirectory(destination)
         if (destination.exists()) {
@@ -2794,7 +2824,8 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
         }
         val replaceMode = args.requiredString("replaceMode")
         if (replaceMode !in setOf("first", "all")) throw IllegalArgumentException("replaceMode 无效")
-        val expectedReplacements = args.requiredLong("expectedReplacements")
+        // W4 task-18：expectedReplacements 缺省 -1（禁用替换数检查；与 schema default 同源）。
+        val expectedReplacements = args.optionalLong("expectedReplacements", DEFAULT_REPLACE_EXPECTED)
         if (expectedReplacements != -1L) checkRange(expectedReplacements, "expectedReplacements", 0, MAX_SAFE_INTEGER)
         if (textCodePoints(contentPattern).toLong() + textCodePoints(writeText) > MAX_EDIT_TEXT_CODE_POINTS) {
             throw IllegalArgumentException("contentPattern + writeText 超过 $MAX_EDIT_TEXT_CODE_POINTS 码点")
@@ -2926,7 +2957,8 @@ internal class McpFileToolkit(private val root: File, private val store: File? =
     private fun searchFiles(args: JsonObject): ToolResult {
         val rawPath = args.requiredString("path")
         if (rawPath.isEmpty()) throw IllegalArgumentException("path 不能为空；搜索 root 请用 .")
-        val recursive = args.requiredBoolean("recursive")
+        // W4 task-18：recursive 缺省 true（与 schema default、file_discover_apk 同源）。
+        val recursive = args.optionalBoolean("recursive", DEFAULT_SEARCH_RECURSIVE)
         val namePattern = args.optionalString("namePattern")
         val namePatternType = args.optionalString("namePatternType", "literal")
         val nameMatchMode = args.optionalString("nameMatchMode", "contains")

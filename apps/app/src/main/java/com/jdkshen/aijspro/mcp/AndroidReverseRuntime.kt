@@ -300,13 +300,19 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val interaction=args.tString("interactionType","listen")
         require(interaction in setOf("listen","script")){"interactionType 只能是 listen 或 script"}
         val preloadMode=args.tString("preloadMode","provider").trim().lowercase()
-        require(preloadMode in setOf("provider","dt_needed")) {"preloadMode 只能是 provider 或 dt_needed"}
+        require(preloadMode in setOf("provider","dt_needed","clinit")) {"preloadMode 只能是 provider、dt_needed 或 clinit"}
         val preloadPlan=if(preloadMode=="dt_needed") ToolkitGadgetPreload.plan(input, args.tString("preloadTarget","").ifEmpty{null}, android.os.Build.SUPPORTED_ABIS.firstOrNull()) else null
         if(preloadPlan!=null&&!preloadPlan.applied){
             throw ToolkitException("PRELOAD_DT_NEEDED_FAILED",
                 "DT_NEEDED 就地补丁失败，未产出 APK。details="+preloadPlan.json.toString(), "preloadTarget")
         }
-        val preload=preloadPlan?.json ?: ToolkitGadgetPreload.assessment("provider")
+        // clinit：只读预检 + 生成 Application 子类 DEX；失败在写出任何产物之前抛出（不产出半成品）。
+        val clinitPlan=if(preloadMode=="clinit") ToolkitGadgetPreload.planClinit(input, temp, args.tString("clinitTarget","").ifEmpty{null}) else null
+        if(clinitPlan!=null&&!clinitPlan.applied){
+            throw ToolkitException(clinitPlan.json.get("reason")?.asString ?: "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                "clinit 提前加载准备失败，未产出 APK。details="+clinitPlan.json.toString(), "clinitTarget")
+        }
+        val preload=preloadPlan?.json ?: clinitPlan?.json ?: ToolkitGadgetPreload.assessment("provider")
         val unsigned=File(temp,"gadget-unsigned.apk")
         var scriptInfo:JsonObject?=null
         val effectiveScriptPath=if(interaction=="script"){
@@ -322,7 +328,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             effectiveScriptPath,
             // 反馈接线：schema 收了 providerProcess，调用方必须真传，否则逃生口/显式指定形同虚设。
             args.tString("providerProcess","").ifEmpty{null},
-            patchedEntries = preloadPlan?.let { plan -> plan.targetEntry?.let { path -> mapOf(path to (plan.patched ?: byteArrayOf())) } ?: emptyMap() } ?: emptyMap())
+            patchedEntries = preloadPlan?.let { plan -> plan.targetEntry?.let { path -> mapOf(path to (plan.patched ?: byteArrayOf())) } ?: emptyMap() } ?: emptyMap(),
+            clinit = clinitPlan?.hook)
         ToolkitArchiveAlignment.align(unsigned)
         val signed=File(temp,"gadget-signed.apk")
         var verification:JsonObject?=null
