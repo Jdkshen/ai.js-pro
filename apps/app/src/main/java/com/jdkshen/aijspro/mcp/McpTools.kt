@@ -108,7 +108,9 @@ internal class McpTools(private val context: Context, private val event: (String
                 "tools/call" -> {
                     val invocation = McpRpcValidation.parseToolCall(params)
                     eventName = invocation.requestedName
-                    applyScalarMirror(invocation.requestedName, call(invocation))
+                    // W4 task-21：主进程 / 工具桥 / 自动化三条路径都收敛到这里；给扁平结果统一补 data 镜像
+                    // （含纯标量工具），>64KiB 不补并写 dataOmitted 说明原因；已是信封或已有 data 的不动。
+                    McpToolResultShapes.mirrorFlatResult(applyScalarMirror(invocation.requestedName, call(invocation)))
                 }
                 "resources/list"->knowledge.resourcesList(McpRpcValidation.optionalParams(params)?:JsonObject())
                 "resources/templates/list"->knowledge.resourceTemplatesList(McpRpcValidation.optionalParams(params)?:JsonObject())

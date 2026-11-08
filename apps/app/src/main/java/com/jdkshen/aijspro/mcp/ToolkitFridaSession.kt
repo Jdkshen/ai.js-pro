@@ -336,7 +336,9 @@ internal class ToolkitFridaSession(
         require(parts.isNotEmpty() && parts.all { part ->
             part.isNotEmpty() && part.length <= 63 && part.all { c -> c.isLetterOrDigit() || c == '_' }
         }) { "packageName 格式无效：应为点分 Android 包名" }
-        target.pid?.let { require(it > 0) { "pid 必须为空或正整数" } }
+        // W4 task-21：pid 是**可选覆盖**（省略时按 packageName 解析目标进程）。旧 schema 曾给 pid 一个
+        // default=1，那等于「省略就绑 init」，没有任何可用语义 —— 已去掉该 default，并在这里把 pid<=1 明确拒绝。
+        target.pid?.let { require(it >= 2) { "pid 必须是 >=2 的进程号（pid 1 是 init，不是目标应用进程）；省略 pid 时按 packageName 解析会话目标" } }
         val endpoint = target.endpoint?.trim()?.takeIf { it.isNotEmpty() }
         endpoint?.let { validateEndpoint(it) }
         val token = target.token?.trim()?.takeIf { it.isNotEmpty() }

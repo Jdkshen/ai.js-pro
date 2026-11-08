@@ -16,6 +16,28 @@ class ToolkitFridaSessionTest {
         }
     }
 
+    /**
+     * W4 task-21：pid 是可选覆盖 —— 省略 pid 时按 packageName 解析（pid=null），
+     * 显式给时必须是 >=2 的真实进程号；pid=1（init）与 pid=0 明确拒绝。
+     */
+    @Test
+    fun pidIsOptionalButNeverDefaultsToInit() {
+        val sessions = ToolkitFridaSession({ 1_000L }, ttlMillis = 60_000, maxSessions = 4)
+
+        // 省略 pid：会话按 packageName 解析，pid 为 null（不再是「默认 1」）
+        val byPackage = sessions.open(ToolkitFridaSession.Target("com.example.app", null, "127.0.0.1:27042", null), "")
+        assertEquals("com.example.app", byPackage.tString("packageName"))
+        assertTrue("省略 pid 时应为 JSON null", byPackage.get("pid").isJsonNull)
+
+        // 显式 pid 仍生效
+        val byPid = sessions.open(ToolkitFridaSession.Target("com.example.other", 4321, "127.0.0.1:27042", null), "")
+        assertEquals(4321, byPid.get("pid").asInt)
+
+        // pid 1 = init / pid 0：明确拒绝（不静默绑 init）
+        rejects { sessions.open(ToolkitFridaSession.Target("com.example.init", 1, "127.0.0.1:27042", null), "") }
+        rejects { sessions.open(ToolkitFridaSession.Target("com.example.zero", 0, "127.0.0.1:27042", null), "") }
+    }
+
     @Test
     fun openBindsTargetAndMasksSecrets() {
         var now = 1_000L
@@ -102,7 +124,7 @@ class ToolkitFridaSessionTest {
     @Test
     fun messageLimitRejectsInsteadOfDropping() {
         val sessions = ToolkitFridaSession(maxMessages = 2)
-        val id = sessions.open(ToolkitFridaSession.Target("com.example.app", 1, null, null), "x").tString("sessionId")
+        val id = sessions.open(ToolkitFridaSession.Target("com.example.app", 4242, null, null), "x").tString("sessionId")
         sessions.append(id, "info", "a")
         sessions.append(id, "info", "b")
         rejects { sessions.append(id, "info", "c") }
@@ -114,14 +136,14 @@ class ToolkitFridaSessionTest {
     fun ttlExpiresOnReadAndFreesSessionSlot() {
         var now = 0L
         val sessions = ToolkitFridaSession({ now }, ttlMillis = 100, maxSessions = 1)
-        val id = sessions.open(ToolkitFridaSession.Target("com.example.app", 1, null, null), "x").tString("sessionId")
+        val id = sessions.open(ToolkitFridaSession.Target("com.example.app", 4242, null, null), "x").tString("sessionId")
         sessions.append(id, "info", "before")
         now = 99L
         assertEquals(1, sessions.read(id, 0, 10).get("total").asInt)
         now = 100L
         rejects { sessions.read(id, 0, 10) }
         assertEquals(0, sessions.list().get("count").asInt)
-        val replacement = sessions.open(ToolkitFridaSession.Target("com.example.app", 1, null, null), "x")
+        val replacement = sessions.open(ToolkitFridaSession.Target("com.example.app", 4242, null, null), "x")
         assertTrue(replacement.tString("sessionId").isNotEmpty())
     }
 
@@ -129,7 +151,7 @@ class ToolkitFridaSessionTest {
     fun stopReportsReleasedCountsAndExpiredState() {
         var now = 5L
         val sessions = ToolkitFridaSession({ now }, ttlMillis = 50, maxMessages = 10)
-        val id = sessions.open(ToolkitFridaSession.Target("com.example.app", 1, null, "tok-abcd"), "x").tString("sessionId")
+        val id = sessions.open(ToolkitFridaSession.Target("com.example.app", 4242, null, "tok-abcd"), "x").tString("sessionId")
         sessions.append(id, "info", "one")
         now = 6L
         sessions.append(id, "info", "two")
@@ -160,7 +182,7 @@ class ToolkitFridaSessionTest {
     fun sessionLimitRejectsAndExpiredSlotIsReusable() {
         var now = 0L
         val sessions = ToolkitFridaSession({ now }, ttlMillis = 10, maxSessions = 1)
-        sessions.open(ToolkitFridaSession.Target("com.example.one", 1, null, null), "x")
+        sessions.open(ToolkitFridaSession.Target("com.example.one", 4242, null, null), "x")
         rejects { sessions.open(ToolkitFridaSession.Target("com.example.two", 2, null, null), "x") }
         now = 11L
         val second = sessions.open(ToolkitFridaSession.Target("com.example.two", 2, null, null), "x")
@@ -195,11 +217,11 @@ class ToolkitFridaSessionTest {
     @Test
     fun invalidTargetsAndScriptsAreRejected() {
         val sessions = ToolkitFridaSession()
-        rejects { sessions.open(ToolkitFridaSession.Target("", 1, null, null), "x") }
-        rejects { sessions.open(ToolkitFridaSession.Target("not a package", 1, null, null), "x") }
+        rejects { sessions.open(ToolkitFridaSession.Target("", 4242, null, null), "x") }
+        rejects { sessions.open(ToolkitFridaSession.Target("not a package", 4242, null, null), "x") }
         rejects { sessions.open(ToolkitFridaSession.Target("com.example.app", 0, null, null), "x") }
-        rejects { sessions.open(ToolkitFridaSession.Target("com.example.app", 1, "bad-endpoint", null), "x") }
-        rejects { sessions.open(ToolkitFridaSession.Target("com.example.app", 1, null, null), "x".repeat(65_537)) }
+        rejects { sessions.open(ToolkitFridaSession.Target("com.example.app", 4242, "bad-endpoint", null), "x") }
+        rejects { sessions.open(ToolkitFridaSession.Target("com.example.app", 4242, null, null), "x".repeat(65_537)) }
         rejects { sessions.append("missing-session", "info", "x") }
     }
 }

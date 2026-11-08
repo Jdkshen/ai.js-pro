@@ -53,11 +53,75 @@ class McpToolSurfaceInvariantTest {
         McpToolkitCatalog.aliases.forEach { (alias, target) ->
             assertTrue("mt_ 别名 $alias 指向不存在的工具 $target", target in names)
         }
-        // mt_* 别名是按 names.take(58) 的**下标窗口**生成的（McpToolkitCatalog.kt:107）：
-        // 任何人在第 58 项之前插入名字都会静默改变别名集合，这里把窗口边界钉住。
-        assertEquals("mt_ 别名数量变了（下标窗口 58 被改动？）", 57, McpToolkitCatalog.aliases.size)
-        assertTrue("mt_project_folder 应在窗口内", "mt_project_folder" in McpToolkitCatalog.aliases)
-        assertTrue("窗口外的工具不该有 mt_ 别名", "mt_evidence_export" !in McpToolkitCatalog.aliases)
+        // W4 task-21：mt_ 别名已从「names.take(58) 下标窗口」改成**显式名单**（McpToolkitCatalog.mtAliasTargets）。
+        // 这里把 57 个目标**逐字**冻住：以后插入/改名工具必须显式加别名，否则本断言直接失败（不再静默漂移）。
+        val expectedAliasTargets = listOf(
+            "project_folder",
+            "apk_workspace_open",
+            "apk_list_available_apks",
+            "apk_workspace_list",
+            "apk_list",
+            "apk_search",
+            "apk_read_text",
+            "apk_read_bytes",
+            "apk_dex_read_class_outline",
+            "apk_dex_xref",
+            "apk_resource_read",
+            "apk_resource_xref",
+            "apk_native_inspect",
+            "apk_native_list_items",
+            "apk_native_map_address",
+            "apk_native_xref",
+            "apk_native_disassemble",
+            "apk_native_analyze_control_flow",
+            "apk_continue",
+            "apk_session_create",
+            "apk_edit_text",
+            "apk_delete_target",
+            "apk_resource_edit",
+            "apk_resource_add",
+            "apk_patch_bytes",
+            "apk_native_patch_instructions",
+            "apk_native_patch_string",
+            "apk_session_check",
+            "apk_build",
+            "apk_workspace_delete",
+            "apk_read_signature",
+            "file_get_access_policy",
+            "file_list",
+            "file_stat",
+            "file_read_text",
+            "file_read_bytes",
+            "file_edit_text",
+            "file_write_bytes",
+            "file_patch_bytes",
+            "file_copy",
+            "file_move",
+            "file_delete",
+            "file_create_directory",
+            "file_delete_directory",
+            "file_search",
+            "file_replace_text",
+            "file_truncate_bytes",
+            "file_append_bytes",
+            "file_append_text",
+            "file_search_text",
+            "apk_copy_entry",
+            "zip_list",
+            "zip_read_text",
+            "zip_read_bytes",
+            "zip_test",
+            "zip_extract",
+            "zip_create",
+        )
+        assertEquals(
+            "mt_ 别名集合与冻结名单不一致（新增/改名工具时必须同时更新 McpToolkitCatalog.mtAliasTargets 与本清单）",
+            expectedAliasTargets.sorted(),
+            McpToolkitCatalog.aliases.values.sorted()
+        )
+        assertEquals("mt_ 别名数量", 57, McpToolkitCatalog.aliases.size)
+        assertTrue("mt_project_folder 应在名单里", "mt_project_folder" in McpToolkitCatalog.aliases)
+        assertTrue("不在名单里的工具不该有 mt_ 别名", "mt_evidence_export" !in McpToolkitCatalog.aliases)
     }
 
     // ------------------------------------------------------------------ 定义层

@@ -24,7 +24,7 @@ internal object ToolkitReverseTools {
         "frida_status" to "只读快路径（同步返回，不占后台任务槽）；检查 Frida 客户端组件和指定 endpoint 的服务连接。endpoint 默认127.0.0.1:27042；需打开已集成Gadget的目标应用，token取apk_inject_gadget结果，不需Root或Server。注意：listen 模式跨 UID 时 loopback 可能被 SELinux 静默 DROP（连接停在 SYN_SENT/超时，不是组件没装）；传入 portListening/synSentObserved/sameUid 可获得 connectDiagnosis，返回里另有 listenModeLimits 与 gadgetScriptMode（推荐改用 script 模式，不碰网络）。本版还会自动读取 /proc/net/tcp[6]（读不到时用 tcpText/tcp6Text 传入原文）解析 LISTEN(0A)/SYN_SENT(02) 作为证据；sameUid 无法从 tcp 文件推断，仍需比较目标/客户端 UID。本工具不创建 job，连续重分析把任务槽占满时仍可直接调用。",
         "frida_processes" to "只读快路径（同步返回，不占后台任务槽）；列出指定免Root Gadget endpoint 可见的进程（最多500），需 frida 组件和已打开的Gadget应用，token取apk_inject_gadget结果。应用UID不能任意附加其他应用。本工具不创建 job，任务槽满时仍可直接调用。",
         "frida_eval" to "对 endpoint 的 pid 附加并有界执行 Frida script，durationMs≤10000，返回消息后卸载脚本/分离。需可访问Gadget，传相同endpoint/token；Java.perform需另行打包frida-java-bridge；停止任务杀掉本次客户端进程组。后台 jobId。返回固定顶层 messages/messageLines；失败但有产出时 state=FAILED_BUT_PARTIAL、partial=true，不能丢弃 messages；无产出才 FAILED。",
-        "frida_session_open" to "开启有界 Frida 观测会话（内存态，TTL/消息上限）：绑定目标 packageName/pid 与 endpoint，脚本只记录长度与哈希，endpoint/token 回显掩码。本版本不实现持久 attach（attached=false 会如实标注），真实执行仍走 frida_eval；进程退出会话即丢失，需重新 open。",
+        "frida_session_open" to "开启有界 Frida 观测会话（内存态，TTL/消息上限）：绑定目标 packageName（必填）+ 可选 pid（省略时按 packageName 解析目标进程；显式给时必须是 >=2 的进程号，pid 1 是 init）与 endpoint，脚本只记录长度与哈希，endpoint/token 回显掩码。本版本不实现持久 attach（attached=false 会如实标注），真实执行仍走 frida_eval；进程退出会话即丢失，需重新 open。",
         "frida_session_read" to "按 offset/limit 分页读取会话消息（seq/时间戳/截断标记）。会话过期或不存在时明确报错，不静默返回空列表。",
         "frida_session_close" to "显式停止会话并返回真实清理计数（releasedMessages/releasedSessions）；不存在或已过期返回 state=not_found/expired，不抛异常。",
         "frida_session_list" to "列出当前进程内的观测会话（TTL、上限、重复策略）；过期会话在此真实清理。",
@@ -117,7 +117,7 @@ internal object ToolkitReverseTools {
             "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}
                 field("portListening",ToolkitIo.json("type" to "boolean","default" to false));field("synSentObserved",ToolkitIo.json("type" to "boolean","default" to false));field("sameUid",ToolkitIo.json("type" to "boolean","default" to false))
                 field("tcpText",str("可选：/proc/net/tcp 原文（本进程读不到时用 terminal_exec/shizuku 取回再传入）"));field("tcp6Text",str("可选：/proc/net/tcp6 原文"))}
-            "frida_session_open"->{field("packageName",str("目标包名"),true);field("pid",num(1,Int.MAX_VALUE,1));field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str());field("script",str("Frida JavaScript ≤64KiB"),true)}
+            "frida_session_open"->{field("packageName",str("目标包名"),true);field("pid",num(2,Int.MAX_VALUE));field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str());field("script",str("Frida JavaScript ≤64KiB"),true)}
             "frida_session_read"->{field("sessionId",str(),true);field("offset",num(0,1000000,0));field("limit",num(1,500,50))}
             "frida_session_close"->field("sessionId",str(),true)
             "frida_session_list"->Unit

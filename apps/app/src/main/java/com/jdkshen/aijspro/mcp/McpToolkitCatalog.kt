@@ -104,5 +104,78 @@ internal object McpToolkitCatalog {
         // Bug 2：释放编辑会话，让配额 GC 能真正回收（用户实测 gc 删不动）。
         "apk_session_release"
     )
-    val aliases = names.take(58).filter { it != "toolkit_status" }.associateBy { "mt_" + it }
+    /**
+     * MT 兼容别名（`mt_<tool>`）的**显式名单**（W4 task-21）。
+     *
+     * 以前是 `names.take(58).filter { it != "toolkit_status" }` —— 依赖 names 的**下标窗口**：
+     * 任何人在前 58 项里插入工具都会**静默**改变 mt_ 别名集合（还可能把别名指到新工具上）。
+     * 现在与 names 的顺序解耦：新增/改名工具必须在这里显式加一行。集合与改造前逐字相同（57 个），
+     * 由 `McpToolSurfaceInvariantTest.toolkitCatalogNamesAndAliasesAreConsistent` 钉住。
+     */
+    private val mtAliasTargets = listOf(
+        "project_folder",
+        "apk_workspace_open",
+        "apk_list_available_apks",
+        "apk_workspace_list",
+        "apk_list",
+        "apk_search",
+        "apk_read_text",
+        "apk_read_bytes",
+        "apk_dex_read_class_outline",
+        "apk_dex_xref",
+        "apk_resource_read",
+        "apk_resource_xref",
+        "apk_native_inspect",
+        "apk_native_list_items",
+        "apk_native_map_address",
+        "apk_native_xref",
+        "apk_native_disassemble",
+        "apk_native_analyze_control_flow",
+        "apk_continue",
+        "apk_session_create",
+        "apk_edit_text",
+        "apk_delete_target",
+        "apk_resource_edit",
+        "apk_resource_add",
+        "apk_patch_bytes",
+        "apk_native_patch_instructions",
+        "apk_native_patch_string",
+        "apk_session_check",
+        "apk_build",
+        "apk_workspace_delete",
+        "apk_read_signature",
+        "file_get_access_policy",
+        "file_list",
+        "file_stat",
+        "file_read_text",
+        "file_read_bytes",
+        "file_edit_text",
+        "file_write_bytes",
+        "file_patch_bytes",
+        "file_copy",
+        "file_move",
+        "file_delete",
+        "file_create_directory",
+        "file_delete_directory",
+        "file_search",
+        "file_replace_text",
+        "file_truncate_bytes",
+        "file_append_bytes",
+        "file_append_text",
+        "file_search_text",
+        "apk_copy_entry",
+        "zip_list",
+        "zip_read_text",
+        "zip_read_bytes",
+        "zip_test",
+        "zip_extract",
+        "zip_create",
+    )
+
+    val aliases = mtAliasTargets.associateBy { "mt_" + it }
+
+    init {
+        check(mtAliasTargets.size == mtAliasTargets.toSet().size) { "mt_ 别名目标有重复" }
+        check(mtAliasTargets.all { it in names }) { "mt_ 别名目标不在 names 里：" + mtAliasTargets.filterNot { it in names } }
+    }
 }
