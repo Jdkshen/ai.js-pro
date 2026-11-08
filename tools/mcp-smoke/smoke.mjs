@@ -134,18 +134,56 @@ check("shape.success", "成功结果：content + structuredContent（有 ok 字�
   }
 });
 
-/** 形状清单（信息性）：主进程工具仍是扁平载荷，`.4` 已接受；这里只统计并打印，不判失败。 */
-check("shape.inventory", "形状清单：ok/data 家族 vs 扁平载荷（信息性）", async () => {
-  const samples = ["get_status", "file_list", "apk_list_available_apks", "workspace_list", "list_scripts"];
-  const flat = []; const envelope = [];
-  for (const name of samples) {
-    try {
-      const r = await call(name, {});
-      const sc = r.result.structuredContent;
-      if (sc && Object.prototype.hasOwnProperty.call(sc, "ok")) envelope.push(name); else flat.push(name);
-    } catch (e) { /* 参数不全的工具跳过 */ }
+/**
+ * W-F 审计出的扁平 structuredContent 工具（没有 ok 字段）。这里是静态清单，shape.inventory 只打印、
+ * 不判失败；新增/改名工具时同步更新本数组。json 是有 `items/listing/jobId` 时由 toolJson 自动补 `data` 镜像。
+ * `toolkit_status` 当前已是 {ok,data}，不在本清单；`call_engine_api` 是 {ok,...} 但无 data 的伪信封，单列。
+ */
+const FLAT_TOOL_NAMES = [
+  "get_status", "list_scripts", "search_scripts", "continue_result", "list_samples", "read_sample",
+  "list_executions", "get_execution", "wait_execution", "read_apk_logs", "run_script",
+  "list_engine_api", "probe_engine_api", "engine_api_diff", "stop_script",
+  "get_ui_layout", "capture_screen", "coordinate_convert", "check_syntax",
+  "stop_all_scripts", "get_mcp_log", "list_engines", "list_overlays", "close_overlays",
+  "terminal_exec", "terminal_read", "terminal_stop", "terminal_list", "shell_rish",
+  "get_build_tools", "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url",
+  "apk_install", "apk_uninstall", "ui_find", "ui_click", "ui_long_click", "ui_node_action",
+  "ui_input", "ui_swipe", "ui_global", "ui_wait", "ui_scroll", "search_api_docs", "read_api_doc",
+  "app_exit_info", "app_trace_start", "app_trace_read", "app_trace_stop", "app_trace_list",
+  "app_launch_trace", "floating_menu", "shell_capabilities", "shell_classify_failure",
+  "node_script_command", "crash_buffer_semantics", "tool_schema",
+];
+/** tools/list 另外暴露的扁平 Pro 别名；学习/工作区/文本类别名不是扁平。 */
+const FLAT_ALIASES = {
+  getUiLayout: "get_ui_layout", captureScreen: "capture_screen", checkSyntax: "check_syntax",
+  runScript: "run_script", stopAllScripts: "stop_all_scripts", getMcpLog: "get_mcp_log",
+  listOverlays: "list_overlays", closeOverlays: "close_overlays",
+};
+check("shape.inventory", "形状清单：完整列出扁平 structuredContent 工具（信息性）", async () => {
+  const list = toolsList || (await rpc("tools/list", {})).tools;
+  const advertised = new Set(list.map((t) => t.name));
+  const flat = [...FLAT_TOOL_NAMES, ...Object.keys(FLAT_ALIASES)].filter((name) => advertised.has(name));
+  const missing = FLAT_TOOL_NAMES.filter((name) => !advertised.has(name));
+  return `NOTE扁平 ${flat.length} 个${missing.length ? " ｜ 清单中未注册: " + missing.join(",") : ""}：${flat.join(",")}`;
+});
+check("shape.scalarMirror", "扁平标量：content 旧扁平 + structuredContent {ok,data}（dev-1402 预期待接线）", async () => {
+  // Lead 接线目标：get_status / get_build_tools 的旧 content 仍可直接解析为无 ok 的扁平对象，
+  // structuredContent 变成 {ok:true,data:<旧扁平字段>}。toolkit_status 本来就是 {ok,data}，只查信封。
+  for (const [name, marker] of [["get_status", "toolCatalog"], ["get_build_tools", "platform"]]) {
+    const r = await call(name, {});
+    ok(!r.isError, `${name}: 不应失败`);
+    ok(r.body && typeof r.body === "object", `${name}: content[0].text 应该是旧扁平 JSON`);
+    ok(!Object.prototype.hasOwnProperty.call(r.body, "ok"), `${name}: content[0].text 不应被 ok/data 包裹`);
+    const sc = r.result.structuredContent;
+    ok(sc && sc.ok === true, `${name}: structuredContent.ok 应为 true`);
+    ok(sc.data && typeof sc.data === "object", `${name}: structuredContent.data 应存在`);
+    ok(Object.prototype.hasOwnProperty.call(sc.data, marker), `${name}: data 应保留原扁平字段 ${marker}`);
   }
-  return `NOTEok/data: ${envelope.join(",") || "无"} ｜ 扁平: ${flat.join(",") || "无"}`;
+  const t = await call("toolkit_status", {});
+  ok(!t.isError, "toolkit_status: 不应失败");
+  const ts = t.result.structuredContent;
+  ok(ts && ts.ok === true && ts.data && typeof ts.data === "object", "toolkit_status: 必须有 ok:true + data");
+  return "NOTEget_status/get_build_tools 的 data 镜像 + toolkit_status 信封";
 });
 check("shape.failure.mainProcess", "失败（主进程）：信封 + isError + 顶层 errorCode", async () => {
   assertFailureEnvelope(await call("read_script", { path: "__smoke_missing__.txt" }), null, "read_script");
@@ -176,6 +214,20 @@ check("arg.hint", "参数类报错要自带「可用参数/必填」（`.4` P0-1
   const message = (r.body && r.body.error && r.body.error.message) || "";
   ok(/可用参数/.test(message), `参数报错应给可用参数列表，实际：${message.slice(0, 120)}`);
   return "NOTE" + message.split("\n")[1];
+});
+check("arg.details", "参数报错的结构化 details：required/availableParameters/schemaTool 双写", async () => {
+  const r = await call("native_decompile", { path: "/x", address: "0x1", sha256: "dead" });
+  ok(r.isError, "arg.details: native_decompile 应失败");
+  const top = r.result && r.result.details;
+  const nested = r.body && r.body.error && r.body.error.details;
+  ok(top && typeof top === "object", "arg.details: result.details 顶层应存在");
+  ok(nested && typeof nested === "object", "arg.details: body.error.details 应存在");
+  for (const [label, d] of [["result.details", top], ["error.details", nested]]) {
+    ok(Array.isArray(d.required) && d.required.includes("path") && d.required.includes("address"), label + ".required 应含 path/address");
+    ok(Array.isArray(d.availableParameters) && !d.availableParameters.includes("sha256"), label + ".availableParameters 不应含非法 sha256");
+    eq(d.schemaTool, "tool_schema", label + ".schemaTool");
+  }
+  return "NOTEdetails.required/availableParameters/schemaTool 双写";
 });
 
 check("shape.failure.cursor", "失败：无效游标是信封而不是纯文本", async () => {

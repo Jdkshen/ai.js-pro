@@ -33,6 +33,26 @@
 - 浮窗：Node 用 `require("floating_window")`；坐标/根布局看 Guide「Node floating_window 坐标系与根布局（.4 实战反馈）」——根 `layout_*` 会被 WindowManager 无视，根 `match_parent`，窗口大小用 `setSize`/`initialSize`。
 - 外部 MT 管理器 MCP 只作历史对照，不是本机工具链依赖。APK 工具用于静态查看和编辑，不执行目标 APK 的代码；脚本和终端由各自工具管理。
 
+## 返回结构与提前加载速查（W-G）
+
+### 扁平标量工具的两种读法
+
+get_status / toolkit_status / get_build_tools 新版本同时给两种读法：content[0].text 是旧扁平 JSON（老代码不变），structuredContent={ok:true,data:{...}} 是同一批字段（新代码读 data）。当前构建若还没有 data 镜像，继续读 content[0].text；get_status/get_build_tools 已加镜像，toolkit_status 走 :tools 桥接，若该构建尚未镜像同样读 text。
+
+### 参数类错误的 error.details
+
+INVALID_ARGUMENT / 缺参数时，message 仍有人类可读的「可用参数/必填」；新版本会在 structuredContent.error.details 提供 {tool,availableParameters[],required[],schemaTool:"tool_schema"}，可能附 schemaArguments。机读读 details，不解析 message；旧构建没有 details 时退回 message + tool_schema。顶层 details 可能镜像，以 error.details 为准。
+
+### apk_inject_gadget.preloadMode=provider|dt_needed
+
+preloadMode 只有 provider（默认）和 dt_needed；providerProcess 是另一个字段（决定 Provider 跑在哪个进程），不要混。
+
+- provider：ContentProvider.onCreate 路径，在 Application.attachBaseContext 之后，对加固壳可能太晚；成功时 preload.earlyLoad=false / preload.preloadImplemented=false，不能声称已提前加载。
+- dt_needed（支持时）：可选 preloadTarget 指定目标 .so（省略自动选择第一个可安全 patch 的 lib/*/*.so，排除 gadget/config）；就地给 .dynamic 增加 DT_NEEDED=libaijsgadget.so、.dynstr 追加库名或复用同名串，让 linker 在壳之前加载 Gadget。成功保证：只用已有可替换 DT_NULL 空槽（保留终止符）和 .dynstr 尾部 NUL 余量，不移动节/PT_LOAD、文件大小不变；原子写出，失败不留半坏产物、不改原文件。成功看 preload.applied/earlyLoad/preloadImplemented/sizeUnchanged/verified/targetPath。
+- 不支持/失败时：顶层通常 PRELOAD_DT_NEEDED_FAILED（旧版/模式不可用可能 PRELOAD_MODE_UNAVAILABLE），错误信息里带 preload 计划（applied=false）；reason 举例 DYNAMIC_NO_SPARE_NULL、DYNSTR_NO_ROOM、NO_DYNAMIC_SEGMENT、NOT_ELF、UNSUPPORTED_ENDIAN/UNSUPPORTED_ELF_CLASS，完整清单看错误/计划里的 preload.targets[].reason/reasons，不要当全集。不要伪造成功；对目标 .so 副本用外部 patchelf --add-needed libaijsgadget.so --page-size 16384 <目标.so>（page-size 按目标/设备页大小），回填 APK、重签并 apk_verify 复核。
+- 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED/PRELOAD_MODE_UNAVAILABLE 及任何细分 reason；不要反复试到看起来成功。
+- 边界：目标 .so 必须在壳初始化前被 linker 加载；多 .so/多 ABI/分包、自定义 linker、页对齐不满足不保证成功。若返回失败，不会生成半成品。
+
 ## 文件与 APK 工具：读取 → 修改 → 检查 → 构建
 
 - 快照/会话：`apk_workspace_open` 建不可变快照（已有 APK 上下文可用 `aijs://current-apk` 取回，没有上下文时先按实际路径打开；已保存工作区用 `aijs://workspace/<id>` 且 `temporary=false`），`apk_session_create` 建写时复制会话。会话不会改源 APK。

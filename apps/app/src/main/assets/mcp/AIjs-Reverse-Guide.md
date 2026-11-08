@@ -628,6 +628,26 @@ AXML 不是普通文本，但也有**已接通**的读写路径：
 - `frida_eval`脚本≤64KiB、durationMs≤10000；结束时卸载脚本/分离，取消只终止本次客户端进程组。
 - **Frida17不内置Java桥**：直接 `Java.perform()` 会报Java未定义；需要用frida-java-bridge和frida-compile打包脚本后传入。本工具不冒充已内置Java桥编译器。
 
+### Gadget 提前加载：preloadMode=provider 与 dt_needed
+
+apk_inject_gadget.preloadMode 只有两个取值：provider（默认）| dt_needed。不要把它和 providerProcess 混用：providerProcess 决定注入 Provider 在哪个进程（例如 :script / :remote），preloadMode 决定 Gadget 在启动链的哪一段加载。
+
+**provider（当前路径；对加固壳太晚）**
+
+- 通过注入的 ContentProvider.onCreate 加载；ContentProvider 在 Application.attachBaseContext 之后才创建，因此对在 attachBaseContext / JNI_OnLoad 阶段就初始化的加固壳可能太晚。
+- 成功时 preload.earlyLoad=false、preload.preloadImplemented=false 是诚实标注；这不是“已提前加载”，不能据此声称能抢在壳的 native 初始化前。
+
+**dt_needed（支持时；失败/不支持时明确失败）**
+
+- 可选 preloadTarget：指定目标 .so（完整 lib/... 路径或文件名）；省略时自动从 lib/*/*.so 选择第一个可安全 patch 的目标（排除 gadget/config）。
+- 支持时的语义：就地给目标 .so 的 .dynamic 增加 DT_NEEDED=libaijsgadget.so，并在 .dynstr 追加库名或复用已有同名串，让 linker 在加载目标壳 .so 之前先加载 Gadget。等价于 .4 手工执行的 patchelf --add-needed libaijsgadget.so --page-size 16384 的自动化版本。
+- 成功保证（仅当工具明确支持并成功时）：只使用 .dynamic 已有的可替换 DT_NULL 空槽（通常保留后一个 DT_NULL 终止符）和 .dynstr 尾部 NUL 余量，不移动节/段/PT_LOAD，输出文件大小不变；原子写出，失败不留下半坏产物，原文件不动。
+- 成功看 preload.applied=true、earlyLoad=true、preloadImplemented=true、sizeUnchanged=true、verified=true、targetPath；只有这些成立才算提前加载。provider 成功时是 earlyLoad=false/preloadImplemented=false。
+- 失败时顶层通常是 PRELOAD_DT_NEEDED_FAILED（旧版/模式不可用可能是 PRELOAD_MODE_UNAVAILABLE），错误信息里带 preload 计划（applied=false）；reason 举例：DYNAMIC_NO_SPARE_NULL、DYNSTR_NO_ROOM、NO_DYNAMIC_SEGMENT、NOT_ELF、UNSUPPORTED_ENDIAN、UNSUPPORTED_ELF_CLASS 等。完整清单以错误/计划里的 preload.targets[].reason/reasons 为准，不要当全集。
+- 不支持或失败时不要重试到“成功”：用目标 .so 副本执行外部 patchelf --add-needed libaijsgadget.so --page-size 16384 <目标.so>（page-size 按目标/设备页大小，16 KiB 用 16384），再回填 APK、重新签名并用 apk_verify 复核。外部 patchelf 不是本工具自动完成的步骤。
+- 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED/PRELOAD_MODE_UNAVAILABLE 及任何细分 reason；不要反复试到“看起来成功”。
+- 边界：目标 .so 必须在壳初始化前被 linker 加载；多 .so / 多 ABI / 分包、自定义 linker、页对齐不满足的目标不保证成功。provider 可作为兼容回退，但不解决早于 attachBaseContext 的时序问题。
+
 ### Frida 17 API 迁移对照（P0-3）
 
 Frida 17 起，一批 Module 静态方法被移除，不是函数本身消失。遇到 TypeError: ... is not a function，先按 API 迁移排查，不要把它当成“目标函数不存在”。
@@ -775,6 +795,11 @@ Frida 17 起，一批 Module 静态方法被移除，不是函数本身消失。
 - `retrySameArguments=false` 表示**不要原样重试**；先改参数/先补前置。
 - `nextActions` 可能给出具体下一步；为空时按 code 和本文处理，不要自己编工具名。
 - `recoverable=true` 不等于“重试就能过”；预算/缺组件/旧版本都需要先改变状态。
+
+### 参数错误 details 与扁平标量返回
+
+- 参数类失败（INVALID_ARGUMENT、缺参数）除 message 里的「可用参数/必填」外，新版本会在 structuredContent.error.details 提供 {tool,availableParameters[],required[],schemaTool:"tool_schema"}（可能附 schemaArguments）；机读用 details，不要解析 message。顶层 details 可能镜像；旧构建没有 details 时退回 message + tool_schema。
+- get_status / toolkit_status / get_build_tools 这类扁平标量工具的新版本会同时给：content[0].text 旧扁平 JSON（老代码照旧读），以及 structuredContent={ok:true,data:{...}}（新代码读 data）。当前构建若尚未加 data 镜像，以 content[0].text 为准；get_status/get_build_tools 已加镜像，toolkit_status 走 :tools 桥接，若该构建尚未镜像同样以 text 为准。
 
 ### 常见错误与正确动作
 

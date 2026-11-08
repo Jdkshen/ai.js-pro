@@ -108,7 +108,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 "tools/call" -> {
                     val invocation = McpRpcValidation.parseToolCall(params)
                     eventName = invocation.requestedName
-                    call(invocation)
+                    applyScalarMirror(invocation.requestedName, call(invocation))
                 }
                 "resources/list"->knowledge.resourcesList(McpRpcValidation.optionalParams(params)?:JsonObject())
                 "resources/templates/list"->knowledge.resourceTemplatesList(McpRpcValidation.optionalParams(params)?:JsonObject())
@@ -124,16 +124,16 @@ internal class McpTools(private val context: Context, private val event: (String
             rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolError) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "工具调用失败"), "TOOL_FAILED"))
+            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "工具调用失败"), "TOOL_FAILED", details = argumentDetailsOrNull(eventName, e.message)))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: ToolkitException) {
             // 必须先于 IllegalArgumentException 捕获（ToolkitException 是它的子类），否则 code 会被丢成纯文本。
             event("$eventName · 失败 · ${e.code} · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "工具调用失败"), e.code, e.argument))
+            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "工具调用失败"), e.code, e.argument, argumentDetailsOrNull(eventName, e.message)))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalArgumentException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
-            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "参数或工作区状态无效"), "INVALID_ARGUMENT"))
+            if (method == "tools/call") rpcResult(id, toolFailure(withArgumentHint(eventName, e.message ?: "参数或工作区状态无效"), "INVALID_ARGUMENT", details = argumentDetailsOrNull(eventName, e.message)))
             else rpcError(id, -32602, e.message ?: "Invalid params")
         } catch (e: IllegalStateException) {
             event("$eventName · 失败 · ${e.message.orEmpty().take(100)}")
@@ -469,6 +469,9 @@ internal class McpTools(private val context: Context, private val event: (String
                     code?.takeIf { it.isJsonPrimitive }?.asString?.let { addProperty("errorCode", it) }
                     result.getAsJsonObject("error")?.get("argument")?.takeIf { it.isJsonPrimitive }?.asString
                         ?.let { addProperty("argument", it) }
+                    // 参数明细也镜像到结果顶层（主进程路径本来就放在顶层；冒烟 arg.details 两边都断言）。
+                    (result.getAsJsonObject("error")?.getAsJsonObject("details") ?: result.getAsJsonObject("details"))
+                        ?.let { add("details", it) }
                 }
             }
         }
@@ -1517,6 +1520,39 @@ internal class McpTools(private val context: Context, private val event: (String
     }
     /** P0-2：terminal_* 扁平 structuredContent 保留旧顶层字段，同时补 data 镜像（data.jobId/data.items…）。 */
     private fun terminalJson(json: JsonObject) = toolJson(McpToolResultShapes.flatWithDataMirror(json))
+    /** 扁平标量工具：`content[0].text` 保留旧扁平 JSON，`structuredContent` 补 `{ok,data}`（`.4` 要求）。 */
+    private val scalarMirrorTools = setOf("get_status", "get_build_tools")
+
+    private fun applyScalarMirror(toolName: String, result: JsonObject): JsonObject {
+        if (result.get("isError")?.asBoolean == true) return result
+        val canonical = runCatching { McpToolCatalog.canonicalName(toolName) }.getOrDefault(toolName)
+        if (canonical !in scalarMirrorTools) return result
+        val structured = result.getAsJsonObject("structuredContent") ?: return result
+        if (structured.has("ok")) return result
+        result.add("structuredContent", ToolkitIo.json(
+            "ok" to true, "data" to structured, "error" to null, "nextActions" to emptyList<Any>()))
+        return result
+    }
+
+    /** 参数类报错的结构化明细（`.4`：机读用 details，别解析 message 文本）。 */
+    private fun argumentDetailsOrNull(toolName: String, message: String?): JsonObject? {
+        if (message == null || !looksLikeArgumentProblem(message)) return null
+        val canonical = runCatching { McpToolCatalog.canonicalName(toolName) }.getOrDefault(toolName)
+        val definition = toolDefinitionsByName[toolName] ?: toolDefinitionsByName[canonical] ?: return null
+        val schema = definition.getAsJsonObject("inputSchema") ?: return null
+        val properties = schema.getAsJsonObject("properties")?.keySet()?.toList().orEmpty()
+        val required = schema.getAsJsonArray("required")?.map { it.asString }.orEmpty()
+        if (properties.isEmpty()) return null
+        val name = definition.get("name").asString
+        return JsonObject().apply {
+            addProperty("tool", name)
+            add("availableParameters", JsonArray().apply { properties.forEach { add(it) } })
+            add("required", JsonArray().apply { required.forEach { add(it) } })
+            addProperty("schemaTool", "tool_schema")
+            addProperty("schemaArguments", "{\"tool\":\"$name\"}")
+        }
+    }
+
     /** 名称 → 工具定义（首次使用时构建；定义在单个 build 内是静态的）。 */
     private val toolDefinitionsByName: Map<String, JsonObject> by lazy {
         listTools(null).getAsJsonArray("tools")
@@ -1531,6 +1567,10 @@ internal class McpTools(private val context: Context, private val event: (String
         val message = error.get("message")?.asString ?: return
         val enriched = withArgumentHint(toolName, message)
         if (enriched != message) error.addProperty("message", enriched)
+        argumentDetailsOrNull(toolName, message)?.let { details ->
+            if (!error.has("details")) error.add("details", details)
+            payload.add("details", details)
+        }
     }
 
     /** `.4` P0-1：参数类报错附「可用参数 / 必填 / schema 入口」，省掉穷举试错。 */
@@ -1597,16 +1637,18 @@ internal class McpTools(private val context: Context, private val event: (String
      * 失败结果：既给 content[0].text（人读），也给 structuredContent（机读）。
      * `.4` 总报告 P1-E：以前 ToolError/IllegalArgumentException 只回纯文本，标准客户端要再写一个解析器。
      */
-    private fun toolFailure(message: String, code: String, argument: String? = null): JsonObject {
+    private fun toolFailure(message: String, code: String, argument: String? = null, details: JsonObject? = null): JsonObject {
         // `.4` P1-A：失败路径的 content[0].text 也必须是同一个 `{ok:false,error:{…}}` 信封，
         // 这样"把 text 当 JSON 解析"的客户端不会再撞到纯文本（人读的 message 就在 error.message 里）。
+        val error = ToolkitIo.json("code" to code, "message" to message,
+            "argument" to argument, "recoverable" to true, "retrySameArguments" to false)
+        // `.4` v8 后续：把「可用参数/必填」做成结构化字段，机读不用解析 message。
+        if (details != null) error.add("details", details)
         val envelope = ToolkitIo.json(
-            "ok" to false, "data" to null,
-            "error" to ToolkitIo.json("code" to code, "message" to message,
-                "argument" to argument, "recoverable" to true, "retrySameArguments" to false),
-            "nextActions" to emptyList<Any>())
+            "ok" to false, "data" to null, "error" to error, "nextActions" to emptyList<Any>())
         return toolResult(envelope.toString(), true, errorCode = code, argument = argument).apply {
             add("structuredContent", envelope)
+            if (details != null) add("details", details)
         }
     }
 

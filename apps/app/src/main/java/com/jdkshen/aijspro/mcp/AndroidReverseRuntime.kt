@@ -299,9 +299,14 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk")
         val interaction=args.tString("interactionType","listen")
         require(interaction in setOf("listen","script")){"interactionType 只能是 listen 或 script"}
-        val preloadMode=args.tString("preloadMode","provider")
-        val preload=ToolkitGadgetPreload.assessment(preloadMode)
-        if(preloadMode.trim()!="provider") throw ToolkitException("PRELOAD_MODE_UNAVAILABLE", preload.toString(), "preloadMode")
+        val preloadMode=args.tString("preloadMode","provider").trim().lowercase()
+        require(preloadMode in setOf("provider","dt_needed")) {"preloadMode 只能是 provider 或 dt_needed"}
+        val preloadPlan=if(preloadMode=="dt_needed") ToolkitGadgetPreload.plan(input, args.tString("preloadTarget","").ifEmpty{null}, android.os.Build.SUPPORTED_ABIS.firstOrNull()) else null
+        if(preloadPlan!=null&&!preloadPlan.applied){
+            throw ToolkitException("PRELOAD_DT_NEEDED_FAILED",
+                "DT_NEEDED 就地补丁失败，未产出 APK。details="+preloadPlan.json.toString(), "preloadTarget")
+        }
+        val preload=preloadPlan?.json ?: ToolkitGadgetPreload.assessment("provider")
         val unsigned=File(temp,"gadget-unsigned.apk")
         var scriptInfo:JsonObject?=null
         val effectiveScriptPath=if(interaction=="script"){
@@ -316,7 +321,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             interaction,
             effectiveScriptPath,
             // 反馈接线：schema 收了 providerProcess，调用方必须真传，否则逃生口/显式指定形同虚设。
-            args.tString("providerProcess","").ifEmpty{null})
+            args.tString("providerProcess","").ifEmpty{null},
+            patchedEntries = preloadPlan?.let { plan -> plan.targetEntry?.let { path -> mapOf(path to (plan.patched ?: byteArrayOf())) } ?: emptyMap() } ?: emptyMap())
         ToolkitArchiveAlignment.align(unsigned)
         val signed=File(temp,"gadget-signed.apk")
         var verification:JsonObject?=null

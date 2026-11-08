@@ -10,6 +10,7 @@ import java.io.File
 import java.security.SecureRandom
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.zip.CRC32
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -38,7 +39,7 @@ internal object ToolkitGadget {
 
     fun prepare(input: File, output: File, scratch: File, component: File, port: Int, defaultAbi: String,
                 interactionType: String = "listen", scriptPath: String? = null,
-                providerProcess: String? = null): JsonObject {
+                providerProcess: String? = null, patchedEntries: Map<String, ByteArray> = emptyMap()): JsonObject {
         require(interactionType == "listen" || interactionType == "script") { "interactionType 只能是 listen 或 script" }
         if (interactionType == "script") {
             // 跨 UID 的 loopback 可能被 SELinux 静默 DROP（实测停在 SYN_SENT），script 模式不碰网络。
@@ -107,7 +108,15 @@ internal object ToolkitGadget {
                         if (method == ZipEntry.STORED) { size = entry.size; compressedSize = entry.size; crc = entry.crc }
                     }
                     out.putNextEntry(copy)
-                    if (!entry.isDirectory) zip.getInputStream(entry).use { source ->
+                    val patched = patchedEntries[entry.name]
+                    if (patched != null) {
+                        require(patched.size.toLong() == entry.size) { "就地 ELF 补丁改变了大小：" + entry.name }
+                        if (entry.method == ZipEntry.STORED) {
+                            copy.size = patched.size.toLong(); copy.compressedSize = patched.size.toLong()
+                            copy.crc = CRC32().apply { update(patched) }.value
+                        }
+                        out.write(patched)
+                    } else if (!entry.isDirectory) zip.getInputStream(entry).use { source ->
                         val buffer = ByteArray(65536)
                         while (true) { ToolkitIo.ensureActive(); val n = source.read(buffer); if (n < 0) break; out.write(buffer, 0, n) }
                     }

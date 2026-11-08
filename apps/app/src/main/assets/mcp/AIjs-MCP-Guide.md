@@ -30,6 +30,28 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 4. 改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply（workspace_write 本身不落盘）。
 5. 任何失败：先看返回的 error/status，再调用 get_execution / wait_execution / get_mcp_log；不要重复猜参数。
 
+## 返回结构与参数错误（新版兼容契约）
+
+### 扁平标量工具（get_status / toolkit_status / get_build_tools）
+
+这三个工具的新版本会同时提供两种读法：
+
+- content[0].text：保持旧扁平 JSON，老代码继续按原字段读，形状不变；
+- structuredContent：标准信封 {ok:true,data:{...}}，data 内是同一批标量字段。
+
+新代码优先读 structuredContent.data；老代码继续读 content[0].text 即可。若当前构建还没有 data 镜像（升级前），以 content[0].text 为准；升级后两处字段应等价，不要因为多了一个 data 就认为旧字段被删除。当前实现里 get_status/get_build_tools 已加镜像；toolkit_status 结果来自 :tools 桥接进程，若该构建尚未镜像同样以 text 为准。
+
+### 参数类错误的 error.details
+
+INVALID_ARGUMENT 或缺参数时，人类可读的 message 仍会给「可用参数/必填/tool_schema 提示」；新版本还会在 structuredContent.error.details 提供机读字段：
+
+- tool：工具名；
+- availableParameters[]：该工具可用参数名；
+- required[]：必填参数名；
+- schemaTool："tool_schema"（可直接调用 tool_schema 查完整类型/默认值/别名）；当前实现也可能附 schemaArguments，作为 tool_schema 的 arguments 快捷值。
+
+机读请读 error.details，不要解析 message；顶层 details 可能作为镜像出现，以 error.details 为准。若旧构建没有 details，退回 message + tool_schema，不要声称参数可用。
+
 ## 产出目录约定（必须遵守）
 
 > 这是产品行为，不是建议。所有 MCP 产出都归到**项目目录**，不再散落在脚本根；AI 一上手就先读本节。
@@ -658,6 +680,26 @@ full 诊断示例：
 
 **怎么验证**：用该样本按下面命令省略 `providerProcess`，检查返回 `providerProcess=":script"`、`providerProcessSource="manifest"`；安装后看 `:script` 进程/日志是否加载 Gadget。显式传 `:remote` 时仍应返回 `:remote`/`explicit`。
 
+
+### apk_inject_gadget.preloadMode：provider 与 dt_needed
+
+apk_inject_gadget 的 preloadMode 只有两个取值：provider（默认）和 dt_needed。它和 providerProcess 不是一回事：providerProcess 决定注入的 Provider 跑在哪个进程（:script/:remote 等），preloadMode 决定 Gadget 在启动链的哪个阶段加载。
+
+**provider（当前可用，较晚）**
+
+- 走现有 ContentProvider.onCreate 路径；ContentProvider 在 Application.attachBaseContext 之后才创建，对加固壳可能太晚。
+- 成功时以 preload.earlyLoad=false、preload.preloadImplemented=false 如实标注（字段以当前返回为准）；不要把它当成已提前加载，也不要因为有 provider 就声称能抢在壳的 native 初始化前。
+
+**dt_needed（支持时；失败/不支持时明确失败）**
+
+- 可选 preloadTarget：指定 APK 内目标 .so（完整 lib/... 路径或文件名）；省略时从 lib/*/*.so 自动选择第一个可安全 patch 的目标（排除 gadget/config）。
+- 支持时的语义：就地给目标 .so 的 .dynamic 增加一条 DT_NEEDED=libaijsgadget.so，并在 .dynstr 追加库名或复用已有同名串；让 linker 在加载目标壳 .so 之前先加载 Gadget。这是 .4 手工 patchelf --add-needed 的自动化版本。
+- 成功保证（仅当工具明确支持并成功时）：只使用 .dynamic 已有的可替换 DT_NULL 空槽（通常要保留后一个 DT_NULL 作终止符）和 .dynstr 尾部 NUL 余量，不移动节/段/PT_LOAD，输出文件大小不变；原子写出，失败不留下半坏产物、不改原文件。
+- 成功时以 preload.applied=true、earlyLoad=true、preloadImplemented=true、sizeUnchanged=true、verified=true、targetPath 为准；只有这些字段都成立才算提前加载。只有 provider 时是 earlyLoad=false、preloadImplemented=false。
+- 失败时不要伪造成功：顶层通常是 PRELOAD_DT_NEEDED_FAILED（旧版/模式不可用可能是 PRELOAD_MODE_UNAVAILABLE），错误信息里带 preload 计划（applied=false）；reason 举例：DYNAMIC_NO_SPARE_NULL（没有可替换且后续仍保留 DT_NULL 的槽）、DYNSTR_NO_ROOM（尾部 NUL 余量不足）、NO_DYNAMIC_SEGMENT（没有可读 PT_DYNAMIC/.dynamic）、NOT_ELF/UNSUPPORTED_ENDIAN/UNSUPPORTED_ELF_CLASS 等；完整清单以错误/计划里的 preload.targets[].reason/reasons 为准，不要把这里当成全集。
+- 失败/不支持时的正确路径：对目标 .so 的副本执行外部 patchelf --add-needed libaijsgadget.so --page-size 16384 <目标.so>（page-size 按目标/设备页大小，16 KiB 用 16384），再回填 APK、重签并用 apk_verify 复核；这不是工具自动完成的步骤。
+- 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED/PRELOAD_MODE_UNAVAILABLE 及任何细分 reason；不要反复试到“看起来成功”。
+- 边界：目标 .so 必须在壳初始化前被 linker 加载；多 .so/多 ABI/分包、加固壳自定义 linker、页对齐不满足的包不保证成功。provider 模式仍可作为兼容回退，但它不解决“早于 attachBaseContext”的问题。
 
 ### #18 `apk_build` 增加 `detail=summary`
 

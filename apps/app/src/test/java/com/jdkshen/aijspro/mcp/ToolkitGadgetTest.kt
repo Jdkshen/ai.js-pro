@@ -86,6 +86,17 @@ class ToolkitGadgetTest {
         }
         rejects { ToolkitGadget.prepare(out,File(temp.root,"twice.apk"),scratch,component,27131,"arm64-v8a") }
     }
+    @Test fun patchedNativeEntryBytesAreWrittenInPlace() {
+        val input=fixture(native=listOf("arm64-v8a"))
+        val patched=byteArrayOf(9,4,3)
+        val out=File(temp.root,"patched.apk");val scratch=temp.newFolder("scratch-patched")
+        ToolkitGadget.prepare(input,out,scratch,component,27131,"arm64-v8a",
+            patchedEntries=mapOf("lib/arm64-v8a/libexisting.so" to patched))
+        ZipFile(out).use { zip ->
+            assertArrayEquals(patched,zip.getInputStream(zip.getEntry("lib/arm64-v8a/libexisting.so")).readBytes())
+        }
+    }
+
     @Test fun rejectsSplitsSharedUidUnsupportedAbiAndOverwriteBeforeOutput() {
         for(input in listOf(fixture(manifest("split=\"config.arm64\"")),fixture(manifest("android:sharedUserId=\"com.example.uid\"")),fixture(manifest(appExtra="android:isSplitRequired=\"true\"")),fixture(native=listOf("mips")))) {
             val output=File(temp.root,"rejected.apk")
@@ -115,9 +126,9 @@ class ToolkitGadgetTest {
         assertFalse(provider.tBool("preloadImplemented",true))
         assertFalse(provider.tBool("earlyLoad",true))
         assertEquals("provider_only",provider.tString("status"))
-        assertTrue(provider.getAsJsonObject("dtNeeded").tString("status").contains("feasibility"))
+        assertTrue(provider.getAsJsonObject("dtNeeded").tString("status").contains("available"))
         val dt=ToolkitGadgetPreload.assessment("dt_needed")
-        assertEquals("PRELOAD_MODE_UNAVAILABLE",dt.tString("status"))
+        assertEquals("dt_needed_available",dt.tString("status"))
         assertFalse(dt.tBool("preloadImplemented",true))
     }
 
