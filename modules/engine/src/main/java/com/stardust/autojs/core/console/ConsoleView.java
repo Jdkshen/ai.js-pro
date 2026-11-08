@@ -328,7 +328,11 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
         boolean follow = true;
         LinearLayoutManager manager = (LinearLayoutManager) mLogListRecyclerView.getLayoutManager();
         if (manager != null && !mFilteredEntries.isEmpty()) {
-            follow = manager.findLastVisibleItemPosition() >= mFilteredEntries.size() - 2;
+            int lastVisible = manager.findLastVisibleItemPosition();
+            // 「左下角输出日志不翻滚」根因：notifyDataSetChanged() 之后的一瞬间 RecyclerView 还没布局出
+            // 任何子项，findLastVisibleItemPosition() 返回 -1，旧条件 -1 >= size-2 恒为 false，于是 follow
+            // 永久 false、日志再不跟到底。这里把 -1（未布局/无可见项）按「跟随」处理。
+            follow = lastVisible < 0 || lastVisible >= mFilteredEntries.size() - 2;
         }
         int oldVisibleSize = mFilteredEntries.size();
         appendNewLogs();
