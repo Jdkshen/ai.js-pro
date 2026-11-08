@@ -54,6 +54,8 @@ INVALID_ARGUMENT 或缺参数时，人类可读的 message 仍会给「可用参
 
 机读请读 error.details，不要解析 message；顶层 details 可能作为镜像出现，以 error.details 为准。若旧构建没有 details，退回 message + tool_schema，不要声称参数可用。
 
+**参数默认值以 `tool_schema` 为准**（工具描述里的「省略时=…」与 schema 的 `default` 同源；不要凭旧文档猜必填）。dev-1416 起放宽了一批假必填：`file_list` **零必填**（`recursive` 缺省 false、`limit` 缺省 200）、`file_search.recursive` 缺省 true、`file_copy.overwrite` 缺省 false、`file_replace_text.expectedReplacements` 缺省 -1、`zip_create.level` 缺省 6；安全闸仍保留必填（`file_delete_directory.recursive`、`zip_extract.overwrite`、`zip_create.overwrite`）。
+
 ## 产出目录约定（必须遵守）
 
 > 这是产品行为，不是建议。所有 MCP 产出都归到**项目目录**，不再散落在脚本根；AI 一上手就先读本节。
@@ -733,9 +735,9 @@ full 诊断示例：
 **怎么验证**：用该样本按下面命令省略 `providerProcess`，检查返回 `providerProcess=":script"`、`providerProcessSource="manifest"`；安装后看 `:script` 进程/日志是否加载 Gadget。显式传 `:remote` 时仍应返回 `:remote`/`explicit`。
 
 
-### apk_inject_gadget.preloadMode：provider 与 dt_needed
+### apk_inject_gadget.preloadMode：provider / dt_needed / clinit
 
-apk_inject_gadget 的 preloadMode 只有两个取值：provider（默认）和 dt_needed。它和 providerProcess 不是一回事：providerProcess 决定注入的 Provider 跑在哪个进程（:script/:remote 等），preloadMode 决定 Gadget 在启动链的哪个阶段加载。
+apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_needed、clinit**（clinit **dev-1416 起**；dev-1414 及更早只接受 provider|dt_needed，传 clinit 会被参数校验直接拒绝）。它和 providerProcess 不是一回事：providerProcess 决定注入的 Provider 跑在哪个进程（`:script`/`:remote` 等），preloadMode 决定 Gadget 在启动链的哪个阶段加载。
 
 **provider（当前可用，较晚）**
 
@@ -752,6 +754,15 @@ apk_inject_gadget 的 preloadMode 只有两个取值：provider（默认）和 d
 - 失败/不支持时的正确路径：对目标 .so 的副本执行外部 patchelf --add-needed libaijsgadget.so --page-size 16384 <目标.so>（page-size 按目标/设备页大小，16 KiB 用 16384），再回填 APK、重签并用 apk_verify 复核；这不是工具自动完成的步骤。
 - 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED 及任何细分 reason；不要反复试到“看起来成功”。
 - 边界：目标 .so 必须在壳初始化前被 linker 加载；多 .so/多 ABI/分包、加固壳自定义 linker、页对齐不满足的包不保证成功。provider 模式仍可作为兼容回退，但它不解决“早于 attachBaseContext”的问题。
+
+**clinit（dev-1416 起：Java 类初始化阶段，最早的一条路径）**
+
+- 语义：生成 Application 子类 `com.aijs.instrumentation.AijsApplication`（`.super` = 原 `application@name`），其 `<clinit>` 里 `System.loadLibrary("aijsgadget")`（整段 `.catch Ljava/lang/Throwable;` 只 `Log.e`，加载失败不会崩 App），作为**新的 `classesN.dex` 追加**；`AndroidManifest.xml` **只改 `application@name` 一个属性**——不重编资源、既有 DEX 一个字节不动。
+- 可选 `clinitTarget`：显式指定要继承的原 Application 全限定类名（例如解包后确认的壳 Application）；省略则读 Manifest 的 `application@name`，未声明时用 `android.app.Application`。
+- **时序边界**：保证早于 `Application.attachBaseContext`；但父类先初始化（JLS 12.4.2），**不保证早于加固壳自身的 native 初始化**（壳可以在 native 或自身 `<clinit>` 里抢跑）。工具返回 `runtimeVerified=false`、`verificationScope=static_dex_manifest_only`、`timingNote`——**只做静态字节级校验，不声称运行时已验证**。
+- 成功看 `preload.applied=true`、`earlyLoad=true`、`preloadImplemented=true`、`method=application_clinit_loadLibrary`、`clinitClass`、`originalApplication`、`targetSource`（`application@name`|`clinitTarget`）；结果顶层另有 `clinitClass`/`clinitOriginalApplication`/`clinitDexEntry`。
+- 失败码（失败**不产出任何 APK**）：`PRELOAD_CLINIT_UNSUPPORTED_APPLICATION`（原 Application 是 final / 是接口 / 不在 APK 的 `classes*.dex` 里（壳加密或动态加载）/ 声明了 `android:appComponentFactory` / APK 里已存在同名生成类）、`PRELOAD_CLINIT_MANIFEST_PATCH_FAILED`、`PRELOAD_CLINIT_DEX_ASSEMBLY_FAILED`。
+- 边界：只覆盖 Java 初始化路径；新增 DEX 与重签会改变签名，壳若自校验 DEX/签名会检测到。clinit 与 provider 钩子并存（二次 `loadLibrary` 是同 classloader no-op）。provider/dt_needed 的 `earlyLoad` 语义不变（provider 仍是 false）。
 
 ### #18 `apk_build` 增加 `detail=summary`
 

@@ -630,9 +630,9 @@ AXML 不是普通文本，但也有**已接通**的读写路径：
 - `frida_eval`脚本≤64KiB、durationMs≤10000；结束时卸载脚本/分离，取消只终止本次客户端进程组。
 - **Frida17不内置Java桥**：直接 `Java.perform()` 会报Java未定义；需要用frida-java-bridge和frida-compile打包脚本后传入。本工具不冒充已内置Java桥编译器。
 
-### Gadget 提前加载：preloadMode=provider 与 dt_needed
+### Gadget 提前加载：preloadMode=provider / dt_needed / clinit
 
-apk_inject_gadget.preloadMode 只有两个取值：provider（默认）| dt_needed。不要把它和 providerProcess 混用：providerProcess 决定注入 Provider 在哪个进程（例如 :script / :remote），preloadMode 决定 Gadget 在启动链的哪一段加载。
+apk_inject_gadget.preloadMode 有三个取值：provider（默认）| dt_needed | **clinit**（**dev-1416 起**；dev-1414 及更早只接受前两个）。不要把它和 providerProcess 混用：providerProcess 决定注入 Provider 在哪个进程（例如 `:script` / `:remote`），preloadMode 决定 Gadget 在启动链的哪一段加载。
 
 **provider（当前路径；对加固壳太晚）**
 
@@ -649,6 +649,13 @@ apk_inject_gadget.preloadMode 只有两个取值：provider（默认）| dt_need
 - 不支持或失败时不要重试到“成功”：用目标 .so 副本执行外部 patchelf --add-needed libaijsgadget.so --page-size 16384 <目标.so>（page-size 按目标/设备页大小，16 KiB 用 16384），再回填 APK、重新签名并用 apk_verify 复核。外部 patchelf 不是本工具自动完成的步骤。
 - 必须回退外部 patchelf 的情形：目标不是动态 ELF、没有 .dynamic、没有空闲且可替换的 DT_NULL 槽或 .dynstr 没有 NUL 余量、需要移动节/段/PT_LOAD、字节序/架构不支持，或返回 PRELOAD_DT_NEEDED_FAILED 及任何细分 reason；不要反复试到“看起来成功”。
 - 边界：目标 .so 必须在壳初始化前被 linker 加载；多 .so / 多 ABI / 分包、自定义 linker、页对齐不满足的目标不保证成功。provider 可作为兼容回退，但不解决早于 attachBaseContext 的时序问题。
+
+**clinit（dev-1416 起：Application 类初始化阶段）**
+
+- 语义：生成 Application 子类 `com.aijs.instrumentation.AijsApplication`（`.super` = 原 `application@name`），其 `<clinit>` 里 `System.loadLibrary("aijsgadget")`（整段 `.catch Ljava/lang/Throwable;` 只 `Log.e`，加载失败不崩 App），作为**新 `classesN.dex` 追加**；Manifest **只改 `application@name`**，不重编资源、既有 DEX 一字节不动。可选 `clinitTarget` 覆盖父类（省略则读 Manifest 的 `application@name`，未声明用 `android.app.Application`）。
+- **时序边界**：保证早于 `Application.attachBaseContext`；父类先初始化（JLS 12.4.2），**不保证早于加固壳自身的 native 初始化**。返回 `runtimeVerified=false`、`verificationScope=static_dex_manifest_only`、`timingNote`——只做静态字节级校验，不声称运行时已验证。
+- 成功看 `preload.applied=true`、`earlyLoad=true`、`preloadImplemented=true`、`method=application_clinit_loadLibrary`、`clinitClass`、`originalApplication`、`targetSource`。
+- 失败码（**失败不产出 APK**）：`PRELOAD_CLINIT_UNSUPPORTED_APPLICATION`（父类 final / 接口 / 不在 `classes*.dex` 里（壳加密或动态加载）/ 声明了 `appComponentFactory` / 已存在同名生成类）、`PRELOAD_CLINIT_MANIFEST_PATCH_FAILED`、`PRELOAD_CLINIT_DEX_ASSEMBLY_FAILED`。
 
 ### Frida 17 API 迁移对照（P0-3）
 

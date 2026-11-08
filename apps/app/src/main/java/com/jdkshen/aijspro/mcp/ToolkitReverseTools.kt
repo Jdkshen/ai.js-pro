@@ -69,7 +69,9 @@ internal object ToolkitReverseTools {
     ) + names.filter { it.startsWith("native_") && it !in setOf("native_decompile", "native_emulate") }.associateWith { listOf("radare2") } +
         names.filter { it.startsWith("frida_") }.associateWith { listOf("frida") }
     private fun str(description:String="")=ToolkitIo.json("type" to "string", "description" to description)
-    private fun num(min:Int,max:Int,default:Int)=ToolkitIo.json("type" to "integer","minimum" to min,"maximum" to max,"default" to default)
+    /** default 可省略（W4 task-20）：required 字段不该带 default；省略时 schema 里就不出现 default。 */
+    private fun num(min:Int,max:Int,default:Int?=null)= if(default==null)ToolkitIo.json("type" to "integer","minimum" to min,"maximum" to max)
+        else ToolkitIo.json("type" to "integer","minimum" to min,"maximum" to max,"default" to default)
     fun schema(name:String):JsonObject {
         val p=JsonObject(); val required=ArrayList<String>()
         fun field(key:String,type:JsonObject=str(),needed:Boolean=false){p.add(key,type);if(needed)required+=key}
@@ -112,7 +114,7 @@ internal object ToolkitReverseTools {
             "native_compare"->{path();path("otherPath");page()}
             "yara_scan"->{path();path("rulesPath");field("scanTimeoutSeconds",num(1,30,10));field("includeOffsets",ToolkitIo.json("type" to "boolean","default" to true))}
             "native_emulate"->{field("architecture",ToolkitIo.json("type" to "string","enum" to listOf("arm64","arm","thumb","x86","x86_64")),true);field("codeHex",str(),true);field("dataHex",str());field("registers",ToolkitIo.json("type" to "object","additionalProperties" to str("0x十六进制寄存器值")));field("timeoutMs",num(1,1000,100));field("instructionLimit",num(1,100000,10000))}
-            "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE,1),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}
+            "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}
                 field("portListening",ToolkitIo.json("type" to "boolean","default" to false));field("synSentObserved",ToolkitIo.json("type" to "boolean","default" to false));field("sameUid",ToolkitIo.json("type" to "boolean","default" to false))
                 field("tcpText",str("可选：/proc/net/tcp 原文（本进程读不到时用 terminal_exec/shizuku 取回再传入）"));field("tcp6Text",str("可选：/proc/net/tcp6 原文"))}
             "frida_session_open"->{field("packageName",str("目标包名"),true);field("pid",num(1,Int.MAX_VALUE,1));field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str());field("script",str("Frida JavaScript ≤64KiB"),true)}
