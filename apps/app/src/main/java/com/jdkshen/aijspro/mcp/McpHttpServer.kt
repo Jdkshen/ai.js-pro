@@ -105,7 +105,13 @@ class McpHttpServer(
                     try { socket.use { serve(it) } } finally { connections.remove(socket) }
                 }
             } catch (_: RejectedExecutionException) {
-                runCatching { respond(socket, 503, "Service Unavailable") }
+                // `.4` P1-G：503 也要给结构化 body（含恢复建议），别让调用方靠超时猜。
+                respondJson(socket, 503, com.google.gson.JsonObject().apply {
+                    addProperty("error", "service_busy")
+                    addProperty("message", "MCP 连接队列已满（等待上限 " + QUEUED_CONNECTIONS + "），本次请求未进入处理")
+                    addProperty("recovery", "稍后重试；若持续出现，先 get_status.mcp 看服务是否在心跳窗口内，必要时重开 App 让服务拉起")
+                    addProperty("retryAfterMs", 1000)
+                }, null)
                 runCatching { socket.close() }
                 connections.remove(socket)
             } catch (_: IOException) {

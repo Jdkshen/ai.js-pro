@@ -104,6 +104,46 @@ object McpStateStore {
         Log.w(TAG, "C-MCP: state=error heartbeat=" + now + " error=" + error)
     }
 
+    /**
+     * 只读摘要给 `get_status.mcp`：`.4` P1-G —— 让调用方能区分「服务未就绪」与「网络问题」，
+     * 不用靠超时猜。心跳超时（10s）即认为端点不再可用。
+     */
+    @Synchronized
+    fun statusJson(context: Context, autoStarted: Boolean = false): com.google.gson.JsonObject {
+        val state = read(context)
+        val now = System.currentTimeMillis()
+        val age = if (state.updatedAt > 0) now - state.updatedAt else -1L
+        val fresh = state.fresh(now)
+        return com.google.gson.JsonObject().apply {
+            addProperty("status", when {
+                fresh -> "running"
+                state.running -> "stale"
+                state.error.isNotEmpty() -> "error"
+                state.updatedAt > 0 -> "starting"
+                else -> "stopped"
+            })
+            addProperty("listening", fresh)
+            addProperty("fresh", fresh)
+            addProperty("running", state.running)
+            addProperty("port", state.port)
+            addProperty("localUrl", state.localUrl)
+            addProperty("lanUrl", state.lanUrl)
+            addProperty("updatedAt", state.updatedAt)
+            addProperty("heartbeatAgeMs", age)
+            addProperty("heartbeatIntervalMs", HEARTBEAT_INTERVAL_MS)
+            addProperty("heartbeatTimeoutMs", HEARTBEAT_TIMEOUT_MS)
+            addProperty("lastError", state.error)
+            addProperty("autoStarted", autoStarted)
+            addProperty("foregroundService", true)
+            addProperty("sticky", true)
+            if (!fresh) {
+                addProperty("recovery",
+                    "MCP 服务未在心跳窗口内上报：打开 AI.js Pro 让服务自动拉起（前台服务 + START_STICKY 也会重建）；" +
+                    "若刚启动，等 1~2 秒再试；连接被拒/超时表示 App 进程被回收，不是网络问题。")
+            }
+        }
+    }
+
     fun read(context: Context): State {
         val prefs = prefs(context)
         return State(

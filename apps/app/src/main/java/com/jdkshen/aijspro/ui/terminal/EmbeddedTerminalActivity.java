@@ -52,6 +52,23 @@ public final class EmbeddedTerminalActivity extends Activity {
     private TextView mBackendStatus;
     private AppThemePalette mPalette;
     private LinearLayout mRootLayout;
+    private TextView mRunStatus;
+    private android.widget.HorizontalScrollView mQuickBar;
+    private Button mClear;
+    private Button mCopy;
+    private final java.util.List<Button> mThemeButtons = new java.util.ArrayList<>();
+    /** 控制台是否跟随最新输出（用户上翻时暂停，滚回底部恢复）。 */
+    private boolean mFollowTail = true;
+    private boolean mTruncationNoted = false;
+    /** 命令历史（↑/↓ 回溯），最多 {@link #HISTORY_LIMIT} 条。 */
+    private final java.util.List<String> mHistory = new java.util.ArrayList<>();
+    private int mHistoryCursor = -1;
+    private static final int HISTORY_LIMIT = 50;
+    private static final int CONSOLE_MAX_CHARS = 200_000;
+    private static final String HISTORY_PREFS = "terminal_history";
+    private final android.os.Handler mStatusHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private long mRunStartedAt;
+    private java.lang.Runnable mStatusTick;
     private final AppThemeRepository.ThemeListener mThemeListener = this::applyThemePalette;
 
     @Override
@@ -105,6 +122,14 @@ public final class EmbeddedTerminalActivity extends Activity {
         mBackend.setBackgroundTintList(android.content.res.ColorStateList.valueOf(mPalette.surfaceSecondary));
         root.addView(mBackend, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // 运行状态行：空闲给 cwd，运行中给 jobId + 计时，结束后给退出码 + 耗时。
+        mRunStatus = new TextView(this);
+        mRunStatus.setTextColor(mPalette.textSecondary);
+        mRunStatus.setTextSize(12f);
+        mRunStatus.setPadding(0, Math.max(4, padding / 2), 0, 0);
+        root.addView(mRunStatus, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
 
         mScrollView = new ScrollView(this);
         mScrollView.setFillViewport(true);
@@ -135,8 +160,43 @@ public final class EmbeddedTerminalActivity extends Activity {
             submitCommand();
             return true;
         });
+        // 快捷命令：点一下就填入并执行（横滑，避免挤占控制台高度）。
+        mQuickBar = new android.widget.HorizontalScrollView(this);
+        mQuickBar.setHorizontalScrollBarEnabled(false);
+        LinearLayout quickRow = new LinearLayout(this);
+        quickRow.setOrientation(LinearLayout.HORIZONTAL);
+        String[][] quicks = {
+                {"pwd", "pwd"}, {"ls -l", "ls -l"}, {"id", "id"},
+                {"top", "logcat -d -t 200"},
+                {"前台", "dumpsys window | grep -i mCurrentFocus"},
+                {"端口", "ss -tlnp"},
+        };
+        for (String[] quick : quicks) {
+            Button chip = terminalButton(quick[0]);
+            final String payload = quick[1];
+            chip.setOnClickListener(v -> { if (!mRunning) { mCommand.setText(payload);
+                mCommand.setSelection(payload.length()); submitCommand(); } });
+            quickRow.addView(chip, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        }
+        mQuickBar.addView(quickRow);
+        root.addView(mQuickBar, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         root.addView(mCommand, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // ↑/↓ 回溯历史命令（运行中不打断输入转发）。
+        mCommand.setOnKeyListener((view, keyCode, event) -> {
+            if (event.getAction() != KeyEvent.ACTION_DOWN) return false;
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP) return browseHistory(-1);
+            if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) return browseHistory(1);
+            return false;
+        });
+        loadHistory();
+
+        // 用户在控制台里上翻时暂停跟随，滚回底部自动恢复。
+        mScrollView.setOnScrollChangeListener((v, scrollX, scrollY, oldX, oldY) ->
+                mFollowTail = !mScrollView.canScrollVertically(1));
 
         mBackend.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
@@ -164,6 +224,27 @@ public final class EmbeddedTerminalActivity extends Activity {
         });
         root.addView(mStop, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+
+        // 操作行：清空 / 复制全部。
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        mClear = terminalButton("清空");
+        mClear.setOnClickListener(v -> { mConsole.setText(""); mFollowTail = true; appendPrompt(); });
+        mCopy = terminalButton("复制全部");
+        mCopy.setOnClickListener(v -> {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard != null) {
+                clipboard.setPrimaryClip(android.content.ClipData.newPlainText("terminal", mConsole.getText()));
+                appendLine("[已复制全部输出到剪贴板]");
+            }
+        });
+        actions.addView(mClear, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        actions.addView(mCopy, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        root.addView(actions, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
         setContentView(root);
         applyWindowSystemUi();
         appendLine("AI.js Pro 终端");
@@ -172,6 +253,7 @@ public final class EmbeddedTerminalActivity extends Activity {
         appendLine("默认超时 1 小时；编译器需单独配置。D8/Smali 可用 $AIJS_APK / $AIJS_BUILD_MAIN 调用。");
         appendLine("公网安装 C/C++：aijs-toolchain install cpp；使用 app 后端，编译器不计入主 APK。");
         updateBackendHint();
+        showIdleStatus();
         appendPrompt();
         mCommand.requestFocus();
         String initialCommand = getIntent().getStringExtra(EXTRA_INITIAL_COMMAND);
@@ -184,6 +266,7 @@ public final class EmbeddedTerminalActivity extends Activity {
     private void submitCommand() {
         String command = mCommand.getText().toString().trim();
         if (TextUtils.isEmpty(command)) return;
+        rememberCommand(command);
         mCommand.setText("");
         appendLine(command);
         if (mRunning) {
@@ -222,7 +305,7 @@ public final class EmbeddedTerminalActivity extends Activity {
                 : new File(path).isAbsolute() ? new File(path) : new File(mWorkingDirectory, path);
         try {
             destination = destination.getCanonicalFile();
-            if (destination.isDirectory()) mWorkingDirectory = destination;
+            if (destination.isDirectory()) { mWorkingDirectory = destination; showIdleStatus(); }
             else appendLine("cd: 目录不存在: " + path);
         } catch (Exception error) {
             appendLine("cd: " + error.getMessage());
@@ -234,7 +317,8 @@ public final class EmbeddedTerminalActivity extends Activity {
             JsonObject state = mTerminal.execute(command, directory.getCanonicalPath(),
                     Collections.emptyMap(), 3600, backend);
             mJobId = state.get("jobId").getAsString();
-            postTerminal(() -> mStop.setEnabled(true));
+            mRunStartedAt = System.currentTimeMillis();
+            postTerminal(() -> { mStop.setEnabled(true); startStatusTicker(); });
             long offset = 0;
             do {
                 state = mTerminal.read(mJobId, offset, 16384, 1000);
@@ -245,6 +329,18 @@ public final class EmbeddedTerminalActivity extends Activity {
                 if (state.get("processActive").getAsBoolean() && !text.isEmpty()) Thread.sleep(50);
             } while (state.get("processActive").getAsBoolean() || state.get("hasMore").getAsBoolean());
             String status = state.get("status").getAsString();
+            final int exitCode = state.has("exitCode") ? state.get("exitCode").getAsInt() : -1;
+            final long elapsedMs = System.currentTimeMillis() - mRunStartedAt;
+            final boolean ok = "SUCCEEDED".equals(status) && exitCode <= 0;
+            postTerminal(() -> {
+                stopStatusTicker();
+                if (mRunStatus != null) {
+                    mRunStatus.setText("上次命令 · " + (ok ? "成功" : "退出 " + status)
+                            + (exitCode >= 0 ? " · exit=" + exitCode : "")
+                            + " · " + String.format(java.util.Locale.US, "%.2f s", elapsedMs / 1000.0)
+                            + " · cwd " + mWorkingDirectory.getAbsolutePath());
+                }
+            });
             if (!"SUCCEEDED".equals(status)) {
                 String message = "\n[" + status + (state.has("exitCode") ? " 退出码 " + state.get("exitCode").getAsInt() : "")
                         + (state.has("error") ? " " + state.get("error").getAsString() : "") + "]";
@@ -259,6 +355,7 @@ public final class EmbeddedTerminalActivity extends Activity {
         postTerminal(() -> {
             appendPrompt();
             updateBackendHint();
+            stopStatusTicker();
             mStop.setEnabled(false);
             mBackend.setEnabled(true);
             mCommand.requestFocus();
@@ -378,12 +475,89 @@ public final class EmbeddedTerminalActivity extends Activity {
         runOnUiThread(() -> { if (!isFinishing() && !isDestroyed()) action.run(); });
     }
 
+    /** 终端里的统一样式按钮（跟随主题）。 */
+    private Button terminalButton(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setAllCaps(false);
+        button.setTextSize(13f);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setTextColor(mPalette.textPrimary);
+        button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(mPalette.surfaceSecondary));
+        mThemeButtons.add(button);
+        return button;
+    }
+
+    /** ↑/↓ 浏览历史；返回 true 表示已消费按键。 */
+    private boolean browseHistory(int delta) {
+        if (mHistory.isEmpty()) return false;
+        if (mHistoryCursor < 0) mHistoryCursor = mHistory.size();
+        mHistoryCursor = Math.max(0, Math.min(mHistory.size(), mHistoryCursor + delta));
+        String value = mHistoryCursor >= mHistory.size() ? "" : mHistory.get(mHistoryCursor);
+        mCommand.setText(value);
+        mCommand.setSelection(value.length());
+        return true;
+    }
+
+    private void rememberCommand(String command) {
+        if (command.isEmpty()) return;
+        mHistory.remove(command);
+        mHistory.add(0, command);
+        while (mHistory.size() > HISTORY_LIMIT) mHistory.remove(mHistory.size() - 1);
+        mHistoryCursor = -1;
+        getSharedPreferences(HISTORY_PREFS, MODE_PRIVATE).edit()
+                .putString("entries", TextUtils.join("\n", mHistory)).apply();
+    }
+
+    private void loadHistory() {
+        String stored = getSharedPreferences(HISTORY_PREFS, MODE_PRIVATE).getString("entries", "");
+        if (TextUtils.isEmpty(stored)) return;
+        for (String line : stored.split("\n")) {
+            if (!line.trim().isEmpty() && !mHistory.contains(line)) mHistory.add(line);
+        }
+        while (mHistory.size() > HISTORY_LIMIT) mHistory.remove(mHistory.size() - 1);
+    }
+
+    /** 运行中每 200ms 刷新一次计时。 */
+    private void startStatusTicker() {
+        stopStatusTicker();
+        mStatusTick = new Runnable() {
+            @Override public void run() {
+                if (!mRunning || mRunStatus == null) return;
+                long ms = System.currentTimeMillis() - mRunStartedAt;
+                mRunStatus.setText("运行中 · job=" + (mJobId == null ? "启动中" : mJobId)
+                        + " · " + String.format(java.util.Locale.US, "%.1f s", ms / 1000.0)
+                        + " · " + mWorkingDirectory.getAbsolutePath());
+                mStatusHandler.postDelayed(this, 200L);
+            }
+        };
+        mStatusHandler.post(mStatusTick);
+    }
+
+    private void stopStatusTicker() {
+        if (mStatusTick != null) { mStatusHandler.removeCallbacks(mStatusTick); mStatusTick = null; }
+    }
+
+    private void showIdleStatus() {
+        if (mRunStatus != null) {
+            mRunStatus.setText("空闲 · 后端 " + selectedBackend() + " · cwd " + mWorkingDirectory.getAbsolutePath());
+        }
+    }
+
     private void appendOutput(String text) {
         mConsole.append(text);
-        if (mConsole.length() > 65536) {
-            mConsole.setText(mConsole.getText().subSequence(mConsole.length() - 65536, mConsole.length()));
+        // 只保留尾部一段：超出上限时截断，并一次性提示（避免刷屏）。
+        if (mConsole.length() > CONSOLE_MAX_CHARS) {
+            mConsole.setText(mConsole.getText()
+                    .subSequence(mConsole.length() - CONSOLE_MAX_CHARS, mConsole.length()));
+            if (!mTruncationNoted) {
+                mTruncationNoted = true;
+                mConsole.setText("[已截断较早输出，仅保留最近部分]\n" + mConsole.getText());
+            }
         }
-        mScrollView.post(() -> mScrollView.fullScroll(ScrollView.FOCUS_DOWN));
+        // 仅当用户本来就在底部时才跟随；上翻阅读时不打扰。
+        if (mFollowTail) mScrollView.post(() -> mScrollView.fullScroll(ScrollView.FOCUS_DOWN));
     }
 
     private void appendPrompt() {
@@ -417,6 +591,11 @@ public final class EmbeddedTerminalActivity extends Activity {
         if (mBackend.getAdapter() instanceof android.widget.BaseAdapter)
             ((android.widget.BaseAdapter) mBackend.getAdapter()).notifyDataSetChanged();
         mBackendStatus.setTextColor(palette.textSecondary);
+        if (mRunStatus != null) mRunStatus.setTextColor(palette.textSecondary);
+        for (Button button : mThemeButtons) {
+            button.setTextColor(palette.textPrimary);
+            button.setBackgroundTintList(android.content.res.ColorStateList.valueOf(palette.surfaceSecondary));
+        }
         mStop.setTextColor(palette.textPrimary);
         mStop.setBackgroundTintList(android.content.res.ColorStateList.valueOf(palette.surfaceSecondary));
         getWindow().setStatusBarColor(palette.statusBar);
@@ -463,6 +642,7 @@ public final class EmbeddedTerminalActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        stopStatusTicker();
         if (mTerminal != null) mTerminal.close();
         mExecutor.shutdownNow();
         mStatusExecutor.shutdownNow();
