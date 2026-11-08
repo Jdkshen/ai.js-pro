@@ -43,6 +43,36 @@ get_status / toolkit_status / get_build_tools 新版本同时给两种读法：c
 
 INVALID_ARGUMENT / 缺参数时，message 仍有人类可读的「可用参数/必填」；新版本会在 structuredContent.error.details 提供 {tool,availableParameters[],required[],schemaTool:"tool_schema"}，可能附 schemaArguments。机读读 details，不解析 message；旧构建没有 details 时退回 message + tool_schema。顶层 details 可能镜像，以 error.details 为准。
 
+### get_status.mcp（服务自检第一入口）
+
+连接被拒 / 超时 / 静默无响应时，**先看 `get_status.mcp.listening`，不要先怀疑网络**：
+
+- `listening`：**进程内真实监听**（服务实例活着且已绑定端口），**不是心跳推断**；
+- `fresh` / `heartbeatAgeMs`：心跳新鲜度（5s 一跳、10s 超时；心跳跑在主 looper 上，主线程被阻塞时可能短暂为 false）；
+- `running` / `state`：持久化的显式状态 `starting|running|stopped|error`（不再靠「干净停止」猜）；
+- `startReason` / `autoStarted`：本次是 `auto`（回前台等自动拉起）还是 `manual`；
+- `port` / `localUrl` / `lanUrl` / `updatedAt` / `lastError`；`heartbeatIntervalMs=5000`、`heartbeatTimeoutMs=10000`；
+- `foregroundService:true` / `sticky:true`：前台服务 + `START_STICKY` 保活；
+- `recovery`：**只有** `listening=false` 时才出现（能拿到这个响应本身就说明服务活着；被拒/超时通常是 App 进程没在跑）。
+
+> 报警组合：`listening=false` + 有 `recovery` → App 进程没在跑或服务没起来；`listening=true` 却仍连不上 → 核对 `port` 是不是你连的那个，以及 ADB forward / 局域网地址是否正确。
+
+（顺带）`get_status` 还有 `toolCatalog{toolCount,build,fingerprint}`、顶层 `toolCount`/`canonicalToolCount`（dev-1412 实测 **219 / 210**）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`、`toolCategories{}`、`baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
+
+### HTTP 503 不是工具失败
+
+连接队列满（**4 个 worker + 16 个排队位**）时，服务返回 **503** + 结构化 JSON body：
+
+```json
+{"error":{"code":"service_busy","message":"MCP 连接队列已满（等待上限 16），本次请求未进入处理","recoverable":true,"retrySameArguments":true},"errorCode":"service_busy","recovery":"稍后重试；若持续出现，先 get_status.mcp 看服务状态（listening/port/lastError），必要时重开 App 让服务拉起","retryAfterMs":1000}
+```
+
+- `error.code` 与顶层 `errorCode` 都是 `service_busy`（形状与**工具失败信封**一致：`error` 是对象 + 顶层 `errorCode`）；
+- 按 `retryAfterMs`（1000ms）重试即可；
+- **503 不代表真实负载**：它数的是「同时打进来的连接数」，不是「工具在忙」，更不代表某个工具真的在执行；
+- 状态行是 `503 Service Unavailable`（旧构建曾错写成 `503 Bad Request`）；
+- 持续 503 时先 `get_status.mcp` 看服务状态并降低并发，不要当成工具 bug 反复重试。
+
 ### apk_inject_gadget.preloadMode=provider|dt_needed
 
 preloadMode 只有 provider（默认）和 dt_needed；providerProcess 是另一个字段（决定 Provider 跑在哪个进程），不要混。

@@ -90,9 +90,26 @@ class McpHttpServer(
         acceptThread = null
     }
 
-    private fun acceptConnections(server: ServerSocket, executor: ThreadPoolExecutor) {
+    /**
+     * 可见性从 private 放宽到 internal：单测需要用一个可替换的 ServerSocket 驱动
+     * 「accept() 抛一次瞬时 IOException 之后是否还能继续 accept」（W4 task-5 A 的 seam）。运行时行为不变。
+     */
+    internal fun acceptConnections(server: ServerSocket, executor: ThreadPoolExecutor) {
         while (!server.isClosed) {
-            val socket = try { server.accept() } catch (_: IOException) { break }
+            val socket = try { server.accept() } catch (_: IOException) {
+                // W4 task-5 A：这里以前是裸 break。accept() 只要抛一次瞬时 IOException
+                // （EMFILE/ENFILE、ECONNABORTED），循环就永久退出：listener 仍占端口、
+                // McpService.running/listeningPort 仍为真，get_status.mcp 继续报 listening=true，
+                // 但端点再也不 accept；start() 见 listener!=null 直接 return、McpAutoLifecycle
+                // 只在 !running 时拉起 → 没有任何自愈路径。
+                // 保守改法：只有本 socket 已被 close()（stop() 的路径）才退出，否则短退避后重试。
+                if (server.isClosed) break
+                try { Thread.sleep(ACCEPT_RETRY_DELAY_MS) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+                continue
+            }
             connections.add(socket)
             try {
                 if (server.isClosed) {
@@ -516,6 +533,8 @@ class McpHttpServer(
         private const val READ_TIMEOUT_MS = 5000
         private const val WORKER_COUNT = 4
         private const val QUEUED_CONNECTIONS = 16
+        /** accept() 瞬时失败后的重试间隔；只影响异常路径，正常 accept 不等待。 */
+        private const val ACCEPT_RETRY_DELAY_MS = 50L
         private const val HEADER_NAME_CHARS = "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
         // Some desktop bridges still send the last pre-Streamable-HTTP version while using the
         // modern POST endpoint. The message shapes used here are compatible with all three.

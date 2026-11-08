@@ -1,8 +1,8 @@
 <!-- section:id=overview -->
 # AI.js Pro 逆向 MCP 自发现指南
 
-> 适用基线：**dev-1368**。本机公开 MCP 入口 **214 个**（**205 个规范名 + 9 个兼容别名**：status 3 · script 11 · workspace 10 · engine 5 · device 26 · terminal 11 · overlay 2 · asset 5 · toolkit 88 · reverse 43）。
-> 本指南部分细节段落写于 dev-1330 时代，若与 `tools/list` 或 [`AIjs-MCP-Guide.md`](AIjs-MCP-Guide.md) 的「dev-1368 行为变化」冲突，以后者为准。其中**逆向类工具现为 43 个**（本指南写于 dev-1330，下面这句列的是当时那 19 个已注册工具，名单已扩充）：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
+> 适用基线：**dev-1412**。本机公开 MCP 入口 **219 个**（**210 个规范名 + 9 个兼容别名**：status 4 · script 11 · workspace 10 · engine 5 · device 26 · terminal 11 · overlay 2 · asset 5 · toolkit 93 · reverse 43）。以上为 K40 dev-1412 实测：`tools/list` 返回 219 项，`get_status` 的 `toolCount=219`、`canonicalToolCount=210`，`toolCategories` 与上面逐项一致。旧文写的 214 / 205 / status 3 / toolkit 88 已过期。
+> 本指南部分细节段落写于 dev-1330 时代，若与 `tools/list` 或 [`AIjs-MCP-Guide.md`](AIjs-MCP-Guide.md) 的「dev-1409~1412 行为变化」「dev-1368 行为变化」冲突，以后者为准。其中**逆向类工具现为 43 个**（本指南写于 dev-1330，下面这句列的是当时那 19 个已注册工具，名单已扩充）：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
 >
 > 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida使用免Root Gadget集成流程、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。
 
@@ -15,15 +15,15 @@
 3. **真实执行**：由已注册的 `apk_*`、`file_*`、`zip_*`、`native_*`、`frida_*` 等工具完成；计划本身不执行、不下载、不注入。
 
 ```text
-reverse_guide(topic=index)      # 章节、工作流、19 个逆向工具状态
+reverse_guide(topic=index)      # 章节、工作流、43 个逆向工具状态
 reverse_guide(topic=<section>)  # 按 section id 读正文，可分页
 reverse_plan(goal=<goal>)       # 取机读 steps；组件和工具状态明确
 按 plan 执行可用步骤             # 计划本身不执行
 ```
 
-## 本版真实边界（dev1330-1）
+## 本版真实边界（`guideVersion` 字段仍为 `dev1330-1`，工具数已按 dev-1412 实测复核）
 
-- **19 个逆向工具已注册**，但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
+- **43 个逆向工具已注册**（dev-1412 实测；本节旧文写的「19 个」是 dev-1330 时代的数字），但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
 - 可选组件共 9 个：`jadx`、`apk-resources`、`apktool`、`radare2`、`r2ghidra`、`yara`、`unicorn`、`frida`、`frida-gadget`。`apk_component_install/remove` 的 `component` 枚举就是这 9 个。
 - **Apktool 3.0.3** 已在本机真机通过 decode → edit → rebuild：使用私有 `app_process` + AAPT2 wrapper，不把 apktool 类加载进主进程。但**任意 APK 不保证**可解包/回编译，失败必须报原始 stderr。
 - **radare2** 的 `native_*` 工具直接读手机路径，不读 APK 快照 locator；要从快照分析 so，先用 `apk_copy_entry(direction=workspace_to_local)` 导出。
@@ -62,6 +62,8 @@ Authorization: Bearer <LAN_TOKEN>
 ```
 
 `<LAN_TOKEN>` 从 App 的 MCP 设置页读取，**不要把真实 token 嵌进本文、脚本或对话**。当前构建在可信局域网内即使不带 `Authorization` 也可能接受请求，但不要把它当作可依赖的鉴权保证；客户端配置里仍使用同一个 LAN token。`Accept` 同时列出 `application/json` 和 `text/event-stream` 以兼容 Streamable HTTP 客户端；本服务没有 SSE，`GET /mcp` 带 `Accept: text/event-stream` 会返回 405，改用 `POST` JSON-only。
+
+**连不上 / 503 的排查顺序**：① 先调 `get_status.mcp` 看 `listening`（**进程内真实监听**，不是心跳推断）与 `port`；② 连接被拒或超时通常是 **App 进程没在跑**（此时 `listening=false` 并附带 `recovery`），不要先怀疑网络；③ 若返回 **503**，说明**连接队列满**（4 worker + 16 队列），body 是结构化 JSON（`error.code` 与顶层 `errorCode` 均为 `service_busy`、`recovery`、`retryAfterMs=1000`），按 `retryAfterMs` 重试即可——**503 不代表真实负载，也不代表工具失败**。
 
 ### 1. 看指南索引与计划
 
@@ -865,9 +867,9 @@ Frida 17 起，一批 Module 静态方法被移除，不是函数本身消失。
 
 `variables[]` 里的 `${name}` 必须替换成真实值；`example` 只是形状示例，不是可直接使用的真实 ID。`unresolvedVariables` 非空时，`args` 还是模板；`unknownVariables` 非空说明资产/调用方变量声明不一致，先修模板。
 
-### 19 个逆向工具与组件
+### 43 个逆向工具与组件
 
-`candidateTools[]` 保留 18 个名字用于校验；dev1330-1 全部已注册，`available` 应为 true。名字存在仍不等于组件已装：
+`candidateTools[]` 保留 **19** 个名字用于校验（`guideVersion=dev1330-1`；这 19 个是「计划会引用到」的子集，不是全部 43 个逆向工具）；这 19 个全部已注册，`available` 应为 true。名字存在仍不等于组件已装：
 
 - 静态/构建：`apk_decode_project`（apktool）、`apk_build_project`（apktool + apk-resources）、`apk_install_framework`（apktool）。
 - 原生：`native_analyze`、`native_functions`、`native_function_detail`、`native_xrefs`、`native_compare`（radare2）；`native_decompile`（radare2 + r2ghidra，r2ghidra 按需安装）。

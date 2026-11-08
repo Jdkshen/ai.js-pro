@@ -12,10 +12,14 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
-import java.util.Locale;
 import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -28,13 +32,16 @@ import java.util.Set;
  * RUN 前把项目复制到 {@code <filesDir>/native-staging/<路径hash>/}，入口脚本与工作目录都
  * 换到这份私有副本上（脚本本身不用改）。
  *
- * <p>规则（与 task-10 描述一致）：
+ * <p>规则（task-10 定义；第 3 条按 dev-1410 改为清单化合并）：
  * <ul>
  *   <li>项目已经在 {@code getFilesDir()} 之下（例如 Pro 打包版的私有项目目录）：原样返回，
  *       不重复复制；</li>
  *   <li>否则复制到 {@code <filesDir>/native-staging/<稳定短hash>}，hash 取项目规范化绝对
  *       路径的 SHA-1 前 12 个十六进制字符，同一路径每次得到同一个目录；</li>
- *   <li>复制前先删掉同 hash 的旧副本，避免上次残留的 .so/旧文件影响本次运行；</li>
+ *   <li>同一 hash 的旧副本<b>不整目录删除</b>：按上次复制清单 {@code .aijs-staging-manifest.txt}
+ *       只删「上次从源拷过、这次源里已没有」的文件，脚本自己下载/写进运行目录的依赖一律保留
+ *       （清单化合并见 {@link #mergeIntoStaging}；dev-1410 之前的实现是「每次 RUN 前
+ *       {@code deleteRecursively} + 重建」，会把上次下载的依赖清掉）；</li>
  *   <li>保留相对路径与文件名；跳过 {@code .git} 目录与普通 {@code *.apk}
  *       （打包产物，脚本运行时用不到；项目自带的 26MB ImGui APK 就靠这条省掉）；</li>
  *   <li>{@code build} 目录默认视为构建中间产物，但 Node/UI 工程的编译资源包恰好放在
@@ -45,11 +52,14 @@ import java.util.Set;
  *   <li>单文件上限 {@value #MAX_FILE_BYTES_TEXT}、整个项目上限 {@value #MAX_TOTAL_BYTES_TEXT}，
  *       超限直接抛中文 {@link IOException}，不做静默截断/跳过；</li>
  *   <li>复制用 {@link FileInputStream}/{@link FileOutputStream}，失败向上抛（服务端会转成
- *       给主进程的 ERROR(102)），并清掉半成品目录。</li>
+ *       给主进程的 ERROR(102)）；<b>失败不回滚</b>：已写进暂存目录的文件保留，清单保持上一次
+ *       成功运行的内容，下一次成功运行覆盖修正（历史实现会递归删掉整个副本）。</li>
  * </ul>
  *
- * <p>注意：暂存副本是「一次性」的 —— 每次 RUN 都会先删旧副本再重新复制，脚本运行中写进
- * 暂存目录的文件不会回写到原始项目目录（与 Pro 打包版的语义一致）。
+ * <p>注意：暂存副本不是「一次性」的 —— 每次 RUN 只做三件事：按清单删「上次拷过、这次源里
+ * 已没有」的陈旧文件 → 覆盖式复制本次源文件 → 重写清单；脚本运行中写进暂存目录的文件会
+ * <b>跨 RUN 保留</b>，但不会回写到原始项目目录（与 Pro 打包版的语义一致）。清单缺失/不可读时
+ * 按空清单处理：只复制、不删除 —— 宁可留下陈旧文件，也不误删脚本自己下载的依赖。
  *
  * <p>Phase1 起 {@code :script} 进程的 {@code ScriptHostStaging} 也复用本类，但用各自的
  * 暂存根目录名（{@code native-staging} / {@code script-staging}）—— 两个进程同跑同一项目时
@@ -58,7 +68,7 @@ import java.util.Set;
  * <p>与 {@code com.jdkshen.aijspro.flutterpoc.FsCopyTree} 的关系：本类<b>不复用</b>该通用
  * 目录复制器。FsCopyTree 只保留 PocPackaging/PocWorkspace 的「普通文件/目录复制」语义；
  * 本类还带递归深度上限（防符号链接成环）、按相对路径跳过 .git 与普通 .apk、只保留
- * build/project-res.apk(+json)、单文件/整树字节上限、CopyStats 统计和失败清理，这些是
+ * build/project-res.apk(+json)、单文件/整树字节上限、CopyStats 统计与「失败不回滚」语义，这些是
  * 暂存项目的领域规则，不是单纯目录复制，强行合并会改变行为，故保留独立实现。
  */
 public final class NativeProjectStaging {
@@ -160,34 +170,23 @@ public final class NativeProjectStaging {
         // require("./脚本.js") 报 Module not found。改为「清单化合并」：
         //   1) 读上次复制清单；2) 只删「上次从源拷过、这次源里已没有」的文件；
         //   3) 覆盖式复制本次源文件；脚本自己写下的文件（不在清单里）一律保留。
-        if (!target.isDirectory() && !target.mkdirs()) {
-            throw new IOException("暂存项目失败：无法创建私有目录：" + target.getPath());
-        }
-        for (String relative : readCopiedManifest(target)) {
-            if (new File(project, relative).exists()) {
-                continue;
-            }
-            File stale = new File(target, relative);
-            if (stale.isFile() && !stale.delete()) {
-                Log.w(TAG, "旧副本中的陈旧文件删除失败：" + stale.getPath());
-            }
-        }
-
         CopyStats stats = new CopyStats();
-        stats.root = target;
         try {
-            copyProjectContents(project, target, stats);
+            // 合并（删陈旧 + 覆盖复制 + 写清单）抽在 mergeIntoStaging 里：不依赖 Context/Log，
+            // 纯 JVM 单测可以直接驱动，覆盖这四类行为（见 NativeProjectStagingManifestTest）。
+            for (String relative : mergeIntoStaging(project, target, stats)) {
+                Log.w(TAG, "旧副本中的陈旧文件删除失败：" + new File(target, relative).getPath());
+            }
             // Stable source mapping lets settings and rebuilt UI resources survive staged runs.
             try (FileOutputStream output = new FileOutputStream(new File(target, ".aijs-staging-origin.json"))) {
                 String origin = new org.json.JSONObject().put("schemaVersion", 1)
                         .put("sourceDirectory", project.getPath()).put("stagedDirectory", target.getPath()).toString();
-        writeCopiedManifest(target, stats.copied);
                 output.write(origin.getBytes(StandardCharsets.UTF_8));
             } catch (org.json.JSONException error) {
                 throw new IOException("无法记录项目源目录", error);
             }
         } catch (IOException error) {
-            // 不再 deleteRecursively(target)：会连脚本自己下载/写入的文件一起删掉。
+            // 失败不回滚：不递归删除 target —— 那会连脚本自己下载/写入的文件一起删掉。
             throw error;
         } catch (RuntimeException error) {
             // 同上：保留脚本自己写下的文件。
@@ -196,6 +195,32 @@ public final class NativeProjectStaging {
         Log.i(TAG, "已把项目复制到私有目录：" + project.getPath() + " -> " + target.getPath()
                 + "（" + stats.files + " 个文件，" + readableSize(stats.bytes) + "）");
         return target;
+    }
+
+    // ------------------------------------------------------------------
+    // 清单化合并（不依赖 Context/Log，纯 JVM 单测可直接驱动）
+    // ------------------------------------------------------------------
+
+    /**
+     * 合并式暂存的可测入口：删陈旧 → 覆盖式复制 → 重写清单。
+     *
+     * <p>与 {@link #stageIfNeeded(Context, File, String)} 的差别只有两点：不写
+     * {@code .aijs-staging-origin.json}（该步骤依赖 {@code org.json}），也不写日志 —— 删除失败
+     * 只通过返回值上报。生产路径的 {@code Context#getFilesDir()} 解析、「已在私有目录则跳过」
+     * 判断与暂存根目录命名仍留在 {@code stageIfNeeded} 里。
+     *
+     * @param stats 复制统计；{@code copied} 会写进清单，{@code root} 由本方法设置
+     * @return 删除失败的相对路径（调用方记日志），空表示没有失败项
+     */
+    static List<String> mergeIntoStaging(File projectDir, File targetDir, CopyStats stats) throws IOException {
+        if (!targetDir.isDirectory() && !targetDir.mkdirs() && !targetDir.isDirectory()) {
+            throw new IOException("暂存项目失败：无法创建私有目录：" + targetDir.getPath());
+        }
+        List<String> failedDeletions = pruneStaleCopied(projectDir, targetDir, readCopiedManifest(targetDir));
+        stats.root = targetDir;
+        copyProjectContents(projectDir, targetDir, stats);
+        writeCopiedManifest(targetDir, stats.copied);
+        return failedDeletions;
     }
 
     // ------------------------------------------------------------------
@@ -398,23 +423,6 @@ public final class NativeProjectStaging {
         }
     }
 
-    /** 递归删除；返回是否删干净（调用方据此决定要不要报错）。 */
-    private static boolean deleteRecursively(File file) {
-        if (file == null || !file.exists()) {
-            return true;
-        }
-        boolean deleted = true;
-        if (file.isDirectory()) {
-            File[] children = file.listFiles();
-            if (children != null) {
-                for (File child : children) {
-                    deleted = deleteRecursively(child) && deleted;
-                }
-            }
-        }
-        return file.delete() && deleted;
-    }
-
     private static void closeQuietly(Closeable closeable) {
         if (closeable == null) {
             return;
@@ -439,36 +447,80 @@ public final class NativeProjectStaging {
     /** 上次复制清单文件名（记录从源项目复制过去的相对路径）。 */
     private static final String MANIFEST_NAME = ".aijs-staging-manifest.txt";
 
+    /**
+     * 删除「上次从源拷过（在清单里）、这次源里已没有」的陈旧文件。
+     *
+     * <p>纯文件操作，不写日志：删除失败只收集相对路径交调用方上报。清单为空（首次运行 /
+     * 清单缺失 / 清单不可读）时<b>不做任何删除</b> —— 这是有意保留的保守行为：宁可留下陈旧
+     * 文件，也不误删脚本自己下载写进运行目录的依赖（见类注释）。
+     *
+     * @return 删除失败的相对路径（顺序与清单一致）；空表示没有失败项
+     */
+    static List<String> pruneStaleCopied(File sourceDir, File targetDir, Set<String> copiedManifest) {
+        List<String> failed = new ArrayList<>();
+        for (String relative : copiedManifest) {
+            if (relative == null || relative.trim().isEmpty()) {
+                continue;
+            }
+            if (new File(sourceDir, relative).exists()) {
+                continue;
+            }
+            File stale = new File(targetDir, relative);
+            // 只删普通文件：目录项（历史清单/异常写入）不动，暂存目录里不做递归删除。
+            if (stale.isFile() && !stale.delete()) {
+                failed.add(relative);
+            }
+        }
+        return failed;
+    }
+
+    /** 读上次复制清单（相对路径集合）；文件不存在或读失败都按空清单处理（=> 本轮不删任何东西）。 */
     private static Set<String> readCopiedManifest(File target) {
-        Set<String> result = new LinkedHashSet<>();
         File manifest = new File(target, MANIFEST_NAME);
         if (!manifest.isFile()) {
-            return result;
+            return new LinkedHashSet<>();
         }
         try {
-            for (String line : new String(java.nio.file.Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8).split("\n")) {
-                String trimmed = line.trim();
-                if (!trimmed.isEmpty()) {
-                    result.add(trimmed);
-                }
-            }
+            return parseCopiedManifest(new String(
+                    java.nio.file.Files.readAllBytes(manifest.toPath()), StandardCharsets.UTF_8));
         } catch (IOException error) {
             Log.w(TAG, "读取暂存清单失败（按空清单处理）：" + error);
+            return new LinkedHashSet<>();
+        }
+    }
+
+    /** 清单文本 -&gt; 相对路径集合（去空白行、保序）。纯函数，单测可直接覆盖。 */
+    static Set<String> parseCopiedManifest(String text) {
+        Set<String> result = new LinkedHashSet<>();
+        if (text == null || text.isEmpty()) {
+            return result;
+        }
+        for (String line : text.split("\n")) {
+            String trimmed = line.trim();
+            if (!trimmed.isEmpty()) {
+                result.add(trimmed);
+            }
         }
         return result;
     }
 
-    private static void writeCopiedManifest(File target, Set<String> copied) {
-        File manifest = new File(target, MANIFEST_NAME);
+    /** 相对路径集合 -&gt; 清单文本（字典序、每行一个、行尾换行）。纯函数，单测可直接覆盖。 */
+    static String formatCopiedManifest(Collection<String> copied) {
+        List<String> sorted = new ArrayList<>(copied);
+        Collections.sort(sorted);
         StringBuilder builder = new StringBuilder();
-        java.util.List<String> sorted = new java.util.ArrayList<>(copied);
-        java.util.Collections.sort(sorted);
         for (String relative : sorted) {
             builder.append(relative).append('\n');
         }
+        return builder.toString();
+    }
+
+    /** 覆盖式写本次复制清单；写失败只记日志（下次读不到清单 => 保守地不删任何东西）。 */
+    private static void writeCopiedManifest(File target, Set<String> copied) {
+        File manifest = new File(target, MANIFEST_NAME);
         try {
             try (FileOutputStream output = new FileOutputStream(manifest)) {
-                output.write(builder.toString().getBytes(StandardCharsets.UTF_8));
+                output.write(formatCopiedManifest(copied).getBytes(StandardCharsets.UTF_8));
             }
         } catch (IOException error) {
             Log.w(TAG, "写入暂存清单失败（下次会保守清理）：" + error);
@@ -484,8 +536,8 @@ public final class NativeProjectStaging {
         }
     }
 
-    /** 复制统计：日志里报告文件数与总字节数。 */
-    private static final class CopyStats {
+    /** 复制统计：日志里报告文件数与总字节数；包内可见，供纯 JVM 单测断言本次复制集合。 */
+    static final class CopyStats {
         long bytes;
         int files;
         /** 本次真正复制过去的文件（相对目标根），下次据此清理陈旧源文件。 */

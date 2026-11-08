@@ -296,7 +296,7 @@ Launcher → Splash/Main → Flutter GlassFlutterActivity
 | <code>fonts/</code> | NotoSansCJKsc 子集 | 2 文件，约 0.6MB |
 | <code>js/</code> | 少量运行期 JS 资源 | 2 文件，约 0.1MB |
 
-根 assets 还有：<code>excluded-zip-files.json</code>（瘦身模板需从宿主 APK 补齐的 lib 清单）、<code>sample-manifest.json</code>、<code>template.apk</code>（瘦身模板，当前约 20.4MB）。
+根 assets 还有：<code>excluded-zip-files.json</code>（瘦身模板需从宿主 APK 补齐的 lib 清单）、<code>sample-manifest.json</code>、<code>template.apk</code>（瘦身模板，2026-11-08 实测 19,814,709 B ≈ 19.8MB，SHA-256 <code>3AC69531…</code>）。
 
 引擎/Node 资产不在 app assets，而在 <code>modules/engine/src/main/assets</code>：
 
@@ -311,7 +311,7 @@ Launcher → Splash/Main → Flutter GlassFlutterActivity
 apps/inrt (:inrt) release arm64 unsigned APK
         │ :inrt:buildApkPlugin
         ▼
-plugins/apkbuilder-plugin/src/main/assets/template.apk   （全量模板，当前约 88.3MB）
+plugins/apkbuilder-plugin/src/main/assets/template.apk   （全量模板，2026-11-08 实测 88,448,312 B ≈ 88.4MB）
         │ 安装打包插件；宿主 ApkBuilderPluginHelper.ensureTemplate 反射落地
         ▼
 主 App 打包页：ApkBuilder 用 template + 用户 project/assets 替换、重签/验签
@@ -322,7 +322,7 @@ plugins/apkbuilder-plugin/src/main/assets/template.apk   （全量模板，当�
 apps/inrt packageRelease
         │ tools/build-slim-template.ps1（剔除 lib/，生成 excluded 清单）
         ▼
-apps/app/src/main/assets/template.apk（瘦身，当前约 20.4MB）
+apps/app/src/main/assets/template.apk（瘦身，2026-11-08 实测 19,814,709 B ≈ 19.8MB）
         + excluded-zip-files.json
         │ 宿主缺少插件时，从自己的 APK 补齐 excluded libs
         ▼

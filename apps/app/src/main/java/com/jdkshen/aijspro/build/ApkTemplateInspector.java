@@ -18,15 +18,27 @@ import java.util.zip.ZipFile;
 /**
  * W-H：打包模板指纹与 dev-1401 engine-require-root 修复标记检测。
  *
- * 只读流式读取模板 APK 的 assets/init.js，不解压整包；读取失败不影响模板本身可用性，
+ * <p>只读**流式**读取模板 APK 的 {@code assets/init.js}，不解压整包；读取失败不影响模板本身可用性，
  * 但会把 engineRequireRootFix=false 且 inspectError 写进结果。
+ *
+ * <p>dev-1413：整包 SHA-256 与 {@code assets/init.js} 都改成流式读取。旧实现先用 {@code readAll()}
+ * 把整包读进内存并设了 64MiB 上限，于是**插件兜底通道**（{@code ApkBuilderPluginHelper} 第 115-119 行
+ * 落地的是 88,448,312 B 全量模板）与 **{@code /sdcard/template.apk} 手动覆盖**（历史就是 88MiB 级）
+ * 上，再新的模板也会被判成 available=false / engineRequireRootFix=false / templateStale=true
+ * （inspectError="IOException: 模板超过 64MiB"）；打包本身不失败，但日志与 get_status 字段全错。
+ * 现在只读 zip 中央目录 + 单条 {@code assets/init.js}（上限 {@link #MAX_INIT_BYTES}），模板多大都不进内存。
  */
 public final class ApkTemplateInspector {
     public static final String SOURCE_SDCARD = "sdcard_override";
     public static final String SOURCE_HOST_CACHE = "host_cache";
     public static final String SOURCE_BUNDLED = "bundled_assets";
     public static final String SOURCE_NONE = "none";
+    /** 模板里唯一需要读出来的条目。 */
+    private static final String INIT_ENTRY = "assets/init.js";
+    /** 单条 init.js 的内存上限（真实约 12KB）；与整包大小无关。 */
     private static final int MAX_INIT_BYTES = 4 * 1024 * 1024;
+    /** 整包 SHA-256 的流式缓冲区。 */
+    private static final int HASH_BUFFER_BYTES = 64 * 1024;
     private static final String REQUIRE_ROOT_MARKER = "__ajsSetRequireRoot";
 
     public static final class Info {
@@ -91,54 +103,43 @@ public final class ApkTemplateInspector {
             return new Info(false, source, file == null ? "" : file.getPath(), 0, "", "", false,
                     "", "模板文件不存在");
         }
-        try (InputStream input = new FileInputStream(file)) {
-            return inspect(input, source, file.getPath(), file.length());
+        String path = file.getPath();
+        long size = file.length();
+        String sha;
+        try {
+            sha = sha256File(file);
         } catch (Throwable error) {
-            return new Info(false, source, file.getPath(), file.length(), "", "", false,
+            return new Info(false, source, path, size, "", "", false,
                     error.getClass().getSimpleName() + ": " + error.getMessage(), "读取模板失败");
         }
+        String initSha = "";
+        boolean fixed = false;
+        String inspectError = "";
+        try (ZipFile zip = new ZipFile(file)) {
+            ZipEntry entry = zip.getEntry(INIT_ENTRY);
+            if (entry != null) {
+                byte[] init = readBounded(zip.getInputStream(entry), MAX_INIT_BYTES, INIT_ENTRY);
+                initSha = sha256(init).substring(0, 16);
+                fixed = new String(init, StandardCharsets.UTF_8).contains(REQUIRE_ROOT_MARKER);
+            }
+        } catch (Throwable error) {
+            inspectError = error.getClass().getSimpleName() + ": " + error.getMessage();
+        }
+        return new Info(true, source, path, size, sha, initSha, fixed, inspectError,
+                detailOf(fixed, inspectError));
     }
 
     public static Info inspect(byte[] bytes, String source, String path) {
         if (bytes == null) return new Info(false, source, path, 0, "", "", false, "", "模板字节为空");
-        try {
-            return inspect(new ByteArrayInputStream(bytes), source, path, bytes.length);
-        } catch (Throwable error) {
-            return new Info(false, source, path, bytes.length, "", "", false,
-                    error.getClass().getSimpleName() + ": " + error.getMessage(), "读取模板失败");
-        }
-    }
-
-    private static Info inspect(InputStream input, String source, String path, long size) throws IOException {
-        byte[] all = readAll(input);
-        String sha = sha256(all);
+        String sha = sha256(bytes);
         String initSha = "";
         boolean fixed = false;
         String inspectError = "";
-        try (ZipFile zip = new ZipFile(path)) {
-            // ZipFile path overload needs a real file; this branch cannot be used for raw asset bytes.
-            inspectError = "internal";
-        } catch (Throwable ignored) {
-        }
-        return inspectBytes(all, source, path, size, sha);
-    }
-
-    private static Info inspectBytes(byte[] all, String source, String path, long size, String sha) {
-        String initSha = "";
-        boolean fixed = false;
-        String inspectError = "";
-        try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(new ByteArrayInputStream(all))) {
+        try (java.util.zip.ZipInputStream zip = new java.util.zip.ZipInputStream(new ByteArrayInputStream(bytes))) {
             ZipEntry entry;
-            byte[] buffer = new byte[8192];
             while ((entry = zip.getNextEntry()) != null) {
-                if (!"assets/init.js".equals(entry.getName())) continue;
-                ByteArrayOutputStream out = new ByteArrayOutputStream();
-                int read;
-                while ((read = zip.read(buffer)) > 0) {
-                    if (out.size() + read > MAX_INIT_BYTES) throw new IOException("assets/init.js 超过 " + MAX_INIT_BYTES + " 字节");
-                    out.write(buffer, 0, read);
-                }
-                byte[] init = out.toByteArray();
+                if (!INIT_ENTRY.equals(entry.getName())) continue;
+                byte[] init = readBounded(zip, MAX_INIT_BYTES, INIT_ENTRY);
                 initSha = sha256(init).substring(0, 16);
                 fixed = new String(init, StandardCharsets.UTF_8).contains(REQUIRE_ROOT_MARKER);
                 break;
@@ -146,31 +147,56 @@ public final class ApkTemplateInspector {
         } catch (Throwable error) {
             inspectError = error.getClass().getSimpleName() + ": " + error.getMessage();
         }
-        String detail = fixed ? "含 " + REQUIRE_ROOT_MARKER : (inspectError.isEmpty() ? "未找到 assets/init.js 或缺少修复标记" : "读取 assets/init.js 失败");
-        return new Info(true, source, path, size, sha, initSha, fixed, inspectError, detail);
+        return new Info(true, source, path, bytes.length, sha, initSha, fixed, inspectError,
+                detailOf(fixed, inspectError));
+    }
+
+    private static String detailOf(boolean fixed, String inspectError) {
+        if (fixed) return "含 " + REQUIRE_ROOT_MARKER;
+        return inspectError.isEmpty() ? "未找到 assets/init.js 或缺少修复标记" : "读取 assets/init.js 失败";
+    }
+
+    /** 流式计算整包 SHA-256：88MiB 级模板也只占一个 64KiB 缓冲区。 */
+    private static String sha256File(File file) throws IOException {
+        MessageDigest digest;
+        try {
+            digest = MessageDigest.getInstance("SHA-256");
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            return "";
+        }
+        try (InputStream input = new FileInputStream(file)) {
+            byte[] buffer = new byte[HASH_BUFFER_BYTES];
+            int read;
+            while ((read = input.read(buffer)) > 0) digest.update(buffer, 0, read);
+        }
+        return hex(digest.digest());
+    }
+
+    /** 读出单个条目，超过 maxBytes 直接失败（不整包读盘/读内存）。 */
+    private static byte[] readBounded(InputStream input, int maxBytes, String label) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = input.read(buffer)) > 0) {
+            if (out.size() + read > maxBytes) throw new IOException(label + " 超过 " + maxBytes + " 字节");
+            out.write(buffer, 0, read);
+        }
+        return out.toByteArray();
     }
 
     public static String sha256(byte[] bytes) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(bytes);
-            StringBuilder builder = new StringBuilder(hash.length * 2);
-            for (byte value : hash) builder.append(String.format(Locale.ROOT, "%02x", value & 0xff));
-            return builder.toString();
+            return hex(digest.digest(bytes));
         } catch (Exception error) {
             return "";
         }
     }
 
-    private static byte[] readAll(InputStream input) throws IOException {
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int read;
-        while ((read = input.read(buffer)) > 0) {
-            if (out.size() + read > 64 * 1024 * 1024) throw new IOException("模板超过 64MiB");
-            out.write(buffer, 0, read);
-        }
-        return out.toByteArray();
+    private static String hex(byte[] hash) {
+        StringBuilder builder = new StringBuilder(hash.length * 2);
+        for (byte value : hash) builder.append(String.format(Locale.ROOT, "%02x", value & 0xff));
+        return builder.toString();
     }
 
     /** org.json 的 put 抛受检 JSONException；这里包一层，避免整条调用链传播受检异常。 */

@@ -52,6 +52,9 @@ object McpStateStore {
             .putBoolean(KEY_RUNNING, false)
             .putLong(KEY_UPDATED_AT, now)
             .putString(KEY_STATE, "starting")
+            // W4 task-5 B：新一次启动尝试开始，上一轮的 start_reason 必须失效——否则这次启动
+            // 在 saveRunning 之前就失败时，get_status.mcp 会把上一轮的 auto/manual 报成这一次的。
+            .remove(KEY_START_REASON)
             .remove(KEY_ERROR)
             .apply()
         Log.i(TAG, "C-MCP: state=starting heartbeat=" + now)
@@ -95,6 +98,10 @@ object McpStateStore {
             .putBoolean(KEY_RUNNING, false)
             .putLong(KEY_UPDATED_AT, now)
             .putString(KEY_STATE, "stopped")
+        // 有意不清 KEY_START_REASON（W4 task-5 B 复核）：停止后没有「本次尝试」，保留上一轮的真实
+        // 启动原因比清掉更准确；清掉反而会让 statusJson 的 ifEmpty 回退去伪造 "manual"
+        // （McpService.autoStarted 在启动成功时已清零）。进程被系统回收的路径不会走到这里，
+        // 与 J3 的告警（启动失败/重启后仍报上一轮）无关。
         if (error.isNullOrEmpty()) {
             editor.remove(KEY_ERROR)
         } else {
@@ -112,6 +119,10 @@ object McpStateStore {
             .putLong(KEY_UPDATED_AT, now)
             .putString(KEY_ERROR, error)
             .putString(KEY_STATE, "error")
+            // W4 task-5 B：启动失败（例如 8765..8795 全被占）不能继续报上一轮的 start_reason。
+            // 清掉后 statusJson 的 ifEmpty 回退会用 McpService.autoStarted —— 那是本次尝试的实时标志，
+            // 成功前不会被清零（McpService.onCreate 只在 start 成功后置 false），所以回退值是正确的。
+            .remove(KEY_START_REASON)
             .apply()
         Log.w(TAG, "C-MCP: state=error heartbeat=" + now + " error=" + error)
     }

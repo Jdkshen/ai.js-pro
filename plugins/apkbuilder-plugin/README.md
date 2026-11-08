@@ -6,10 +6,11 @@
 - 注册类：`com.jdkshen.apkbuilder.plugin.PluginRegistry`（`AndroidManifest.xml` 里的
   `org.autojs.plugin.sdk.registry` 元数据，官方 Auto.js Pro 与本仓库都按它反射加载）
 - 插件对象：`com.jdkshen.apkbuilder.plugin.ApkBuilderPlugin`
-- 体积：当前仓库里的 `assets/template.apk` 实测 **84.33 MB**（88,424,956 B，SHA 前 8 位 `5E70C543`），几乎全是打包运行时模板（arm64 未签名，由 `:inrt` 构建）
-  （2026-11-06 校正过两次：此前写的 67.5 MB / 70,808,075 B 已过期；当天用 `:inrt:buildApkPlugin` 重新生成，
-  证明原先跟踪的 `1CA77AD1…` 版本相对当前源码是**过期产物**。本次重建**未做真机验收**，插件正式发版时仍需按本文重跑并 bump 版本。
-  宿主侧另有瘦身模板 20,418,813 B，两者用途不同，不要混用。）
+- 体积：当前仓库里的 `assets/template.apk` 实测 **84.35 MB**（88,448,312 B，SHA-256 `CC1D028F91EEE86EED60AC59BC7C7CD1BBD158DEB3D6607D431AC8F424436892`），几乎全是打包运行时模板（arm64 未签名，由 `:inrt` 构建；`assets/template-manifest.json` 的 `templateBytes` 同为 88448312）
+  （**2026-11-08 重建**：88,445,288 B → **88,448,312 B**。内嵌 `assets/init.js` 含 dev-1401 的 `__ajsSetRequireRoot`、`assets/modules/jvm-npm.js` 含 dev-1410 的「找不到模块」可执行诊断。
+  本次重建**未做真机验收**，插件正式发版时仍需按本文重跑并 bump 版本。
+  历史数字（仅作对照，均已过期）：2026-11-06 重建时 88,424,956 B / `5E70C543`；更早跟踪的 `1CA77AD1…` 为 67.5 MB / 70,808,075 B。
+  宿主侧另有瘦身模板 **19,814,709 B**（SHA-256 `3AC695312E74158C7E1FBDD4A622F6395DF12A86F79AD82E820033012C4434F1`），两者用途不同，不要混用。）
 
 ## 为什么做成插件
 
@@ -74,4 +75,4 @@ builder.ensureTemplate("/sdcard/模板缓存");       // 落地成真实文件�
 | 未装插件、无 `/sdcard/template.apk` | 打包页提示缺失；`openTemplateApk` 抛可操作异常（`ApkBuilderTemplateAvailabilityTest` 通过） |
 | 装插件后打包「dsh 手机客户端」示例 | 通过（`DshClientSamplePackagingTest`，真实 ApkBuilder 全链路） |
 | 打包加密回归 19 项 | 18 通过；1 项失败与本插件无关（`IMAGE_MODULE_LIBS` 未包含新模板里的 `libopencv_features.so`，属于仓库里既有的模板/清单不同步） |
-| 落地结果 | `files/apk-builder/template.apk` 44,842,488 字节，来源标记 `1.0.0 (1)` |
+| 落地结果（**历史值**，2026-11-06 记录） | `files/apk-builder/template.apk` 44,842,488 字节，来源标记 `1.0.0 (1)` |

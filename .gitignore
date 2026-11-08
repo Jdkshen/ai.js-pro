@@ -49,6 +49,9 @@
 !apps/app/src/testMiuix/java/com/jdkshen/aijspro/autojs/build/**
 !apps/app/src/test/java/com/jdkshen/aijspro/autojs/build/
 !apps/app/src/test/java/com/jdkshen/aijspro/autojs/build/**
+# ApkTemplateInspectorTest lives in the Java package ...aijspro.build (dev-1413)
+!apps/app/src/test/java/com/jdkshen/aijspro/build/
+!apps/app/src/test/java/com/jdkshen/aijspro/build/**
 
 # Generated release and capture directories
 /release/

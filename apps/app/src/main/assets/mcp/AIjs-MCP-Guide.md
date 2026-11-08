@@ -10,7 +10,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 
 | 分类 | 工具 |
 |---|---|
-| 状态与诊断 | get_status、read_apk_logs、get_mcp_log |
+| 状态与诊断 | get_status（含 `toolCatalog`/`mcp`/`template`/`toolCategories` 等自检块）、read_apk_logs、get_mcp_log |
 | 脚本与执行 | list_scripts、read_script、search_scripts、continue_result、run_script、check_syntax、list_executions、get_execution、wait_execution、stop_script、stop_all_scripts |
 | 工作区 | workspace_open/list/read/write/delete/diff/request_apply/mkdir/cancel/cleanup |
 | 项目目录 | project_folder（state/create/set/tidy；产出自动归置） |
@@ -40,6 +40,8 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 - structuredContent：标准信封 {ok:true,data:{...}}，data 内是同一批标量字段。
 
 新代码优先读 structuredContent.data；老代码继续读 content[0].text 即可。若当前构建还没有 data 镜像（升级前），以 content[0].text 为准；升级后两处字段应等价，不要因为多了一个 data 就认为旧字段被删除。当前实现里 get_status/get_build_tools 已加镜像；toolkit_status 结果来自 :tools 桥接进程，若该构建尚未镜像同样以 text 为准。
+
+`get_status` 里还有几块**不属于扁平标量**的自检信息，不要漏读：`toolCatalog{toolCount,build,fingerprint}` 与顶层 `toolCount`/`canonicalToolCount`（K40 dev-1412 实测 **219 / 210**）、`mcp{...}`（MCP 服务自身状态，字段与排查顺序见 Playbook「get_status.mcp」）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`（dev-1404：打包**实际会用哪份模板**、是否含 require 根修复——`templateStale=true` 时按 `nextActions` 重建模板）、`toolCategories{}`（各分类工具数）、以及 `baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
 
 ### 参数类错误的 error.details
 
@@ -587,7 +589,43 @@ clang main.c -O2 -o hello
 
 编译不需要 Shizuku；Shizuku 身份通常不能读取应用私有编译目录。源码可来自共享存储，可执行产物应放私有目录。Android 对 target29+ 应用执行私有目录下载文件有限制；入口会报告不支持，不更改 targetSdk 绕过。卸载组件前先结束使用它的任务，再执行 `aijs-toolchain remove cpp`；项目源码不放组件目录，卸载不会主动删除项目目录。该管理入口不代表 Node 原生 child_process 已自动注入终端函数。
 
-应用内终端同步增加实时输出、输入与停止，退出界面会清理自己的命令；其默认执行期限为 1 小时，界面仅保留最近 64Ki 字符。
+应用内终端与 MCP 终端复用同一底层，默认执行期限 **1 小时**。界面（dev-1411/1412）：控制台**跟随式自动滚动**（只在你本就在底部时才跟随，上翻阅读不被打断，滚回底部自动恢复）、**运行状态行**（空闲=后端+cwd；运行中=jobId+200ms 计时；结束=成功或退出码+耗时）、**快捷命令横滑条**（pwd / ls -l / id / 日志=`logcat -d -t 200` / 前台=`dumpsys window | grep -i mCurrentFocus` / 端口=`ss -tlnp`）、**↑/↓ 或长按输入框**回溯最近 **50 条**命令（软键盘没有方向键，所以长按输入框也能弹历史）、**清空 / 复制全部**。
+
+控制台保留上限 **20 万字符**（旧的 64Ki 说法已过期）：超出时**一次丢弃到约 10 万字符**，并在**状态行**提示一次「控制台已截断」——提示放状态行是因为它不随日志滚动，不会被截掉。运行中输入的 stdin 不进命令历史；退出界面会清理自己的命令。
+
+## 运行项目与暂存目录（dev-1410）
+
+App 内「运行项目」会把共享存储里的脚本项目**暂存到应用私有目录再执行**（`:script` 用 `files/script-staging/<hash>`，`:native` 用 `files/native-staging/<hash>`）。dev-1410 起**暂存不再是「每次清空重建」**：
+
+- **脚本自己下载/写下的文件会保留**。自更新类脚本把 `脚本.js`、任务脚本下载到运行目录后，下一次 RUN **不会再被清掉**——dev-1410 修的就是「第二次运行报 `Module ".../script-staging/<hash>/脚本.js" not found`」。
+- 只删**上次从源项目拷过、这次源项目里已经没有**的文件；清单文件 `.aijs-staging-manifest.txt` 记录上次拷过的相对路径。
+- 复制失败**不再整目录删除**（旧实现会把脚本下载的依赖一起删掉）。
+- 过滤规则不变：跳过 `.git/` 与普通 `*.apk`；任意嵌套的 `build/` 只保留 `project-res.apk`（+可选 `project-res.json`）；单文件 64MB / 整树 256MB 上限，超限直接报错、不静默截断。
+- `.aijs-staging-origin.json` 记录「源目录 ↔ 暂存目录」映射；删掉它会让设置与编译资源映射失效。
+
+### 相对依赖找不到时，先看引擎给的可执行诊断（dev-1410）
+
+Rhino 下 `require("./脚本.js")` 相对路径解析失败时，不再只回 Rhino 那句 `Can not resolve relative module ID … outside of a module`，而是先给可执行诊断：
+
+```text
+找不到模块 "./脚本.js"：相对 /storage/emulated/0/脚本 解析为 /storage/emulated/0/脚本/脚本.js，该文件不存在。该目录下现有：(没有 .js/.json 文件)。若这是「云端下载 / 自更新」类脚本，请确认依赖已下载成功，且下载与运行使用同一个工作目录。
+```
+
+看到这句时按顺序排查：① 诊断里给的绝对路径是否真的存在；② 自更新脚本的**下载目录**是否等于**运行目录**（暂存后 cwd 是私有暂存目录，不是脚本根）；③ 目录列表是否为空——为空通常说明**下载这一步就没成功**（常见伴随「获取用户信息错误」＝用户信息/卡密校验失败）。
+
+> **版本门禁（重要）**：这条诊断在仓库工作树的模板里**已重建但尚未发布**；**当前发布的 dev-1412 打包产物仍是旧文案**（其模板 `assets/modules/jvm-npm.js` 不含该诊断）。要让打包版拿到它，必须用含该修复的模板**重新打包**；`get_status.template.engineRequireRootFix` 只能证明 require 根修复，**不能**证明诊断存在——判断依据是模板内 `assets/modules/jvm-npm.js` 是否含「找不到模块」。
+
+## dev-1409~1412 行为变化（dev-1409~1412 新增项；上一节见 dev-1368）
+
+| 工具/字段 | 现在的行为 |
+|---|---|
+| `get_status.mcp` | **新增**（dev-1411 P1-G / dev-1412 J3-J5）：`status`/`listening`/`fresh`/`running`/`port`/`localUrl`/`lanUrl`/`updatedAt`/`heartbeatAgeMs`/`heartbeatIntervalMs`/`heartbeatTimeoutMs`/`lastError`/`startReason`/`autoStarted`/`foregroundService`/`sticky`/`state`，仅 `listening=false` 时多一个 `recovery`。`listening` 是**进程内真实监听**（不是心跳推断）。K40 dev-1412 实测：`status=running`/`listening=true`/`state=running`/`startReason=auto`/`heartbeatAgeMs≈0.9s` |
+| `get_status.template` | **新增**（dev-1404）：`source`（`bundled_assets`/`host_cache`/`sdcard`）、`path`、`sizeBytes`、`sha256`、`engineRequireRootFix`、`templateStale`、`warnings`、`nextActions` |
+| HTTP **503** | body 改为**结构化 JSON**（`error.code` + 顶层 `errorCode` = `service_busy`、`recovery`、`retryAfterMs`）；503 的原因是**连接队列满**（4 worker + 16 队列），**不代表真实负载**，也不代表工具失败 |
+| 相对 `require` 失败 | 先给可执行诊断（解析后绝对路径 + 目录现有 `.js/.json` + 自更新脚本排查提示），见上节 |
+| 项目暂存目录 | 清单化合并：脚本自己写下的文件保留，只清「上次拷过、这次源里没有的」；失败不再整目录删除，见上节 |
+| 内置终端界面 | 跟随式滚动 / 运行状态行 / 快捷命令条 / ↑↓ 与长按历史 50 条 / 清空+复制全部；控制台上限 **20 万字符**（超限丢到约一半 + 状态行提示一次） |
+| `reverse_guide` 参数 | 只有 `topic`（`index`/`all`/`<section-id>`）、`offset`、`maxChars`；**没有** `sectionIds` 入参——`sectionIds` 只是**响应字段**（章节名列表），逐节读取要用 `topic=<section-id>` |
 
 ## dev-1368 行为变化（相对 dev-1365，改前请对照）
 

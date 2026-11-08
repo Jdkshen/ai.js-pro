@@ -5,7 +5,7 @@ import com.google.gson.*
 /** Small, discoverable contracts. Optional binaries stay out of the APK and run out of process. */
 internal object ToolkitReverseTools {
     val descriptions = linkedMapOf(
-        "reverse_guide" to "逆向工具入门与分页指南。首次连接先 topic=index，再按 sectionIds 读取；offset 使用 nextOffset，maxChars≤24000。包括依赖安装、APK/DEX/SO/Frida/YARA/Unicorn、任务轮询及错误处理。",
+        "reverse_guide" to "逆向工具入门与分页指南。首次连接先 topic=index 取章节清单（响应里的 sectionIds 是可选读的章节名列表，不是入参），再用 topic=<section-id> 逐节读取；分页用返回的 nextOffset，maxChars≤24000。包括依赖安装、APK/DEX/SO/Frida/YARA/Unicorn、任务轮询及错误处理。",
         "reverse_capabilities" to "查询当前手机逆向后端、按需组件、执行策略和真实限制。installed/available 只代表文件与平台条件；verifiedThisRequest=false 不代表已运行验证。不会下载或启动目标。",
         "reverse_plan" to "按 goal 返回机读逆向工作流、工具与组件依赖、参数模板及限制；goal 见 reverse_guide index。只规划不执行，占位符必须替换，工具注册不代表组件已安装。",
         "apk_decode_project" to "Apktool 完整解包 APK 为可编辑的 Manifest/XML/Smali 工程；path→新 outDir。需 apktool 组件。后台任务默认开启，返回 jobId 后用 apk_job_status/result。不会覆盖源 APK/目录。",

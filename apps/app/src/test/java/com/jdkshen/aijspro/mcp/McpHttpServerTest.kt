@@ -10,7 +10,12 @@ import org.junit.Before
 import org.junit.Test
 import java.io.IOException
 import java.net.BindException
+import java.net.ServerSocket
 import java.net.Socket
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class McpHttpServerTest {
@@ -349,6 +354,192 @@ class McpHttpServerTest {
         assertEquals(200, post(INITIALIZE).status)
     }
 
+    /**
+     * W4 task-5 C：连接队列打满（4 worker + 16 排队 = 20）时，多出来的连接必须在
+     * McpHttpServer 的 RejectedExecutionException 分支里拿到结构化 503；并且把这些连接
+     * 用 RST 中止（dev-1411 里让 503 分支裸 respondJson 抛 IOException 的场景）之后，
+     * accept 线程必须还活着继续服务（dev-1411 会在这里再也拿不到响应）。
+     */
+    @Test
+    fun floodedQueueAnswersStructured503AndAcceptLoopSurvivesAbortedPeers() {
+        val held = ArrayList<Socket>()
+        var callsBeforeBusyProbe = -1
+        try {
+            // 40 个「连上但一个字节都不发」的裸 socket：4 个占住 worker（5s 读超时），
+            // 16 个占住排队槽，其余走到拒绝分支被就地回 503。
+            val connectDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (held.size < FLOOD_SOCKETS && System.nanoTime() < connectDeadline) {
+                // 内核 accept 队列瞬时满时（Windows 会直接 RST）重试即可；只要建立 >=21 个，
+                // 4 worker + 16 排队 = 20 个槽位就必然被打满。
+                val socket = try { Socket("127.0.0.1", server.localPort) } catch (_: IOException) { null }
+                if (socket == null) Thread.sleep(20) else held.add(socket)
+            }
+            assertTrue("只建立了 ${held.size}/$FLOOD_SOCKETS 个连接", held.size >= 21)
+            var busy: Response? = null
+            val probeDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (System.nanoTime() < probeDeadline) {
+                callsBeforeBusyProbe = calls.get()
+                val response = probe()
+                if (response != null && response.status == 503) { busy = response; break }
+                Thread.sleep(50)
+            }
+            assertTrue("$FLOOD_SOCKETS 个连接占满队列后，新请求应拿到 503", busy != null)
+            assertEquals(503, busy!!.status)
+            assertTrue(
+                "503 状态行必须是 Service Unavailable，实际：${busy.statusLine}",
+                busy.statusLine.startsWith("HTTP/1.1 503 Service Unavailable")
+            )
+            val body = busy.json()
+            assertEquals("service_busy", body.get("errorCode").asString)
+            assertEquals("service_busy", body.getAsJsonObject("error").get("code").asString)
+            assertTrue(body.getAsJsonObject("error").get("recoverable").asBoolean)
+            assertTrue(body.getAsJsonObject("error").get("retrySameArguments").asBoolean)
+            assertEquals(1000, body.get("retryAfterMs").asInt)
+            assertTrue(body.get("recovery").asString.isNotEmpty())
+            // 被拒绝的请求没有进入 handler（与 body 里「本次请求未进入处理」一致）：
+            // 打出 503 的那次探测前后 handler 计数不变。
+            assertEquals(callsBeforeBusyProbe, calls.get())
+        } finally {
+            for (socket in held) {
+                runCatching { socket.setSoLinger(true, 0) } // RST，不是 FIN
+                runCatching { socket.close() }
+            }
+        }
+        // dev-1411 的回归点就在这里：503 是对端已断开时写 socket 抛 IOException（accept 线程死亡）。
+        // 除了上面那批「保持到断言之后再 RST」的连接，再连 2 轮「连上就 RST」的风暴，
+        // 尽量让服务端的 503 写入撞上已经复位的对端。
+        repeat(2) {
+            val storm = ArrayList<Socket>()
+            repeat(FLOOD_SOCKETS) {
+                val socket = try { Socket("127.0.0.1", server.localPort) } catch (_: IOException) { null }
+                if (socket != null) storm.add(socket)
+            }
+            for (socket in storm) {
+                runCatching { socket.setSoLinger(true, 0) } // RST，不是 FIN
+                runCatching { socket.close() }
+            }
+        }
+        val after = awaitHealthyResponse()
+        assertTrue("RST 掉 $FLOOD_SOCKETS 个连接后端点不再响应：accept 线程可能已死", after != null)
+        assertEquals(200, after!!.status)
+        assertEquals("示例运行", after.json().getAsJsonObject("result").get("echo").asString)
+    }
+
+    /**
+     * dev-1411 的回归点：503 分支以前是裸 respondJson(...)，对端不可写时抛 IOException 会穿出
+     * accept 循环、杀死 accept 线程（listener 仍占端口却再也不 accept）。这里用 seam 精确复现：
+     * worker + 排队槽被占满 → 下一个连接必然走 503 分支；交给它的 socket 未连接（取输出流/写必然
+     * 失败），所以只有 503 分支的 try/catch 生效时循环才会继续 accept。
+     */
+    @Test
+    fun acceptLoopSurvives503WriteFailureToUnwritablePeer() {
+        val unwritable = Socket() // 未连接、未关闭：soTimeout 可设，但取输出流/写必抛 SocketException
+        val fake = FlakyServerSocket(unwritable)
+        val saturating = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1))
+        val release = CountDownLatch(1)
+        saturating.execute { release.await() } // worker 占住
+        saturating.execute { release.await() } // 排队槽占住 → 下一次 execute 必然被 AbortPolicy 拒绝
+        val loop = Thread { server.acceptConnections(fake, saturating) }
+        loop.isDaemon = true
+        loop.start()
+        try {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (fake.acceptCalls.get() < 2 && System.nanoTime() < deadline) Thread.sleep(10)
+            assertTrue(
+                "503 写失败后 accept 循环退出了（dev-1411 回归）：accept() 只被调用 ${fake.acceptCalls.get()} 次",
+                fake.acceptCalls.get() >= 2
+            )
+        } finally {
+            release.countDown()
+            fake.close()
+            saturating.shutdownNow()
+            loop.join(3000)
+        }
+        assertFalse("close() 之后 accept 循环应退出", loop.isAlive)
+    }
+
+    /**
+     * W4 task-5 A：accept() 抛一次瞬时 IOException（EMFILE/ENFILE、ECONNABORTED）时，
+     * 旧的 catch (_: IOException) { break } 会永久退出循环（listener 仍占端口却不再 accept，
+     * 且 start()/McpAutoLifecycle 都不会重启它）。这里用一个始终抛瞬时 IOException 的
+     * ServerSocket 直接驱动 acceptConnections，断言它持续重试、且 close() 之后能退出。
+     */
+    @Test
+    fun acceptLoopKeepsRetryingAfterTransientIoExceptionAndStillStopsOnClose() {
+        val flaky = FlakyServerSocket()
+        val executor = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1))
+        val loop = Thread { server.acceptConnections(flaky, executor) }
+        loop.isDaemon = true
+        loop.start()
+        try {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (flaky.acceptCalls.get() < 2 && System.nanoTime() < deadline) Thread.sleep(10)
+            assertTrue(
+                "首次 IOException 之后没有重试：accept() 只被调用 ${flaky.acceptCalls.get()} 次（旧行为=1）",
+                flaky.acceptCalls.get() >= 2
+            )
+            // 退避检查：50ms 退避下 300ms 约 6 次；忙等会是几十万次。
+            val first = flaky.acceptCalls.get()
+            Thread.sleep(300)
+            val retries = flaky.acceptCalls.get() - first
+            assertTrue("accept 重试疑似忙等：300ms 内 $retries 次", retries in 1..100)
+        } finally {
+            flaky.close()
+            loop.join(3000)
+        }
+        assertFalse("close() 之后 accept 循环应退出", loop.isAlive)
+    }
+
+    /** RST 风暴之后再要一个正常响应（dev-1411 的 accept 线程已死时会一直拿不到）。 */
+    private fun awaitHealthyResponse(): Response? {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            val response = probe()
+            if (response != null && response.status == 200) return response
+            Thread.sleep(50)
+        }
+        return null
+    }
+
+    /** 带短超时的正常 POST；连接被拒/超时/无响应一律返回 null（不抛断言）。 */
+    private fun probe(): Response? = try {
+        Socket("127.0.0.1", server.localPort).use { socket ->
+            socket.soTimeout = PROBE_TIMEOUT_MS
+            val output = socket.getOutputStream()
+            output.write(headers(INITIALIZE.toByteArray(Charsets.UTF_8).size).toByteArray(Charsets.US_ASCII))
+            output.write(INITIALIZE.toByteArray(Charsets.UTF_8))
+            output.flush()
+            parseResponse(socket.getInputStream().readBytes().toString(Charsets.UTF_8))
+        }
+    } catch (_: IOException) {
+        null
+    }
+
+    private fun parseResponse(raw: String): Response {
+        val headerEnd = raw.indexOf("\r\n\r\n")
+        if (headerEnd < 0) return Response(-1, emptyMap(), raw, raw.lineSequence().firstOrNull().orEmpty())
+        val lines = raw.substring(0, headerEnd).split("\r\n")
+        return Response(
+            lines.first().split(' ').getOrNull(1)?.toIntOrNull() ?: -1,
+            lines.drop(1).associate { it.substringBefore(':').lowercase() to it.substringAfter(':').trim() },
+            raw.substring(headerEnd + 4),
+            lines.first()
+        )
+    }
+
+    /**
+     * 只用于 task-5 A/C 的 seam：第一次 accept() 返回 first（若非 null），之后永远抛瞬时
+     * IOException，直到测试 close() 它。
+     */
+    private class FlakyServerSocket(private val first: Socket? = null) : ServerSocket() {
+        val acceptCalls = AtomicInteger()
+        override fun accept(): Socket {
+            val call = acceptCalls.incrementAndGet()
+            if (call == 1 && first != null) return first
+            throw IOException("transient accept failure (EMFILE)")
+        }
+    }
+
     private fun post(
         body: String,
         method: String = "POST",
@@ -390,15 +581,25 @@ class McpHttpServerTest {
         Response(
             lines.first().split(' ')[1].toInt(),
             lines.drop(1).associate { it.substringBefore(':').lowercase() to it.substringAfter(':').trim() },
-            response.substring(headerEnd + 4)
+            response.substring(headerEnd + 4),
+            lines.first()
         )
     }
 
-    private data class Response(val status: Int, val headers: Map<String, String>, val body: String) {
+    private data class Response(
+        val status: Int,
+        val headers: Map<String, String>,
+        val body: String,
+        /** 完整状态行，用于断言 reason phrase（task-5 C 的 503 Service Unavailable）。 */
+        val statusLine: String = ""
+    ) {
         fun json(): JsonObject = JsonParser().parse(body).asJsonObject
     }
 
     companion object {
+        /** 连接队列容量 = WORKER_COUNT(4) + QUEUED_CONNECTIONS(16)；用 40 留足余量。 */
+        private const val FLOOD_SOCKETS = 40
+        private const val PROBE_TIMEOUT_MS = 2000
         private const val INITIALIZE = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}"
     }
 }

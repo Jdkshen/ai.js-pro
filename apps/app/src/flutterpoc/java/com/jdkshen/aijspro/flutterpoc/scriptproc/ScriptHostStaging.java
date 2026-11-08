@@ -42,8 +42,9 @@ import java.io.IOException;
  *       到 {@code :native}（那里会暂存）；后续也可以按「脚本声明依赖清单」再补；</li>
  *   <li>项目判定是启发式（见 {@link #isProjectExecution}）：没有 project.json、入口也不叫 main.js
  *       的工程会被当单文件脚本、不复制；</li>
- *   <li>暂存副本每次 RUN 前重建（见 {@link NativeProjectStaging}），脚本运行中的写操作落在
- *       私有副本里，不会回写原项目目录。</li>
+ *   <li>暂存副本按清单化合并维护（见 {@link NativeProjectStaging}）：只删「上次拷过、这次源里
+ *       已没有」的文件，脚本自己下载/写进运行目录的依赖会跨 RUN 保留；脚本运行中的写操作都
+ *       落在私有副本里，不会回写原项目目录。</li>
  * </ul>
  */
 public final class ScriptHostStaging {

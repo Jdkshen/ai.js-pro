@@ -1230,13 +1230,30 @@ tasks.register("verifySlimPackagingTemplate") {
                 }
                 return false
             }
-            def name = "com.stardust.autojs.inrt"
+            // dev-1413 修：这里原先写死 "com.stardust.autojs.inrt"，而 :inrt 早已改名
+            // com.jdkshen.aijspro.inrt（apps/inrt/build.gradle 的 applicationId），于是断言恒不命中、
+            // 每次只打一条 warn —— 检查形同虚设。改成从 :inrt 的 build.gradle 读 applicationId
+            // （单一事实来源，再次改名也不会哑），读不到才退回当前已知值。
+            def name = "com.jdkshen.aijspro.inrt"
+            def inrtBuildGradle = file("../inrt/build.gradle")
+            if (inrtBuildGradle.isFile()) {
+                def applicationIdMatcher = (inrtBuildGradle.text =~ /applicationId\s+["']([^"']+)["']/)
+                if (applicationIdMatcher.find()) {
+                    name = applicationIdMatcher.group(1)
+                } else {
+                    logger.warn("C-PKG: no applicationId in " + inrtBuildGradle + "; fallback " + name)
+                }
+            } else {
+                logger.warn("C-PKG: " + inrtBuildGradle + " not found; fallback " + name)
+            }
             boolean packageFound = containsBytes(manifestBytes, name.getBytes("UTF-8"))
                     || containsBytes(manifestBytes, name.getBytes("UTF-16LE"))
             if (!packageFound) {
                 // ASCII 日志：Windows 控制台/构建日志编码可能是 GBK，中文 warn 会乱码；
                 // 包名找不到只 warn 不阻断（大小/entry/lib 已硬校验），中文原因留在异常里。
-                logger.warn("C-PKG: package name not found in AXML string pool, skip package check; "
+                // dev-1413：warn 里带上期望包名与扫描字节数，避免"打了一条看不懂的 warn"。
+                logger.warn("C-PKG: expected package " + name + " not found in AXML string pool ("
+                        + manifestBytes.length + " bytes scanned, UTF-8/UTF-16LE); "
                         + "size/entries/lib checks passed")
             }
             logger.lifecycle("C-PKG: slim template OK size=" + size + " entries=" + names.size()
