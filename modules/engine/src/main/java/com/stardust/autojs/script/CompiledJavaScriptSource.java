@@ -22,11 +22,29 @@ public class CompiledJavaScriptSource extends JavaScriptSource {
         this(name, className, classBytes, EXECUTION_MODE_NORMAL);
     }
 
+    /**
+     * 原始脚本文件路径。打包加密（编译型）入口没有文本源码，但 Rhino 引擎要在执行前用
+     * 「脚本自己的目录」刷新 jvm-npm 的 require 根，否则 `require("./x.js")` 会报
+     * "Can not resolve relative module ID ... outside of a module"（`.4` 实测）。
+     * 从 native 库内嵌载荷还原时没有文件路径，为 null。
+     */
+    private final String mScriptPath;
+
     public CompiledJavaScriptSource(String name, String className, byte[] classBytes, int executionMode) {
+        this(name, className, classBytes, executionMode, null);
+    }
+
+    public CompiledJavaScriptSource(String name, String className, byte[] classBytes, int executionMode,
+                                    String scriptPath) {
         super(name);
         mClassName = className;
         mClassBytes = classBytes;
         mExecutionMode = executionMode;
+        mScriptPath = scriptPath;
+    }
+
+    public String getScriptPath() {
+        return mScriptPath;
     }
 
     @Override

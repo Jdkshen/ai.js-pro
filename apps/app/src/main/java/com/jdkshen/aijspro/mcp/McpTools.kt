@@ -481,6 +481,14 @@ internal class McpTools(private val context: Context, private val event: (String
             "get_status" -> toolJson(JsonObject().apply {
                 // P1-9：直接回答「这是哪个 build、有多少工具、更新了什么」，不用再去 app_info 绕。
                 add("toolCatalog", toolCatalogStatus())
+                // `.4` 的坑：打包会优先用 /sdcard/template.apk 或宿主缓存，可能仍是旧引擎。
+                // 这里只读摘要：最终会用哪份模板、它的 sha256、以及是否含 dev-1401 的 require 修复标记。
+                runCatching {
+                    // templateSummary 返回 org.json.JSONObject（打包侧用），这里转成 Gson JsonElement。
+                    val templateJson = com.jdkshen.aijspro.build.ApkBuilderPluginHelper
+                        .templateSummary(context, false).toString()
+                    add("template", com.google.gson.JsonParser().parse(templateJson))
+                }
                 val packageInfo = runCatching {
                     if (Build.VERSION.SDK_INT >= 33) context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
                     else @Suppress("DEPRECATION") context.packageManager.getPackageInfo(context.packageName, 0)

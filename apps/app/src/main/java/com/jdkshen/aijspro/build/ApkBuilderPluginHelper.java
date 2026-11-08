@@ -8,9 +8,11 @@ import android.os.Environment;
 import android.util.Log;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -70,37 +72,106 @@ public class ApkBuilderPluginHelper {
         }
     }
 
-    /** 打包入口：打包页与仪器测试都只认这个方法。 */
-    public static InputStream openTemplateApk(Context context) throws IOException {
-        File manual = manualTemplateFile();
-        if (isUsableTemplate(manual)) {
-            Log.i(TAG, "Using manual template " + manual);
-            return new FileInputStream(manual);
+    /** 一次打包实际选中的模板 + 指纹；调用方必须关闭 input。 */
+    public static final class TemplateSelection implements Closeable {
+        public final ApkTemplateInspector.Info info;
+        public final InputStream input;
+        TemplateSelection(ApkTemplateInspector.Info info, InputStream input) {
+            this.info = info;
+            this.input = input;
         }
-        // task-107：主 APK 内置瘦身模板（无 lib/），运行时从宿主 APK 补齐 excluded 清单里的 lib。
+        @Override public void close() throws IOException {
+            if (input != null) input.close();
+        }
+    }
+
+    public static TemplateSelection openTemplateSelection(Context context) throws IOException {
+        return openTemplateSelection(context, false);
+    }
+
+    /**
+     * 选模板并计算 source/path/size/sha256/init.js 修复标记。
+     * forceBundled=true 时跳过 /sdcard 与宿主缓存，直接用 app 内置模板（会重新 merge 瘦身模板）。
+     */
+    public static TemplateSelection openTemplateSelection(Context context, boolean forceBundled) throws IOException {
+        if (!forceBundled) {
+            File manual = manualTemplateFile();
+            if (isUsableTemplate(manual)) {
+                return new TemplateSelection(ApkTemplateInspector.inspect(manual, ApkTemplateInspector.SOURCE_SDCARD),
+                        new FileInputStream(manual));
+            }
+            File cached = cachedTemplateFile(context);
+            if (isUsableTemplate(cached)) {
+                return new TemplateSelection(ApkTemplateInspector.inspect(cached, ApkTemplateInspector.SOURCE_HOST_CACHE),
+                        new FileInputStream(cached));
+            }
+        }
         File mergedBundled = mergedBundledTemplate(context);
         if (isUsableTemplate(mergedBundled)) {
-            Log.i(TAG, "Using merged bundled slim template " + mergedBundled
-                    + " size=" + mergedBundled.length());
-            return new FileInputStream(mergedBundled);
+            return new TemplateSelection(ApkTemplateInspector.inspect(mergedBundled, ApkTemplateInspector.SOURCE_BUNDLED),
+                    new FileInputStream(mergedBundled));
         }
-        File cached = cachedTemplateFile(context);
-        if (isUsableTemplate(cached)) {
-            return new FileInputStream(cached);
-        }
-        File extracted = extractTemplateFromPlugin(context);
-        if (extracted != null) {
-            return new FileInputStream(extracted);
+        if (!forceBundled) {
+            File extracted = extractTemplateFromPlugin(context);
+            if (extracted != null) {
+                return new TemplateSelection(ApkTemplateInspector.inspect(extracted, ApkTemplateInspector.SOURCE_HOST_CACHE),
+                        new FileInputStream(extracted));
+            }
         }
         try {
             InputStream bundled = context.getAssets().open(TEMPLATE_APK_PATH);
-            Log.i(TAG, "Using bundled assets/" + TEMPLATE_APK_PATH);
-            return bundled;
-        } catch (IOException ignored) {
-            // 现在的主程序不带模板，落到下面的操作指引。
+            java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+            byte[] chunk = new byte[65536];
+            int read;
+            while ((read = bundled.read(chunk)) > 0) {
+                if (buffer.size() + read > 64 * 1024 * 1024) throw new IOException("内置模板超过 64MiB");
+                buffer.write(chunk, 0, read);
+            }
+            bundled.close();
+            byte[] bytes = buffer.toByteArray();
+            ApkTemplateInspector.Info info = ApkTemplateInspector.inspect(bytes,
+                    ApkTemplateInspector.SOURCE_BUNDLED, "assets/" + TEMPLATE_APK_PATH);
+            return new TemplateSelection(info, new ByteArrayInputStream(bytes));
+        } catch (IOException error) {
+            throw new IOException(missingTemplateMessage(), error);
         }
-        throw new IOException(missingTemplateMessage());
     }
+
+    /** 只读摘要（get_status 用）；失败时返回 available=false 的结构化对象，不抛异常。 */
+    public static JSONObject templateSummary(Context context, boolean forceBundled) throws org.json.JSONException {
+        try (TemplateSelection selection = openTemplateSelection(context, forceBundled)) {
+            return selection.info.toJson();
+        } catch (Throwable error) {
+            return new JSONObject()
+                    .put("available", false)
+                    .put("source", ApkTemplateInspector.SOURCE_NONE)
+                    .put("path", "")
+                    .put("sizeBytes", 0)
+                    .put("sha256", "")
+                    .put("engineInitSha256", "")
+                    .put("engineRequireRootFix", false)
+                    .put("templateStale", true)
+                    .put("inspectError", error.getClass().getSimpleName() + ": " + error.getMessage())
+                    .put("detail", error.getMessage() == null ? "模板不可用" : error.getMessage())
+                    .put("warnings", new JSONArray().put("模板不可用，打包会失败"))
+                    .put("nextActions", new JSONArray().put(missingTemplateMessage()));
+        }
+    }
+
+    /** 打包入口：打包页与仪器测试都只认这个方法。 */
+    public static InputStream openTemplateApk(Context context) throws IOException {
+        TemplateSelection selection = openTemplateSelection(context, false);
+        // `.4` 的坑：以为换了模板其实没换 —— 打包时把「最终用了哪份 + 有没有 require 修复」写进日志。
+        try {
+            Log.i(TAG, "Template selection: " + selection.info.toJson());
+            if (selection.info.templateStale) {
+                Log.w(TAG, "Template stale: " + selection.info.warnings + " actions=" + selection.info.nextActions);
+            }
+        } catch (Throwable ignored) {
+        }
+        return selection.input;
+    }
+
 
     /** 打包页进入页面时问一次，用来决定要不要显示「装插件」提示。 */
     public static TemplateStatus templateStatus(Context context) {

@@ -48,7 +48,26 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
     private val mHandler: Handler = Handler(Looper.getMainLooper())
     private var mScriptExecution: ScriptExecution? = null
 
+    /**
+     * 打包版启动打印「引擎指纹」：`.4` 报 `require("./x.js") outside of a module` 时，
+     * 第一件事就是确认产物里带的引擎有没有 dev-1401 的 require 根修复。
+     */
+    private fun logEngineFingerprint() {
+        try {
+            val bytes = mActivity.assets.open("init.js").use { it.readBytes() }
+            val text = String(bytes, Charsets.UTF_8)
+            val hasFix = text.contains("__ajsSetRequireRoot")
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            val sha = digest.joinToString("") { String.format("%02x", it) }.take(16)
+            val storage = mProjectConfig.scriptStorage ?: "default"
+            Log.i(TAG, "C-INRT: engine requireRootFix=$hasFix initJsSha256=$sha scriptStorage=$storage")
+        } catch (e: Throwable) {
+            Log.w(TAG, "C-INRT: engine fingerprint unavailable: $e")
+        }
+    }
+
     init {
+        logEngineFingerprint()
         prepare()
         // task-113 B：工程解压后、在脚本线程上把工程 dex/native 清单准备好（Pro 顺序 dex->so）。
         prepareProjectRuntime()

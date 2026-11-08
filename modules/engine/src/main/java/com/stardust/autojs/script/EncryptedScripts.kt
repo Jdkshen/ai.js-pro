@@ -59,7 +59,7 @@ object EncryptedScripts {
             // 脚本容器（scripts.pack）不是可执行脚本：它由启动器解包，不能被当源码执行。
             return null
         }
-        return sourceOf(bytes, name)
+        return sourceOf(bytes, name, file.absolutePath)
     }
 
     /**
@@ -100,7 +100,7 @@ object EncryptedScripts {
     }
 
     /** 按文件头的载荷类型分发：文本 / Rhino 编译类 / QuickJS 字节码。 */
-    private fun sourceOf(bytes: ByteArray, name: String): JavaScriptSource {
+    private fun sourceOf(bytes: ByteArray, name: String, scriptPath: String? = null): JavaScriptSource {
         val flags = EncryptedScriptFileHeader.readFlags(bytes)
         val plain = decryptBytes(bytes)
         val executionMode = flags.toInt() and
@@ -108,7 +108,7 @@ object EncryptedScripts {
         return when (EncryptedScriptFileHeader.payloadTypeOf(flags)) {
             EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS -> {
                 val payload = CompiledScriptPayload.read(plain)
-                CompiledJavaScriptSource(name, payload.className, payload.classBytes, executionMode)
+                CompiledJavaScriptSource(name, payload.className, payload.classBytes, executionMode, scriptPath)
             }
             EncryptedScriptFileHeader.PAYLOAD_TYPE_QUICKJS_BYTECODE ->
                 QuickJsBytecodeSource(name, plain, executionMode)

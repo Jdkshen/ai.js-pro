@@ -79,6 +79,9 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
     public override fun doExecution(source: JavaScriptSource): Any? {
         // 打包加密等级 ≥ 2 的产物是编译好的 class（没有源码），这里换成加载类再执行。
         if (source is CompiledJavaScriptSource) {
+            // 编译型（受保护产物）入口同样要刷新 require 根：它没有文本源码，但
+            // EncryptedScripts.toSource(file) 会把原始路径带进来（`.4` 的加密产物实测）。
+            applyRequireRootFor(source)
             return executeCompiledScript(source)
         }
         var reader = source.nonNullScriptReader
@@ -112,8 +115,13 @@ open class RhinoJavaScriptEngine(private val mAndroidContext: android.content.Co
      * 这里每次执行前按**脚本自身目录**刷新（拿不到路径时退回引擎 cwd，与旧行为一致）。
      */
     private fun applyRequireRootFor(source: JavaScriptSource) {
-        val dir = (source as? com.stardust.autojs.script.JavaScriptFileSource)?.file?.parentFile?.absolutePath
-            ?: cwd()
+        val dir = when (source) {
+            is com.stardust.autojs.script.JavaScriptFileSource -> source.file?.parentFile?.absolutePath
+            // 编译型（受保护产物）入口没有文本源码，但 EncryptedScripts.toSource(file) 带上了原始路径。
+            is com.stardust.autojs.script.CompiledJavaScriptSource ->
+                source.scriptPath?.let { java.io.File(it).parentFile?.absolutePath }
+            else -> null
+        } ?: cwd()
         if (dir.isNullOrEmpty()) return
         val setter = ScriptableObject.getProperty(mScriptable, "__ajsSetRequireRoot")
         if (setter is org.mozilla.javascript.Function) {   // kotlin.Function 会遮蔽 mozilla 的
