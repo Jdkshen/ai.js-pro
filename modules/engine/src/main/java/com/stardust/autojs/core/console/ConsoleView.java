@@ -344,6 +344,7 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
         }
     }
 
+
     private void appendNewLogs() {
         if (mConsole == null)
             return;

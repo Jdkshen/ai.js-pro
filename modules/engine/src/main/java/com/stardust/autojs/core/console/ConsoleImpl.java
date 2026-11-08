@@ -80,6 +80,8 @@ public class ConsoleImpl extends AbstractConsole {
     private WeakReference<ConsoleView> mConsoleView;
     private volatile boolean mShown = false;
     private int mX, mY;
+    /** show() 之前调用的 setSize 也要生效：记住尺寸，窗口创建后补应用（与 setPosition 一致）。 */
+    private int mWidth = -1, mHeight = -1;
 
     /** 这次运行的落盘日志（见 {@link ScriptRunLog}）；null = 不落盘（如全局控制台）。 */
     private volatile ScriptRunLog mRunLog;
@@ -98,6 +100,9 @@ public class ConsoleImpl extends AbstractConsole {
                 super.onCreate(context, manager);
                 expand();
                 mFloatyWindow.getWindowBridge().updatePosition(mX, mY);
+                // 尺寸也要补应用（见 applyPendingSize 注释）。
+                mUiHandler.post(() -> applyPendingSize());
+                mUiHandler.postDelayed(() -> applyPendingSize(), 100);
                 synchronized (WINDOW_SHOW_LOCK) {
                     mShown = true;
                     WINDOW_SHOW_LOCK.notifyAll();
@@ -270,13 +275,26 @@ public class ConsoleImpl extends AbstractConsole {
 
 
     public void setSize(int w, int h) {
+        mWidth = w;
+        mHeight = h;
         if (mShown) {
             mUiHandler.post(() -> {
-                if (mShown) {
-                    ViewUtil.setViewMeasure(mConsoleFloaty.getExpandedView(), w, h);
-                }
+                if (mShown) applyPendingSize();
             });
         }
+    }
+
+    /**
+     * 应用最近一次 setSize 的尺寸。
+     * `.4` 实测「日志窗口一片空白」根因：脚本常常先 setSize/setPosition 再 show()，而旧实现只在
+     * mShown 时才应用尺寸 → 尺寸被丢弃 → 展开视图保持 WRAP_CONTENT，带 weight 的日志列表被量成 0 高，
+     * 于是窗口里什么都看不到（数据其实一直在）。setPosition 早就用 mX/mY 做了这件事，这里补齐。
+     */
+    void applyPendingSize() {
+        if (mWidth <= 0 || mHeight <= 0) return;
+        android.view.View view = mConsoleFloaty == null ? null : mConsoleFloaty.getExpandedView();
+        if (view == null) return;
+        ViewUtil.setViewMeasure(view, mWidth, mHeight);
     }
 
     public void setPosition(int x, int y) {

@@ -93,6 +93,8 @@ public class ConsoleFloaty extends ResizableExpandableFloaty.AbstractResizableEx
         ConsoleView consoleView = view.findViewById(R.id.console);
         consoleView.setConsole(mConsole);
         consoleView.setWindow(window);
+        // 展开视图刚 inflate：把 show() 之前设的尺寸补应用上。
+        mConsole.applyPendingSize();
         initConsoleTitle(view);
     }
 
