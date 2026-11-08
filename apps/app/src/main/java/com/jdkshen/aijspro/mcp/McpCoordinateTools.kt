@@ -96,14 +96,20 @@ internal object McpCoordinateTools {
     private fun stored(context: Context): Calibration? {
         val raw = prefs(context).getString(PREF_KEY, null) ?: return null
         val fields = raw.split(",").map { it.trim() }
-        val numbers = fields.mapNotNull { it.toDoubleOrNull() }
-        if (numbers.size >= 6 && fields.size >= 6 && fields[0].toDoubleOrNull() == null && fields[1].toDoubleOrNull() == null) {
-            return Calibration(fields[0].lowercase(), fields[1].lowercase(),
-                McpCoordinateMath.Affine(numbers[0], numbers[1], numbers[2], numbers[3], "calibrated"))
+        // 新格式：from,to,sx,sy,ox,oy —— 前两个是**空间名**，所以数字只有 4 个（曾误判为"需要 6 个数字"，
+        // 结果永远落到老格式分支，标定的 from/to 白存；冒烟脚手架 `coordinate.calibrationScope` 抓到的）。
+        val looksNew = fields.size >= 6 && fields[0].toDoubleOrNull() == null && fields[1].toDoubleOrNull() == null
+        if (looksNew) {
+            val numbers = fields.drop(2).mapNotNull { it.toDoubleOrNull() }
+            if (numbers.size >= 4) {
+                return Calibration(fields[0].lowercase(), fields[1].lowercase(),
+                    McpCoordinateMath.Affine(numbers[0], numbers[1], numbers[2], numbers[3], "calibrated"))
+            }
         }
-        if (numbers.size < 4) return null
+        val legacy = fields.mapNotNull { it.toDoubleOrNull() }
+        if (legacy.size < 4) return null
         return Calibration("window", "screenshot",
-            McpCoordinateMath.Affine(numbers[0], numbers[1], numbers[2], numbers[3], "calibrated"))
+            McpCoordinateMath.Affine(legacy[0], legacy[1], legacy[2], legacy[3], "calibrated"))
     }
 
     private fun state(context: Context, measureScreenshot: Boolean): JsonObject {
@@ -157,6 +163,7 @@ internal object McpCoordinateTools {
             "$from,$to,${affine.scaleX},${affine.scaleY},${affine.offsetX},${affine.offsetY}").apply()
         return ToolkitIo.ok(JsonObject().apply {
             add("affine", affineJson(affine))
+            addProperty("from", from); addProperty("to", to)
             addProperty("points", if (w2 != null && s2 != null) 2 else 1)
             addProperty("note", if (w2 != null && s2 != null) "已按两点标定（逐轴缩放+平移）"
                 else "只有一组对应点：只能求平移（缩放按 1）；给第二组点可同时求缩放")
