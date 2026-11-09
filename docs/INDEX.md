@@ -6,11 +6,12 @@
 
 **一句话现状**：当前发布版本与测试机以 [`AGENTS.md`](../AGENTS.md) 顶部为准（本索引快照时为 **dev-1362 LAN，默认测试机 K40 cccc62c7**；`docs/HANDOFF_AI.md` 顶部到 dev-1352，`docs/PROJECT_STATUS.md`/`docs/README.md` 更旧）。AGENTS.md 顶部还包含 2026-11-06 源码整理/框架梳理记录（commit a8786cd7/822a072a/d491154e，未 push）。历史报告里的数字只代表当时环境，不代表当前工作树。
 
-## 0. 30 秒上手：先读哪 3 篇
+## 0. 30 秒上手：先读哪 4 篇
 
 1. [`docs/guides/ARCHITECTURE.md`](guides/ARCHITECTURE.md) —— **架构总览（10 分钟版，2026-11-06 基线 dev-1362）**：模块图/进程模型/三引擎/MCP/UI/打包，带 `文件:行号` 证据；先建立全局图再读细节。
-2. [`docs/guides/REPO_CONVENTIONS.md`](guides/REPO_CONVENTIONS.md) —— **仓库规范**：备份、目录职责、跟踪策略、报告六段、只本地提交/只发 LAN、测试机 K40。
-3. [`docs/INDEX.md`](INDEX.md)（本页） —— 文档地图、457 篇 reports 的分类索引、重复/取代清单与读法。
+2. [`docs/guides/DIRECTORY_CONVENTIONS.md`](guides/DIRECTORY_CONVENTIONS.md) —— **目录与产出规范（2026-11-09 新增）**：临时产出/构建产物该放哪、命名规则、红线、清理规则、任务收尾清单。配套自检脚本 [`tools/check-dir-hygiene.ps1`](../tools/check-dir-hygiene.ps1)。**写在 `AGENTS.md` 顶部（因 AGENTS.md 已 190KB、会被指令预算截断到 64KB，靠后的规范读不到）。**
+3. [`docs/guides/REPO_CONVENTIONS.md`](guides/REPO_CONVENTIONS.md) —— **仓库规范**：备份、目录职责、跟踪策略、报告六段、只本地提交/只发 LAN、测试机 K40。
+4. [`docs/INDEX.md`](INDEX.md)（本页） —— 文档地图、457 篇 reports 的分类索引、重复/取代清单与读法。
 
 > 只关心「现在是什么状态/怎么发版」而不读架构时，直接看 [`AGENTS.md`](../AGENTS.md) 顶部（最新发布/测试机/雷区）；[HANDOFF_AI.md](HANDOFF_AI.md) 是更完整但部分旧（§4 状态）的总纲。
 
