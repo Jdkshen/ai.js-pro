@@ -320,6 +320,7 @@ internal class McpApkToolkit(
             "apk_continue" -> continuePage(args)
             "apk_read_signature" -> ToolkitIo.ok(readSignature(snapshot(args.tString("workspaceId")), args.tBool("verify", false)).apply { addProperty("workspaceId", args.tString("workspaceId")) })
             "vm_survey" -> ToolkitIo.ok(vmSurvey(args))
+            "chain_resume" -> ToolkitIo.ok(chainResume(args))
             else -> {
                 val workspace = args.tString("workspaceId"); workspace(workspace)
                 val session = args.tString("editSessionId", "")
@@ -446,6 +447,7 @@ internal class McpApkToolkit(
     }
     private fun description(name: String): String = when(name) {
         "apk_verify" -> "只读检查真实APK：密码学验签、普通Stored4B/原生库ZIP16KB、ELF LOAD段及Manifest。返回独立检查证据，不保证安装/业务行为。"
+        "chain_resume" -> "编排：checkpoint → 回编 → 对齐+签名 → 验签一条链。给了 checkpoint 就先按 apk_session_rollback 语义恢复（必须带 expectedRevision；检查点不存在或 revision 过期 → CHAIN_RESTORE_FAILED，链未开始且**不产出任何产物**），否则用当前 revision（返回 restoredFrom{source=current|checkpoint}）。固定顺序 build → align+sign → verify，**任一步失败立即停**：ok=false、stoppedAt、failure{where,phase,code,message}，后续步骤 status=skipped，绝不把整链标成功。finalArtifact{path,bytes,sha256} 的 sha256 是磁盘实测；**verified 只来自 ToolkitApkVerifier 的逐方案结论（不是「签过名」的同义词）**，runtimeVerified 只有真跑完验签才 true。steps=all|build|sign|verify（sign 隐含 build，verify 隐含 build+sign）；裁剪时 notes 写明跳过了什么、因此不能声称什么（未签名不能声称可安装/未被篡改；未验签时 verified=false 只代表没跑验签）。对齐/签名沿用 apk_build 内部实现（signWithApksig，失败回退 keystore 旧路径），验签沿用 apk_verify 同一实现；本工具不重编资源、不安装、不覆盖源包。"
         "vm_survey" -> "静态 dispatch 壳调查（逆向建议 §11.2 第一刀）：对 APK/DEX 逐方法给**可解释分数**找 switch/dispatch 候选（features/contributions 逐项列出，配 scoreBuckets 分数分布）、按 opcode 直方图**聚类**（可给 approxPercent 做近似聚类）、列大常量负载候选、把 dispatch 数组摊平成 index->元素，并支持用 opcodeRules 做**线性**反汇编（coveragePercent + 停点）与**只到基本块起点 + 覆盖计数**的 CFG。**不做反编译、不承诺任意 VMP 一键还原；0 候选是合法结果**（没有 switch/大常量表、被 R8 内联或壳加密都会为 0，返回里写清扫了多少 dex/类/方法）。输入 workspaceId（可配 editSessionId）或工具目录内的 path。"
         "apk_read_signature" -> "只读 APK 的 V1/V2/V3/V3.1 证书与方案元数据；**默认不做密码学验签**：此时 verified=false 且 verification=not_run（=「没跑验签」，不是「验签失败」）、verificationReason 说明原因、verifyWith 指向真正能验签的调用。要密码学验签与逐方案状态用 apk_verify{workspaceId}（同一 ToolkitApkVerifier 的完整报告），或本工具 verify=true 在同一次调用里跑验签并返回 signature.schemes/errors/backendDiagnosis。"
         "apk_dex_search_members" -> "按方法名/描述符/字符串/引用搜索，返回精确方法locator、dexEntry和行/指令锚点；有预算，truncated表示需要缩小查询。"
@@ -1812,6 +1814,246 @@ internal class McpApkToolkit(
         data.addProperty("path", path.ifEmpty { null })
         data.add("sources", JsonArray().apply { dexes.forEach { add(it.first) } })
         return data
+    }
+
+    /**
+     * 交接单 ⑥⑦ chain_resume：checkpoint → 回编 → 对齐+签名 → 验签，一条链跑完。
+     *
+     * 定位是**编排**：恢复复用 [ToolkitApkSessions.rollback]（同 apk_session_rollback 语义，必须带 expectedRevision），
+     * 回编复用 [build]（签名/对齐在它内部完成，签名沿用 signWithApksig + keystore 回退，不另写一套），
+     * 验签复用 [ToolkitApkVerifier]。**任一步失败立即停**：返回 stoppedAt/failure，后续步骤标 skipped，ok=false；
+     * 恢复失败（检查点不存在 / expectedRevision 过期）直接抛 CHAIN_RESTORE_FAILED（无任何产物）。
+     * verified 只来自 ToolkitApkVerifier 的逐方案结论，绝不是「签过名」的同义词。
+     */
+    private fun chainResume(args: JsonObject): JsonObject {
+        val workspace = args.tString("workspaceId", "").trim()
+        require(workspace.isNotEmpty()) { "需要 workspaceId" }
+        val session = requiredSession(args.tString("editSessionId", "").trim())
+        workspace(workspace)
+        val requestedSteps = args.tString("steps", "all")
+        val steps = chainSteps(requestedSteps)
+        val wantsSign = "align+sign" in steps
+        val wantsVerify = "verify" in steps
+
+        // ---- 1) 恢复（checkpoint 可选）----
+        val checkpoint = args.tString("checkpoint", "").trim().ifEmpty { args.tString("checkpointId", "").trim() }
+        val explicitRevision = args.tString("expectedRevision", "").trim()
+        val revisionBefore = revision(workspace, session)
+        val expected = explicitRevision.ifEmpty { revisionBefore }
+        val expectedSource = if (explicitRevision.isEmpty()) "current" else "explicit"
+        val restoredFrom: JsonObject
+        if (checkpoint.isEmpty()) {
+            restoredFrom = ToolkitIo.json(
+                "checkpoint" to null, "revision" to revisionBefore, "source" to "current",
+                "expectedRevision" to expected, "expectedRevisionSource" to expectedSource,
+                "previousRevision" to revisionBefore)
+        } else {
+            val restored = try {
+                ToolkitApkSessions.rollback(sessionDir(workspace, session), ToolkitIo.json(
+                    "checkpointId" to checkpoint, "expectedRevision" to expected))
+            } catch (failure: Throwable) {
+                if (failure is VirtualMachineError) throw failure
+                val details = ToolkitIo.json(
+                    "stage" to "restore", "checkpoint" to checkpoint, "expectedRevision" to expected,
+                    "expectedRevisionSource" to expectedSource, "currentRevision" to revisionBefore,
+                    "availableCheckpoints" to runCatching {
+                        ToolkitApkSessions.checkpoints(sessionDir(workspace, session)).get("items")
+                    }.getOrNull(),
+                    "steps" to steps.map {
+                        ToolkitIo.json("step" to it, "status" to "skipped", "reason" to "restore 失败，链未开始")
+                    })
+                throw ToolkitException("CHAIN_RESTORE_FAILED",
+                    "恢复检查点失败：链未开始，没有任何产物。checkpoint=" + checkpoint +
+                        "；expectedRevision=" + expected + "（" + expectedSource + "，当前 revision=" + revisionBefore + "）。原因：" +
+                        (failure.message ?: failure.javaClass.simpleName) + "。details=" + details, "checkpoint")
+            }
+            restoredFrom = ToolkitIo.json(
+                "checkpoint" to checkpoint, "revision" to restored.tString("revision"),
+                "restoredFrom" to restored.get("restoredFrom"), "source" to "checkpoint",
+                "expectedRevision" to expected, "expectedRevisionSource" to expectedSource,
+                "previousRevision" to revisionBefore, "sourceUnchanged" to restored.tBool("sourceUnchanged"))
+        }
+
+        // ---- 2) 固定顺序跑链，任一步失败立即停 ----
+        val chain = JsonArray()
+        var stoppedAt: String? = null
+        var failureRow: JsonObject? = null
+        var artifact: JsonObject? = null
+        var buildResult: JsonObject? = null
+        var signatureSection: JsonObject? = null
+        var verificationReport: JsonObject? = null
+
+        run {
+            val started = System.currentTimeMillis()
+            try {
+                buildResult = build(workspace, session, chainBuildArgs(args, wantsSign))
+                artifact = ToolkitIo.json(
+                    "path" to buildResult.tString("path"),
+                    "bytes" to (buildResult.get("size")?.asLong ?: 0L),
+                    "sha256" to buildResult.tString("sha256"))
+                chain.add(ToolkitIo.json(
+                    "step" to "build", "status" to "ok", "ms" to (System.currentTimeMillis() - started),
+                    "signRequested" to wantsSign, "artifact" to artifact,
+                    "detail" to ("signed=" + buildResult.tBool("signed") + "；signer=" + buildResult.tString("signer", "") +
+                        "；sourceUnchanged=" + buildResult.tBool("sourceUnchanged") +
+                        (if (wantsSign) "（对齐+签名在 build 内部完成，见下一步 evidence）" else "（未签名：steps 未包含 sign）"))))
+            } catch (failure: Throwable) {
+                if (failure is VirtualMachineError) throw failure
+                val code = (failure as? ToolkitException)?.code ?: "CHAIN_STEP_FAILED"
+                val phase = when {
+                    wantsSign && (failure.message ?: "").contains("签名器") -> "sign"
+                    wantsSign -> "build_or_sign"
+                    else -> "build"
+                }
+                stoppedAt = "build"
+                failureRow = ToolkitIo.json(
+                    "where" to "build", "phase" to phase, "code" to code,
+                    "message" to (failure.message ?: failure.javaClass.simpleName), "recoverable" to true)
+                chain.add(ToolkitIo.json(
+                    "step" to "build", "status" to "failed", "ms" to (System.currentTimeMillis() - started),
+                    "errorCode" to code, "phase" to phase,
+                    "reason" to (failure.message ?: failure.javaClass.simpleName)))
+            }
+        }
+
+        if (stoppedAt == null) {
+            if (wantsSign) {
+                val result = buildResult!!
+                chain.add(ToolkitIo.json(
+                    "step" to "align+sign", "status" to "ok", "ms" to 0, "derivedFrom" to "build", "artifact" to artifact,
+                    "detail" to "由 build 步骤内部完成：writeUnsigned 已做 Stored/16K 对齐；signWithApksig（失败回退 keystore 旧路径）完成签名",
+                    "evidence" to ToolkitIo.json(
+                        "signer" to result.tString("signer", ""),
+                        "signerFallbackReason" to result.get("signerFallbackReason"),
+                        "schemesApplied" to result.get("schemesApplied"),
+                        "schemesVerified" to result.get("schemesVerified"),
+                        "alignment" to result.get("alignment"),
+                        "signatureVerifiedByBuild" to result.getAsJsonObject("signature").get("verified"))))
+            } else {
+                chain.add(ToolkitIo.json(
+                    "step" to "align+sign", "status" to "skipped", "ms" to 0,
+                    "reason" to "steps 未包含 sign：产物是未签名 APK（对齐仍由 build 完成），因此不能声称可安装或未被篡改"))
+            }
+        }
+
+        if (stoppedAt == null && wantsVerify) {
+            val started = System.currentTimeMillis()
+            try {
+                val report = ToolkitApkVerifier.inspect(File(artifact!!.tString("path")))
+                verificationReport = report
+                signatureSection = report.getAsJsonObject("signature")
+                val verified = signatureSection.tBool("verified")
+                if (wantsSign && !verified) {
+                    stoppedAt = "verify"
+                    failureRow = ToolkitIo.json(
+                        "where" to "verify", "phase" to "verify", "code" to "CHAIN_VERIFY_FAILED",
+                        "message" to ("已签名产物没有通过密码学验签：" + report.get("issues")), "recoverable" to false)
+                    chain.add(ToolkitIo.json(
+                        "step" to "verify", "status" to "failed", "ms" to (System.currentTimeMillis() - started),
+                        "errorCode" to "CHAIN_VERIFY_FAILED", "artifact" to artifact,
+                        "reason" to ("signature.verified=false；reports=" + report.get("issues"))))
+                } else {
+                    chain.add(ToolkitIo.json(
+                        "step" to "verify", "status" to "ok", "ms" to (System.currentTimeMillis() - started),
+                        "artifact" to artifact,
+                        "detail" to ("zip=" + report.getAsJsonObject("checks").getAsJsonObject("zip").tString("status", "") +
+                            "；signature.verified=" + verified +
+                            "；schemes=" + signatureSection.get("schemes")),
+                        "verification" to signatureSection))
+                }
+            } catch (unexpected: Throwable) {
+                if (unexpected is VirtualMachineError) throw unexpected
+                stoppedAt = "verify"
+                failureRow = ToolkitIo.json(
+                    "where" to "verify", "phase" to "verify", "code" to "CHAIN_VERIFY_FAILED",
+                    "message" to (unexpected.message ?: unexpected.javaClass.simpleName), "recoverable" to false)
+                chain.add(ToolkitIo.json(
+                    "step" to "verify", "status" to "failed", "ms" to (System.currentTimeMillis() - started),
+                    "errorCode" to "CHAIN_VERIFY_FAILED", "reason" to (unexpected.message ?: unexpected.javaClass.simpleName)))
+            }
+        } else if (stoppedAt == null) {
+            chain.add(ToolkitIo.json(
+                "step" to "verify", "status" to "skipped", "ms" to 0,
+                "reason" to "steps 未包含 verify：verified=false 只代表「没有跑验签」，不是「验签失败」"))
+        }
+        if (stoppedAt != null) {
+            val seen = chain.map { it.asJsonObject.tString("step") }.toSet()
+            steps.filterNot { it in seen }.forEach { step ->
+                chain.add(ToolkitIo.json(
+                    "step" to step, "status" to "skipped", "ms" to 0,
+                    "reason" to ("前一步失败即停（stoppedAt=" + stoppedAt + "），本步未执行")))
+            }
+        }
+
+        val verified = signatureSection?.tBool("verified") == true
+        val notes = JsonArray()
+        notes.add("这是**编排**：回编/签名/验签各自的边界沿用它们自己的工具说明（apk_build 不重编资源、会替换原签名；apk_verify 只做静态检查，不保证可安装或业务行为）。")
+        notes.add("finalArtifact.sha256 是对磁盘上产物的实测哈希；verified 只来自 ToolkitApkVerifier 的逐方案结论（不是「签过名」的同义词）。")
+        if (!wantsSign) notes.add("跳过了 align+sign：产物未签名，因此不能声称可安装或未被篡改。")
+        if (!wantsVerify) notes.add("跳过了 verify：verified=false 只代表没跑验签；runtimeVerified=false。")
+        if (stoppedAt != null) notes.add("链路在 " + stoppedAt + " 停止：后续步骤未执行（skipped），ok=false，本响应不是成功结论。")
+        if (checkpoint.isNotEmpty()) notes.add("已按 apk_session_rollback 语义恢复到检查点 " + checkpoint + "（expectedRevision 来源=" + expectedSource + "）。")
+
+        val nextActions = JsonArray()
+        if (stoppedAt != null) {
+            nextActions.add("先修掉 " + stoppedAt + " 步的问题再重跑：failure.code=" + (failureRow?.get("code")?.asString ?: "") +
+                "；apk_session_check 取最新 revision 后用新的 expectedRevision 重试")
+        } else {
+            nextActions.add("要逐方案细节用 apk_verify{workspaceId}（与本次 verify 步同源）；要回滚产物用 apk_session_rollback")
+        }
+        if (!wantsVerify) nextActions.add("要验签：steps=\"all\"（或至少包含 verify），或单独调 apk_verify")
+
+        return ToolkitIo.json(
+            "version" to "chain-resume/1",
+            "workspaceId" to workspace, "editSessionId" to session,
+            "stepsRequested" to requestedSteps, "stepsEffective" to steps,
+            "restoredFrom" to restoredFrom,
+            "ok" to (stoppedAt == null),
+            "stoppedAt" to stoppedAt,
+            "failure" to failureRow,
+            "errorCode" to failureRow?.get("code")?.asString,
+            "chain" to chain,
+            "finalArtifact" to artifact,
+            "verified" to verified,
+            "runtimeVerified" to (wantsVerify && verificationReport != null),
+            "verification" to signatureSection,
+            "verificationIssues" to verificationReport?.get("issues"),
+            "buildSummary" to buildResult?.let {
+                ToolkitIo.json(
+                    "path" to it.tString("path"), "size" to it.get("size"), "sha256" to it.tString("sha256"),
+                    "signed" to it.tBool("signed"), "signer" to it.tString("signer", ""),
+                    "signerFallbackReason" to it.get("signerFallbackReason"),
+                    "schemesApplied" to it.get("schemesApplied"), "schemesVerified" to it.get("schemesVerified"),
+                    "sourceUnchanged" to it.tBool("sourceUnchanged"), "organized" to it.get("organized"))
+            },
+            "alignment" to buildResult?.get("alignment"),
+            "notes" to notes, "nextActions" to nextActions,
+        )
+    }
+
+    /** steps 展开：verify 隐含 align+sign，align+sign 隐含 build；顺序固定。 */
+    private fun chainSteps(requested: String): List<String> {
+        val raw = requested.trim().lowercase()
+        if (raw !in setOf("all", "build", "sign", "verify")) {
+            throw ToolkitException("INVALID_ARGUMENT", "steps 只能是 all、build、sign 或 verify", "steps")
+        }
+        val steps = LinkedHashSet<String>()
+        steps.add("build")
+        if (raw == "all" || raw == "sign" || raw == "verify") steps.add("align+sign")
+        if (raw == "all" || raw == "verify") steps.add("verify")
+        return steps.toList()
+    }
+
+    /** 只把回编需要的参数透传给 [build]（sign 由链决定）。 */
+    private fun chainBuildArgs(args: JsonObject, sign: Boolean): JsonObject = JsonObject().apply {
+        addProperty("sign", sign)
+        addProperty("detail", args.tString("detail", "full"))
+        val outPath = args.tString("outPath", "").trim()
+        if (outPath.isNotEmpty()) addProperty("outputName", outPath)
+        else args.get("outputName")?.let { add("outputName", it) }
+        args.get("overwrite")?.let { add("overwrite", it) }
+        args.get("organize")?.let { add("organize", it) }
+        args.get("label")?.let { add("label", it) }
     }
 
     /** path 形态的 dex 集合：APK 取 classes*.dex，独立 DEX 按单条目。 */

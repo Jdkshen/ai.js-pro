@@ -2303,6 +2303,69 @@
       }
     }
   },
+  "chain_resume": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string",
+        "description": "APK 工作区 id。"
+      },
+      "editSessionId": {
+        "type": "string",
+        "description": "编辑会话 id（回编必须有会话；与 apk_build 同义）。"
+      },
+      "checkpoint": {
+        "type": "string",
+        "description": "可选：apk_session_checkpoint 返回的检查点 id。给了就先按 apk_session_rollback 语义把会话恢复到该检查点；检查点不存在或 revision 过期会明确失败 CHAIN_RESTORE_FAILED 且不产出任何产物。"
+      },
+      "expectedRevision": {
+        "type": "string",
+        "description": "可选：恢复时要求的 revision（与 apk_session_rollback 的 expectedRevision 同义）。省略时取当前 revision（返回 restoredFrom.expectedRevisionSource=current）；传了过期值会被拒绝，不会静默用当前 revision。"
+      },
+      "steps": {
+        "type": "string",
+        "enum": [
+          "all",
+          "build",
+          "sign",
+          "verify"
+        ],
+        "default": "all",
+        "description": "跑哪些步：all=回编+对齐签名+验签（默认）；build=只回编（未签名，verified=false）；sign=回编+对齐签名（未验签）；verify=回编+对齐签名+验签。顺序固定，sign 隐含 build、verify 隐含 build+sign。"
+      },
+      "outPath": {
+        "type": "string",
+        "description": "回编产物路径或文件名（透传给 apk_build 的 outputName，不能覆盖源 APK）；省略时自动用源文件名 + _mcp_<session>_<sign|unsigned>.apk。"
+      },
+      "overwrite": {
+        "type": "boolean",
+        "description": "目标已存在时必须显式传 true（同 apk_build，避免误覆盖）。"
+      },
+      "organize": {
+        "type": "boolean",
+        "default": true,
+        "description": "产物归置（同 apk_build）：裸文件名会被写进默认项目目录；传 false 关闭。"
+      },
+      "label": {
+        "type": "string",
+        "description": "可选：归置标签（同 outputOrganizer）。"
+      },
+      "detail": {
+        "type": "string",
+        "enum": [
+          "full",
+          "summary"
+        ],
+        "default": "full",
+        "description": "透传给回编步：full（默认）保留完整 verification/alignment 诊断。"
+      }
+    },
+    "required": [
+      "workspaceId",
+      "editSessionId"
+    ]
+  },
   "vm_survey": {
     "type": "object",
     "additionalProperties": false,
