@@ -82,7 +82,8 @@ internal object McpCapturePreset {
         }.getOrElse { target to null }
     }
 
-    private fun operationRoot(): java.io.File {
+    /** 脚本目录下的工具操作根；task-26 起 dev_screen_diff 也用它解析 baseline 路径（所以从 private 放宽到 internal）。 */
+    internal fun operationRoot(): java.io.File {
         val scriptRoot = runCatching { java.io.File(Pref.getScriptDirPath()).canonicalFile }.getOrElse { java.io.File(".").canonicalFile }
         val context = runCatching { GlobalAppContext.get() }.getOrNull() ?: return scriptRoot
         val operation = runCatching { McpSettings.operationPath(context) }.getOrDefault("")

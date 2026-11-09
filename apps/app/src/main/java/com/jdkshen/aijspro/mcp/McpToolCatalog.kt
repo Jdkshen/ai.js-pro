@@ -31,6 +31,8 @@ internal object McpToolCatalog {
         "workspace_cleanup",
         "get_ui_layout",
         "capture_screen",
+        // task-26：逐帧像素差异（与 capture_screen 同一条截图管线）。
+        "dev_screen_diff",
         // P1-6（.4 反馈「三套坐标系没有换算工具」）：截图/显示/浮窗三套空间的换算与标定
         "coordinate_convert",
         "check_syntax",

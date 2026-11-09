@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.mcp
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Rect
 import android.os.Build
 import android.util.Base64
@@ -115,27 +116,12 @@ internal object McpDeviceTools {
         require(effective.quality in 1..100 && effective.maxWidth in 0..4096 && effective.timeoutMillis in 500..15000)
         if (Build.VERSION.SDK_INT < 30) throw IllegalStateException("直接无障碍截图需要 Android 11+；旧系统请通过 run_script 使用 requestScreenCapture/captureScreen")
         val startedAt = System.currentTimeMillis()
-        val bitmap = AccessibilityScreenCapturer().capture(effective.timeoutMillis.toLong())
-        val captureMs = System.currentTimeMillis() - startedAt
-        var scaled: Bitmap? = null
-        var cropped: Bitmap? = null
+        // W4 task-26：截图/裁剪/缩放抽成 captureFrame —— capture_screen 与 dev_screen_diff 共用同一条管线。
+        val captured = captureFrame(effective.timeoutMillis, requestedRegion, effective.maxWidth)
+        val bitmap = captured.source
+        val output = captured.output
+        val captureMs = captured.captureMs
         try {
-            // 区域优先：先按屏幕坐标裁剪（越界自动夹取），再决定是否缩小 —— 只截一小块时
-            // 既能把编码成本降到极低，又能保留 1:1 像素（比整屏缩小更清楚）。
-            val region = requestedRegion?.let {
-                McpCapturePreset.Region(
-                    it.left.coerceIn(0, bitmap.width - 1),
-                    it.top.coerceIn(0, bitmap.height - 1),
-                    it.right.coerceIn(it.left + 1, bitmap.width),
-                    it.bottom.coerceIn(it.top + 1, bitmap.height),
-                )
-            }
-            val croppedBitmap = if (region == null) bitmap else Bitmap.createBitmap(
-                bitmap, region.left, region.top, region.width, region.height).also { cropped = it }
-            val output = if (effective.maxWidth > 0 && croppedBitmap.width > effective.maxWidth) {
-                Bitmap.createScaledBitmap(croppedBitmap, effective.maxWidth,
-                    (croppedBitmap.height.toLong() * effective.maxWidth / croppedBitmap.width).toInt().coerceAtLeast(1), true).also { scaled = it }
-            } else croppedBitmap
             val rawRequested = resolvedSaveFormat == "raw"
             val mime = if (rawRequested) "application/octet-stream" else if (resolvedFormat == "png") "image/png" else "image/jpeg"
             val encodeStartedAt = System.currentTimeMillis()
@@ -160,6 +146,8 @@ internal object McpDeviceTools {
                 writeMs = System.currentTimeMillis() - writeStartedAt
             }
             check(bytes.size <= 16 * 1024 * 1024) { "截图过大，请使用 jpg 或 maxWidth 缩小尺寸" }
+            // W4 task-26：把这一帧记进进程内帧缓存（只留一帧），供 dev_screen_diff 的「上一帧」基线使用。
+            val previousFrameRemembered = rememberFrame(output, "capture_screen", if (resolvedFormat == "png") "png" else "jpg")
             val encoded = if (saveTarget == null || dataUri) Base64.encodeToString(bytes, Base64.NO_WRAP) else ""
             val metadata = JsonObject().apply {
                 addProperty("success", true); addProperty("width", output.width); addProperty("height", output.height)
@@ -169,10 +157,7 @@ internal object McpDeviceTools {
                     addProperty("cropped", true)
                     // 裁剪区域（已按屏幕边界夹取）与块内坐标换算用这两个字段
                     addProperty("region", "[${requestedRegion.left},${requestedRegion.top}][${requestedRegion.right},${requestedRegion.bottom}]")
-                    addProperty("regionClamped", requestedRegion.left != requestedRegion.left.coerceIn(0, bitmap.width - 1) ||
-                        requestedRegion.top != requestedRegion.top.coerceIn(0, bitmap.height - 1) ||
-                        requestedRegion.right != requestedRegion.right.coerceIn(requestedRegion.left + 1, bitmap.width) ||
-                        requestedRegion.bottom != requestedRegion.bottom.coerceIn(requestedRegion.top + 1, bitmap.height))
+                    addProperty("regionClamped", captured.regionClamped)
                     addProperty("regionNote", "输出图内坐标 = 屏幕坐标 - 区域左上角，再乘 scale；用 get_ui_layout 的节点 bounds 可直接减区域左上角")
                 }
                 addProperty("mimeType", mime); addProperty("format", if (resolvedFormat == "png") "png" else "jpg")
@@ -188,6 +173,7 @@ internal object McpDeviceTools {
                     if (rawRequested) addProperty("rawLayout", "RGBA8888 行优先，stride=width*4，无文件头（${output.width}x${output.height}，共 ${bytes.size} 字节）")
                 }
                 addProperty("captureMs", captureMs); addProperty("encodeMs", encodeMs)
+                addProperty("previousFrameRemembered", previousFrameRemembered)
                 addProperty("totalMs", System.currentTimeMillis() - startedAt)
                 add("effective", JsonObject().apply {
                     addProperty("format", if (resolvedFormat == "png") "png" else "jpg")
@@ -210,9 +196,233 @@ internal object McpDeviceTools {
                 })
             }
         } finally {
-            scaled?.takeIf { it !== bitmap && it !== cropped }?.recycle()
-            cropped?.takeIf { it !== bitmap }?.recycle()
-            bitmap.recycle()
+            captured.recycle.forEach { runCatching { it.recycle() } }
+        }
+    }
+
+    /** capture_screen 与 dev_screen_diff 共用的截图结果（output 已裁剪+缩放；recycle 是待回收的原始/中间位图）。 */
+    private class CapturedFrame(
+        val source: Bitmap,
+        val output: Bitmap,
+        val captureMs: Long,
+        val regionClamped: Boolean,
+        val recycle: List<Bitmap>,
+    )
+
+    /**
+     * W4 task-26：**唯一**的截图管线（capture_screen 与 dev_screen_diff 共用，不另起一套）。
+     * 原始位图 →（region 越界自动夹取）裁剪 →（maxWidth>0 时）等比缩小；调用方负责回收 [CapturedFrame.recycle]。
+     */
+    private fun captureFrame(timeoutMillis: Int, requestedRegion: McpCapturePreset.Region?, maxWidth: Int): CapturedFrame {
+        if (Build.VERSION.SDK_INT < 30) {
+            throw IllegalStateException("直接无障碍截图需要 Android 11+；旧系统请通过 run_script 使用 requestScreenCapture/captureScreen")
+        }
+        val startedAt = System.currentTimeMillis()
+        val bitmap = AccessibilityScreenCapturer().capture(timeoutMillis.toLong())
+        val captureMs = System.currentTimeMillis() - startedAt
+        var scaled: Bitmap? = null
+        var cropped: Bitmap? = null
+        val region = requestedRegion?.let {
+            McpCapturePreset.Region(
+                it.left.coerceIn(0, bitmap.width - 1),
+                it.top.coerceIn(0, bitmap.height - 1),
+                it.right.coerceIn(it.left + 1, bitmap.width),
+                it.bottom.coerceIn(it.top + 1, bitmap.height),
+            )
+        }
+        val croppedBitmap = if (region == null) bitmap else Bitmap.createBitmap(
+            bitmap, region.left, region.top, region.width, region.height).also { cropped = it }
+        val output = if (maxWidth > 0 && croppedBitmap.width > maxWidth) {
+            Bitmap.createScaledBitmap(croppedBitmap, maxWidth,
+                (croppedBitmap.height.toLong() * maxWidth / croppedBitmap.width).toInt().coerceAtLeast(1), true).also { scaled = it }
+        } else croppedBitmap
+        val recycle = ArrayList<Bitmap>()
+        scaled?.takeIf { it !== bitmap && it !== cropped }?.let { recycle.add(it) }
+        cropped?.takeIf { it !== bitmap }?.let { recycle.add(it) }
+        if (bitmap !in recycle) recycle.add(bitmap)
+        val regionClamped = requestedRegion != null && region != null && (
+            region.left != requestedRegion.left || region.top != requestedRegion.top ||
+                region.right != requestedRegion.right || region.bottom != requestedRegion.bottom)
+        return CapturedFrame(bitmap, output, captureMs, regionClamped, recycle)
+    }
+
+    /** 位图 → ARGB 像素帧（拷贝一份，位图随后可回收）。 */
+    private fun frameOf(bitmap: Bitmap): ToolkitScreenDiff.Frame {
+        val pixels = IntArray(bitmap.width * bitmap.height)
+        bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+        return ToolkitScreenDiff.Frame(bitmap.width, bitmap.height, pixels)
+    }
+
+    /** 记入进程内帧缓存（只留一帧）；超过像素上限返回 false（不占内存）。 */
+    private fun rememberFrame(bitmap: Bitmap, source: String, format: String): Boolean {
+        if (bitmap.width.toLong() * bitmap.height > ToolkitScreenDiff.MAX_REMEMBERED_PIXELS) return false
+        return runCatching { ToolkitScreenFrameStore.remember(frameOf(bitmap), source, format) }.getOrDefault(false)
+    }
+
+    /**
+     * W4 task-26：`dev_screen_diff` —— 逐帧**像素级**差异。
+     *
+     * 当前帧走 captureFrame（与 capture_screen 同一条管线，支持 region 与 maxDims 缩小）；
+     * 基线优先用显式路径（脚本目录内的 PNG/JPEG），否则用进程内上一帧；两者都没有时**明确失败**（不拿黑图当基线）。
+     * 比较是纯函数（ToolkitScreenDiff.compare），尺寸不一致直接拒绝（SIZE_MISMATCH），不裁剪/不缩放。
+     */
+    fun screenDiff(
+        baseline: String?,
+        region: com.google.gson.JsonElement?,
+        mode: String,
+        tolerance: Int?,
+        saveDiffTo: String?,
+        maxDims: Int?,
+        captureMode: String?,
+        organize: Boolean = true,
+    ): JsonObject {
+        val normalizedMode = mode.trim().lowercase().ifEmpty { ToolkitScreenDiff.MODE_COUNT }
+        if (normalizedMode !in ToolkitScreenDiff.MODES) {
+            return ToolkitScreenDiff.invalidArgumentFailure("mode 只能是 count、bbox 或 mask，收到：$mode", "mode")
+        }
+        if (maxDims != null && maxDims !in 0..4096) return ToolkitScreenDiff.invalidArgumentFailure("maxDims 必须在 0..4096（0=不缩放）", "maxDims")
+        if (tolerance != null && tolerance !in 0..255) return ToolkitScreenDiff.invalidArgumentFailure("tolerance 必须在 0..255", "tolerance")
+        val normalizedCaptureMode = captureMode?.trim()?.lowercase()?.takeIf { it.isNotEmpty() } ?: McpCapturePreset.MODE_BALANCED
+        if (!McpCapturePreset.isKnownMode(normalizedCaptureMode)) {
+            return ToolkitScreenDiff.invalidArgumentFailure("captureMode 必须是 fastest、fast、balanced 或 quality（与 capture_screen 的 mode 同一套预设），收到：$captureMode", "captureMode")
+        }
+        val preset = McpCapturePreset.resolve(normalizedCaptureMode)
+        val requestedRegion = runCatching { McpCapturePreset.parseRegion(region) }
+            .getOrElse { return ToolkitScreenDiff.invalidArgumentFailure(it.message ?: "region 无效", "region") }
+        val previous = ToolkitScreenFrameStore.lastOrNull()
+        // ①a：显式 maxDims > 沿用上一帧宽度（避免 capture_screen{fast} 之后默认抓全尺寸直接 SIZE_MISMATCH）> 预设默认。
+        val (effectiveMaxWidth, sizeSource) = ToolkitScreenDiff.resolveMaxWidth(maxDims, previous?.frame?.width, preset.maxWidth)
+        val captured = runCatching { captureFrame(preset.timeoutMillis, requestedRegion, effectiveMaxWidth) }
+            .getOrElse { error ->
+                return ToolkitScreenDiff.failure(
+                    "CAPTURE_FAILED",
+                    "截图失败：${error.message ?: error.javaClass.simpleName}",
+                    null,
+                    listOf("确认已开启 AI.js Pro 无障碍服务（Android 11+ 才支持无障碍截图）", "或先用 capture_screen 验证截图可用"),
+                )
+            }
+        val capturedFormat = if (preset.format == "png") "png" else "jpg"
+        try {
+            val current = frameOf(captured.output)
+            // ② task-28：**先记当前帧再解析基线** —— 第一次调用虽然 NO_BASELINE，但帧已留下，
+            // 所以「连调两次即可 diff」成立（K40 实测修前 call1/call2 都失败）。
+            val remembered = runCatching { ToolkitScreenFrameStore.remember(current, "dev_screen_diff", capturedFormat) }.getOrDefault(false)
+            val rawBaseline = baseline?.trim().takeIf { !it.isNullOrEmpty() }
+            val explicitFrame = if (rawBaseline == null) null else {
+                val file = runCatching { McpPathRules.resolve(McpCapturePreset.operationRoot(), rawBaseline, "baseline 必须在脚本目录内") }
+                    .getOrElse { return ToolkitScreenDiff.invalidArgumentFailure(it.message ?: "baseline 路径无效", "baseline") }
+                if (!file.isFile) return ToolkitScreenDiff.baselineUnreadableFailure(file.path, "文件不存在")
+                val decoded = BitmapFactory.decodeFile(file.path)
+                    ?: return ToolkitScreenDiff.baselineUnreadableFailure(file.path, "不是可解码的 PNG/JPEG（saveFormat=raw 的原始像素文件不支持）")
+                try { frameOf(decoded) } finally { decoded.recycle() }
+            }
+            // bootstrapBaseline 的契约：先读帧缓存里的当前帧（上面已 remember），再决定基线。
+            val resolution = ToolkitScreenDiff.bootstrapBaseline(explicitFrame, previous?.frame) { remembered }
+            val baselineFrame = when (resolution) {
+                is ToolkitScreenDiff.Baseline.ExplicitPath -> resolution.frame
+                is ToolkitScreenDiff.Baseline.PreviousFrame -> resolution.frame
+                ToolkitScreenDiff.Baseline.Missing -> return ToolkitScreenDiff.noBaselineFailure(remembered)
+            }
+            val explicitPath = resolution is ToolkitScreenDiff.Baseline.ExplicitPath
+            val baselineIsJpeg = explicitPath && rawBaseline.orEmpty().lowercase().let { it.endsWith(".jpg") || it.endsWith(".jpeg") }
+            // tolerance 默认：任一侧是 JPEG（压缩噪声）→ 8；两侧都无损 → 0。
+            val jpegSources = ArrayList<String>()
+            if (baselineIsJpeg) jpegSources.add("baseline")
+            if (capturedFormat == "jpg") jpegSources.add("capture:" + normalizedCaptureMode)
+            val effectiveTolerance = tolerance ?: if (jpegSources.isNotEmpty()) ToolkitScreenDiff.DEFAULT_JPEG_TOLERANCE else 0
+            val toleranceSource = when {
+                tolerance != null -> "explicit"
+                jpegSources.isNotEmpty() -> "jpeg_default(${ToolkitScreenDiff.DEFAULT_JPEG_TOLERANCE}):" + jpegSources.joinToString("+")
+                else -> "lossless_default(0)"
+            }
+            val result = try {
+                ToolkitScreenDiff.compare(baselineFrame, current, effectiveTolerance)
+            } catch (mismatch: ToolkitScreenDiff.SizeMismatchException) {
+                return ToolkitScreenDiff.sizeMismatchFailure(baselineFrame, current)
+            }
+            val metrics = ToolkitScreenDiff.metricsJson(
+                result, current, baselineFrame.sha256,
+                if (explicitPath) "explicit_path" else "previous_frame",
+                effectiveTolerance, toleranceSource, normalizedMode,
+            ).apply {
+                addProperty("captureMs", captured.captureMs)
+                addProperty("regionClamped", captured.regionClamped)
+                // task-28（①a）：把「这一次是按什么预设/什么尺寸抓的」写出来，调用方据此对齐两次调用。
+                addProperty("captureMode", normalizedCaptureMode)
+                addProperty("captureFormat", capturedFormat)
+                addProperty("sizeSource", sizeSource)
+                addProperty("captureMaxWidth", effectiveMaxWidth)
+                addProperty("sourceWidth", captured.source.width)
+                addProperty("sourceHeight", captured.source.height)
+                addProperty("scale", captured.output.width.toDouble() / captured.source.width)
+                if (requestedRegion != null) {
+                    addProperty("region", "[${requestedRegion.left},${requestedRegion.top}][${requestedRegion.right},${requestedRegion.bottom}]")
+                    addProperty("regionNote", "两次调用必须用同一个 region/maxDims，否则尺寸不一致会被拒绝（SIZE_MISMATCH）")
+                }
+                addProperty("baselineAgeMs", if (explicitPath) -1L else previous?.let { System.currentTimeMillis() - it.capturedAt } ?: -1L)
+                if (!explicitPath) {
+                    addProperty("previousFrameSource", previous?.source.orEmpty())
+                    addProperty("previousFrameAt", previous?.capturedAt ?: 0L)
+                }
+                addProperty("previousFrameRemembered", remembered)
+                if (!remembered) {
+                    addProperty("previousFrameNote", "这一帧超过 ${ToolkitScreenDiff.MAX_REMEMBERED_PIXELS} 像素，未记入进程内帧缓存；下次请显式传 baseline 或加 maxDims")
+                }
+            }
+            var maskBytes: ByteArray? = null
+            var organized: JsonObject? = null
+            var writtenPath: String? = null
+            if (normalizedMode == ToolkitScreenDiff.MODE_MASK) {
+                val mask = ToolkitScreenDiff.mask(baselineFrame, current, effectiveTolerance)
+                metrics.addProperty("maskChangedPixels", mask.count { it == ToolkitScreenDiff.MASK_CHANGED })
+                val maskBitmap = Bitmap.createBitmap(mask, current.width, current.height, Bitmap.Config.ARGB_8888)
+                maskBytes = try {
+                    ByteArrayOutputStream().use { out ->
+                        check(maskBitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) { "掩码 PNG 编码失败" }
+                        out.toByteArray()
+                    }
+                } finally { maskBitmap.recycle() }
+                metrics.addProperty("maskBytes", maskBytes.size)
+                val requestedTarget = McpCapturePreset.resolveSaveTarget(saveDiffTo)
+                if (requestedTarget != null && requestedTarget.extension.lowercase() !in setOf("png", "")) {
+                    return ToolkitScreenDiff.invalidArgumentFailure("saveDiffTo 必须是 .png 文件或目录（掩码固定写 PNG），收到：$saveDiffTo", "saveDiffTo")
+                }
+                val target = McpCapturePreset.organizeSaveTarget(requestedTarget, organize)
+                if (target.first != null) {
+                    val file = target.first!!
+                    file.parentFile?.mkdirs()
+                    FileOutputStream(file).use { it.write(maskBytes) }
+                    organized = target.second
+                    writtenPath = file.absolutePath
+                    metrics.addProperty("written", true)
+                    metrics.addProperty("path", file.absolutePath)
+                    metrics.addProperty("bytes", maskBytes.size)
+                    if (organized != null) metrics.add("organized", organized)
+                } else {
+                    metrics.addProperty("written", false)
+                    metrics.addProperty("maskInline", true)
+                    val notes = metrics.getAsJsonArray("notes") ?: JsonArray().also { metrics.add("notes", it) }
+                    notes.add("掩码内联返回（base64 PNG）：像素不变=黑、变化=白；传 saveDiffTo 可改为落盘。")
+                }
+            } else if (!saveDiffTo.isNullOrBlank()) {
+                metrics.addProperty("saveDiffToIgnored", "mode=$normalizedMode 不生成掩码；要落盘请传 mode=mask")
+            }
+            return JsonObject().apply {
+                if (organized != null) add("organized", organized)
+                add("structuredContent", metrics)
+                add("content", JsonArray().apply {
+                    if (maskBytes != null && writtenPath == null) {
+                        add(JsonObject().apply {
+                            addProperty("type", "image")
+                            addProperty("data", Base64.encodeToString(maskBytes, Base64.NO_WRAP))
+                            addProperty("mimeType", "image/png")
+                        })
+                    }
+                    add(JsonObject().apply { addProperty("type", "text"); addProperty("text", metrics.toString()) })
+                })
+            }
+        } finally {
+            captured.recycle.forEach { runCatching { it.recycle() } }
         }
     }
 

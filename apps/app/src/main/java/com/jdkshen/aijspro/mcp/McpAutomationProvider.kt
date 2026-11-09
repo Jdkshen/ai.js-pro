@@ -41,7 +41,7 @@ class McpAutomationProvider : ContentProvider() {
 
 internal object McpAutomationTransport {
     const val MAX_BYTES = 48 * 1024 * 1024
-    private val names = setOf("get_ui_layout", "capture_screen", "ui_find", "ui_click", "ui_long_click", "ui_node_action",
+    private val names = setOf("get_ui_layout", "capture_screen", "dev_screen_diff", "ui_find", "ui_click", "ui_long_click", "ui_node_action",
         "ui_input", "ui_swipe", "ui_global", "ui_wait", "ui_scroll")
     fun supports(name: String) = name in names
     fun call(context: Context, name: String, args: JsonObject): JsonObject {
@@ -61,6 +61,19 @@ internal object McpAutomationTransport {
         fun str(key: String, fallback: String = "") = args.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: fallback
         fun int(key: String, fallback: Int) = args.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asInt ?: fallback
         fun bool(key: String, fallback: Boolean) = args.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: fallback
+        if (name == "dev_screen_diff") {
+            // task-26：逐帧像素差异（baseline/region/mode/tolerance/saveDiffTo/maxDims）。
+            return McpDeviceTools.screenDiff(
+                str("baseline", "").ifEmpty { null },
+                args.get("region"),
+                str("mode", ToolkitScreenDiff.MODE_COUNT).lowercase(),
+                int("tolerance", -1).takeIf { it >= 0 },
+                str("saveDiffTo", "").ifEmpty { null },
+                int("maxDims", -1).takeIf { it >= 0 },
+                str("captureMode", "").ifEmpty { null },
+                bool("organize", true),
+            )
+        }
         if (name == "capture_screen") {
             // 预设只决定「没传的参数」：显式传了就以调用方为准（int("-1"/0) 表示未传）。
             return McpDeviceTools.screenshot(

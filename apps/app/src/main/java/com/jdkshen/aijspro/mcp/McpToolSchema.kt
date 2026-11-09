@@ -12,6 +12,8 @@ internal object McpToolSchema {
         "offset", "limit", "maxBytes", "afterId", "timeoutSeconds",
         "olderThanHours", "keepAppliedHours", "maxNodes", "maxDepth", "windowId", "timeoutMillis",
         "quality", "maxWidth", "maxChars", "waitMillis", "x", "y", "x1", "y1", "x2", "y2", "durationMillis", "index", "intervalMillis", "maxResults",
+        // task-26：dev_screen_diff 的容差与缩小上限都是整数（否则会被 objSchema 声明成 string）。
+        "tolerance", "maxDims",
         // 同类漏网（本次审计发现）：pid 是整数、keepLatest 是整数，之前都落进 string。
         "pid", "keepLatest"
     )
