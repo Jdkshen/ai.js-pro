@@ -102,7 +102,9 @@ internal object McpToolkitCatalog {
         "binary_transform",
         "evidence_export",
         // Bug 2：释放编辑会话，让配额 GC 能真正回收（用户实测 gc 删不动）。
-        "apk_session_release"
+        "apk_session_release",
+        // §11.2 第一刀：dispatch 壳静态调查（严格追加在列表末尾；mt_ 别名是显式名单，不受序位影响）。
+        "vm_survey"
     )
     /**
      * MT 兼容别名（`mt_<tool>`）的**显式名单**（W4 task-21）。

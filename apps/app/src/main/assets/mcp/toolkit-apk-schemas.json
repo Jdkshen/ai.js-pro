@@ -2303,6 +2303,104 @@
       }
     }
   },
+  "vm_survey": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspaceId": {
+        "type": "string",
+        "description": "APK 工作区 id（与 path 二选一）。只给 blobHex 时可省略（blob-only 模式：只反汇编、不扫 DEX）。"
+      },
+      "editSessionId": {
+        "type": "string",
+        "description": "可选：带上编辑会话里的改动一起分析（与 apk_read_text 同一套会话）。"
+      },
+      "path": {
+        "type": "string",
+        "description": "可选：工具目录内的 APK/DEX 路径（与 workspaceId 二选一）。只给 blobHex 时可省略（blob-only 模式）。"
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 200,
+        "default": 20,
+        "description": "候选/负载/簇成员最多返回多少条（默认 20）。"
+      },
+      "minScore": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+        "default": 0,
+        "description": "只返回分数 >= minScore 的候选（默认 0=不额外过滤）。分数 0 表示没有任何 dispatch 特征，一律不进候选（所以 0 候选是合法结果）。分数是可解释启发式，不是「已识别 VMP」。"
+      },
+      "payloadMinBytes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 1048576,
+        "default": 64,
+        "description": "大常量负载阈值（byte[]/String，默认 64 字节）。"
+      },
+      "approxPercent": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 100,
+        "default": 0,
+        "description": "近似聚类阈值（总变差距离 0..100）：0=只做精确同签名聚类；小于等于阈值合并、大于不合并。"
+      },
+      "maxInstructions": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 4096,
+        "default": 512,
+        "description": "线性反汇编最多输出多少条指令（默认 512；超出时给 stopsAt 与 stopReason=max_instructions）。"
+      },
+      "opcodeRules": {
+        "type": "array",
+        "maxItems": 512,
+        "description": "用户提供的 opcode 规则（线性反汇编用）：index=首字节 0..255、mnemonic、length=指令字节数 1..64。",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "index": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            "mnemonic": {
+              "type": "string"
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            }
+          },
+          "required": [
+            "index",
+            "mnemonic",
+            "length"
+          ]
+        }
+      },
+      "blobHex": {
+        "type": "string",
+        "description": "要线性反汇编的字节码 blob（十六进制；与 payloadRef 二选一）。给了非空 blobHex 且没给 workspaceId/path 时进入 blob-only 模式：只做反汇编 + 规则校验 + coveragePercent/停点，不扫描任何 dex（sources 为空）。"
+      },
+      "payloadRef": {
+        "type": "string",
+        "description": "用返回里 payloads[].field 作为 blob（与 blobHex 二选一）。"
+      },
+      "method": {
+        "type": "string",
+        "description": "要导出基本块起点的 dex_method 定位符（如 dex_method:Lpkg/Foo;->bar()V）；只做块边界与覆盖计数。"
+      },
+      "dispatchArray": {
+        "type": "string",
+        "description": "要摊平的 dispatch 数组字段（如 Lpkg/Foo;->table:[I，或只给字段名）；省略自动挑最大的 int/short/byte 数组。"
+      }
+    }
+  },
   "apk_dex_interface_table": {
     "type": "object",
     "additionalProperties": false,

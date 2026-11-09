@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.mcp
 
 import com.android.apksig.ApkSigner
 import com.google.gson.*
+import org.jf.dexlib2.iface.ClassDef
 import com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity
 import com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner
 import java.io.*
@@ -318,6 +319,7 @@ internal class McpApkToolkit(
             }
             "apk_continue" -> continuePage(args)
             "apk_read_signature" -> ToolkitIo.ok(readSignature(snapshot(args.tString("workspaceId")), args.tBool("verify", false)).apply { addProperty("workspaceId", args.tString("workspaceId")) })
+            "vm_survey" -> ToolkitIo.ok(vmSurvey(args))
             else -> {
                 val workspace = args.tString("workspaceId"); workspace(workspace)
                 val session = args.tString("editSessionId", "")
@@ -444,6 +446,7 @@ internal class McpApkToolkit(
     }
     private fun description(name: String): String = when(name) {
         "apk_verify" -> "只读检查真实APK：密码学验签、普通Stored4B/原生库ZIP16KB、ELF LOAD段及Manifest。返回独立检查证据，不保证安装/业务行为。"
+        "vm_survey" -> "静态 dispatch 壳调查（逆向建议 §11.2 第一刀）：对 APK/DEX 逐方法给**可解释分数**找 switch/dispatch 候选（features/contributions 逐项列出，配 scoreBuckets 分数分布）、按 opcode 直方图**聚类**（可给 approxPercent 做近似聚类）、列大常量负载候选、把 dispatch 数组摊平成 index->元素，并支持用 opcodeRules 做**线性**反汇编（coveragePercent + 停点）与**只到基本块起点 + 覆盖计数**的 CFG。**不做反编译、不承诺任意 VMP 一键还原；0 候选是合法结果**（没有 switch/大常量表、被 R8 内联或壳加密都会为 0，返回里写清扫了多少 dex/类/方法）。输入 workspaceId（可配 editSessionId）或工具目录内的 path。"
         "apk_read_signature" -> "只读 APK 的 V1/V2/V3/V3.1 证书与方案元数据；**默认不做密码学验签**：此时 verified=false 且 verification=not_run（=「没跑验签」，不是「验签失败」）、verificationReason 说明原因、verifyWith 指向真正能验签的调用。要密码学验签与逐方案状态用 apk_verify{workspaceId}（同一 ToolkitApkVerifier 的完整报告），或本工具 verify=true 在同一次调用里跑验签并返回 signature.schemes/errors/backendDiagnosis。"
         "apk_dex_search_members" -> "按方法名/描述符/字符串/引用搜索，返回精确方法locator、dexEntry和行/指令锚点；有预算，truncated表示需要缩小查询。"
         "apk_search" -> "跨 ZIP/resources/dex/native 语义目标搜索；返回 stopReason（COMPLETE/TIME_BUDGET/BUDGET）、partialTargets、budgetNote 与 zeroResultMeaning。只有 stopReason=COMPLETE 且 total=0 才是“没有命中”。"
@@ -1740,6 +1743,110 @@ internal class McpApkToolkit(
             require(!found.isDirectory && found.size >= 0) { "需要普通 ZIP 文件条目" }; found.size
         }
     }
+    /**
+     * §11.2 第一刀：dispatch 壳的静态调查入口（实现见 [ToolkitVmSurvey]）。
+     *
+     * 输入 workspaceId（可配 editSessionId）或工具目录内的 path（APK/DEX）；**只给 blobHex 时进入 blob-only 模式**
+     * （不需要 workspace：只按 opcodeRules 做线性反汇编，不扫 DEX）。只读：不改任何文件、不导出。
+     * 返回里的 notes/nextActions 必须保持「静态启发式、0 候选合法、不承诺还原」的措辞。
+     */
+    private fun vmSurvey(args: JsonObject): JsonObject {
+        val workspaceId = args.tString("workspaceId", "").trim()
+        val session = args.tString("editSessionId", "").trim()
+        val path = args.tString("path", "").trim()
+        val blobHexArg = args.tString("blobHex", "").trim()
+        // blob-only：给了非空 blobHex 且没给 workspace/path —— 用户提供 opcode 规则做线性反汇编这条路径
+        // 不该被「先去开一个 APK/DEX」的前置守卫挡死。
+        val blobOnly = workspaceId.isEmpty() && path.isEmpty()
+        if (blobOnly && blobHexArg.isEmpty()) {
+            throw ToolkitException("INVALID_ARGUMENT",
+                "需要 workspaceId（可配 editSessionId）、path（工具目录内的 APK/DEX），或 blobHex（进入 blob-only 模式）。" +
+                    "nextActions: 先用 apk_workspace_open 建快照 / 给 apk_list_available_apks 里的路径；" +
+                    "只做线性反汇编则给 blobHex + opcodeRules[{index,mnemonic,length}]。", "workspaceId")
+        }
+        val dexes: List<Pair<String, List<ClassDef>>> = when {
+            workspaceId.isNotEmpty() -> {
+                workspace(workspaceId)
+                if (session.isNotEmpty()) sessionDir(workspaceId, session)
+                dexes(workspaceId, session).map { it.first to it.second.classes }.toList()
+            }
+            path.isNotEmpty() -> readDexSet(ToolkitIo.resolve(root, path))
+            else -> emptyList()
+        }
+        if (!blobOnly) require(dexes.isNotEmpty()) { "没有可分析的 classes*.dex" }
+        val limit = args.tInt("limit", 20, 1, 200)
+        val minScore = args.tInt("minScore", 0, 0, 100)
+        val payloadMinBytes = args.tInt("payloadMinBytes", 64, 1, 1048576)
+        val approxPercent = args.tInt("approxPercent", 0, 0, 100)
+        val maxInstructions = args.tInt("maxInstructions", 512, 1, 4096)
+        val rules = opcodeRules(args)
+        val blobHex = blobHexArg
+        val payloadRef = args.tString("payloadRef", "").trim()
+        var blob: ByteArray? = null
+        var blobSource = "none"
+        if (blobHex.isNotEmpty()) {
+            require(blobHex.length <= 2 * ToolkitIo.MAX_TEXT) { "blobHex 超过文本上限（" + ToolkitIo.MAX_TEXT + " 字节）" }
+            blob = ToolkitIo.unhex(blobHex); blobSource = "blobHex"
+        } else if (payloadRef.isNotEmpty()) {
+            blob = ToolkitVmSurvey.payloadBytesOf(dexes, payloadRef)
+            if (blob == null) throw ToolkitException("INVALID_ARGUMENT",
+                "payloadRef 没有匹配到可读的 byte[]/String 常量负载：" + payloadRef +
+                    "。nextActions: 先跑一次不带 payloadRef 的 vm_survey，用返回的 payloads[].field。", "payloadRef")
+            blobSource = "payloadRef:" + payloadRef
+        }
+        val data = ToolkitVmSurvey.survey(
+            dexes = dexes,
+            limit = limit,
+            minScore = minScore,
+            payloadMinBytes = payloadMinBytes,
+            approxPercent = approxPercent,
+            opcodeRules = rules,
+            blob = blob,
+            blobSource = blobSource,
+            maxInstructions = maxInstructions,
+            cfgMethodLocator = args.tString("method", "").ifEmpty { null },
+            dispatchArrayRef = args.tString("dispatchArray", "").ifEmpty { null },
+            blobOnly = blobOnly,
+        )
+        data.addProperty("workspaceId", workspaceId.ifEmpty { null })
+        data.addProperty("path", path.ifEmpty { null })
+        data.add("sources", JsonArray().apply { dexes.forEach { add(it.first) } })
+        return data
+    }
+
+    /** path 形态的 dex 集合：APK 取 classes*.dex，独立 DEX 按单条目。 */
+    private fun readDexSet(file: File): List<Pair<String, List<ClassDef>>> {
+        require(file.isFile) { "文件不存在：" + file.path }
+        val magic = file.inputStream().use { input -> ByteArray(4).let { buffer -> val read = input.read(buffer); buffer.copyOf(read.coerceAtLeast(0)) } }
+        val isDex = magic.size >= 4 && magic[0] == 0x64.toByte() && magic[1] == 0x65.toByte() && magic[2] == 0x78.toByte()
+        if (isDex) return listOf(file.name to ToolkitDex(file.readBytes()).classes)
+        ZipFile(file).use { zip ->
+            val out = ArrayList<Pair<String, List<ClassDef>>>()
+            for (entry in zip.entries()) {
+                if (!entry.name.matches(Regex("classes[0-9]*\\.dex"))) continue
+                val bytes = zip.getInputStream(entry).use { ToolkitIo.read(it, ToolkitIo.MAX_ENTRY) }
+                out.add(entry.name to ToolkitDex(bytes).classes)
+            }
+            require(out.isNotEmpty()) { "APK 里没有 classes*.dex：" + file.path }
+            return out.sortedBy { it.first }
+        }
+    }
+
+    private fun opcodeRules(args: JsonObject): List<ToolkitVmSurvey.OpcodeRule> {
+        val array = args.getAsJsonArray("opcodeRules") ?: return emptyList()
+        require(array.size() <= 512) { "opcodeRules 最多 512 条" }
+        return array.map { element ->
+            val rule = element.asJsonObject
+            val index = rule.get("index")?.asInt
+                ?: throw ToolkitException("INVALID_ARGUMENT", "opcodeRules[].index 必填（0..255）", "opcodeRules")
+            val mnemonic = rule.get("mnemonic")?.asString
+                ?: throw ToolkitException("INVALID_ARGUMENT", "opcodeRules[].mnemonic 必填", "opcodeRules")
+            val length = rule.get("length")?.asInt
+                ?: throw ToolkitException("INVALID_ARGUMENT", "opcodeRules[].length 必填（1..64）", "opcodeRules")
+            ToolkitVmSurvey.OpcodeRule(index, mnemonic, length)
+        }
+    }
+
     /**
      * 读取签名信息。默认**只读证书元数据**（ToolkitSignatures），此时 verified=false 表示「没跑验签」而不是
      * 「验签失败」——用 verification=not_run/verificationReason/verifyWith 把这件事说清楚（.4 §4.2 的入口误导）。
