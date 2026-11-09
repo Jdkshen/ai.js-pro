@@ -10,7 +10,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 
 | 分类 | 工具 |
 |---|---|
-| 状态与诊断 | get_status（含 `toolCatalog`/`mcp`/`template`/`toolCategories` 等自检块）、read_apk_logs、get_mcp_log |
+| 状态与诊断 | get_status（含 `toolCatalog`/`mcp`/`template`/`toolCategories`/`baseline` 等自检块）、**get_baseline**、read_apk_logs、get_mcp_log |
 | 脚本与执行 | list_scripts、read_script、search_scripts、continue_result、run_script、check_syntax、list_executions、get_execution、wait_execution、stop_script、stop_all_scripts |
 | 工作区 | workspace_open/list/read/write/delete/diff/request_apply/mkdir/cancel/cleanup |
 | 项目目录 | project_folder（state/create/set/tidy；产出自动归置） |
@@ -41,7 +41,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 
 新代码优先读 structuredContent.data；老代码继续读 content[0].text 即可。若当前构建还没有 data 镜像（升级前），以 content[0].text 为准；升级后两处字段应等价，不要因为多了一个 data 就认为旧字段被删除。当前实现里 get_status/get_build_tools 已加镜像；toolkit_status 结果来自 :tools 桥接进程，若该构建尚未镜像同样以 text 为准。
 
-`get_status` 里还有几块**不属于扁平标量**的自检信息，不要漏读：`toolCatalog{toolCount,build,fingerprint}` 与顶层 `toolCount`/`canonicalToolCount`（K40 **dev-1429** 实测 **224 / 215**，另有 **16 个只派发族别名**不进 tools/list）、`mcp{...}`（MCP 服务自身状态，字段与排查顺序见 Playbook「get_status.mcp」）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`（dev-1404：打包**实际会用哪份模板**、是否含 require 根修复——`templateStale=true` 时按 `nextActions` 重建模板）、`toolCategories{}`（各分类工具数）、以及 `baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
+`get_status` 里还有几块**不属于扁平标量**的自检信息，不要漏读：`toolCatalog{toolCount,build,fingerprint}` 与顶层 `toolCount`/`canonicalToolCount`（K40 **dev-1433** 实测 **225 / 216**，另有 **16 个只派发族别名**不进 tools/list）、`mcp{...}`（MCP 服务自身状态，字段与排查顺序见 Playbook「get_status.mcp」）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`（dev-1404：打包**实际会用哪份模板**、是否含 require 根修复——`templateStale=true` 时按 `nextActions` 重建模板）、`toolCategories{}`（各分类工具数）、以及 `baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
 
 ### 参数类错误的 error.details
 
@@ -794,10 +794,10 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 ### B11 `maxChars` 两套上限不要混
 
 - `apk_decompile_class`/`apk_decompile_method`：`maxChars` **默认 200000、上限 200000**；超过仍在 **200000 截断**（B3 正在修，先如实现状），不会自动分页。要拿全，用 `apk_job_export`/`offset` 续读，或把类/方法拆小。
-- `apk_job_result`：默认读取窗口 **1,048,576 字符**，schema 上限 **1 MiB**（dev-1380 起；旧构建曾为 200000）。大结果一次取回，超过再用 `nextOffset` 续读。
+- `apk_job_result`：默认读取窗口 **1,048,576 字符**，schema 上限 **1 MiB**（dev-1380 起；旧构建曾为 200000）。大结果一次取回，超过再用 `nextOffset` 续读。**dev-1431 起文本型任务默认 `format:"text"`（`content` 即正文），`totalChars` 随之变成正文长度——要原始 JSON 大小看 `rawTotalChars`**，详见「dev-1431~1433 行为变化」。
 - `apk_job_export`：默认导出全部结果，`offset`/`maxChars` 可选（`maxChars ≤1 MiB`）；适合把反编译等大结果原样留档。
 
-**怎么验证**：对一个 81,162 字符的反编译结果不传 `maxChars` 调 `apk_job_result`，确认 `totalChars=81162`、`hasMore=false`、`defaultMaxChars=1048576`；再对输出调 `apk_job_export`，`file_stat` 的 SHA/字节与导出返回一致。`apk_decompile_*` 传 `maxChars=200000` 与传更大值对比，确认仍按 200000 截断（不要宣称已修）。
+**怎么验证**：对一个 81,162 字符的反编译结果不传 `maxChars` 调 `apk_job_result`，确认 `hasMore=false`、`defaultMaxChars=1048576`，且 `totalChars` **等于你实际拿到的正文长度**（文本型任务默认 `format:"text"`；显式 `format:"json"` 或结构化任务才是原始 JSON 长度），原始大小另看 `rawTotalChars`；再对输出调 `apk_job_export`，`file_stat` 的 SHA/字节与导出返回一致。`apk_decompile_*` 传 `maxChars=200000` 与传更大值对比，确认仍按 200000 截断（不要宣称已修）。
 
 ### B12 `zip_create` 与 `file_edit_text` 两个易错参数
 
@@ -863,7 +863,7 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 **怎么验证**：分别用 `run_script {engine:"rhino",...}` 与 `engine:"nodejs"` 打印 `Packages.java.lang.String.valueOf(42)`；dev-1380+ Rhino 应为 `42`，`.4` dev-1378 是 `42.0`，Node 一直 `42`；报告里写清构建版本。
 
 
-## 新增工具（dev-1422~1428）
+## 新增工具（dev-1422~1433）
 
 以下 5 个工具是 dev-1422 起陆续加入的：**用途 / 最小参数 / 返回关键字段 / 诚实边界 / 常见误用**。参数细节一律以 `tool_schema{tool:"..."}` 为准。
 
@@ -914,8 +914,45 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 
 - **16 个只派发别名**：`dex_read_class_outline`/`dex_xref`/`dex_search_members`/`dex_call_graph`/`dex_hierarchy`/`dex_interface_table`/`dex_list_classes`/`dex_list_methods` → 对应 `apk_dex_*`；`so_inspect`/`so_list_items`/`so_map_address`/`so_xref`/`so_disassemble`/`so_analyze_control_flow`/`so_patch_instructions`/`so_patch_string` → 对应 `apk_native_*`。
 - **新旧等价、旧名（canonical）长期保留**：`dex_xref` 与 `apk_dex_xref` 是同一个工具，同一 workspace 调用返回键集逐字相同。
-- **别名不出现在 `tools/list`**（advertised 仍是 224，不占客户端上下文）；用 `tool_schema{tool:"dex_xref"}` 查参数会回显 `resolved=apk_dex_xref` 与 `familyAliases[]`。
+- **别名不出现在 `tools/list`**（advertised 仍是 **225**，不占客户端上下文）；用 `tool_schema{tool:"dex_xref"}` 查参数会回显 `resolved=apk_dex_xref` 与 `familyAliases[]`。
 - 未知工具名仍会给近邻建议（近邻池含族别名）；`tier=core`/`groups` 过滤**不含**别名。
+
+## dev-1431~1433 行为变化（基线自检 / job 默认正文 / 警告收窄）
+
+### `get_baseline`（dev-1431，运行时就绪基线）
+
+- **用途**：一次拿到「运行时就绪状态」，不额外加往返；同一条基线也会自动挂在 `get_status` 与**首个 `tools/call`** 上（见下一条）。
+- **参数**：`refresh:true` 强制重建（否则 15s 内复用同一份缓存）。
+- **返回 `baseline`**：`version`（**内容不变则不变**，客户端可据此去重）、`root`、`currentProject`、`outputRule`、`workspaces{script, apk{used,quota,temporary,ttlHint}}`、`toolchain{sampled,ready,missing,present}`、`jobs{retention,advice}`，有缺失时给一条最短 `recovery`。
+- **同源约束**：`toolchain` 与 `get_build_tools` 的 `ready/missing/present` **逐字相等**；`workspaces.apk.used/quota` 与 `apk_workspace_inventory` **逐字相等**；`jobs.retention` 与 `toolkit_status` 同一份。baseline **不自己统计**（不重探 PATH、不重算工作区）。
+- **预算**：总量 **≤512 字节**；超了按「**先丢统计、保 `version`/`missing`/`recovery`**」裁剪并加 `trimmed`/`trimNote`（丢字段顺序：jobs → backends/outputRule → workspaces 明细 → toolchain.present → currentProject → workspaces → root）。
+- **未采样时**：`toolchain{sampled:false,note}`（**不是** `missing:[]`——空数组会被读成「什么都不缺」）；首次入口会触发一次与 `get_build_tools` 同源的采样（30s 内不重试，失败路径不采样）。
+
+### `baseline` 出现在哪里（以及一个已知小瑕疵）
+
+| 位置 | 带什么 |
+|---|---|
+| `get_status` | **完整版** |
+| **首个 `tools/call`** | **完整版**（只挂一次；latch 之后普通调用不带，省上下文） |
+| **所有失败信封**（`isError=true`） | **失败专用裁剪版**：只有 `version` + `recovery`（有缺失时再加 `missing`）+ `trimmed:"failure"`/`trimNote`，**不带** workspaces/jobs/toolchain 明细 |
+| `tools/list` 与普通成功调用 | **不带** |
+| `get_baseline` | 完整版（`refresh:true` 强刷） |
+
+- **已知小瑕疵（正在修）**：失败信封的 `content[0].text` 镜像**暂不含 `baseline`**（只有 `structuredContent` 里有）→ 读失败信封的基线请**以 `structuredContent` 为准**；修好后本节会更新。
+- 另外注意：JSON-RPC 层错误（`-32602` 之类）**不带** `baseline`；无缺失时失败版不会出现 `missing`。
+
+### `apk_job_result`：文本型任务默认 `format:"text"`（dev-1431）
+
+- **文本型任务**（`apk_decompile_class/method` 等）**默认 `format:"text"`**：顶层 `content`（与 `text`）**直接就是正文**，不再 JSON-in-JSON；要旧形状显式传 `format:"json"`。
+- 新增 `formatDefaulted`/`formatSource`（`default|explicit`）/`pagingSource`（`text|raw_json`）——**审计用**，不要靠猜。
+- **行为变更**：text 形态下 `totalChars`/`nextOffset`/`hasMore`/`chars`/`truncated` 描述的都是**正文**；**旧 `totalChars` 曾是「原始 JSON 长度」，现在要原始大小请看 `rawTotalChars`**（另有 `rawNextOffset`/`rawHasMore`）。`nextOffset` 的用法不变（原样回传即可续读）。
+- 结构化任务默认仍是 `json`（结果不是正文文本）。
+
+### 警告语义收窄（dev-1431）
+
+- **只有真 warning 才 `SUCCEEDED_WITH_WARNINGS`**，判据（原文回显在 `warningCriteria`）：文本型任务**正文为空**；`warningCode=EMPTY_RESULT`/`RESULT_TRUNCATED`；正文含 **JADX ERROR** 或 **Method dump skipped**；组件给出其它**非 `DECOMPILE_INCOMPLETE`** 的 `warningCode`。
+- **`JADX INFO` 注释与 `errorsCount`/`warningsCount` 等全局计数只进 `notes`**（`notesCount`；`noteCount` 是旧别名，两者同值），**不改变 `SUCCEEDED`**。
+- `warningSource`（`empty_result|truncated|decode_error|component_warning|incomplete`）说明判据来自哪一类；空 `warningCode` 视为**无** warning（旧组件常回 `""`，之前会被误判）。
 
 ## 常见错误与修法
 

@@ -196,6 +196,55 @@ class McpBaselineTest {
         assertEquals(view.toString(), McpBaseline.failureView(full).toString())
     }
 
+    /**
+     * task-39（①②）：失败结果的 `content[0].text` 里必须有**同一份**裁剪版 baseline（与 structuredContent 逐字段相同），
+     * 且连续两次失败都一样（不受「首个 tools/call」latch 影响）。
+     */
+    @Test
+    fun failureTextMirrorCarriesTheSameBaseline() {
+        val full = McpBaseline.assemble(
+            11, "/storage/emulated/0/脚本", "p",
+            ToolkitIo.json("script" to 4, "apk" to ToolkitIo.json("used" to 3, "quota" to 16, "temporary" to 1, "ttlHint" to "temporary 会过期")),
+            McpBaseline.toolchain(readiness(false, allComponents, emptyList())),
+            McpBaseline.jobs("6h / 64 条", "终态立刻 result 或 export"),
+        )
+        val view = McpBaseline.failureView(full)
+        // 桥接失败：text 是工具进程返回的载荷（JSON 对象）→ 就地补 baseline
+        val payload = "{\"ok\":false,\"data\":null,\"error\":{\"code\":\"INVALID_ARGUMENT\",\"message\":\"缺少参数 workspaceId\"},\"nextActions\":[]}"
+        val withBaseline = McpBaseline.failureText(payload, view, "INVALID_ARGUMENT", null)
+        val parsed = com.google.gson.JsonParser().parse(withBaseline).asJsonObject
+        assertTrue("text 里必须有 baseline", parsed.has("baseline"))
+        assertEquals("text.baseline 必须与 structuredContent.baseline 逐字段相同", view.toString(), parsed.getAsJsonObject("baseline").toString())
+        assertEquals("原始字段不能丢", "INVALID_ARGUMENT", parsed.getAsJsonObject("error").get("code").asString)
+        // 纯文本失败（少数 catch 路径）→ 包成标准信封，原文进 error.message，同样带 baseline
+        val wrapped = McpBaseline.failureText("工作区状态冲突", view, "WORKSPACE_STATE_CONFLICT", null)
+        val wrappedJson = com.google.gson.JsonParser().parse(wrapped).asJsonObject
+        assertEquals(false, wrappedJson.get("ok").asBoolean)
+        assertEquals("工作区状态冲突", wrappedJson.getAsJsonObject("error").get("message").asString)
+        assertEquals(view.toString(), wrappedJson.getAsJsonObject("baseline").toString())
+        // 连续两次（幂等 + 同值）
+        assertEquals("重复注入必须幂等且同值", withBaseline, McpBaseline.failureText(withBaseline, view, "INVALID_ARGUMENT", null))
+        assertEquals(withBaseline, McpBaseline.failureText(payload, McpBaseline.failureView(full), "INVALID_ARGUMENT", null))
+    }
+
+    /** task-39（③）：注入必须在**序列化单点**，成功路径按描述**有意不带**文本镜像。 */
+    @Test
+    fun failureTextIsInjectedAtTheSingleSerializationPointOnly() {
+        assertTrue("单点：rpcResult 兜底", mcpToolsSource.contains("add(\"result\", withFailureBaseline(result))"))
+        assertEquals("withFailureBaseline 只能有一个调用点", 1,
+            Regex("withFailureBaseline\\(result\\)").findAll(mcpToolsSource).count())
+        assertTrue("文本重写在 withFailureBaseline 里",
+            mcpToolsSource.contains("obj.addProperty(\"text\", McpBaseline.failureText(text, view, errorCode, null))"))
+        val failureBody = mcpToolsSource.substringAfter("private fun withFailureBaseline(result: JsonObject): JsonObject {")
+            .substringBefore("private fun withEntryBaseline")
+        assertFalse("失败路径不能被 latch 影响", failureBody.contains("entryBaselineDelivered"))
+        assertTrue("失败路径确实重写 text", failureBody.contains("McpBaseline.failureText("))
+        val entryBody = mcpToolsSource.substringAfter("private fun withEntryBaseline(result: JsonObject): JsonObject {")
+            .substringBefore("private fun toolJson")
+        assertFalse("成功路径有意不重写文本镜像（省一次大载荷重序列化）", entryBody.contains("failureText"))
+        assertTrue("成功路径的不带必须在描述里写明", mcpToolsSource.contains("文本镜像**不含**"))
+    }
+
     @Test
     fun versionIsStableWhileContentIsUnchanged() {
         val version = McpBaselineVersion()

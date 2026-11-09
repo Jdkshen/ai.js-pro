@@ -68,7 +68,7 @@ INVALID_ARGUMENT / 缺参数时，message 仍有人类可读的「可用参数/�
 
 > 版本边界：`running` 同源、`persistedRunning`、`listener{...}`、`status=degraded`、`recovery` 的 30 秒冷却都是 **dev-1414 起** 的语义。**dev-1413 及更早为旧契约**：`running` 是持久化布尔、没有 `persistedRunning`/`listener`、`status` 没有 `degraded`（那时 `recovery` 也没有 30 秒冷却）。
 
-（顺带）`get_status` 还有 `toolCatalog{toolCount,build,fingerprint}`、顶层 `toolCount`/`canonicalToolCount`（**dev-1429** 实测 **224 / 215**）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`、`toolCategories{}`、`baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
+（顺带）`get_status` 还有 `toolCatalog{toolCount,build,fingerprint}`、顶层 `toolCount`/`canonicalToolCount`（**dev-1433** 实测 **225 / 216**）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`、`toolCategories{}`、`baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
 
 ### HTTP 503 不是工具失败
 
@@ -139,7 +139,7 @@ preloadMode 有三个取值：provider（默认）、dt_needed、clinit（**dev-
 - 手工改成 wait 时：不要依赖断开连接自动恢复；unload/detach 不是 resume。用支持 resume 的 Frida 控制端（CLI %resume / API Session.resume() 或 Device.resume()），或改回 on_load:"resume" 重新注入。上游：https://frida.re/docs/gadget/
 - 想要“启动早期加载脚本”而不是“启动时阻塞”：优先 interactionType=script（同样 on_load:"resume"），不要用 wait。
 
-## 新工具速查（dev-1422~1428）
+## 新工具速查（dev-1422~1433）
 
 四个逆向/构建向 + 一个 UI 向。**参数以 `tool_schema{tool:"…"}` 为准**，这里只给「怎么用对 + 别踩什么」。
 
@@ -149,7 +149,11 @@ preloadMode 有三个取值：provider（默认）、dt_needed、clinit（**dev-
 - **`chain_resume`**（dev-1426/1427）：`checkpoint → 回编 → 对齐/签名 → 验签`。必填 `workspaceId`+`editSessionId`；`steps` 默认 `all`、`checkpoint` 必须配 `expectedRevision`。**任一步失败返回 payload `ok=false`（不抛异常）——必须看 `ok`**，另有 `stoppedAt`/`failure{where,phase,code,message}`/后续 `skipped`；`finalArtifact.sha256` 是磁盘实测，**`verified` 只来自 verifier 逐方案结论**（≠「签过名」）。dev-1427 起「Manifest 缺资源上下文」不再阻断构建（转 `warnings[]` 的 `MANIFEST_PRIMARY_DECODER_FALLBACK`）。→ 别把 `schemes` 存在当验签通过。
 - **`crypto_`**（dev-1428）：`op=hash|hmac|aes_gcm|rsa_sign|rsa_verify`（只 **`op` 必填**）；输入 `inputHex|inputText|path` 三选一；密钥**只允许显式** `keyHex` 或**工具目录内** `keyRef`（不读 App 私有密钥库，只回显 `keyBytes/keySha256Prefix`）。失败码 `ALG_UNSUPPORTED/KEY_INVALID/MAC_INVALID/DECRYPT_FAILED/INPUT_TOO_LARGE`，**失败不留半成品**（校验+运算都在写盘前）。不做 KDF/PSS/CBC/密钥管理；GCM 通过只说明 tag 校验通过，**不构成信任判断**；仅私钥时用「重签后常量时间比较」。→ `keyRef:"../x"` 会 `KEY_INVALID`；`inputHex` 与 `path` 同给会 `INVALID_ARGUMENT`。
 
-**族前缀别名（dev-1429）**：`dex_*` → `apk_dex_*`、`so_*` → `apk_native_*` 共 **16 个**，**只派发不广播**（不进 `tools/list`，advertised 仍 224）；新旧名等价、旧名长期保留。查参数：`tool_schema{tool:"dex_xref"}` → `resolved=apk_dex_xref` + `familyAliases[]`。
+- **`get_baseline`**（dev-1431）：一次拿运行时就绪——`version`/`root`/`currentProject`/`outputRule`/`workspaces{script,apk{used,quota,temporary,ttlHint}}`/`toolchain{sampled,ready,missing,present}`/`jobs{retention,advice}`/`recovery`。**≤512 字节**、内容不变 `version` 不变（可去重）、`refresh:true` 强刷；**同源**：`toolchain` 与 `get_build_tools`、`workspaces.apk` 与 `apk_workspace_inventory` **逐字相等**。同一条基线自动出现在 **`get_status` + 首个 `tools/call`**（完整版）与**所有失败信封**（裁剪版 `version+recovery(+missing)+trimmed`）；`tools/list` 与普通成功调用不带。→ 读失败信封的基线**以 `structuredContent` 为准**（`content[0].text` 镜像暂不含 baseline，正在修）。
+- **`apk_job_result` 文本型任务默认 `format:"text"`**（dev-1431）：`content` 直接是正文（要旧形状显式传 `format:"json"`）；新增 `formatDefaulted`/`formatSource`/`pagingSource`。**`totalChars` 现在是正文长度**（旧=原始 JSON 长度），要原始大小看 **`rawTotalChars`**；`nextOffset` 用法不变。
+- **警告收窄**（dev-1431）：只有真 warning（正文为空 / `EMPTY_RESULT` / `RESULT_TRUNCATED` / 含 JADX ERROR 或 Method dump skipped / 非 `DECOMPILE_INCOMPLETE` 的 `warningCode`）才 `SUCCEEDED_WITH_WARNINGS`；**JADX INFO 与全局计数只进 `notes`（`notesCount`，`noteCount` 是旧别名）**、不改变 `SUCCEEDED`；判据原文在 `warningCriteria`、来源在 `warningSource`。
+
+**族前缀别名（dev-1429）**：`dex_*` → `apk_dex_*`、`so_*` → `apk_native_*` 共 **16 个**，**只派发不广播**（不进 `tools/list`，advertised 仍 **225**）；新旧名等价、旧名长期保留。查参数：`tool_schema{tool:"dex_xref"}` → `resolved=apk_dex_xref` + `familyAliases[]`。
 
 ## 附录 A · 坑表（症状 → 根因 → 正确做法）
 

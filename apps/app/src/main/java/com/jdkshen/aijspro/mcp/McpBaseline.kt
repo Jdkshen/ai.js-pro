@@ -62,6 +62,29 @@ internal object McpBaseline {
     }
 
     /**
+     * task-39：把**同一份** [view] 注入失败结果的**文本镜像**（`content[]..text`）。
+     *
+     * - text 是 JSON 对象（信封或桥接载荷）→ 就地加 `baseline` 后重新序列化（键顺序保持，追加在尾部）；
+     * - text 是纯文本（少数 catch 路径）→ 包成标准失败信封，原文留在 error.message（P1-A 口径），同样带上 baseline。
+     * 由 `McpTools.withFailureBaseline`（rpcResult 单点）调用，不在各调用点补。
+     */
+    fun failureText(text: String, view: JsonObject, errorCode: String?, message: String?): String {
+        val parsed = runCatching { com.google.gson.JsonParser().parse(text) }.getOrNull()
+        if (parsed != null && parsed.isJsonObject) {
+            val obj = parsed.asJsonObject
+            if (!obj.has("baseline")) obj.add("baseline", view.deepCopy())
+            return obj.toString()
+        }
+        return ToolkitIo.json(
+            "ok" to false, "data" to null,
+            "error" to ToolkitIo.json("code" to (errorCode ?: "TOOL_FAILED"),
+                "message" to (message ?: text), "recoverable" to true, "retrySameArguments" to false),
+            "nextActions" to emptyList<Any>(),
+            "baseline" to view.deepCopy(),
+        ).toString()
+    }
+
+    /**
      * task-38（①）：**失败专用裁剪版** —— 只保 `version` + `recovery`（有缺失时额外带 `missing`），
      * 不带宽表统计（workspaces/jobs/toolchain 明细），并回显 trimmed/trimNote 说明这是失败专用裁剪。
      * 失败信封必须始终能自救，所以它不受「首个 tools/call」latch 影响。

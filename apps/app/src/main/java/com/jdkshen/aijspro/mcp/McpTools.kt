@@ -269,7 +269,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun listTools(params: JsonObject? = null) = JsonObject().apply {
         add("tools", JsonArray().apply {
             add(tool("get_status", "读取 MCP、脚本目录、任务和工作区状态"))
-            add(tool("get_baseline", "运行时就绪基线（自检，只读）：root/currentProject、workspaces{script,apk{used,quota,temporary,ttlHint}}、toolchain{ready,missing,present}、jobs{retention,advice}，有缺失时给一条最短 recovery。数字与 get_build_tools / apk_workspace_inventory / toolkit_status 同源（不另算一份），15s 内复用同一份缓存；内容不变时 version 不变（可去重）；总量 ≤512 字节，超了按「先丢统计、保 version/missing/recovery」裁剪并标注 trimmed。同一条 baseline 也会自动出现在首个 tools/call（或 get_status）与所有失败信封里；tools/list 与普通工具返回不带（省上下文）。refresh:true 强制重建。", objSchema("refresh")))
+            add(tool("get_baseline", "运行时就绪基线（自检，只读）：root/currentProject、workspaces{script,apk{used,quota,temporary,ttlHint}}、toolchain{ready,missing,present}、jobs{retention,advice}，有缺失时给一条最短 recovery。数字与 get_build_tools / apk_workspace_inventory / toolkit_status 同源（不另算一份），15s 内复用同一份缓存；内容不变时 version 不变（可去重）；总量 ≤512 字节，超了按「先丢统计、保 version/missing/recovery」裁剪并标注 trimmed。同一条 baseline 也会自动出现在首个 tools/call（或 get_status）与所有失败信封里；tools/list 与普通工具返回不带（省上下文）。refresh:true 强制重建。成功路径的 baseline 只在 structuredContent（与结果顶层/信封）里，content[0].text 文本镜像**不含**（省一次大载荷重序列化）；**失败路径例外**：顶层、structuredContent、content[0].text 三处都带同一份失败裁剪版。", objSchema("refresh")))
             add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）；示例：{\"path\":\"\",\"recursive\":true}", objSchema("path", "offset", "limit", "recursive")))
             add(tool("read_script", "分块读取脚本目录中的文本文件；示例：{\"path\":\"main.js\",\"maxBytes\":65536}", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
             add(tool("search_scripts", "递归搜索脚本文件名与内容；截断时返回 scanCursor（可传回本工具继续扫描）和分页 cursor（用于继续分页取出已返回的 items）", objSchema("query", "path", "limit", "scanCursor", "resumeCursor", "cursor", required = arrayOf("query")).apply {
@@ -1577,6 +1577,15 @@ internal class McpTools(private val context: Context, private val event: (String
         val view = result.get("baseline")?.takeIf { it.isJsonObject }?.asJsonObject ?: failureBaselineView()
         result.add("baseline", view)
         result.getAsJsonObject("structuredContent")?.let { if (!it.has("baseline")) it.add("baseline", view.deepCopy()) }
+        // task-39：文本镜像（content[].text）也要带**同一份** baseline —— 只在序列化单点（这里）重写，
+        // 因为有的客户端只读 content[0].text，拿不到 recovery 就失去自救信息。
+        val errorCode = result.get("errorCode")?.takeIf { it.isJsonPrimitive }?.asString
+        result.getAsJsonArray("content")?.forEach { item ->
+            val obj = item.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
+            val text = obj.get("text")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: return@forEach
+            if (text.contains("\"baseline\"")) return@forEach
+            obj.addProperty("text", McpBaseline.failureText(text, view, errorCode, null))
+        }
         return result
     }
 

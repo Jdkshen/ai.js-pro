@@ -1,7 +1,7 @@
 <!-- section:id=overview -->
 # AI.js Pro 逆向 MCP 自发现指南
 
-> 适用基线：**dev-1429**。本机公开 MCP 入口 **224 个**（**215 个规范名 + 9 个 Pro 兼容别名**：status 4 · script 11 · workspace 10 · engine 5 · device **27** · terminal 11 · overlay 2 · asset 5 · toolkit **96** · reverse **44**），另有 **16 个只派发族别名**（`dex_*`/`so_*`，**不出现在 tools/list**，见「族前缀别名」）。以上为 K40 dev-1429 实测：`tools/list` 返回 224 项、`serverInfo.version=dev-1429`，`get_status` 的 `toolCount=224`、`canonicalToolCount=215`，`toolCategories` 与上面逐项一致。旧文写的计数已过期，一律以本节与 `tools/list` 为准。
+> 适用基线：**dev-1433**。本机公开 MCP 入口 **225 个**（**216 个规范名 + 9 个 Pro 兼容别名**：status **5** · script 11 · workspace 10 · engine 5 · device **27** · terminal 11 · overlay 2 · asset 5 · toolkit **96** · reverse **44**），另有 **16 个只派发族别名**（`dex_*`/`so_*`，**不出现在 tools/list**，见「族前缀别名」）。以上为 K40 dev-1433 实测：`tools/list` 返回 225 项、`serverInfo.version=dev-1433`，`get_status` 的 `toolCount=225`、`canonicalToolCount=216`，`toolCategories` 与上面逐项一致（`status` 组由 4→**5**，新增 `get_baseline`）。旧文写的计数已过期，一律以本节与 `tools/list` 为准。
 > 本指南部分细节段落写于 dev-1330 时代，若与 `tools/list` 或 [`AIjs-MCP-Guide.md`](AIjs-MCP-Guide.md) 的「dev-1409~1412 行为变化」「dev-1368 行为变化」冲突，以后者为准。其中**逆向类工具现为 44 个**（本指南写于 dev-1330，下面这句列的是当时那 19 个已注册工具，名单已扩充）：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
 >
 > 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida使用免Root Gadget集成流程、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。
@@ -23,7 +23,7 @@ reverse_plan(goal=<goal>)       # 取机读 steps；组件和工具状态明确
 
 ## 本版真实边界（`guideVersion` 字段仍为 `dev1330-1`，工具数已按 dev-1412 实测复核）
 
-- **44 个逆向工具已注册**（dev-1429 实测；本节旧文写的「19 个」是 dev-1330 时代的数字），但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
+- **44 个逆向工具已注册**（dev-1433 实测；本节旧文写的「19 个」是 dev-1330 时代的数字），但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
 - 可选组件共 9 个：`jadx`、`apk-resources`、`apktool`、`radare2`、`r2ghidra`、`yara`、`unicorn`、`frida`、`frida-gadget`。`apk_component_install/remove` 的 `component` 枚举就是这 9 个。
 - **Apktool 3.0.3** 已在本机真机通过 decode → edit → rebuild：使用私有 `app_process` + AAPT2 wrapper，不把 apktool 类加载进主进程。但**任意 APK 不保证**可解包/回编译，失败必须报原始 stderr。
 - **radare2** 的 `native_*` 工具直接读手机路径，不读 APK 快照 locator；要从快照分析 so，先用 `apk_copy_entry(direction=workspace_to_local)` 导出。
@@ -270,7 +270,7 @@ radare2 系列 `native_*` 工具直接读手机路径，不读 APK 快照 locato
 {"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"apk_job_result","arguments":{"jobId":"${JOB_ID}","offset":0,"maxChars":16000}}}
 ```
 
-返回 `content`、`nextOffset`、`hasMore`、`totalChars`。下一页把 `offset` 设为上次 `nextOffset`，不要按行号或字节数自己算。结果文件上限 24 MiB；`apk_job_result.maxChars` 默认/上限 **1 MiB**（dev-1380；旧版 200000）。
+返回 `content`、`nextOffset`、`hasMore`、`totalChars`。**dev-1431 起：文本型任务默认 `format:"text"`，此时这些字段描述的是正文，原始大小看 `rawTotalChars`**（旧 `totalChars` 曾是原始 JSON 长度）。下一页把 `offset` 设为上次 `nextOffset`，不要按行号或字节数自己算。结果文件上限 24 MiB；`apk_job_result.maxChars` 默认/上限 **1 MiB**（dev-1380；旧版 200000）。
 
 **终止条件只有一个：`hasMore=false`。** 不要写成 `while (hasMore || nextOffset)`，也不要在 `hasMore=false` 后继续读；`nextOffset` 只是下一页位置，不是“还有内容”的独立信号。
 
@@ -792,7 +792,7 @@ Frida 17 起，一批 Module 静态方法被移除，不是函数本身消失。
 - `apk_session_diff` 只比较同一会话相对其原快照的变更，不是两个 APK 的 diff。
 
 <!-- section:id=newtools -->
-## 新工具与族前缀别名（dev-1422~1429）
+## 新工具与族前缀别名（dev-1422~1433）
 
 这 5 个工具 dev-1422 起陆续加入；参数一律以 `tool_schema{tool:"…"}` 为准。
 
@@ -834,9 +834,18 @@ JCA：`op=hash|hmac|aes_gcm|rsa_sign|rsa_verify`（仅 `op` 必填）；密钥**
 - 边界：像素级、不做语义/模板匹配；**`ratio` ≠ 界面变化程度**；尺寸不一致**直接 `SIZE_MISMATCH`**（不裁剪不缩放，等比时给 `suggestedArguments`/`copyableCommand`）。
 - 误用：第一次 `NO_BASELINE` 以为坏了（已记帧，**同参数再调一次**）。
 
+### `get_baseline`（dev-1431，运行时就绪基线）
+
+一次拿就绪状态：`version`/`root`/`currentProject`/`outputRule`/`workspaces{script,apk{used,quota,temporary,ttlHint}}`/`toolchain{sampled,ready,missing,present}`/`jobs{retention,advice}`/`recovery`。`refresh:true` 强刷；**≤512 字节**、内容不变 `version` 不变（可去重）；**同源**（`toolchain` 与 `get_build_tools`、`workspaces.apk` 与 `apk_workspace_inventory`、`jobs.retention` 与 `toolkit_status` 逐字相等）。**挂载位置**：`get_status` 与**首个 `tools/call`** 带完整版；**所有失败信封**带裁剪版（`version`+`recovery`(+`missing`)+`trimmed:"failure"`/`trimNote`，**无** workspaces/jobs/toolchain 明细）；`tools/list` 与普通成功调用**不带**。未采样时 `toolchain{sampled:false,note}`（不是空 `missing:[]`）。**已知小瑕疵**：失败信封的 `content[0].text` 镜像暂不含 baseline，读它请以 `structuredContent` 为准。
+
+### `apk_job_result` 默认 `format:"text"` 与警告收窄（dev-1431）
+
+- 文本型任务默认 `format:"text"`（`content` 即正文；旧形状显式 `format:"json"`），新增 `formatDefaulted`/`formatSource`/`pagingSource`。**`totalChars` 现在是正文长度**（旧=原始 JSON 长度），要原始大小看 **`rawTotalChars`**；`nextOffset` 用法不变。
+- `SUCCEEDED_WITH_WARNINGS` 只在真 warning 时出现（判据原文 `warningCriteria`、来源 `warningSource`）；**JADX INFO 与 `errorsCount`/`warningsCount` 等全局计数只进 `notes`（`notesCount`，`noteCount` 为旧别名）**，**不改变 `SUCCEEDED`**。
+
 ### 族前缀别名：`dex_*` / `so_*`（dev-1429）
 
-`dex_read_class_outline`/`dex_xref`/`dex_search_members`/`dex_call_graph`/`dex_hierarchy`/`dex_interface_table`/`dex_list_classes`/`dex_list_methods` → `apk_dex_*`；`so_inspect`/`so_list_items`/`so_map_address`/`so_xref`/`so_disassemble`/`so_analyze_control_flow`/`so_patch_instructions`/`so_patch_string` → `apk_native_*`。共 **16 个**；**新旧等价、旧名长期保留**；**不出现在 tools/list**（advertised 仍 224）；`tool_schema{tool:"dex_xref"}` 会回 `resolved=apk_dex_xref` + `familyAliases[]`；`tier=core`/`groups` 不含别名。
+`dex_read_class_outline`/`dex_xref`/`dex_search_members`/`dex_call_graph`/`dex_hierarchy`/`dex_interface_table`/`dex_list_classes`/`dex_list_methods` → `apk_dex_*`；`so_inspect`/`so_list_items`/`so_map_address`/`so_xref`/`so_disassemble`/`so_analyze_control_flow`/`so_patch_instructions`/`so_patch_string` → `apk_native_*`。共 **16 个**；**新旧等价、旧名长期保留**；**不出现在 tools/list**（advertised 仍 **225**）；`tool_schema{tool:"dex_xref"}` 会回 `resolved=apk_dex_xref` + `familyAliases[]`；`tier=core`/`groups` 不含别名。
 
 <!-- section:id=errors -->
 ## 错误、nextActions 与预算
