@@ -154,6 +154,68 @@ public class ProjectConfig {
     @SerializedName("signatureFingerprint")
     private String mSignatureFingerprint;
 
+    /**
+     * **SJBC 容器**配置（task-81）。SJBC 的 {@code .sjbc} 自带 AES-256-GCM + HKDF 双层加密，
+     * 所以用了 SJBC 的工程**推荐把 encryptLevel 选 0（不加密）**；其余等级仍是「**可选再套一层**」。
+     *
+     * <p>只描述「工程要不要带 SJBC 容器、容器目录在哪、期望的签名证书指纹是什么」；
+     * **目录收集、manifest 写入、certSha 的实际计算由打包侧（ApkBuilder/PocPackaging）负责**。</p>
+     *
+     * <p>未配置时该字段为 {@code null} → Gson **不输出**该键 ⇒ 未用 SJBC 的工程 toJson 逐字不变。</p>
+     */
+    @SerializedName("sjbc")
+    private SjbcConfig mSjbc;
+
+    public SjbcConfig getSjbc() {
+        return mSjbc;
+    }
+
+    public void setSjbc(SjbcConfig sjbc) {
+        mSjbc = sjbc;
+    }
+
+    /** 工程是否配置了 SJBC 容器（读兼容端点：只看字段在不在，不猜语义）。 */
+    public boolean usesSjbc() {
+        return mSjbc != null;
+    }
+
+    /** SJBC 容器配置（键名稳定：sjbc.assetsDir / sjbc.certSha）。 */
+    public static final class SjbcConfig {
+
+        /** 容器目录默认值（相对工程根）。 */
+        public static final String DEFAULT_ASSETS_DIR = "assets/sjbc";
+
+        @SerializedName("assetsDir")
+        private String mAssetsDir = DEFAULT_ASSETS_DIR;
+
+        /** 期望的签名证书 SHA-256（十六进制；规范化后无冒号、全小写）。**期望值**，实际值由打包侧算。 */
+        @SerializedName("certSha")
+        private String mCertSha;
+
+        public String getAssetsDir() {
+            return mAssetsDir;
+        }
+
+        public void setAssetsDir(String assetsDir) {
+            mAssetsDir = assetsDir;
+        }
+
+        public String getCertSha() {
+            return mCertSha;
+        }
+
+        public void setCertSha(String certSha) {
+            mCertSha = certSha;
+        }
+    }
+
+    /** 规范化证书指纹（去冒号/空白、转小写）；空值原样返回 null。 */
+    public static String normalizeCertSha(String value) {
+        if (value == null) return null;
+        String cleaned = value.replace(":", "").replace(" ", "").trim().toLowerCase(java.util.Locale.ROOT);
+        return cleaned.isEmpty() ? null : cleaned;
+    }
+
 
     /** Pro 的 scripts 钩子（值为字符串的条目）；没有则为空表。**只读**，不参与写。 */
     public Map<String, String> getScriptHooks() {
@@ -200,6 +262,8 @@ public class ProjectConfig {
             // but was STRING/NUMBER）——所以必须先把这些键从**副本**里摘掉，再委托给普通 Gson 解析其余字段。
             JsonObject plain = json.deepCopy();
             JsonElement scripts = plain.remove("scripts");
+            // sjbc 同样先摘出来：Gson 对「类型不对的嵌套对象」会整份抛，这里必须手工容错。
+            JsonElement sjbc = plain.remove("sjbc");
             JsonElement topDisplay = plain.has("displaySplash") ? plain.remove("displaySplash") : null;
             JsonObject launch = plain.has("launchConfig") && plain.get("launchConfig").isJsonObject()
                     ? plain.getAsJsonObject("launchConfig") : null;
@@ -251,7 +315,32 @@ public class ProjectConfig {
                     config.mWarnings.add("features 不是对象（我们的 useFeatures 是数组），已忽略");
                 }
             }
-            // 4) 有意不读的 Pro 键：只列清单
+            // 4) sjbc（SJBC 容器）：容错解析 + 规范化；缺目录用默认值
+            if (sjbc != null) {
+                if (sjbc.isJsonObject()) {
+                    try {
+                        config.mSjbc = GSON.fromJson(sjbc, SjbcConfig.class);
+                    } catch (RuntimeException error) {
+                        config.mWarnings.add("sjbc 配置解析失败（" + error.getClass().getSimpleName() + "），已忽略");
+                        config.mSjbc = null;
+                    }
+                    if (config.mSjbc != null) {
+                        String dir = config.mSjbc.getAssetsDir();
+                        if (dir == null || dir.trim().isEmpty()) {
+                            config.mSjbc.setAssetsDir(SjbcConfig.DEFAULT_ASSETS_DIR);
+                            config.mWarnings.add("sjbc.assetsDir 为空，已回退默认 " + SjbcConfig.DEFAULT_ASSETS_DIR);
+                        }
+                        config.mSjbc.setCertSha(normalizeCertSha(config.mSjbc.getCertSha()));
+                        if (config.mSjbc.getCertSha() == null && sjbc.getAsJsonObject().has("certSha")) {
+                            config.mWarnings.add("sjbc.certSha 为空，已忽略（不比较证书指纹）");
+                        }
+                    }
+                } else {
+                    config.mWarnings.add("sjbc 不是对象，已忽略");
+                    config.mSjbc = null;
+                }
+            }
+            // 5) 有意不读的 Pro 键：只列清单
             for (String key : PRO_KEYS_NOT_READ) {
                 if (json.has(key)) {
                     config.mWarnings.add("未读取的 Pro 键：" + key + "（真值在打包策略侧，避免第二份真值）");

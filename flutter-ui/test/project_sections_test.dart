@@ -68,6 +68,12 @@ void main() {
     await tester.ensureVisible(find.byKey(const ValueKey('project-main')));
     await tester.enterText(find.byKey(const ValueKey('project-main')), '');
     await tester.ensureVisible(find.byKey(const ValueKey('project-section-脚本和加密')));
+    await tester.pumpAndSettle();
+    // task-81：加密等级下方新增了 SJBC 说明行，页面变高 ⇒ ensureVisible 后 header 可能贴在
+    // AppBar 下沿/视口边缘而收不到点击（tap 报 "widget is actually off-screen or obscured"）。
+    // 这里先把内容往下拖一点让 header 落在视口中部再点——**产品行为未改**，只让这次交互可靠。
+    await tester.drag(find.byType(ListView).first, const Offset(0, 120));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('project-section-脚本和加密')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('project-main')), findsNothing);

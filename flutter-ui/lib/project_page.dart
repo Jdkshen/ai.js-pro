@@ -1320,11 +1320,13 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
               items: [0, 1, 2, 3]
                   .map((level) => DropdownMenuItem<int>(
                       value: level,
+                      // task-81：SJBC 容器（.sjbc 自带 AES-256-GCM + HKDF）下推荐「不加密」；
+                      // 其余等级保留为「可选再套一层」；Snapshot(3) 被引擎 clamp 到 2（见说明行）。
                       child: Text(const [
-                        '不加密',
-                        '离线加密',
-                        '离线加密 · Dex',
-                        '离线加密 · Snapshot'
+                        '不加密（推荐：SJBC 容器自带加密）',
+                        '离线加密（可选再套一层）',
+                        '离线加密 · Dex（可选再套一层）',
+                        '离线加密 · Snapshot（等同 Dex：引擎最高等级为 2）'
                       ][level])))
                   .toList(),
               validator: (level) => level == null ? '请选择 0 到 3 的加密等级' : null,
@@ -1342,7 +1344,10 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                     style: TextStyle(
                         fontSize: 12,
                         color: Theme.of(context).colorScheme.error))),
-          const Text('由本机打包引擎处理所选等级，结果以实际日志和生成文件为准。',
+          const Text(
+              '由本机打包引擎处理所选等级，结果以实际日志和生成文件为准。'
+              '用 SJBC 容器时建议选「不加密」：.sjbc 自带 AES-256-GCM + HKDF 双层加密，再套一层不会更安全，只会多一层开销；'
+              '其余等级仍可选，表示在容器之外再套一层。',
               style: TextStyle(fontSize: 12)),
           const SizedBox(height: 14),
           textField('icon', '应用图标',

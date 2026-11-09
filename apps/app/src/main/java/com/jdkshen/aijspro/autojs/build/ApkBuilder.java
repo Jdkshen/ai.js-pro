@@ -514,6 +514,7 @@ public class ApkBuilder {
         copyProjectToWorkspace();
         copySplashIcon();
         removeDisabledFeatures();
+        stageSjbcAssets();
         enforcePackagingPolicy();
         // 等级 × 引擎的实际载荷形态记一条：等级 2 对 Node 不是字节码，日志里必须能看出来。
         Log.i("C-PKG", "script protection level=" + mEncryptLevel
@@ -592,6 +593,84 @@ public class ApkBuilder {
         } catch (Throwable ignored) {
             // 只用于可观测，失败不影响打包
         }
+    }
+
+    private String mSjbcCertSha;
+
+    /** task-80 ②：由调用方（知道真正用的是哪把签名证书）传入的证书 SHA-256（冒号/大小写随意，会归一）。 */
+    public ApkBuilder setSjbcCertSha(String certSha) {
+        mSjbcCertSha = certSha;
+        return this;
+    }
+
+    /**
+     * task-80 ①：把工程的 .sjbc + manifest.json 原样收进产物 assets/sjbc/，并把 manifest 的 certSha
+     * 对齐本次签名证书（换证书 → warning「必须重编脚本」）。**不含 .sjbc 时什么都不做**（行为不变）。
+     *
+     * <p>注意：这里**不**把 .sjbc 当脚本加密产物再套壳 —— 只做「原样拷贝 + manifest 字段对齐」。
+     */
+    private void stageSjbcAssets() throws IOException {
+        if (mAppConfig == null || mAppConfig.sourcePath == null) {
+            return;
+        }
+        File projectDir = new File(mAppConfig.sourcePath);
+        if (!projectDir.isDirectory()) {
+            return;
+        }
+        File sourceDir = SjbcPackaging.findSourceDir(projectDir);
+        SjbcPackaging.Stage stage = SjbcPackaging.collect(sourceDir);
+        if (stage.getEntries().isEmpty()) {
+            return;
+        }
+        String certSha = SjbcPackaging.normalizeCertSha(mSjbcCertSha);
+        if (certSha == null && mAppConfig != null
+                && mAppConfig.getSigner() instanceof com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner) {
+            // 真正会用哪把证书签名，就从那个 Signer 取（单一事实来源，避免与自定义 keystore 不一致）。
+            certSha = SjbcPackaging.certSha256(((com.jdkshen.aijspro.autojs.build.sign.KeyStoreApkSigner)
+                    mAppConfig.getSigner()).getSigningKey().getCertificate());
+        }
+        if (certSha == null) {
+            // 没显式给就用本机自动签名身份（与 AutoSigningIdentity.signer 实际使用的一致）；
+            // 若调用方用的是自定义 keystore，必须显式 setSjbcCertSha。
+            certSha = SjbcPackaging.normalizeCertSha(
+                    com.jdkshen.aijspro.autojs.build.sign.AutoSigningIdentity.INSTANCE.certificateFingerprint());
+        }
+        File targetDir = new File(mWorkspacePath, SjbcPackaging.TARGET_DIR);
+        if (!targetDir.isDirectory() && !targetDir.mkdirs()) {
+            throw new IOException("无法创建 SJBC 目标目录：" + targetDir);
+        }
+        List<String> sjbcNames = new ArrayList<>();
+        String manifestText = null;
+        for (SjbcPackaging.Entry entry : stage.getEntries()) {
+            File out = new File(targetDir, entry.getRelativePath());
+            File parent = out.getParentFile();
+            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
+                throw new IOException("无法创建 SJBC 子目录：" + parent);
+            }
+            byte[] bytes = PFiles.readBytes(entry.getSource().getPath());
+            try (FileOutputStream output = new FileOutputStream(out)) {
+                output.write(bytes);
+            }
+            if (entry.getRelativePath().endsWith(".sjbc")) {
+                sjbcNames.add(entry.getRelativePath());
+            } else if (entry.getRelativePath().equals("manifest.json")) {
+                manifestText = new String(bytes, "UTF-8");
+            }
+        }
+        try {
+            SjbcPackaging.PatchResult patch = SjbcPackaging.patchManifest(
+                    manifestText, certSha, mAppConfig.getPackageName(), sjbcNames);
+            try (FileOutputStream output = new FileOutputStream(new File(targetDir, "manifest.json"))) {
+                output.write(patch.getJson().getBytes("UTF-8"));
+            }
+            if (patch.getWarning() != null) {
+                Log.w("C-PKG", patch.getWarning());
+                mPackagingWarnings.add(patch.getWarning());
+            }
+        } catch (Throwable error) {
+            Log.w("C-PKG", "sjbc: manifest 对齐失败（保留原文件）：" + error.getMessage());
+        }
+        Log.i("C-PKG", SjbcPackaging.describe(stage, certSha, mAppConfig.getPackageName()));
     }
 
     private void enforcePackagingPolicy() throws IOException {
