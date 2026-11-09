@@ -67,6 +67,8 @@ class App : MultiDexApplication() {
         super.onCreate()
         GlobalAppContext.set(this)
         // APK parsers run on demand in their own process, without engines, UI or schedulers.
+        // task-43：手势派发计数器目录（dev_gesture_probe 读它把「派发次数」与框架回调表条目数对起来）。
+        com.stardust.automator.GestureDispatchProbe.init(java.io.File(filesDir, "gesture-probe"))
         if (com.stardust.autojs.execution.ScriptProcessIdentity.suffix(this) == ":tools") return
         com.stardust.autojs.core.floaty.RuntimeFloatyService.installRouting()
         if (com.stardust.autojs.execution.ScriptProcessIdentity.suffix(this) != ":script") {

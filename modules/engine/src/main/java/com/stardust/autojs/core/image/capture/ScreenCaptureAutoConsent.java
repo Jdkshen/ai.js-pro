@@ -72,6 +72,7 @@ public final class ScreenCaptureAutoConsent {
                 new android.accessibilityservice.GestureDescription.Builder()
                         .addStroke(new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0L, 40L))
                         .build();
+        com.stardust.automator.GestureDispatchProbe.INSTANCE.record("ScreenCaptureAutoConsent", false);
         boolean ok = service.dispatchGesture(gesture, null, null);
         Log.i(TAG, "blind tap (" + x + "," + y + ") ok=" + ok);
     }

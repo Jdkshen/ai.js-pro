@@ -41,7 +41,7 @@ class McpAutomationProvider : ContentProvider() {
 
 internal object McpAutomationTransport {
     const val MAX_BYTES = 48 * 1024 * 1024
-    private val names = setOf("get_ui_layout", "capture_screen", "dev_screen_diff", "ui_find", "ui_click", "ui_long_click", "ui_node_action",
+    private val names = setOf("get_ui_layout", "capture_screen", "dev_screen_diff", "dev_gesture_probe", "ui_find", "ui_click", "ui_long_click", "ui_node_action",
         "ui_input", "ui_swipe", "ui_global", "ui_wait", "ui_scroll")
     fun supports(name: String) = name in names
     fun call(context: Context, name: String, args: JsonObject): JsonObject {
@@ -72,6 +72,17 @@ internal object McpAutomationTransport {
                 int("maxDims", -1).takeIf { it >= 0 },
                 str("captureMode", "").ifEmpty { null },
                 bool("organize", true),
+            )
+        }
+        if (name == "dev_gesture_probe") {
+            // task-43：手势回调表泄漏探针；report 只读，stress 会真的派发手势。
+            return McpDeviceTools.gestureProbe(
+                str("action", "report"),
+                int("count", 100),
+                int("timeoutSeconds", 30),
+                bool("withCallback", true),
+                int("intervalMs", 0),
+                bool("reset", false),
             )
         }
         if (name == "capture_screen") {

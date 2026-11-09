@@ -143,6 +143,9 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
     private static final int MAX_JSON_CHARS = 200 * 1024;
     /** GestureDescription 最多支持的 stroke 数。 */
     private static final int MAX_GESTURE_STROKES = 10;
+
+    /** 诊断计数器站点名（dev_gesture_probe 的 bySite 用它归类；见 GestureDispatchProbe）。 */
+    private static final String GESTURE_PROBE_SITE = "AutomationHostBackend";
     /**
      * getLatestNodeDump 的结果缓存时长（spec §5 建议 150-300ms）。
      * :script 侧一次选择器操作可能连续取多份 dump，短 TTL 既省主线程遍历，又不会明显过期。
@@ -1165,6 +1168,7 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             // 正常不会走到（AIDL 调用都在 binder 线程）：真在主线程时不能等待主线程回调，直接派发。
             try {
+                com.stardust.automator.GestureDispatchProbe.INSTANCE.record(GESTURE_PROBE_SITE, false);
                 return service.dispatchGesture(description, null, null);
             } catch (Throwable error) {
                 Log.w(TAG, "派发手势失败（主线程直接派发）", error);
@@ -1173,6 +1177,7 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
         }
         boolean dispatched;
         try {
+            com.stardust.automator.GestureDispatchProbe.INSTANCE.record(GESTURE_PROBE_SITE, true);
             dispatched = service.dispatchGesture(description,
                     new AccessibilityService.GestureResultCallback() {
                         @Override

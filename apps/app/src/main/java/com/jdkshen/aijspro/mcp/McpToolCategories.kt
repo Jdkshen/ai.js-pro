@@ -44,7 +44,7 @@ internal object McpToolCategories {
             "list_engines", "list_engine_api", "probe_engine_api", "engine_api_diff", "call_engine_api",
         ).forEach { put(it, "engine") }
         listOf(
-            "get_ui_layout", "capture_screen", "dev_screen_diff", "coordinate_convert",
+            "get_ui_layout", "capture_screen", "dev_screen_diff", "dev_gesture_probe", "coordinate_convert",
             "ui_find", "ui_click", "ui_long_click", "ui_node_action", "ui_input", "ui_swipe", "ui_global", "ui_wait", "ui_scroll",
             "app_list", "app_info", "app_launch", "app_open_settings", "app_open_url",
             "apk_install", "apk_uninstall",

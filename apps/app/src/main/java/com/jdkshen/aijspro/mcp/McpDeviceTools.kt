@@ -266,6 +266,101 @@ internal object McpDeviceTools {
      * 基线优先用显式路径（脚本目录内的 PNG/JPEG），否则用进程内上一帧；两者都没有时**明确失败**（不拿黑图当基线）。
      * 比较是纯函数（ToolkitScreenDiff.compare），尺寸不一致直接拒绝（SIZE_MISMATCH），不裁剪/不缩放。
      */
+    /**
+     * task-43（①量泄漏）：手势回调表泄漏探针 —— report 只读；stress 会**真的派发** count 次 1px/1ms 手势。
+     *
+     * 只读部分用 best-effort 反射读框架隐藏字段（读不到给 supported=false + reason，绝不伪造数字、绝不抛异常）；
+     * 派发次数来自跨进程计数器 GestureDispatchProbe（三处调用点 + 本工具的压测都会计入）。
+     */
+    fun gestureProbe(action: String, count: Int, timeoutSeconds: Int, withCallback: Boolean,
+                     intervalMs: Int, reset: Boolean): JsonObject {
+        val normalized = action.trim().lowercase().ifEmpty { "report" }
+        if (normalized !in setOf("report", "stress")) {
+            return ToolkitIo.json("ok" to false, "error" to ToolkitIo.json(
+                "code" to "INVALID_ARGUMENT",
+                "message" to "action 只能是 report 或 stress，收到：" + action,
+                "argument" to "action"))
+        }
+        val service = AccessibilityService.instance
+        val resetFiles = if (reset) com.stardust.automator.GestureDispatchProbe.reset() else 0
+        if (normalized == "report") {
+            val payload = ToolkitGestureProbe.report(service)
+            payload.addProperty("ok", true)
+            payload.addProperty("action", "report")
+            payload.addProperty("serviceAvailable", service != null)
+            payload.addProperty("serviceInstanceClass", service?.javaClass?.name)
+            payload.addProperty("resetFiles", resetFiles)
+            payload.addProperty("counterDir", com.stardust.automator.GestureDispatchProbe.directoryPath())
+            payload.add("nextActions", JsonArray().apply {
+                add("要看增长：先 report 记下 table.size，再 stress{count:2000}，最后再 report 对比（表条目数是否随之线性增长）。")
+                add("stress 会真的派发手势：不要在业务脚本关键路径上跑，量级建议 ≤2000 次。")
+            })
+            return payload
+        }
+        if (service == null) {
+            return ToolkitIo.json("ok" to false, "error" to ToolkitIo.json(
+                "code" to "SERVICE_UNAVAILABLE",
+                "message" to "stress 需要无障碍服务实例（当前进程没有 AccessibilityService.instance）：先开启 AI.js Pro 无障碍服务",
+                "argument" to "action"))
+        }
+        val requested = count.coerceIn(1, 10000)
+        val timeout = timeoutSeconds.coerceIn(1, 600)
+        val outcome = ToolkitGestureProbe.stress(
+            count = requested,
+            timeoutSeconds = timeout,
+            withCallback = withCallback,
+            intervalMs = intervalMs.coerceIn(0, 2000),
+            probe = { ToolkitGestureProbe.snapshot(service) },
+            dispatch = { withCb -> dispatchTinyGesture(service, withCb) },
+        )
+        val counters = com.stardust.automator.GestureDispatchProbe.snapshot()
+        val notes = JsonArray()
+        notes.add("stress 是诊断动作：真的派发了手势（1px、1ms、不改变界面语义），不是只读。")
+        notes.add("这里是「派发次数 vs 框架回调表条目数」并排显示，不声称因果；关闭无障碍服务、系统取消手势等都会影响读数。")
+        notes.add("stress 自己也会被计数器记入 bySite=dev_gesture_probe，便于把压测与业务派发分开。")
+        if (!outcome.before.supported || !outcome.after.supported) {
+            notes.add("表读数不可用（supported=false）：本次只给出派发次数，表条目请用其它手段（或换 Android 版本）核对。")
+        }
+        return ToolkitIo.json(
+            "ok" to true,
+            "action" to "stress",
+            "requested" to outcome.requested,
+            "dispatched" to outcome.dispatched,
+            "failed" to outcome.failed,
+            "withCallback" to outcome.withCallback,
+            "intervalMs" to intervalMs.coerceIn(0, 2000),
+            "timeoutSeconds" to timeout,
+            "stoppedBy" to outcome.stoppedBy,
+            "elapsedMs" to outcome.elapsedMs,
+            "before" to outcome.before.toJson(),
+            "after" to outcome.after.toJson(),
+            "tableDelta" to (if (outcome.before.size != null && outcome.after.size != null) outcome.after.size - outcome.before.size else null),
+            "counters" to ToolkitIo.json(
+                "initialized" to counters.initialized,
+                "dispatched" to counters.dispatched,
+                "withCallback" to counters.withCallback,
+                "withoutCallback" to counters.withoutCallback,
+                "files" to counters.files,
+            ),
+            "notes" to notes,
+        )
+    }
+
+    /** 1px、1ms 的极小手势；withCallback=true 走「会进框架回调表」的那条路径（泄漏相关）。 */
+    private fun dispatchTinyGesture(service: AccessibilityService, withCallback: Boolean): Boolean {
+        val path = android.graphics.Path().apply { moveTo(1f, 1f) }
+        val description = android.accessibilityservice.GestureDescription.Builder()
+            .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0L, 1L))
+            .build()
+        com.stardust.automator.GestureDispatchProbe.record("dev_gesture_probe", withCallback)
+        return if (withCallback) {
+            service.dispatchGesture(description,
+                object : android.accessibilityservice.AccessibilityService.GestureResultCallback() {}, null)
+        } else {
+            service.dispatchGesture(description, null, null)
+        }
+    }
+
     fun screenDiff(
         baseline: String?,
         region: com.google.gson.JsonElement?,

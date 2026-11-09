@@ -29,6 +29,9 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
          * 抓：`adb logcat -s DshGesture:V`
          */
         const val GESTURE_TAG = "DshGesture"
+
+        /** 诊断计数器里的站点名（dev_gesture_probe 的 bySite 用它归类）。 */
+        const val GESTURE_PROBE_SITE = "GlobalActionAutomator"
     }
 
     private val service: AccessibilityService
@@ -114,6 +117,8 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
     private fun gesturesWithHandler(handler: Handler, description: GestureDescription): Boolean {
         val result = VolatileDispose<Boolean>()
         Log.d(GESTURE_TAG, "submit strokes=" + description.strokeCount)
+        // 诊断计数（带回调 = 会进框架回调表的那条路径）；未 init 时是 no-op，绝不影响手势。
+        GestureDispatchProbe.record(GESTURE_PROBE_SITE, true)
         service.dispatchGesture(description, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription) {
                 Log.d(GESTURE_TAG, "completed strokes=" + gestureDescription.strokeCount)
@@ -135,6 +140,7 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
         val result = VolatileBox(false)
         val handler = Handler(Looper.myLooper()!!)
         Log.d(GESTURE_TAG, "submit(no-handler) strokes=" + description.strokeCount)
+        GestureDispatchProbe.record(GESTURE_PROBE_SITE, true)
         service.dispatchGesture(description, object : AccessibilityService.GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription) {
                 Log.d(GESTURE_TAG, "completed(no-handler)")
@@ -158,6 +164,7 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
         for (stroke in strokes) {
             builder.addStroke(stroke)
         }
+        GestureDispatchProbe.record(GESTURE_PROBE_SITE, false)
         service.dispatchGesture(builder.build(), null, null)
     }
 
