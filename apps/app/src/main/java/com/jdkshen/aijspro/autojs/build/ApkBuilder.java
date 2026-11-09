@@ -374,7 +374,11 @@ public class ApkBuilder {
             return;
         }
         if (name.startsWith("lib/")) {
-            if (name.startsWith(HOST_LIB_PREFIX) && name.endsWith(".so")) {
+            // task-74 补漏（Lead 真机抓到）：这里原来只收 lib/arm64-v8a/ 的条目，导致清单里的 v7a 条目
+            // 在**加载阶段**就被丢掉（真机日志：`清单 15 条`，而 assets 里其实有 21 条），于是
+            // ensureTemplateLibs 永远走「都已存在」分支、v7a 补齐永不触发。改成「lib/<任意 abi>/*.so」
+            // 一律收，ABI 只由路径推导（不写第二份清单）。
+            if (name.endsWith(".so") && TemplateLibCompletion.abiOf(name) != null) {
                 out.add(name);
             }
             return;
