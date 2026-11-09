@@ -66,6 +66,17 @@
 3. `FlutterService` 式绑定服务——我们的运行方式不引入它。
 4. 渠道标记 `FlutterExports("googleplay")`——无需求。
 
+## 4.5 进度（2026-11-09 18:50，dev-1439）
+
+| 项 | 状态 |
+|---|---|
+| F1 契约成文 + 核对脚本 | ✅ 完成（`docs/guides/Flutter本地桥API.md` + `tools/flutter-bridge-contract.mjs`，`--strict` PASS/0 gaps） |
+| F2 状态推送 5 事件 | ✅ 交付并真机验三类：`processResumed` / `accessibilityState` / `prefsChanged`（logcat `FlutterBridgeEvent`）；`debugConnectionState` 未真机触发（需 Dart 轮询路径） |
+| F3 两个未命中方法 | ✅ 完成（`sampleDownload` 清死调用、`storageIntroduce` 改现行名） |
+| F4「原生有、Dart 未用」核实 | ⬜ 未做（脚本目前只 gate Dart 死调用方向） |
+| F5 功能面终判表 | ⬜ 未做 |
+| **taskChanged 覆盖 MCP 路径 + TimedTask** | ⬜ 已派 task-50（真机证实：MCP `run_script` 不触发） |
+
 ## 5. 风险与边界
 
 1. **推送是双刃**：事件太密会拖慢 Flutter 侧；F2 必须给节流/合并（参考 `ConsoleLogEvents.java:49` 已有的 150ms 合并写法）。
