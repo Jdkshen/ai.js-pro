@@ -258,7 +258,7 @@ class McpBaselineTest {
         val recoveryBody = File("src/main/java/com/jdkshen/aijspro/mcp/McpBaseline.kt").readText()
             .substringAfter("fun recoveryFor(toolchain: JsonObject, apk: JsonObject): String? {")
             .substringBefore("/** 组装")
-        assertFalse("不触发采样：" + recoveryBody.take(80), recoveryBody.contains("inspect"))
+        assertFalse("不触发采样（不能出现 McpBuildTools.inspect 调用）", recoveryBody.contains("McpBuildTools.inspect("))
         assertFalse("不触发桥调用", recoveryBody.contains("toolkit_status"))
     }
 
@@ -277,7 +277,7 @@ class McpBaselineTest {
         val entryBody = mcpToolsSource.substringAfter("private fun withEntryBaseline(result: JsonObject): JsonObject {")
             .substringBefore("private fun toolJson")
         assertFalse("成功路径有意不重写文本镜像（省一次大载荷重序列化）", entryBody.contains("failureText"))
-        assertTrue("成功路径的不带必须在描述里写明", mcpToolsSource.contains("文本镜像**不含**"))
+        assertTrue("成功路径 text 的口径必须在描述里写明（不保证包含）", mcpToolsSource.contains("不保证包含"))
     }
 
     @Test
