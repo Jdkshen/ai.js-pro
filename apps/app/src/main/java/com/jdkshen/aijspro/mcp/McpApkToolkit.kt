@@ -491,6 +491,7 @@ internal class McpApkToolkit(
         "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64、ARM/Thumb、x86/x86-64 指令，expectedHex 防旧数据。常见指令可直接处理，一般汇编可通过可选 C/C++ 组件完成。"
         "apk_read_bytes", "apk_delete_target", "apk_copy_entry" ->
             "读取/编辑 APK 条目、DEX 或资源；$locatorHint"
+        "crypto_" -> "现场通用密码学（JCA）：op=hash（MD5/SHA-1/SHA-256/SHA-384/SHA-512）｜hmac（HmacSHA256 等，需密钥）｜aes_gcm（AES/GCM/NoPadding，加密或解密，方向由 mode=encrypt|decrypt 或 decrypt=true 明确）｜rsa_sign / rsa_verify（PKCS#1 v1.5，SHA256withRSA 等）。输入 inputHex/inputText/path 三选一（hash/hmac 流式读，上限 64 MiB，超出 INPUT_TOO_LARGE）。**密钥只允许显式 keyHex 或工具目录内的 keyRef**：本工具不读 App 私有密钥库/签名身份，也不返回密钥内容（只回显 keyBytes 与 keySha256Prefix）。输出 outputHex（≤64 KiB）或 outPath 原子落盘，附 bytes/digestOfInput/provider/algorithmSource=JCA；provider 是实际 JCA 实例（Android 通常 BC）。错误码可区分：ALG_UNSUPPORTED（算法/GCM 非 NoPadding）、KEY_INVALID（hex 非法、AES 密钥非 16/24/32 字节、RSA 密钥格式/口令加密 PEM、keyRef 越界）、MAC_INVALID（GCM tag 校验失败）、DECRYPT_FAILED（密文长度/padding）、INPUT_TOO_LARGE（输入超限）；**失败不产出半成品**（所有校验/运算在写盘前完成）。rsa_verify 用公钥（SPKI/X.509 证书）时 valid=false 表示签名不匹配（工具执行成功）；只给私钥时用「重签后常量时间比较」（PKCS#1 v1.5 确定性，PSS 不支持）。不做 KDF/密钥管理/自定义算法，GCM 解密通过只说明 tag 校验通过，不构成信任判断。"
         else -> "AI.js Pro 本地 APK 工具：${name.removePrefix("apk_").replace('_', ' ')}；使用 tools/list 参数定义，locator 来自列表/搜索，不依赖 MT。"
     }
     /** task-250：当前进程内可用于 GC 保护的活动引用。 */

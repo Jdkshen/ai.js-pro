@@ -2564,5 +2564,94 @@
       }
     },
     "description": "分页列出 DEX 里的方法（可按 owner 过滤）。返回 name/descriptor/access/returnType/paramTypes/locator + nextCursor 与 cursorTool。nextCursor 是原工具 cursor：原样传回本工具 cursor，并保持 owner/prefix/dexEntry 不变；不能传给 apk_continue。"
+  },
+  "crypto_": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "op"
+    ],
+    "properties": {
+      "op": {
+        "type": "string",
+        "enum": [
+          "hash",
+          "hmac",
+          "aes_gcm",
+          "rsa_sign",
+          "rsa_verify"
+        ],
+        "description": "操作类型（必填）：hash 摘要｜hmac 消息认证码｜aes_gcm 加解密｜rsa_sign 签名｜rsa_verify 验签。各 op 需要哪些参数见下面字段说明；不适用于该 op 的参数会被显式拒绝，不静默忽略。"
+      },
+      "alg": {
+        "type": "string",
+        "description": "算法名：hash=MD5/SHA-1/SHA-256/SHA-384/SHA-512；hmac=HmacMD5/HmacSHA1/HmacSHA256/HmacSHA384/HmacSHA512；aes_gcm 只支持 AES/GCM/NoPadding；rsa_*=MD5withRSA/SHA1withRSA/SHA256withRSA/SHA384withRSA/SHA512withRSA。不传时按 op 取合理默认，返回里回显实际使用的 alg。"
+      },
+      "keyHex": {
+        "type": "string",
+        "description": "显式十六进制密钥：HMAC/AES 的原始密钥字节；RSA 的 PKCS#8 DER（也可给 PEM 文本的十六进制）。与 keyRef 二选一。返回只回显 keyBytes/keySha256Prefix，不回显密钥内容。"
+      },
+      "keyRef": {
+        "type": "string",
+        "description": "工具目录内的密钥文件路径（二进制 DER 或 PEM 文本都支持）；越界路径会被拒绝（KEY_INVALID）。与 keyHex 二选一。本工具不读取 App 私有密钥库/签名身份。"
+      },
+      "ivHex": {
+        "type": "string",
+        "description": "aes_gcm 的十六进制 IV/GCM nonce（推荐 12 字节，接受 1..16 字节）。必填。"
+      },
+      "aadHex": {
+        "type": "string",
+        "description": "aes_gcm 的可选 AAD（十六进制，不参与加密输出但参与 tag 计算）；解密时给错会 MAC_INVALID。"
+      },
+      "tagLengthBits": {
+        "type": "integer",
+        "minimum": 96,
+        "maximum": 128,
+        "default": 128,
+        "description": "aes_gcm 的认证标签位数（96..128，8 的倍数）。加密输出的最后 tagLengthBits/8 字节就是 tag。"
+      },
+      "mode": {
+        "type": "string",
+        "enum": [
+          "encrypt",
+          "decrypt"
+        ],
+        "description": "aes_gcm 的方向；与 decrypt 只能给一个，同时给且冲突会拒绝。"
+      },
+      "decrypt": {
+        "type": "boolean",
+        "default": false,
+        "description": "aes_gcm 方向的布尔写法（true=解密）；与 mode 只能给一个。"
+      },
+      "padding": {
+        "type": "string",
+        "description": "仅 aes_gcm 有意义且只接受 NoPadding（GCM 不带 padding）；其它值 ALG_UNSUPPORTED。"
+      },
+      "inputHex": {
+        "type": "string",
+        "description": "十六进制输入。与 inputText/path 三选一；空串表示空输入（例如 SHA-256 空串向量）。"
+      },
+      "inputText": {
+        "type": "string",
+        "description": "UTF-8 文本输入。与 inputHex/path 三选一。"
+      },
+      "path": {
+        "type": "string",
+        "description": "工具目录内的输入文件（≤64 MiB；hash/hmac 流式读）。与 inputHex/inputText 三选一。"
+      },
+      "signatureHex": {
+        "type": "string",
+        "description": "rsa_verify 的十六进制签名。验签不匹配时返回 valid=false（工具执行成功），不是工具错误。"
+      },
+      "outPath": {
+        "type": "string",
+        "description": "可选：把输出（摘要/HMAC/密文/明文/签名）原子写入该新文件；不传时只返回 outputHex（超过 64 KiB 只给 outputHexOmitted 提示）。失败不产出半成品。"
+      },
+      "organize": {
+        "type": "boolean",
+        "default": true,
+        "description": "默认 true：裸文件名或直接落在操作根的输出会按既有归置规则改写进默认项目；显式子目录/项目内路径不动。"
+      }
+    }
   }
 }

@@ -105,6 +105,8 @@ internal object McpToolkitCatalog {
         "apk_session_release",
         // §11.2 第一刀：dispatch 壳静态调查（严格追加在列表末尾；mt_ 别名是显式名单，不受序位影响）。
         "vm_survey",
+        // 范围提案 §3：现场加解密（hash/HMAC/AES-GCM/RSA 签验；密钥只显式给）。
+        "crypto_",
         // 交接单 ⑥⑦：checkpoint → 回编 → 对齐/签名 → 验签 的编排链。
         "chain_resume"
     )

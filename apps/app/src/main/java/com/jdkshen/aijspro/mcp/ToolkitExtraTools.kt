@@ -11,11 +11,13 @@ import java.io.File
  * 并保持两条边界：① 分析副本默认不流入构建；② 导出默认排除/脱敏敏感串。
  */
 internal object ToolkitExtraTools {
-    val names = setOf("binary_transform", "evidence_export")
+    val names = setOf("binary_transform", "evidence_export", "crypto_")
 
     fun call(root: File, store: File?, name: String, args: JsonObject): JsonObject = when (name) {
         "binary_transform" -> transform(root, store, args)
         "evidence_export" -> export(root, store, args)
+        // crypto_：通用密码学原语（hash/HMAC/AES-GCM/RSA 签验）；密钥只允许显式 keyHex 或工具目录内 keyRef。
+        "crypto_" -> ToolkitCrypto.call(root, store, args)
         else -> throw IllegalArgumentException("未知扩展工具：$name")
     }
 
@@ -130,7 +132,7 @@ internal object ToolkitExtraTools {
     }
 
     /** B：证据落盘走 A 的归置器；拿不到 store/归置器时保持原路径（旧行为）。 */
-    private fun organizeOutput(root: File, store: File?, requested: File, organize: Boolean): Pair<File, JsonObject?> {
+    internal fun organizeOutput(root: File, store: File?, requested: File, organize: Boolean): Pair<File, JsonObject?> {
         if (!organize) return requested to null
         val configuredStore = store ?: runCatching {
             val context = com.stardust.app.GlobalAppContext.get()
