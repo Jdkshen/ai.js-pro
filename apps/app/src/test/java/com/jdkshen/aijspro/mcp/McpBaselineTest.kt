@@ -227,6 +227,41 @@ class McpBaselineTest {
         assertEquals(withBaseline, McpBaseline.failureText(payload, McpBaseline.failureView(full), "INVALID_ARGUMENT", null))
     }
 
+    /**
+     * task-41（①②③）：未采样时失败版也必须有一条**零成本**建议；采样后仍是点名组件那条；描述口径要准确。
+     */
+    @Test
+    fun unsampledFailureStillGivesAZeroCostRecovery() {
+        val apk = ToolkitIo.json("used" to 0, "quota" to 16, "temporary" to 0)
+        // ① 未采样：不能是 null；必须点出「先采样」且不触发采样（形状不变）
+        val unsampled = McpBaseline.toolchain(null)
+        assertEquals(false, unsampled.get("sampled").asBoolean)
+        val recovery = McpBaseline.recoveryFor(unsampled, apk)
+        assertNotNull("未采样时失败也必须能给自救建议", recovery)
+        assertTrue("要说明是「未采样」：" + recovery, recovery!!.contains("未采样"))
+        assertTrue("要给出可执行入口：" + recovery, recovery.contains("get_build_tools") || recovery.contains("get_baseline"))
+        assertFalse("未采样形状不能被改写（零成本、不触发采样）", unsampled.has("missing") || unsampled.has("present") || unsampled.has("ready"))
+        // 失败裁剪版也要能看到它
+        val unsampledView = McpBaseline.failureView(McpBaseline.assemble(5, "/r", null,
+            ToolkitIo.json("script" to 0, "apk" to apk), unsampled, McpBaseline.jobs("6h", "x")))
+        assertTrue("失败版必须带 recovery", unsampledView.has("recovery") && unsampledView.get("recovery").asString.contains("未采样"))
+        // ② 采样后（有缺失）仍是点名组件那条（K40 已实测，不能回归）
+        val sampled = McpBaseline.toolchain(readiness(false, listOf("jdk17"), listOf("aapt2", "d8")))
+        val sampledRecovery = McpBaseline.recoveryFor(sampled, apk)
+        assertTrue("采样后要点名组件：" + sampledRecovery, sampledRecovery!!.contains("jdk17") && sampledRecovery.contains("apk_component_install"))
+        // ③ 描述口径：成功路径 text 不保证包含（get_status 的扁平 text 会含）
+        val toolsSource = File("src/main/java/com/jdkshen/aijspro/mcp/McpTools.kt").readText()
+        assertTrue("描述要写「不保证包含」", toolsSource.contains("不保证包含"))
+        assertTrue("描述要点出 get_status 的扁平 text 会含", toolsSource.contains("get_status` 的扁平 text 会含"))
+        assertTrue("描述要写失败路径三处同值", toolsSource.contains("失败路径三处同值"))
+        // 未采样分支必须零成本：recoveryFor 里不出现 inspect / 桥调用
+        val recoveryBody = File("src/main/java/com/jdkshen/aijspro/mcp/McpBaseline.kt").readText()
+            .substringAfter("fun recoveryFor(toolchain: JsonObject, apk: JsonObject): String? {")
+            .substringBefore("/** 组装")
+        assertFalse("不触发采样：" + recoveryBody.take(80), recoveryBody.contains("inspect"))
+        assertFalse("不触发桥调用", recoveryBody.contains("toolkit_status"))
+    }
+
     /** task-39（③）：注入必须在**序列化单点**，成功路径按描述**有意不带**文本镜像。 */
     @Test
     fun failureTextIsInjectedAtTheSingleSerializationPointOnly() {

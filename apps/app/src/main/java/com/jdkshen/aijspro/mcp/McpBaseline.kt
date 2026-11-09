@@ -108,8 +108,15 @@ internal object McpBaseline {
     /**
      * 有缺失时给**一条**最短可执行建议（点名组件或工作区命令），没有缺失返回 null。
      * 文案口径沿用既有 recovery/nextActions（apk_component_install、apk_workspace_gc）。
+     *
+     * task-41（①）：**未采样**（`sampled:false`）也必须给一条建议 —— 失败路径有意不采样（零成本），
+     * 冷启动第一次失败时若不给建议，客户端就拿不到任何自救信息（K40 实测反例）。
      */
     fun recoveryFor(toolchain: JsonObject, apk: JsonObject): String? {
+        // 未采样分支：零成本（只读形状，不触发 inspect/桥调用）
+        if (toolchain.get("sampled")?.isJsonPrimitive == true && !toolchain.get("sampled").asBoolean) {
+            return "工具链未采样：先 get_build_tools（或 get_baseline{refresh:true}）拿 ready/missing/present"
+        }
         val missing = toolchain.getAsJsonArray("missing")?.map { it.asString }.orEmpty().filter { it.isNotBlank() }
         if (missing.isNotEmpty()) {
             return missing.first() + " 缺失：" + "apk_component_install{component:\"" + missing.first() + "\"}"
