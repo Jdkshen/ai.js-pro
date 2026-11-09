@@ -77,7 +77,9 @@ class AccessibilityNotificationObserver(private val mContext: Context) : Notific
         } else {
             val list = event.text
             Log.d(TAG, "onNotification: $list; $event")
-            if (event.packageName == mContext.packageName) {
+            // task-69：同包（自身）事件**有意跳过**——这条判据是**共享**的：
+            // 引擎侧 Events 的「kind 通道避重」必须用同一个判据（否则观察者不投递、kind 通道又被跳过 → 事件静默丢失）。
+            if (!willDeliver(event.packageName, mContext.packageName)) {
                 return false
             }
             if (list != null) {
@@ -111,6 +113,20 @@ class AccessibilityNotificationObserver(private val mContext: Context) : Notific
     }
 
     companion object {
+
+        /**
+         * task-69：本观察者**是否会把这条事件投递给 ToastListener**（当前规则：同包/自身事件有意跳过）。
+         *
+         * <p>抽成纯函数的理由：`Events` 的本地 delegate 用它决定「要不要让 kind 通道照发」——
+         * 观察者不投递时必须由 kind 通道兜住（实测：脚本自己的 `toast()` 是同包事件）。
+         */
+        @JvmStatic
+        fun willDeliver(eventPackageName: CharSequence?, ownPackageName: String?): Boolean {
+            if (ownPackageName == null || ownPackageName.isEmpty()) {
+                return true
+            }
+            return eventPackageName == null || eventPackageName.toString() != ownPackageName
+        }
 
         private val EVENT_TYPES = setOf(AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED)
 

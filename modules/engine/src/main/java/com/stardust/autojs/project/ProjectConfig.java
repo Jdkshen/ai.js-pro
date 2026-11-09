@@ -1,14 +1,18 @@
 package com.stardust.autojs.project;
 
 import android.content.Context;
-import android.text.TextUtils;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonDeserializationContext;
+import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.google.gson.annotations.SerializedName;
 import com.stardust.pio.PFiles;
 
 import java.io.File;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -24,6 +28,23 @@ public class ProjectConfig {
     public static final String CONFIG_FILE_NAME = "project.json";
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
+
+    /**
+     * 只用于**读**的 Gson：在 {@link ProDialect} 里对 Pro 方言做容错（A1-4）。
+     * 写路径仍然用上面的 {@link #GSON}（逐字不变；新增字段全部是 transient，不会进 toJson）。
+     */
+    private static final Gson READ_GSON = new GsonBuilder().setPrettyPrinting()
+            .registerTypeAdapter(ProjectConfig.class, new ProDialect())
+            .create();
+
+    /** Pro 的 scripts 钩子（值是字符串）——与我们的 scripts（值是对象）分开存，避免静默丢。 */
+    private final transient Map<String, String> mScriptHooks = new HashMap<>();
+
+    /** Pro 的 features 对象（例如 nodejs=disabled/enabled、activityIntentTasks）——只读兼容，不参与写。 */
+    private final transient Map<String, String> mProFeatures = new HashMap<>();
+
+    /** 读兼容过程中发现的、**不致命**的问题（未知 Pro 键、类型不认识…）：警告而非崩溃。 */
+    private final transient List<String> mWarnings = new ArrayList<>();
 
     @SerializedName("name")
     private String mName;
@@ -134,28 +155,142 @@ public class ProjectConfig {
     private String mSignatureFingerprint;
 
 
+    /** Pro 的 scripts 钩子（值为字符串的条目）；没有则为空表。**只读**，不参与写。 */
+    public Map<String, String> getScriptHooks() {
+        return Collections.unmodifiableMap(mScriptHooks);
+    }
+
+    /** Pro 的 features 对象（只读兼容）；没有则为空表。 */
+    public Map<String, String> getProFeatures() {
+        return Collections.unmodifiableMap(mProFeatures);
+    }
+
+    /** Pro 的 features.nodejs（disabled/enabled）；没有则 null。关系到引擎选择。 */
+    public String getNodeJsMode() {
+        return mProFeatures.get("nodejs");
+    }
+
+    /** 读兼容警告（非致命：未知 Pro 键、类型不认识…）。 */
+    public List<String> getWarnings() {
+        return Collections.unmodifiableList(mWarnings);
+    }
+
+    /**
+     * Pro 方言的**只读**容错反序列化（A1-4）。规则：
+     * <ul>
+     *   <li>{@code scripts}：值是对象 → 走现有 {@link ScriptConfig}（**行为逐字不变**）；
+     *       值是字符串 → Pro 钩子，进 {@link #getScriptHooks()}（**不静默丢**）；
+     *       其它类型 → 该条目记 warning、**其余键照常解析**（绝不整体崩，Gson 原本会整份抛）。</li>
+     *   <li>{@code displaySplash}：Pro 写 {@code launchConfig.displaySplash}，我们历史上叫 {@code showSplash}；
+     *       优先级 = {@code launchConfig.displaySplash} &gt; {@code launchConfig.showSplash} &gt; 顶层 {@code displaySplash}。</li>
+     *   <li>{@code features}（Pro 是对象）→ 进 {@link #getProFeatures()}；我们的 {@code useFeatures}（数组）不变。</li>
+     *   <li>{@code abis}/{@code optimization}/{@code plugins}/{@code signingConfig}：**有意不读**，只在 warnings 里列名
+     *       （真值在打包策略侧 AbiPolicy/NativeLibPolicy，避免第二份真值）。</li>
+     * </ul>
+     */
+    static final class ProDialect implements JsonDeserializer<ProjectConfig> {
+
+        private static final String[] PRO_KEYS_NOT_READ =
+                {"abis", "optimization", "plugins", "signingConfig"};
+
+        @Override
+        public ProjectConfig deserialize(JsonElement element, Type type, JsonDeserializationContext context) {
+            JsonObject json = element.getAsJsonObject();
+            // **顺序很重要**：普通 Gson 的 Map 适配器一旦看到 scripts 值不是对象就会抛（Expected BEGIN_OBJECT
+            // but was STRING/NUMBER）——所以必须先把这些键从**副本**里摘掉，再委托给普通 Gson 解析其余字段。
+            JsonObject plain = json.deepCopy();
+            JsonElement scripts = plain.remove("scripts");
+            JsonElement topDisplay = plain.has("displaySplash") ? plain.remove("displaySplash") : null;
+            JsonObject launch = plain.has("launchConfig") && plain.get("launchConfig").isJsonObject()
+                    ? plain.getAsJsonObject("launchConfig") : null;
+            boolean hasDisplay = launch != null && launch.has("displaySplash");
+            boolean hasShow = launch != null && launch.has("showSplash");
+            // displaySplash 优先级：launchConfig.displaySplash > launchConfig.showSplash > 顶层 displaySplash
+            if (hasDisplay) {
+                launch.add("showSplash", launch.get("displaySplash"));
+                launch.remove("displaySplash");
+            } else if (!hasShow && topDisplay != null && topDisplay.isJsonPrimitive()) {
+                if (launch == null) {
+                    launch = new JsonObject();
+                    plain.add("launchConfig", launch);
+                }
+                launch.add("showSplash", topDisplay);
+            }
+            // 正常路径：其余字段仍由普通 Gson 解析（字段级行为与改动前一致；未知键本来就会忽略）。
+            ProjectConfig config = GSON.fromJson(plain, ProjectConfig.class);
+            // 1) scripts 容错（用摘出来的那份，不再受 Gson 类型约束）
+            if (scripts != null) {
+                if (scripts.isJsonObject()) {
+                    Map<String, ScriptConfig> configs = new HashMap<>();
+                    for (Map.Entry<String, JsonElement> entry : scripts.getAsJsonObject().entrySet()) {
+                        JsonElement value = entry.getValue();
+                        if (value.isJsonObject()) {
+                            configs.put(entry.getKey(), GSON.fromJson(value, ScriptConfig.class));
+                        } else if (value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+                            config.mScriptHooks.put(entry.getKey(), value.getAsString());
+                        } else {
+                            config.mWarnings.add("scripts." + entry.getKey()
+                                    + " 类型不认识（期望对象或字符串），已忽略该条目");
+                        }
+                    }
+                    config.mScriptConfigs = configs;
+                } else {
+                    config.mWarnings.add("scripts 不是对象，已忽略");
+                }
+            }
+            // 2/3) displaySplash 已在委托前落到 showSplash；features（Pro 是对象）见下
+            JsonElement features = json.get("features");
+            if (features != null) {
+                if (features.isJsonObject()) {
+                    for (Map.Entry<String, JsonElement> entry : features.getAsJsonObject().entrySet()) {
+                        JsonElement value = entry.getValue();
+                        config.mProFeatures.put(entry.getKey(),
+                                value.isJsonPrimitive() ? value.getAsString() : value.toString());
+                    }
+                } else {
+                    config.mWarnings.add("features 不是对象（我们的 useFeatures 是数组），已忽略");
+                }
+            }
+            // 4) 有意不读的 Pro 键：只列清单
+            for (String key : PRO_KEYS_NOT_READ) {
+                if (json.has(key)) {
+                    config.mWarnings.add("未读取的 Pro 键：" + key + "（真值在打包策略侧，避免第二份真值）");
+                }
+            }
+            return config;
+        }
+    }
+
     public static ProjectConfig fromJson(String json) {
         if (json == null) {
             return null;
         }
-        ProjectConfig config = GSON.fromJson(json, ProjectConfig.class);
+        ProjectConfig config = READ_GSON.fromJson(json, ProjectConfig.class);
         if (!isValid(config)) {
             return null;
         }
         return config;
     }
 
+    /**
+     * 纯 Java 判空（原 android.text.TextUtils.isEmpty 的等价语义 + trim）。
+     * 换掉 Android 依赖是为了让 isValid/AndroidResources 这段逻辑**能在 JVM 单测里跑**（A1-4 回归的前提）。
+     */
+    private static boolean isEmptyText(CharSequence value) {
+        return value == null || value.toString().trim().isEmpty();
+    }
+
     private static boolean isValid(ProjectConfig config) {
-        if (TextUtils.isEmpty(config.getName())) {
+        if (isEmptyText(config.getName())) {
             return false;
         }
-        if (TextUtils.isEmpty(config.getPackageName())) {
+        if (isEmptyText(config.getPackageName())) {
             return false;
         }
-        if (TextUtils.isEmpty(config.getVersionName())) {
+        if (isEmptyText(config.getVersionName())) {
             return false;
         }
-        if (TextUtils.isEmpty(config.getMainScriptFile())) {
+        if (isEmptyText(config.getMainScriptFile())) {
             return false;
         }
         if (config.getVersionCode() == -1) {
@@ -334,7 +469,7 @@ public class ProjectConfig {
         private String mManifest;
 
         public String getResDir() {
-            return TextUtils.isEmpty(mResDir) ? "res" : mResDir;
+            return isEmptyText(mResDir) ? "res" : mResDir;
         }
 
         public void setResDir(String resDir) {

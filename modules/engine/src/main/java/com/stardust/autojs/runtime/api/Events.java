@@ -175,6 +175,20 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
      * 本进程有 AccessibilityService 实例时才本地直订：事件直接来自本进程的框架回调，
      * 经 {@link #postRemoteAccessibilityEvent} 走与远程通路**同一套**解析/emit（字段因此不会随进程而变）。
      */
+    /**
+     * task-69：本地 kind 通道要不要为「专用观察者」让路（纯判定，便于单测）。
+     *
+     * <p>只有三个条件同时成立才让路：① toast/notification 这类有专用观察者的 kind；② 观察者已挂；
+     * ③ 观察者**会真的投递**这条事件（`AccessibilityNotificationObserver.willDeliver`：同包事件它有意跳过）。
+     */
+    static boolean shouldSkipKindForDedicatedObserver(boolean observerAttached,
+                                                     boolean observerWillDeliver, String kind) {
+        if (!observerAttached || !observerWillDeliver || kind == null) {
+            return false;
+        }
+        return "toast".equals(kind) || "notification".equals(kind);
+    }
+
     private boolean ensureLocalAccessibilityEvents() {
         if (mLocalAccessibilityDelegate != null) {
             return true;
@@ -210,10 +224,16 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
                                 return false;
                             }
                             // toast/notification 有**专用**本地观察者（events.observeToast/observeNotification →
-                            // AccessibilityNotificationObserver）：它已经在发同名事件，这里就不再发 kind（避免一次事件两次回调）；
+                            // AccessibilityNotificationObserver）：它已经在发同名事件时这里就不再发 kind（避免一次事件两次回调）；
                             // 全量 `accessibility_event` 照发，保持与远程通路同形。
-                            boolean dedicatedObserver = ("toast".equals(kind) || "notification".equals(kind))
-                                    && (mListeningToast || mListeningNotification);
+                            // task-69 修正：避重的前提是「观察者**真的会投递**」——观察者对**同包**事件是有意跳过的
+                            // （脚本自己的 `toast()` 就是同包），此时若再跳过 kind 通道，事件就被静默丢掉。
+                            boolean observerWillDeliver =
+                                    com.stardust.view.accessibility.AccessibilityNotificationObserver.Companion
+                                            .willDeliver(event.getPackageName(),
+                                                    mContext == null ? null : mContext.getPackageName());
+                            boolean dedicatedObserver = shouldSkipKindForDedicatedObserver(
+                                    mListeningToast || mListeningNotification, observerWillDeliver, kind);
                             postRemoteAccessibilityEvent(
                                     com.stardust.view.accessibility.AccessibilityEventSnapshot.wrapperOf(event).toJson(),
                                     !dedicatedObserver);

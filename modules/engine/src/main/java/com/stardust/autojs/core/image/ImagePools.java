@@ -40,6 +40,8 @@ public final class ImagePools {
     private static final Set<ImagePool> POOLS = new LinkedHashSet<>();
     private static volatile boolean sDiagnosticsEnabled = true;
     private static volatile Consumer<String> sReporter = message -> Log.w(TAG, message);
+    /** task-71（A1-1）：严格模式默认**关闭** —— 默认「警告 + 强制回收」，不破坏现有脚本。 */
+    private static volatile boolean sStrictMode = false;
 
     private ImagePools() {
     }
@@ -117,19 +119,35 @@ public final class ImagePools {
     public static int drainAll(@Nullable String reason) {
         String where = (reason == null || reason.isEmpty()) ? "unknown" : reason;
         int forced = 0;
+        List<String> allSites = new ArrayList<>();
         for (ImagePool pool : snapshot()) {
             List<String> sites = pool.drainUnreturned();
             if (sites.isEmpty()) {
                 continue;
             }
             forced += sites.size();
+            allSites.addAll(sites);
             report("[ImagePool] 未归还：脚本结束(" + where + ")时仍有 " + sites.size()
                     + " 个图像资源没有 recycle()，已强制 release；分配点：" + String.join(" | ", sites));
             report("[ImagePool] 可抄提示：把作用域写成 try (ImagePool pool = new ImagePool()) { … }，"
                     + "或对每个 make()/mat()/matOfPoint() 的返回值调用 pool.recycle(x)；"
                     + "池统计 ImagePools.stats()。");
         }
+        // task-71（A1-1）：严格模式下**抛具名异常**，但放在强制回收之后 —— 资源一定已经释放，
+        // 异常只把问题暴露给调用方；默认关闭（Pro 是默认抛，我们有意收窄成 opt-in，见类注释与方案 A1-1）。
+        if (sStrictMode && forced > 0) {
+            throw new UnrecycledImageDetectedException(where, allSites, forced);
+        }
         return forced;
+    }
+
+    /** 严格模式：{@link #drainAll(String)} 在强制回收之后抛 {@link UnrecycledImageDetectedException}；默认关闭。 */
+    public static boolean isStrictMode() {
+        return sStrictMode;
+    }
+
+    public static void setStrictMode(boolean strict) {
+        sStrictMode = strict;
     }
 
     /** 是否采集分配点（关掉只省钱，不影响回收与强制回收）。 */

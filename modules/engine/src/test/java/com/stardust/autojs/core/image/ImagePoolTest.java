@@ -36,6 +36,7 @@ public class ImagePoolTest {
 
     @After
     public void restoreGlobals() {
+        ImagePools.setStrictMode(false);
         ImagePools.drainAll("test-cleanup");
         ImagePools.setReporter(null);
         ImagePools.setDiagnosticsEnabled(true);
@@ -115,6 +116,64 @@ public class ImagePoolTest {
             fail("close 之后登记应当失败");
         } catch (IllegalStateException expected) {
             assertTrue(String.valueOf(expected.getMessage()), expected.getMessage().contains("close"));
+        }
+    }
+
+    /** task-71（A1-1）：默认口径 = 警告 + 强制回收，**不抛**（墙上钉住，避免哪天被改成默认抛而破坏现有脚本）。 */
+    @Test
+    public void defaultGuardWarnsAndForcesRecycleWithoutThrowing() {
+        assertFalse("默认不能是严格模式", ImagePools.isStrictMode());
+        ImagePool pool = new ImagePool();
+        FakeResource resource = borrow(pool);
+
+        int forced = ImagePools.drainAll("unit-test");
+
+        assertEquals(1, forced);
+        assertEquals(1, resource.releaseCount);
+        assertTrue(String.join(System.lineSeparator(), messages).contains("未归还"));
+        pool.close();
+    }
+
+    /** task-71（A1-1）：严格模式下抛**具名异常**，但异常发生在强制回收之后（资源一定已释放）。 */
+    @Test
+    public void strictModeThrowsNamedExceptionAfterForcingRecycle() {
+        ImagePools.setStrictMode(true);
+        assertTrue(ImagePools.isStrictMode());
+        ImagePool pool = new ImagePool();
+        FakeResource resource = borrow(pool);
+
+        UnrecycledImageDetectedException thrown = null;
+        try {
+            ImagePools.drainAll("unit-test");
+            fail("严格模式必须抛 UnrecycledImageDetectedException");
+        } catch (UnrecycledImageDetectedException expected) {
+            thrown = expected;
+        } finally {
+            ImagePools.setStrictMode(false);
+        }
+
+        assertEquals("unit-test", thrown.getReason());
+        assertEquals(1, thrown.getForced());
+        assertEquals(1, resource.releaseCount);
+        assertEquals("抛异常时资源必须已经释放", 0, pool.pendingCount());
+        assertTrue(String.valueOf(thrown.getMessage()), thrown.getMessage().contains("严格模式"));
+        assertTrue(String.valueOf(thrown.getMessage()), thrown.getMessage().contains("pool.recycle(x)"));
+        assertTrue("要带分配点: " + thrown.getSites(), thrown.getSites().toString().contains("ImagePoolTest."));
+        pool.close();
+    }
+
+    /** task-71（A1-1）：严格模式下、但没有任何未归还时**不抛**（否则脚本退出路径会被无谓打断）。 */
+    @Test
+    public void strictModeStaysQuietWhenNothingPending() {
+        ImagePools.setStrictMode(true);
+        try {
+            ImagePool pool = new ImagePool();
+            FakeResource resource = borrow(pool);
+            assertTrue(pool.recycle(resource));
+            assertEquals(0, ImagePools.drainAll("unit-test"));
+            pool.close();
+        } finally {
+            ImagePools.setStrictMode(false);
         }
     }
 
