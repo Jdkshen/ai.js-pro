@@ -7,7 +7,6 @@ import android.content.IntentFilter
 import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
-import com.stardust.automator.AccessibilityEventWrapper
 
 /**
  * task-156：把主进程的无障碍事件以同 UID 广播转发给 :node24 进程，供 Node 的
@@ -160,26 +159,10 @@ object AccessibilityEventForwarder {
     }
 
     private fun forward(context: Context, event: AccessibilityEvent) {
-        // task-60：JSON 快照的唯一映射放在 com.stardust.automator.AccessibilityEventWrapper
-        // （纯 JVM 可单测、有单测钉住键集）；这里只做 Android → 包装对象的字段抽取，键与改造前逐字相同。
-        val texts = event.text
+        // task-60：JSON 快照的唯一映射放在 com.stardust.automator.AccessibilityEventWrapper（纯 JVM 可单测）；
+        // task-64：Android → 包装对象的字段抽取也抽到 AccessibilityEventSnapshot，与 :script 本地直订通路共用一份。
         context.sendBroadcast(Intent(ACTION_EVENT)
                 .setPackage(context.packageName)
-                .putExtra("json", wrapperOf(event, texts).toJson()))
-    }
-
-    /** 从框架事件抽字段（唯一的 Android 依赖点；映射规则见 AccessibilityEventWrapper 的文档与单测）。 */
-    private fun wrapperOf(event: AccessibilityEvent, texts: List<CharSequence>?): AccessibilityEventWrapper {
-        val className = event.className?.toString() ?: ""
-        return AccessibilityEventWrapper(
-                kind = AccessibilityEventWrapper.kindOf(event.eventType, className),
-                eventType = event.eventType,
-                packageName = event.packageName?.toString() ?: "",
-                className = className,
-                text = if (texts == null) "" else texts.joinToString(" "),
-                windowId = event.windowId,
-                eventTime = event.eventTime,
-                contentChangeTypes = event.contentChangeTypes,
-                windowChangeTypes = event.windowChanges)
+                .putExtra("json", AccessibilityEventSnapshot.wrapperOf(event).toJson()))
     }
 }

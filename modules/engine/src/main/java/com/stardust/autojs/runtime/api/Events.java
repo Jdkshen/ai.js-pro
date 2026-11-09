@@ -89,6 +89,23 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
                     "toast", "notification"));
     private com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener
             mRemoteAccessibilityListener;
+    // ---- task-64：无障碍服务在**本进程**（:script 的常态）时本地直订 ----
+    /** 本地 delegate 优先级：与 Node24 转发（9101）、主进程后端（9200）错开，互不顶替。 */
+    static final int LOCAL_ACCESSIBILITY_DELEGATE_PRIORITY = 9300;
+    private com.stardust.view.accessibility.AccessibilityDelegate mLocalAccessibilityDelegate;
+    private static final com.stardust.view.accessibility.AccessibilityDelegate LOCAL_ACCESSIBILITY_NOOP_DELEGATE =
+            new com.stardust.view.accessibility.AccessibilityDelegate() {
+                @Override
+                public java.util.Set<Integer> getEventTypes() {
+                    return null;
+                }
+
+                @Override
+                public boolean onAccessibilityEvent(android.accessibilityservice.AccessibilityService service,
+                                                    android.view.accessibility.AccessibilityEvent event) {
+                    return false;
+                }
+            };
     private ScriptRuntime mScriptRuntime;
     private volatile boolean mInterceptsAllKey = false;
     private KeyInterceptor mKeyInterceptor;
@@ -143,7 +160,75 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         if (eventName == null || !REMOTE_ACCESSIBILITY_EVENT_TYPES.contains(eventName)) {
             return;
         }
+        // task-64：服务实例在**本进程**时直订（`:script` 的常态）——不再依赖 task-163 的主进程 AIDL 反向通道：
+        // ① 无障碍服务声明在 :script（AndroidManifest.xml），服务实例也在 :script → 事件本来就在本进程；
+        // ② 主进程 AutomationHostBackend 的 delegate 注册在主进程，那里没有服务实例 → 永不触发；
+        // ③ 且 MCP/:script 直跑时 RemoteAutomationBridge.isActive() 为 false（订阅被静默跳过）。
+        // 实测（K40 dev-1445 + 设备4 预 task-60 包）：两条都不成立 → events.on('accessibility_event') 恒 0 事件。
+        if (ensureLocalAccessibilityEvents()) {
+            return;
+        }
         ensureRemoteAccessibilityEvents();
+    }
+
+    /**
+     * 本进程有 AccessibilityService 实例时才本地直订：事件直接来自本进程的框架回调，
+     * 经 {@link #postRemoteAccessibilityEvent} 走与远程通路**同一套**解析/emit（字段因此不会随进程而变）。
+     */
+    private boolean ensureLocalAccessibilityEvents() {
+        if (mLocalAccessibilityDelegate != null) {
+            return true;
+        }
+        if (com.stardust.view.accessibility.AccessibilityService.Companion.getInstance() == null) {
+            return false;
+        }
+        try {
+            ensureHandler();
+        } catch (Throwable ignored) {
+            // 脚本线程没有 Looper 时回退到主 Looper（见 postRemoteEvent）。
+        }
+        com.stardust.view.accessibility.AccessibilityDelegate delegate =
+                new com.stardust.view.accessibility.AccessibilityDelegate() {
+                    @Override
+                    public java.util.Set<Integer> getEventTypes() {
+                        return null;   // null = 所有事件类型
+                    }
+
+                    @Override
+                    public boolean onAccessibilityEvent(android.accessibilityservice.AccessibilityService service,
+                                                        android.view.accessibility.AccessibilityEvent event) {
+                        if (event == null) {
+                            return false;
+                        }
+                        try {
+                            // 没有订阅者时连 JSON 都不做（与主进程 backend 的 getRegisteredCallbackCount()==0 早退一致）。
+                            String className = event.getClassName() == null ? "" : event.getClassName().toString();
+                            String kind = com.stardust.automator.AccessibilityEventWrapper.kindOf(event.getEventType(), className);
+                            boolean wantsAll = listenerCount("accessibility_event") > 0;
+                            boolean wantsKind = listenerCount(kind) > 0;
+                            if (!wantsAll && !wantsKind) {
+                                return false;
+                            }
+                            // toast/notification 有**专用**本地观察者（events.observeToast/observeNotification →
+                            // AccessibilityNotificationObserver）：它已经在发同名事件，这里就不再发 kind（避免一次事件两次回调）；
+                            // 全量 `accessibility_event` 照发，保持与远程通路同形。
+                            boolean dedicatedObserver = ("toast".equals(kind) || "notification".equals(kind))
+                                    && (mListeningToast || mListeningNotification);
+                            postRemoteAccessibilityEvent(
+                                    com.stardust.view.accessibility.AccessibilityEventSnapshot.wrapperOf(event).toJson(),
+                                    !dedicatedObserver);
+                        } catch (Throwable error) {
+                            android.util.Log.w("Events", "local accessibility event failed", error);
+                        }
+                        return false;
+                    }
+                };
+        com.stardust.view.accessibility.AccessibilityService.Companion.addDelegate(
+                LOCAL_ACCESSIBILITY_DELEGATE_PRIORITY, delegate);
+        mLocalAccessibilityDelegate = delegate;
+        android.util.Log.i("Events", "local accessibility event subscription installed (priority="
+                + LOCAL_ACCESSIBILITY_DELEGATE_PRIORITY + ")");
+        return true;
     }
 
     private void ensureRemoteAccessibilityEvents() {
@@ -179,6 +264,11 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     }
 
     private void postRemoteAccessibilityEvent(String eventJson) {
+        postRemoteAccessibilityEvent(eventJson, true);
+    }
+
+    /** [emitKind]=false 时只发全量 `accessibility_event`（用于「专用观察者已经在发同名事件」的避重）。 */
+    private void postRemoteAccessibilityEvent(String eventJson, boolean emitKind) {
         final com.stardust.autojs.runtime.api.remote.RemoteAccessibilityEvent event =
                 com.stardust.autojs.runtime.api.remote.RemoteAccessibilityEvent.fromJson(eventJson);
         if (event == null) {
@@ -186,6 +276,9 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
         }
         postRemoteEvent(() -> {
             emit("accessibility_event", event);
+            if (!emitKind) {
+                return;
+            }
             String kind = event.getKind();
             if (kind != null && !kind.isEmpty() && !"accessibility_event".equals(kind)) {
                 emit(kind, event);
@@ -207,6 +300,12 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     }
 
     private void releaseRemoteAccessibilityEvents() {
+        if (mLocalAccessibilityDelegate != null) {
+            mLocalAccessibilityDelegate = null;
+            // 摘掉本地订阅：用 noop delegate 顶替（与 AccessibilityEventForwarder.detach 同一手法）。
+            com.stardust.view.accessibility.AccessibilityService.Companion.addDelegate(
+                    LOCAL_ACCESSIBILITY_DELEGATE_PRIORITY, LOCAL_ACCESSIBILITY_NOOP_DELEGATE);
+        }
         com.stardust.autojs.runtime.api.remote.RemoteAutomationBridge.AccessibilityEventListener
                 listener = mRemoteAccessibilityListener;
         if (listener == null) {

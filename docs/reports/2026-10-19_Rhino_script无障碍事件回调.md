@@ -1,5 +1,15 @@
 # Rhino :script 无障碍事件反向通道（task-163）
 
+> ⚠️ **2026-11-09 复核（task-64）：本文 §4 的 PASS 只对 dev-1112 当时的拓扑成立**（那时无障碍服务在主进程，
+> 日志 `AutomationHost: event listener registered count=1 ready=true`）。此后无障碍服务改为声明在 **`:script`**
+> （`modules/engine/src/main/AndroidManifest.xml` 的 `SelectToSpeakService`，`android:process=":script"`），
+> 于是本文设计的两个前提**都不成立**：
+> ① 主进程 `AutomationHostBackend` 的 delegate 注册在**没有服务实例**的进程 → 永不触发；
+> ② `:script` 直跑（MCP `run_script`）时 `RemoteAutomationBridge.isActive()` 为 **false** → 订阅被静默跳过。
+> 结果：`events.on('accessibility_event')` **恒 0 事件**（K40 + 设备4 实测）。
+> 修复：`Events` 在「服务实例在本进程」时改**本地直订**（`ensureLocalAccessibilityEvents`）。
+> 详见 [2026-11-09_无障碍事件源本地直订（task-64）.md](2026-11-09_无障碍事件源本地直订（task-64）.md)。
+
 日期：2026-10-19。执行：t1-native-services。验证机：K40（cccc62c7）。
 
 ## 1. 结论
