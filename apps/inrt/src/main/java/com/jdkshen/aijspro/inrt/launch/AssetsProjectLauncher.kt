@@ -16,6 +16,7 @@ import com.jdkshen.aijspro.inrt.script.InrtScriptThreadHost
 import com.stardust.autojs.engine.encryption.ScriptEncryption
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecutionTask
+import com.stardust.autojs.execution.ScriptHostRouting
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.project.AppSignature
 import com.stardust.autojs.project.ProjectConfig
@@ -106,6 +107,12 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             }
             Log.i(TAG, "C-INRT: run task script=" + file.absolutePath)
             val source = JavaScriptFileSource("task", file)
+            // task-78：headless（定时任务/服务）没有宿主 Activity ⇒ 脚本里的 `activity.*` 会 ReferenceError。
+            // 这里给**明确**文案，不伪造 activity 对象（界面启动路径：SplashActivity/LogActivity/InrtScriptActivity）。
+            if (ScriptHostRouting.textUsesActivityApi(readScriptText(source))) {
+                Log.w(TAG, "C-INRT: headless 执行没有宿主 Activity，脚本里的 activity.* 会 ReferenceError；"
+                        + "如需 activity 请用界面启动。script=" + file.absolutePath)
+            }
             val config = ExecutionConfig(
                 workingDirectory = mProjectDir,
                 scriptConfig = mProjectConfig.getScriptConfig(normalized))
@@ -192,7 +199,8 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         }
         Log.i(TAG, "C-INRT: route=" + route + " process=" + process + " thread=" + thread.name + "/" + thread.id
                 + " engine=" + source.engineName + " uiMode=" + uiMode
-                + " uiLayout=" + hasUiLayoutCall(source) + " resLayout=" + hasLayoutResources())
+                + " uiLayout=" + hasUiLayoutCall(source) + " resLayout=" + hasLayoutResources()
+                + " activityApi=" + ScriptHostRouting.textUsesActivityApi(readScriptText(source)))
         if (route == "ScriptExecuteActivity") {
             // task-115：:script 内启动引擎 UI 宿主（inrt manifest 已把 ScriptExecuteActivity 挂 :script）。
             // ui.layout 的布局由 Activity 承载，引擎按引擎原路径在 Activity 自己的线程执行（与主进程
@@ -229,7 +237,14 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         }
         val text = readScriptText(source)
         if (text != null) {
-            return UI_LAYOUT_PATTERN.containsMatchIn(text)
+            // task-78：判据抽到 engine 的 ScriptHostRouting（纯函数、有单测）。`ui.layout` 家族 **或** `activity.*`
+            // 都需要 Activity 宿主 —— 后者以前被判 headless ⇒ 打包版没有 `activity` 全局（ReferenceError），
+            // 用户实报的「请求悬浮窗权限出错」就是这条（它的 catch 把 ReferenceError 吞了）。
+            return ScriptHostRouting.needsActivityHost(
+                    isUiMode = true,
+                    hasUiLayoutCall = ScriptHostRouting.textUsesUiLayout(text),
+                    usesActivityApi = ScriptHostRouting.textUsesActivityApi(text),
+                    hasImGuiMarker = hasImGuiMarker())
         }
         if (hasImGuiMarker()) {
             return false

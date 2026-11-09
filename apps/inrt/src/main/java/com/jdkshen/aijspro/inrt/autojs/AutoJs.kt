@@ -15,6 +15,7 @@ import com.stardust.autojs.runtime.api.AppUtils
 import com.stardust.autojs.runtime.exception.ScriptException
 import com.stardust.autojs.runtime.exception.ScriptInterruptedException
 import com.stardust.autojs.script.JavaScriptSource
+import com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
 import com.stardust.view.accessibility.AccessibilityService
 import com.google.android.accessibility.selecttospeak.SelectToSpeakService
 import com.stardust.view.accessibility.AccessibilityServiceUtils
@@ -42,7 +43,9 @@ class AutoJs private constructor(application: Application) : com.stardust.autojs
         }
         var errorMessage: String? = null
         if (AccessibilityServiceUtils.isAccessibilityServiceEnabled(application, SelectToSpeakService::class.java)) {
-            errorMessage = GlobalAppContext.getString(R.string.text_auto_operate_service_enabled_but_not_running)
+            // task-77：打包版同源文案（组件名由**服务类对象**拼，不复制类名字符串）。
+            errorMessage = AccessibilityServiceErrors.notConnectedMessage(
+                application.packageName + "/" + SelectToSpeakService::class.java.name)
         } else {
             if (Pref.shouldEnableAccessibilityServiceByRoot()) {
                 if (!AccessibilityServiceTool.enableAccessibilityServiceByRootAndWaitFor(application, 2000)) {
@@ -64,7 +67,9 @@ class AutoJs private constructor(application: Application) : com.stardust.autojs
         }
         var errorMessage: String? = null
         if (AccessibilityServiceUtils.isAccessibilityServiceEnabled(application, SelectToSpeakService::class.java)) {
-            errorMessage = GlobalAppContext.getString(R.string.text_auto_operate_service_enabled_but_not_running)
+            // task-77：打包版同源文案（组件名由**服务类对象**拼，不复制类名字符串）。
+            errorMessage = AccessibilityServiceErrors.notConnectedMessage(
+                application.packageName + "/" + SelectToSpeakService::class.java.name)
         } else {
             if (Pref.shouldEnableAccessibilityServiceByRoot()) {
                 if (!AccessibilityServiceTool.enableAccessibilityServiceByRootAndWaitFor(application, 2000)) {

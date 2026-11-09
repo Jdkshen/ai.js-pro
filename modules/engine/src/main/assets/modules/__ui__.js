@@ -286,7 +286,15 @@ module.exports = function (runtime, global) {
         var activity = Overriding.of(global, real);
         activity.__overrides__ = {
             resources: resources,
-            theme: theme
+            theme: theme,
+            // task-77（Lead 落接线）：悬浮窗权限跳转兜底 —— 补 package: / 失败回退应用详情页，
+            // 唯一实现在 OverlayPermissionCompat（脚本里 activity.startActivity(ForResult) 也走它）。
+            startActivity: function (intent) {
+                return Packages.com.stardust.autojs.util.OverlayPermissionCompat.startActivity(real, intent);
+            },
+            startActivityForResult: function (intent, requestCode) {
+                return Packages.com.stardust.autojs.util.OverlayPermissionCompat.startActivityForResult(real, intent, requestCode);
+            }
         };
         global.activity = activity;
         global.__activityOverridden__ = true;

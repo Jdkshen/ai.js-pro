@@ -202,14 +202,27 @@ public class ScriptExecuteActivity extends AppCompatActivity {
         }
     }
 
-    private void prepare() {
-        mScriptEngine.put("activity", this);
-        mScriptEngine.setTag("activity", this);
+    /**
+     * task-78：把「宿主 Activity → 引擎」的注入抽成**唯一实现**（app 版与打包版共用，不写第二份）。
+     *
+     * <p>`activity` 全局不是引擎自带的：`LoopBasedJavaScriptEngine` 只从 tag 读（`getTag("activity")`），
+     * 谁执行脚本谁注入。打包版（inrt）里 UI 脚本路由到本 Activity 后，注入点就是这里。
+     */
+    public static void attach(ScriptEngine engine, Activity activity) {
+        if (engine == null) {
+            return;
+        }
+        engine.put("activity", activity);
+        engine.setTag("activity", activity);
         // QuickJS 的 put() 只收简单类型（对象会被忽略），因此宿主 Activity 另走一条通道：
         // host bridge 拿到它以后会把 ui.layout 结果挂到本 Activity 的内容视图。
-        if (mScriptEngine instanceof QuickJsJavaScriptEngine) {
-            ((QuickJsJavaScriptEngine) mScriptEngine).setHostActivity(this);
+        if (engine instanceof QuickJsJavaScriptEngine) {
+            ((QuickJsJavaScriptEngine) engine).setHostActivity(activity);
         }
+    }
+
+    private void prepare() {
+        attach(mScriptEngine, this);
         mScriptEngine.setTag(ScriptEngine.TAG_ENV_PATH, mScriptExecution.getConfig().getPath());
         mScriptEngine.setTag(ScriptEngine.TAG_WORKING_DIRECTORY, mScriptExecution.getConfig().getWorkingDirectory());
         mScriptEngine.init();

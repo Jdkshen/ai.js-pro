@@ -262,8 +262,17 @@ public class ApkBuilder {
             zip.close();
         }
         if (added <= 0) {
-            throw new IOException("补全模板 lib 失败：清单中的 so 在宿主 APK 中均不存在（"
-                    + hostApk + "）");
+            // dev-1451 回归修复（Lead 真机抓到）：清单里若只剩**别的 ABI** 的条目（例如宿主是 arm64-only
+            // 而清单同时声明了 v7a），这里会 added=0 —— 那是「该 ABI 的库拿不到」，**不是**补全失败，
+            // 不能把用户的打包整死（v7a 是否缺由 AbiPolicy 的显式 warning 负责）。只有**无清单**
+            // 的兜底扫描（fallbackAll）拿不到任何宿主 lib 时才是真失败。
+            if (fallbackAll) {
+                throw new IOException("补全模板 lib 失败：宿主 APK 里没有可用的 lib/<abi>/*.so（"
+                        + hostApk + "）");
+            }
+            Log.w("C-PKG", "template libs completion: 0 entries copied（清单条目在宿主 APK 中不存在，"
+                    + "例如 ABI 不匹配）hostApk=" + hostApk.getPath());
+            return 0;
         }
         Log.i("C-PKG", "template slim=true hostApk=" + hostApk.getPath()
                 + " added=" + added + " (general=" + general + " opencv=" + opencv + " v8=" + v8

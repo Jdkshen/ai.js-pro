@@ -132,15 +132,23 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
             return;
         }
         String errorMessage = null;
+        // task-77：服务「已勾选但未连接」是最常见情形，给**可抄**文案（组件名 + 关掉再打开 + nextActions）。
+        String component = com.jdkshen.aijspro.tool.AccessibilityCheck.INSTANCE.componentName(
+                GlobalAppContext.get().getPackageName());
         if (AccessibilityServiceTool.isAccessibilityServiceEnabled(GlobalAppContext.get())) {
-            errorMessage = GlobalAppContext.getString(R.string.text_auto_operate_service_enabled_but_not_running);
+            errorMessage = com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
+                    .notConnectedMessage(component);
         } else {
             if (Pref.shouldEnableAccessibilityServiceByRoot()) {
                 if (!AccessibilityServiceTool.enableAccessibilityServiceByRootAndWaitFor(2000)) {
-                    errorMessage = GlobalAppContext.getString(R.string.text_enable_accessibility_service_by_root_timeout);
+                    errorMessage = GlobalAppContext.getString(R.string.text_enable_accessibility_service_by_root_timeout)
+                            + "\n" + com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
+                            .notConnectedMessage(component);
                 }
             } else {
-                errorMessage = GlobalAppContext.getString(R.string.text_no_accessibility_permission);
+                errorMessage = GlobalAppContext.getString(R.string.text_no_accessibility_permission)
+                        + "\n" + com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
+                        .notConnectedMessage(component);
             }
         }
         if (errorMessage != null) {
@@ -155,19 +163,31 @@ public class AutoJs extends com.stardust.autojs.AutoJs {
             return;
         }
         String errorMessage = null;
+        // task-77：同 ensure —— 「已勾选但未连接」给可抄文案（等待行为本身不变：仍然无限等到连接或用户停止）。
+        String component = com.jdkshen.aijspro.tool.AccessibilityCheck.INSTANCE.componentName(
+                GlobalAppContext.get().getPackageName());
         if (AccessibilityServiceTool.isAccessibilityServiceEnabled(GlobalAppContext.get())) {
-            errorMessage = GlobalAppContext.getString(R.string.text_auto_operate_service_enabled_but_not_running);
+            errorMessage = com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
+                    .notConnectedMessage(component);
         } else {
             if (Pref.shouldEnableAccessibilityServiceByRoot()) {
                 if (!AccessibilityServiceTool.enableAccessibilityServiceByRootAndWaitFor(2000)) {
-                    errorMessage = GlobalAppContext.getString(R.string.text_enable_accessibility_service_by_root_timeout);
+                    errorMessage = GlobalAppContext.getString(R.string.text_enable_accessibility_service_by_root_timeout)
+                            + "\n" + com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
+                            .notConnectedMessage(component);
                 }
             } else {
-                errorMessage = GlobalAppContext.getString(R.string.text_no_accessibility_permission);
+                errorMessage = GlobalAppContext.getString(R.string.text_no_accessibility_permission)
+                        + "\n" + com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
+                        .notConnectedMessage(component);
             }
         }
         if (errorMessage != null) {
             AccessibilityServiceTool.goToAccessibilitySetting();
+            if (errorMessage != null) {
+                com.stardust.autojs.core.accessibility.AccessibilityServiceErrors
+                        .notConnectedMessage(component); // 文案已进 errorMessage；保留调用点便于同源核对
+            }
             if (!com.jdkshen.aijspro.automation.AutomationConnectionState.awaitReady(GlobalAppContext.get(),-1)) {
                 throw new ScriptInterruptedException();
             }
