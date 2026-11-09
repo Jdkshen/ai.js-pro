@@ -390,29 +390,14 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
     }
   }
 
-  /// 示例库按需下载（task-122）：大示例不在 APK 里，点下载后落到 files/sample。
+  /// 示例下载**已废弃**（task-129：大示例不再从网络下载，sampleLibrary 恒返回空清单、界面不出下载行）。
+  ///
+  /// 原生侧本来就没有 sampleDownload 这个方法，原来的调用是**死调用**
+  /// （F1 契约核对 --strict 会 FAIL：Dart 调了、原生没 case）。
+  /// 这里改成明确提示、不再发起不存在的桥调用；进度条/按钮沿用现状（列表为空时根本不渲染，布局不变）。
   Future<void> downloadSample(Map<String, dynamic> file) async {
-    final id = file['sampleId']?.toString() ?? '';
-    if (id.isEmpty || downloading.containsKey(id)) return;
-    setState(() => downloading[id] = {
-          'received': 0,
-          'total': file['size'] ?? 0,
-          'phase': 'downloading'
-        });
-    final timer = Timer.periodic(
-        const Duration(milliseconds: 400), (_) => pollDownload(id));
-    try {
-      await LocalBridge.call('sampleDownload', {'id': id});
-      if (mounted) message(context, '示例已下载，可直接打开运行');
-    } catch (e) {
-      if (mounted) message(context, '示例下载失败：$e');
-    } finally {
-      timer.cancel();
-      if (mounted) {
-        setState(() => downloading.remove(id));
-        await load();
-      }
-    }
+    if (!mounted) return;
+    message(context, '示例下载已禁用：示例库改为内置示例，请直接打开运行');
   }
 
   Future<void> pollDownload(String id) async {

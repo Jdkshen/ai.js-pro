@@ -669,7 +669,10 @@ class _HomeState extends State<Home> with WidgetsBindingObserver {
         state['granted'] != false ||
         state['prompted'] != false) return;
     try {
-      if (await LocalBridge.call('storageIntroduce') != true || !mounted)
+      // task-49：原生方法名是 storagePermission（storageIntroduce 是历史名、原生从来没有这个 case，
+      // Dart 调它会拿到 ok=false → StateError）。这里改用现行名；动作与返回值语义完全一致
+      // （拉起存储/所有文件访问授权并回 true，随后由本方法弹自己的说明框）。
+      if (await LocalBridge.call('storagePermission') != true || !mounted)
         return;
       final accepted = await showDialog<bool>(
           context: context,
