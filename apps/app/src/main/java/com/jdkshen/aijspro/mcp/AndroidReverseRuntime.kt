@@ -162,6 +162,8 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                 ToolkitIo.json("sessionId" to sessionId,"commands" to nativeAnalysis.r2Commands(sessionId),
                     "executed" to false,"analysisOnly" to true)
             }
+            // entry_：入口分析（只读编排：Manifest 组件 + DEX 类表 + ELF 摘要 + 提前加载建议）。
+            "entry_"->entryAnalysis(args)
             else->radare(name,args,temp)
         }}finally{temp.deleteRecursively()}
     }
@@ -319,6 +321,34 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
                     evidencePortListening,evidenceSynSent,args.tBool("sameUid",false),probe))
             }
         }
+    }
+    /**
+     * entry_：静态入口分析。输入 path（工具目录内）或 workspaceId(+editSessionId) 二选一；
+     * workspaceId 复用与 apk_* 工具相同的工作区目录布局（<filesDir>/apk-toolkit/<rootHash>/<workspaceId>/base.apk），
+     * 只读校验 metadata 与（可选）编辑会话，不改任何状态。
+     */
+    private fun entryAnalysis(args:JsonObject):JsonObject {
+        val input=entryInput(args)
+        // 与 apk_inject_gadget 传给 ToolkitGadgetPreload.plan 的值完全一致（同一个 Build.SUPPORTED_ABIS 首选）。
+        val preferredAbi=runCatching{android.os.Build.SUPPORTED_ABIS.firstOrNull()}.getOrNull()
+        return ToolkitEntryAnalysis.analyze(input,preferredAbi)
+    }
+    private fun entryInput(args:JsonObject):File {
+        val path=args.tString("path","").trim()
+        val workspace=args.tString("workspaceId","").trim()
+        require(path.isNotEmpty()||workspace.isNotEmpty()){"path 与 workspaceId 至少给一个（二选一）"}
+        require(path.isEmpty()||workspace.isEmpty()){"path 与 workspaceId 只能给一个"}
+        if(path.isNotEmpty())return file(args,limit=ToolkitIo.MAX_APK)
+        val store=File(File(context.filesDir,"apk-toolkit"),ToolkitIo.version(root.path.toByteArray()).take(16))
+        val directory=File(store,ToolkitIo.id(workspace))
+        if(!File(directory,"workspace.json").isFile)throw ToolkitException("WORKSPACE_EXPIRED","工作区不存在或已过期："+workspace,"workspaceId")
+        val session=args.tString("editSessionId","").trim()
+        if(session.isNotEmpty()&&!File(File(File(directory,"sessions"),ToolkitIo.id(session)),"session.json").isFile){
+            throw ToolkitException("SESSION_EXPIRED","编辑会话不存在或已过期："+session,"editSessionId")
+        }
+        val snapshot=File(directory,"base.apk")
+        if(!snapshot.isFile)throw ToolkitException("WORKSPACE_EXPIRED","工作区快照 base.apk 不存在（可能已被 GC）："+workspace,"workspaceId")
+        return snapshot
     }
     private fun injectGadget(args:JsonObject,temp:File):JsonObject {
         val detail=args.tString("detail","full").lowercase()

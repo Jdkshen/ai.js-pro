@@ -101,20 +101,34 @@ internal class ToolkitElf(val bytes: ByteArray) {
         return ToolkitIo.json("found" to (segment != null), "mapping" to ToolkitIo.json("virtualAddress" to v?.let(::hex), "fileOffset" to offset,
             "isLoaded" to (segment != null), "hasFileBytes" to (offset != null), "executable" to (segment != null && segment.flags and 1 != 0L), "segment" to segment, "symbol" to symbol))
     }
-    fun needed(): List<String> {
+    /**
+     * 动态段只读摘要（DT_NEEDED 列表 + DT_SONAME）；读不到动态段时返回空列表 + null。
+     * entry_ 与 apk_native_inspect 共用这一份遍历，避免两处对 DT_* 的解释漂移。
+     */
+    private fun dynamicSummary(): Pair<List<String>, String?> {
         val dynamic = sections.firstOrNull { it.type == 6L }
         val segment = segments.firstOrNull { it.type == 2L }
-        val start = dynamic?.offset ?: segment?.offset ?: return emptyList()
+        val start = dynamic?.offset ?: segment?.offset ?: return emptyList<String>() to null
         val size = dynamic?.size ?: segment!!.size; val stride = if (wide) 16 else 8
         require(size / stride <= 100000)
         var strings: Long? = dynamic?.let { sections.getOrNull(it.link)?.offset }; val indices = ArrayList<Long>()
+        var sonameIndex: Long? = null
         for (index in 0 until (size / stride).toInt()) {
             val p = (start + index * stride).toInt(); val tag = word(p); val value = word(p + stride / 2)
             if (tag == 0L) break
             if (tag == 1L) indices.add(value)
             if (tag == 5L && strings == null) strings = fileOffset(value)
-        }; return strings?.let { pool -> indices.map { string(pool + it, bytes.size.toLong()) } } ?: emptyList()
+            if (tag == 14L) sonameIndex = value
+        }
+        val pool = strings ?: return emptyList<String>() to null
+        val end = bytes.size.toLong()
+        val needed = indices.map { string(pool + it, end) }
+        val soname = sonameIndex?.let { string(pool + it, end) }?.takeIf { name -> name.isNotEmpty() }
+        return needed to soname
     }
+    fun needed(): List<String> = dynamicSummary().first
+    /** DT_SONAME（未声明时 null）。 */
+    fun soname(): String? = dynamicSummary().second
     fun inspect(): JsonObject = ToolkitIo.json("format" to "ELF", "bits" to if (wide) 64 else 32,
         "endianness" to if (little) "little" else "big", "machine" to machine, "architecture" to when(machine) {183 -> "aarch64";40 -> "arm";62 -> "x86_64";3 -> "x86";else -> "machine-$machine"},
         "entryAddress" to hex(entryAddress), "neededLibraries" to needed(), "sectionCount" to sections.size,

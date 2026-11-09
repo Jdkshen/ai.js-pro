@@ -47,7 +47,8 @@ internal object ToolkitReverseTools {
         "native_resident_command" to "在常驻会话里执行单条 r2 命令（framing=<cmd>;?e <marker>，返回剔除 marker）；输出/超时都有界，禁止 ! shell 逃逸。",
         "native_resident_batch" to "在常驻会话里一次执行多条 r2 命令（逐条隔离：一条失败/超时不影响其它条）；返回每条 ok/errorCode/output 与总数/总字节。",
         "native_resident_close" to "关闭常驻 r2 会话并返回真实释放（closed/remainingSessions/releasedProcess）。",
-        "native_resident_list" to "列出常驻 r2 会话（TTL、是否注入执行器 runnerConfigured、命令计数、marker）。"
+        "native_resident_list" to "列出常驻 r2 会话（TTL、是否注入执行器 runnerConfigured、命令计数、marker）。",
+        "entry_" to "只读入口分析（静态编排，不新增解析能力）：一次返回 APK 入口画像——① application{class, classSource=manifest|default, appComponentFactory}：声明了 appComponentFactory（Android 10+）时 Application 由它创建、application@name 不可靠；② launcher[]（activity 与 activity-alias，alias 给出 targetActivity 并展开）+ 所有显式 exported=true 的组件及其 android:process；③ nativeEntryHints[]（lib/**/*.so 的 DT_SONAME/DT_NEEDED/JNI_OnLoad/.init_array 摘要，逐项 evidence/confidence）——**没找到 JNI_OnLoad 不等于没有 native 初始化**（可能在 .init_array/DT_INIT、被壳 dlopen 或加密、符号被裁剪）；④ preloadRecommendation{mode=dt_needed|clinit|provider, reason, reasonSource}——**与 apk_inject_gadget 同源**：dt_needed 用 ToolkitGadgetPreload.plan 的字节级预检（.dynstr 余量 + .dynamic 空槽）、clinit 用 ToolkitGadget.assessClinit 的预检（Application 可继承且未声明 appComponentFactory），reasonSource 回显函数名；这是**静态建议不是保证**，注入时以 apk_inject_gadget 的 PRELOAD_* 失败码为准。输入 path（工具目录内）或 workspaceId(+editSessionId) 二选一。诚实边界：只做静态分析，组件可能被壳动态注册/替换，runtimeVerified 恒为 false；不执行、不安装、不改任何字节。默认后台 job（background=false 可同步返回）。"
     )
     val names = descriptions.keys.toList()
     val guideNames = setOf("reverse_guide", "reverse_plan")
@@ -114,6 +115,9 @@ internal object ToolkitReverseTools {
             "native_compare"->{path();path("otherPath");page()}
             "yara_scan"->{path();path("rulesPath");field("scanTimeoutSeconds",num(1,30,10));field("includeOffsets",ToolkitIo.json("type" to "boolean","default" to true))}
             "native_emulate"->{field("architecture",ToolkitIo.json("type" to "string","enum" to listOf("arm64","arm","thumb","x86","x86_64")),true);field("codeHex",str(),true);field("dataHex",str());field("registers",ToolkitIo.json("type" to "object","additionalProperties" to str("0x十六进制寄存器值")));field("timeoutMs",num(1,1000,100));field("instructionLimit",num(1,100000,10000))}
+            "entry_"->{field("path",str("工具目录内的 APK 相对路径；与 workspaceId 二选一"))
+                field("workspaceId",str("已打开的 APK 工作区 id（apk_workspace_open 或 apk_list_available_apks 返回）；与 path 二选一"))
+                field("editSessionId",str("可选：只做编辑会话存在性校验（不存在则 SESSION_EXPIRED），不参与分析"))}
             "frida_status","frida_processes","frida_eval"->{field("endpoint",str("host:port，默认127.0.0.1:27042"));field("token",str("apk_inject_gadget返回的连接令牌"));if(name=="frida_eval"){field("pid",num(1,Int.MAX_VALUE),true);field("script",str("Frida JavaScript ≤64KiB"),true);field("durationMs",num(1,10000,1000))}
                 field("portListening",ToolkitIo.json("type" to "boolean","default" to false));field("synSentObserved",ToolkitIo.json("type" to "boolean","default" to false));field("sameUid",ToolkitIo.json("type" to "boolean","default" to false))
                 field("probeTimeoutMs",num(50,10000,800))

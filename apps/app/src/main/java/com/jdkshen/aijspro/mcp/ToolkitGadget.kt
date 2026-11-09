@@ -367,68 +367,184 @@ internal object ToolkitGadget {
     internal fun expandClassName(packageName: String, raw: String): String =
         if (raw.startsWith(".")) packageName + raw else raw
 
+    /** Manifest 里一个组件的只读摘要（entry_ 入口分析用）。 */
+    internal data class ManifestComponent(
+        val kind: String,
+        val declaredName: String,
+        val name: String,
+        /** 显式 android:exported；null=Manifest 未声明（是否可被外部启动还取决于 intent-filter 与系统版本）。 */
+        val exported: Boolean?,
+        /** 显式且合法的 android:process；null=未声明（继承 application）。 */
+        val process: String?,
+        /** activity-alias 的 targetActivity（原始写法，未展开）。 */
+        val targetActivity: String?,
+        /** MAIN+LAUNCHER intent-filter（与 patchManifest/resolveProviderProcess 同一判定）。 */
+        val launcher: Boolean,
+        val hasIntentFilter: Boolean,
+    )
+
+    private val COMPONENT_KINDS = listOf("activity", "activity-alias", "service", "receiver", "provider")
+
     /**
-     * clinit 提前加载的**预检 + 生成**：只读输入 APK，校验父类可继承后用进程内 smali 汇编生成新 DEX。
-     * 失败抛 ToolkitException(PRELOAD_CLINIT_*)，调用方据此**不产出任何 APK**。
+     * 只读解析 application 下的组件清单。
+     *
+     * <p>**复用** [isLauncherComponent] 与 [processOf] —— 与 [patchManifest] 里
+     * [resolveProviderProcess] 判「入口 activity/activity-alias」和「android:process 是否合法」
+     * 用的是同一套规则，entry_ 因此不会与注入器给出互相矛盾的入口/进程结论。
      */
-    internal fun prepareClinitHook(input: File, scratch: File, explicitTarget: String? = null): ClinitHook {
+    internal fun readComponents(bytes: ByteArray): List<ManifestComponent> {
+        require(ToolkitResources.isBinaryXml(bytes)) { "输入APK的Manifest必须为二进制AXML" }
+        val xml = ResXmlDocument().apply { readBytes(ByteArrayInputStream(bytes)) }
+        val manifest = xml.documentElement ?: error("Manifest根节点不存在")
+        val packageName = manifest.searchAttributeByName("package")?.valueAsString ?: error("Manifest缺少包名")
+        val app = manifest.getElement("application") ?: error("Manifest缺少application")
+        val result = ArrayList<ManifestComponent>()
+        for (kind in COMPONENT_KINDS) {
+            for (element in app.listElements(kind)) {
+                val declared = element.searchAttributeByName("name")?.valueAsString?.trim().orEmpty()
+                if (declared.isEmpty()) continue
+                result.add(ManifestComponent(
+                    kind = kind,
+                    declaredName = declared,
+                    name = expandClassName(packageName, declared),
+                    // 有的 Manifest 把布尔属性存成字符串：解析失败按「未声明/未判定」处理，不让单个属性打断整棵树。
+                    exported = runCatching { element.searchAttributeByName("exported")?.valueAsBoolean }.getOrNull(),
+                    process = processOf(element),
+                    targetActivity = element.searchAttributeByName("targetActivity")?.valueAsString?.trim()?.takeIf { it.isNotEmpty() },
+                    launcher = isLauncherComponent(element),
+                    hasIntentFilter = element.listElements("intent-filter").isNotEmpty(),
+                ))
+            }
+        }
+        return result
+    }
+
+    /**
+     * clinit 预检的**只读**结果（不编译 DEX、不写任何文件）。
+     *
+     * <p>failureCode/failureMessage 与 [prepareClinitHook] 抛出的 ToolkitException **完全同源**：
+     * apk_inject_gadget 的 preloadMode=clinit 与 entry_ 的 preloadRecommendation 都读这一份评估，
+     * 不会出现「建议 clinit、注入时报不可用」的分歧。
+     */
+    internal data class ClinitAssessment(
+        val packageName: String?,
+        val applicationDeclared: Boolean,
+        /** 生效的父类（已展开为全限定名）；显式 clinitTarget 优先。 */
+        val originalApplication: String?,
+        /** manifest | clinitTarget | default。 */
+        val targetSource: String,
+        val appComponentFactory: String?,
+        /** 父类可用（在 DEX 集里找到，或就是 android.app.Application 默认值）。 */
+        val parentClassUsable: Boolean,
+        val dexEntryCount: Int,
+        val parentIsFinal: Boolean,
+        val parentIsInterface: Boolean,
+        val clinitClassPresent: Boolean,
+        val failureCode: String?,
+        val failureMessage: String?,
+    ) {
+        val available: Boolean get() = failureCode == null
+    }
+
+    /** assessClinit 的构造助手（成员函数：默认参数在成员函数上一定支持）。 */
+    private fun preloadOutcome(details: ManifestApplication?, original: String?, source: String,
+                               usable: Boolean = false, dexEntries: Int = 0, isFinal: Boolean = false,
+                               isInterface: Boolean = false, clinitPresent: Boolean = false,
+                               code: String? = null, message: String? = null) = ClinitAssessment(
+        packageName = details?.packageName, applicationDeclared = details?.applicationName != null,
+        originalApplication = original, targetSource = source, appComponentFactory = details?.appComponentFactory,
+        parentClassUsable = usable, dexEntryCount = dexEntries, parentIsFinal = isFinal,
+        parentIsInterface = isInterface, clinitClassPresent = clinitPresent,
+        failureCode = code, failureMessage = message)
+
+    /**
+     * clinit 的只读预检：与 [prepareClinitHook] 共用同一套判定与失败码（首个失败即返回，后续检查不再执行）。
+     */
+    internal fun assessClinit(input: File, explicitTarget: String? = null): ClinitAssessment {
         ZipFile(input).use { zip ->
             val manifestEntry = zip.getEntry("AndroidManifest.xml")
-                ?: throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "clinit 需要完整单APK：缺少 AndroidManifest.xml", "clinitTarget")
+                ?: return preloadOutcome(null, null, "none", code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    message = "clinit 需要完整单APK：缺少 AndroidManifest.xml")
             val manifest = zip.getInputStream(manifestEntry).use { ToolkitIo.read(it, 4 * 1024 * 1024) }
             val details = try {
                 readApplicationDetails(manifest)
             } catch (failure: Throwable) {
                 if (failure is VirtualMachineError) throw failure
-                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
-                    "无法读取 application 信息：" + (failure.message ?: failure.javaClass.simpleName), "clinitTarget")
+                return preloadOutcome(null, null, "none", code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    message = "无法读取 application 信息：" + (failure.message ?: failure.javaClass.simpleName))
             }
-            val raw = explicitTarget?.trim()?.takeIf { it.isNotEmpty() } ?: details.applicationName
+            val explicit = explicitTarget?.trim()?.takeIf { it.isNotEmpty() }
+            val raw = explicit ?: details.applicationName
+            val source = if (explicit != null) "clinitTarget" else if (details.applicationName != null) "manifest" else "default"
             val original = raw?.let { expandClassName(details.packageName, it) } ?: "android.app.Application"
             if (details.appComponentFactory != null) {
-                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
-                    "目标声明了 android:appComponentFactory=" + details.appComponentFactory + "：它可能自己实例化 Application，application@name 不可靠", "clinitTarget")
+                return preloadOutcome(details, original, source, code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    message = "目标声明了 android:appComponentFactory=" + details.appComponentFactory + "：它可能自己实例化 Application，application@name 不可靠")
             }
             if (original == CLINIT_CLASS) {
-                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "父类不能是本工具生成的类 " + CLINIT_CLASS, "clinitTarget")
+                return preloadOutcome(details, original, source, code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    message = "父类不能是本工具生成的类 " + CLINIT_CLASS)
             }
             if (!original.matches(Regex("[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)+"))) {
-                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "application@name 不是合法类名：" + original, "clinitTarget")
+                return preloadOutcome(details, original, source, code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    message = "application@name 不是合法类名：" + original)
             }
             val originalType = "L" + original.replace('.', '/') + ";"
             val clinitType = "L" + CLINIT_CLASS.replace('.', '/') + ";"
-            var superFound = original == "android.app.Application"
+            var usable = original == "android.app.Application"
             var clinitPresent = false
+            var dexEntries = 0
             for (entry in zip.entries().asSequence().filter { it.name.matches(Regex("classes[0-9]*\\.dex")) }) {
+                dexEntries++
                 val dex = try {
                     ToolkitDex(zip.getInputStream(entry).use { ToolkitIo.read(it, ToolkitIo.MAX_ENTRY) })
                 } catch (failure: Throwable) {
                     if (failure is VirtualMachineError) throw failure
-                    throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
-                        "无法解析 " + entry.name + "（可能被壳加密/损坏），不能确认父类可继承：" + (failure.message ?: failure.javaClass.simpleName), "clinitTarget")
+                    return preloadOutcome(details, original, source, usable = false, dexEntries = dexEntries,
+                        code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                        message = "无法解析 " + entry.name + "（可能被壳加密/损坏），不能确认父类可继承：" + (failure.message ?: failure.javaClass.simpleName))
                 }
                 for (definition in dex.classes) {
                     if (definition.type == clinitType) clinitPresent = true
                     if (definition.type == originalType) {
-                        superFound = true
+                        usable = true
                         if (definition.accessFlags and 0x10 != 0) {
-                            throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "父类 " + original + " 是 final，无法继承", "clinitTarget")
+                            return preloadOutcome(details, original, source, usable = true, dexEntries = dexEntries,
+                                isFinal = true, code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                                message = "父类 " + original + " 是 final，无法继承")
                         }
                         if (definition.accessFlags and 0x200 != 0) {
-                            throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "父类 " + original + " 是接口，无法继承", "clinitTarget")
+                            return preloadOutcome(details, original, source, usable = true, dexEntries = dexEntries,
+                                isInterface = true, code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                                message = "父类 " + original + " 是接口，无法继承")
                         }
                     }
                 }
             }
-            if (!superFound) {
-                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
-                    "在 APK 的 DEX 集里找不到 " + original + "（壳可能动态加载/加密），无法确认能否继承；可用 clinitTarget 显式指定", "clinitTarget")
+            if (!usable) {
+                return preloadOutcome(details, original, source, usable = false, dexEntries = dexEntries, clinitPresent = clinitPresent,
+                    code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    message = "在 APK 的 DEX 集里找不到 " + original + "（壳可能动态加载/加密），无法确认能否继承；可用 clinitTarget 显式指定")
             }
             if (clinitPresent) {
-                throw ToolkitException("PRELOAD_CLINIT_UNSUPPORTED_APPLICATION", "APK 里已存在 " + CLINIT_CLASS + "，请从原 APK 重新生成", "clinitTarget")
+                return preloadOutcome(details, original, source, usable = true, dexEntries = dexEntries, clinitPresent = true,
+                    code = "PRELOAD_CLINIT_UNSUPPORTED_APPLICATION",
+                    message = "APK 里已存在 " + CLINIT_CLASS + "，请从原 APK 重新生成")
             }
-            return ClinitHook(CLINIT_CLASS, original, compileClinitApplication(original, scratch))
+            return preloadOutcome(details, original, source, usable = true, dexEntries = dexEntries)
         }
+    }
+
+    /**
+     * clinit 提前加载的**预检 + 生成**：只读输入 APK，校验父类可继承后用进程内 smali 汇编生成新 DEX。
+     * 失败抛 ToolkitException(PRELOAD_CLINIT_*)，调用方据此**不产出任何 APK**；判定整体复用 [assessClinit]。
+     */
+    internal fun prepareClinitHook(input: File, scratch: File, explicitTarget: String? = null): ClinitHook {
+        val assessment = assessClinit(input, explicitTarget)
+        val code = assessment.failureCode
+        if (code != null) throw ToolkitException(code, assessment.failureMessage ?: code, "clinitTarget")
+        val parent = assessment.originalApplication ?: "android.app.Application"
+        return ClinitHook(CLINIT_CLASS, parent, compileClinitApplication(parent, scratch))
     }
 
     /**
