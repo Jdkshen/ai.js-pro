@@ -1,8 +1,8 @@
 <!-- section:id=overview -->
 # AI.js Pro 逆向 MCP 自发现指南
 
-> 适用基线：**dev-1412**。本机公开 MCP 入口 **219 个**（**210 个规范名 + 9 个兼容别名**：status 4 · script 11 · workspace 10 · engine 5 · device 26 · terminal 11 · overlay 2 · asset 5 · toolkit 93 · reverse 43）。以上为 K40 dev-1412 实测：`tools/list` 返回 219 项，`get_status` 的 `toolCount=219`、`canonicalToolCount=210`，`toolCategories` 与上面逐项一致。旧文写的 214 / 205 / status 3 / toolkit 88 已过期。
-> 本指南部分细节段落写于 dev-1330 时代，若与 `tools/list` 或 [`AIjs-MCP-Guide.md`](AIjs-MCP-Guide.md) 的「dev-1409~1412 行为变化」「dev-1368 行为变化」冲突，以后者为准。其中**逆向类工具现为 43 个**（本指南写于 dev-1330，下面这句列的是当时那 19 个已注册工具，名单已扩充）：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
+> 适用基线：**dev-1429**。本机公开 MCP 入口 **224 个**（**215 个规范名 + 9 个 Pro 兼容别名**：status 4 · script 11 · workspace 10 · engine 5 · device **27** · terminal 11 · overlay 2 · asset 5 · toolkit **96** · reverse **44**），另有 **16 个只派发族别名**（`dex_*`/`so_*`，**不出现在 tools/list**，见「族前缀别名」）。以上为 K40 dev-1429 实测：`tools/list` 返回 224 项、`serverInfo.version=dev-1429`，`get_status` 的 `toolCount=224`、`canonicalToolCount=215`，`toolCategories` 与上面逐项一致。旧文写的计数已过期，一律以本节与 `tools/list` 为准。
+> 本指南部分细节段落写于 dev-1330 时代，若与 `tools/list` 或 [`AIjs-MCP-Guide.md`](AIjs-MCP-Guide.md) 的「dev-1409~1412 行为变化」「dev-1368 行为变化」冲突，以后者为准。其中**逆向类工具现为 44 个**（本指南写于 dev-1330，下面这句列的是当时那 19 个已注册工具，名单已扩充）：`reverse_guide`、`reverse_capabilities`、`reverse_plan`、`apk_decode_project`、`apk_build_project`、`apk_install_framework`、`native_analyze`、`native_functions`、`native_function_detail`、`native_decompile`、`native_xrefs`、`native_compare`、`artifact_fingerprint`、`yara_scan`、`native_emulate`、`frida_status`、`frida_processes`、`frida_eval`、`apk_inject_gadget`。
 >
 > 注册不等于可用：可选组件可能未安装、平台策略可能禁止执行下载的二进制、Frida使用免Root Gadget集成流程、r2ghidra 为按需安装组件，已在小米8验证伪代码输出。任何结论都必须落到真实 `tools/list`、`apk_component_status` 和 `apk_job_result` 证据上。
 
@@ -15,7 +15,7 @@
 3. **真实执行**：由已注册的 `apk_*`、`file_*`、`zip_*`、`native_*`、`frida_*` 等工具完成；计划本身不执行、不下载、不注入。
 
 ```text
-reverse_guide(topic=index)      # 章节、工作流、43 个逆向工具状态
+reverse_guide(topic=index)      # 章节、工作流、44 个逆向工具状态
 reverse_guide(topic=<section>)  # 按 section id 读正文，可分页
 reverse_plan(goal=<goal>)       # 取机读 steps；组件和工具状态明确
 按 plan 执行可用步骤             # 计划本身不执行
@@ -23,7 +23,7 @@ reverse_plan(goal=<goal>)       # 取机读 steps；组件和工具状态明确
 
 ## 本版真实边界（`guideVersion` 字段仍为 `dev1330-1`，工具数已按 dev-1412 实测复核）
 
-- **43 个逆向工具已注册**（dev-1412 实测；本节旧文写的「19 个」是 dev-1330 时代的数字），但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
+- **44 个逆向工具已注册**（dev-1429 实测；本节旧文写的「19 个」是 dev-1330 时代的数字），但每个工具仍受组件、平台执行策略、输入预算和用户授权约束。
 - 可选组件共 9 个：`jadx`、`apk-resources`、`apktool`、`radare2`、`r2ghidra`、`yara`、`unicorn`、`frida`、`frida-gadget`。`apk_component_install/remove` 的 `component` 枚举就是这 9 个。
 - **Apktool 3.0.3** 已在本机真机通过 decode → edit → rebuild：使用私有 `app_process` + AAPT2 wrapper，不把 apktool 类加载进主进程。但**任意 APK 不保证**可解包/回编译，失败必须报原始 stderr。
 - **radare2** 的 `native_*` 工具直接读手机路径，不读 APK 快照 locator；要从快照分析 so，先用 `apk_copy_entry(direction=workspace_to_local)` 导出。
@@ -791,6 +791,53 @@ Frida 17 起，一批 Module 静态方法被移除，不是函数本身消失。
 - 静态差异不是行为等价证明；`native_compare` 不是函数级语义 diff。
 - `apk_session_diff` 只比较同一会话相对其原快照的变更，不是两个 APK 的 diff。
 
+<!-- section:id=newtools -->
+## 新工具与族前缀别名（dev-1422~1429）
+
+这 5 个工具 dev-1422 起陆续加入；参数一律以 `tool_schema{tool:"…"}` 为准。
+
+### `vm_survey`（dev-1422）
+
+静态找 dispatch 壳候选：`candidates[]{score,contributions,features}` + `scoreBuckets`（与 `candidateCount` **同集合**、不被 `limit` 截断）、opcode 聚类、大常量 `payloads[]`、dispatch 数组摊平、按 `opcodeRules` **线性**反汇编（`coveragePercent` + `stopsAt`/`stopReason`）、只到块起点的 CFG。
+
+- 参数：`workspaceId`(+`editSessionId`) 或工具目录内 `path`；**只给 `blobHex`(+`opcodeRules`) 即 blob-only**（不扫 DEX）。
+- 边界：静态启发式、**不做反编译、不承诺任意 VMP 一键还原**；**0 候选是合法结果**（返回写清扫了多少 dex/类/方法）；权重未用真实 VMP 样本校准；CFG 偏移是 code units；`fill-array-data`/native 解密后的常量看不到。
+- 权重校准（dev-1430 起）：可选 `weights{switchCount,switchCases,dispatchLoopBackEdges,arrayIndexOps,invokeCount,instructionCount,classPayloadBytes}` 覆盖 **7 个**特征权重；返回 `weightsSource=default|custom` + **实际生效权重表** + `scoreFormula`（`score=min(100, Σ normalized×weight)`）。**封顶 100 会并列 → 校准看候选的 `rawScore`（不封顶）**；负数/非整数/**全 0**/未知键 → `INVALID_ARGUMENT`（消息列出 7 个可用键），**显式 0 = 关闭该项**（该贡献项仍在 `contributions` 里、值为 0）。
+- 误用：把 `candidateCount` 大当「壳多」；把分数当结论；用 `payloadRef` 却不给 dex 集。
+
+### `entry_`（dev-1425）
+
+一次拿入口画像：`application{class,classSource,appComponentFactory}`、`launcher[]`（`activity-alias` 给声明值+展开值）、`exportedComponents[]`（含 `android:process`）、`nativeEntryHints[]`、`preloadRecommendation{mode,reason,reasonSource,suggestedArguments}`、`staticConclusions[]`/`needsDynamicConfirmation[]`。
+
+- 参数：`path` 或 `workspaceId`(+`editSessionId`) 二选一。
+- 边界：**纯静态、`runtimeVerified=false`**；壳可动态注册/替换组件；**「没找到 JNI_OnLoad」≠「没有 native 初始化」**；建议与 `apk_inject_gadget` **同源**（`reasonSource` 回显函数名+实参），但注入时以 `PRELOAD_*` 失败码为准。
+- 误用：把 `preloadRecommendation.mode` 当保证；忽略 `needsDynamicConfirmation[]`。
+
+### `chain_resume`（dev-1426；构建侧 AXML 分层 dev-1427）
+
+`checkpoint → 回编 → 对齐/签名 → 验签` 一条链。必填 `workspaceId`+`editSessionId`；`steps` 默认 `all`；`checkpoint` 必须配 `expectedRevision`（不存在/过期 → `CHAIN_RESTORE_FAILED`，链未开始且**无产物**）。
+
+- 返回：`ok`、`stoppedAt`、`failure{where,phase,code,message}`、`steps[]`（含 `skipped`）、`finalArtifact{path,bytes,sha256}`（磁盘实测）、`verified`（**只来自 verifier 逐方案结论**）、`runtimeVerified`、`restoredFrom`。
+- 边界：**任一步失败返回 payload `ok=false`，不抛异常 → 客户端必须看 `ok`**；`verified` ≠「签过名」；`finalArtifact` ≠ 可安装证明；不重编资源、不安装、不覆盖源包；dev-1427 起 Manifest 缺资源上下文转 `warnings[]` 的 `MANIFEST_PRIMARY_DECODER_FALLBACK` 并继续构建，`res/**/*.xml` 仍失败。
+
+### `crypto_`（dev-1428）
+
+JCA：`op=hash|hmac|aes_gcm|rsa_sign|rsa_verify`（仅 `op` 必填）；密钥**只允许显式** `keyHex` 或工具目录内 `keyRef`（不读 App 私有密钥库，只回显 `keyBytes`/`keySha256Prefix`）。失败码 `ALG_UNSUPPORTED`/`KEY_INVALID`/`MAC_INVALID`/`DECRYPT_FAILED`/`INPUT_TOO_LARGE`；**失败不留半成品**。
+
+- 边界：不管理密钥、不做 KDF/PSS/CBC；GCM 通过只说明 tag 校验通过，**不构成信任判断**；`rsa_verify` 公钥路径 `valid=false` 是「签名不匹配」（工具执行成功）。
+- 误用：`keyRef:"../x"` → `KEY_INVALID`；`inputHex`+`path` 同给 → `INVALID_ARGUMENT`。
+
+### `dev_screen_diff`（dev-1424）
+
+与 `capture_screen` **同一条截图管线**、**无必填**；不传 `baseline` 就与进程内上一帧比。返回 `changedPixels`/`ratio`/`bbox`/`maxChannelDelta`/`frameSha256`/`baselineSource`/`sizeSource`。
+
+- 边界：像素级、不做语义/模板匹配；**`ratio` ≠ 界面变化程度**；尺寸不一致**直接 `SIZE_MISMATCH`**（不裁剪不缩放，等比时给 `suggestedArguments`/`copyableCommand`）。
+- 误用：第一次 `NO_BASELINE` 以为坏了（已记帧，**同参数再调一次**）。
+
+### 族前缀别名：`dex_*` / `so_*`（dev-1429）
+
+`dex_read_class_outline`/`dex_xref`/`dex_search_members`/`dex_call_graph`/`dex_hierarchy`/`dex_interface_table`/`dex_list_classes`/`dex_list_methods` → `apk_dex_*`；`so_inspect`/`so_list_items`/`so_map_address`/`so_xref`/`so_disassemble`/`so_analyze_control_flow`/`so_patch_instructions`/`so_patch_string` → `apk_native_*`。共 **16 个**；**新旧等价、旧名长期保留**；**不出现在 tools/list**（advertised 仍 224）；`tool_schema{tool:"dex_xref"}` 会回 `resolved=apk_dex_xref` + `familyAliases[]`；`tier=core`/`groups` 不含别名。
+
 <!-- section:id=errors -->
 ## 错误、nextActions 与预算
 
@@ -874,9 +921,9 @@ Frida 17 起，一批 Module 静态方法被移除，不是函数本身消失。
 
 `variables[]` 里的 `${name}` 必须替换成真实值；`example` 只是形状示例，不是可直接使用的真实 ID。`unresolvedVariables` 非空时，`args` 还是模板；`unknownVariables` 非空说明资产/调用方变量声明不一致，先修模板。
 
-### 43 个逆向工具与组件
+### 44 个逆向工具与组件
 
-`candidateTools[]` 保留 **19** 个名字用于校验（`guideVersion=dev1330-1`；这 19 个是「计划会引用到」的子集，不是全部 43 个逆向工具）；这 19 个全部已注册，`available` 应为 true。名字存在仍不等于组件已装：
+`candidateTools[]` 保留 **19** 个名字用于校验（`guideVersion=dev1330-1`；这 19 个是「计划会引用到」的子集，不是全部 44 个逆向工具）；这 19 个全部已注册，`available` 应为 true。名字存在仍不等于组件已装：
 
 - 静态/构建：`apk_decode_project`（apktool）、`apk_build_project`（apktool + apk-resources）、`apk_install_framework`（apktool）。
 - 原生：`native_analyze`、`native_functions`、`native_function_detail`、`native_xrefs`、`native_compare`（radare2）；`native_decompile`（radare2 + r2ghidra，r2ghidra 按需安装）。

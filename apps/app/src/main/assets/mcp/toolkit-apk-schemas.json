@@ -2417,6 +2417,55 @@
         "default": 512,
         "description": "线性反汇编最多输出多少条指令（默认 512；超出时给 stopsAt 与 stopReason=max_instructions）。"
       },
+      "weights": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "可选：覆盖候选打分的权重（非负整数，键=7 个可调特征；未给的项用默认表）。打分是显式线性组合 contribution=normalizedValue*weight，score=min(100,Σ) 仍封顶、未封顶值见候选的 rawScore。未知键/负数/全 0 一律 INVALID_ARGUMENT；权重 0=关闭该项（显式给 0 的特征仍出现在 contributions 里且为 0）。返回 weights/weightsSource 是实际生效的表；默认权重与历史版本逐字段一致。",
+        "properties": {
+          "switchCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "switchCount 的权重（默认 18；作用项 switch_dispatch，归一化 min(switchCount,4)）。"
+          },
+          "switchCases": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "switchCases 的权重（默认 2；作用项 switch_cases，归一化 min(switchCases/4,20)）。"
+          },
+          "dispatchLoopBackEdges": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "dispatchLoopBackEdges 的权重（默认 5；作用项 dispatch_loop_backedge，归一化 min(backBranches,4)）。"
+          },
+          "arrayIndexOps": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "arrayIndexOps 的权重（默认 2；作用项 array_index_ops，归一化 min(arrayOps,16)）。"
+          },
+          "invokeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "invokeCount 的权重（默认 1；作用项 call_fanout，归一化 min(invokeCount,8)）。"
+          },
+          "instructionCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "instructionCount 的权重（默认 1；作用项 method_size，归一化 min(instructionCount/32,8)）。"
+          },
+          "classPayloadBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "classPayloadBytes 的权重（默认 1；作用项 large_constant_payload，归一化 classPayloadBytes>=payloadMinBytes ? 12+min(classPayloadBytes/4096,12) : 0）。把它拉高可让大常量类排到前面。"
+          }
+        }
+      },
       "opcodeRules": {
         "type": "array",
         "maxItems": 512,

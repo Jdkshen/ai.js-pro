@@ -1,5 +1,6 @@
 package com.jdkshen.aijspro.mcp
 
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import org.jf.smali.Smali
 import org.jf.smali.SmaliOptions
@@ -377,5 +378,238 @@ class ToolkitVmSurveyTest {
             "schema 必须说明 blob-only：只给 blobHex 时可省 workspaceId/path",
             props.getAsJsonObject("blobHex").get("description").asString.contains("blob-only"),
         )
+    }
+
+    // ---------------------------------------------------------------- 权重可配置（task-35）
+
+    /** 合成夹具：一个大常量类（256 字节 String）+ 一个 packed-switch 类，两个类互不共享负载。 */
+    private val payloadSmali = "" +
+        ".class public Lvmpayload/Blob;\n" +
+        ".super Ljava/lang/Object;\n" +
+        "\n" +
+        ".field public static final DATA:Ljava/lang/String; = \"" + "ab".repeat(128) + "\"\n" +
+        "\n" +
+        ".method public static touch()V\n" +
+        "    .locals 0\n" +
+        "    return-void\n" +
+        ".end method\n"
+
+    private val dispatchOnlySmali = "" +
+        ".class public Lvmdispatch/Loop;\n" +
+        ".super Ljava/lang/Object;\n" +
+        "\n" +
+        ".method public static run(I)I\n" +
+        "    .locals 1\n" +
+        "    packed-switch p0, :sw\n" +
+        "    const/4 v0, -0x1\n" +
+        "    return v0\n" +
+        "    :a\n" +
+        "    const/4 v0, 0x1\n" +
+        "    return v0\n" +
+        "    :b\n" +
+        "    const/4 v0, 0x2\n" +
+        "    return v0\n" +
+        "    :sw\n" +
+        "    .packed-switch 0x0\n" +
+        "        :a\n" +
+        "        :b\n" +
+        "    .end packed-switch\n" +
+        ".end method\n"
+
+    private fun dexOfFiles(vararg smali: String): ByteArray {
+        val work = temp.newFolder("smali-multi-" + System.nanoTime())
+        val sources = smali.mapIndexed { index, text -> File(work, "sample" + index + ".smali").apply { writeText(text, Charsets.UTF_8) } }
+        val output = File(work, "classes.dex")
+        assertTrue("smali assemble failed", Smali.assemble(SmaliOptions().apply { outputDexFile = output.path; jobs = 1 }, sources.map { it.path }))
+        return output.readBytes()
+    }
+
+    private fun candidateOf(data: JsonObject, prefix: String): JsonObject =
+        data.getAsJsonArray("candidates").map { it.asJsonObject }.first { it.get("method").asString.startsWith(prefix) }
+
+    /** 冻结：默认权重必须与改造前的硬编码系数逐字段一致（权重表 + score + rawScore + contributions）。 */
+    @Test fun defaultWeightsFreezeScoresAndContributions() {
+        assertEquals(
+            linkedMapOf(
+                "switchCount" to 18, "switchCases" to 2, "dispatchLoopBackEdges" to 5, "arrayIndexOps" to 2,
+                "invokeCount" to 1, "instructionCount" to 1, "classPayloadBytes" to 1,
+            ),
+            ToolkitVmSurvey.DEFAULT_WEIGHTS,
+        )
+        val shell = ToolkitVmSurvey.MethodFeatures(
+            instructionCount = 400, switchCount = 2, switchCases = 64, backBranches = 4,
+            arrayOps = 30, invokeCount = 12, bigLiterals = 4, classPayloadBytes = 8192,
+        )
+        // 36 + 32 + 20 + 14 + 32 + 8 + 8 + 8 = 158 -> score 封顶 100（与 dev-1422 硬编码系数逐项一致）
+        val scored = ToolkitVmSurvey.scoreWeighted(shell, 64)
+        assertEquals(100, scored.score)
+        assertEquals(158, scored.rawScore)
+        assertEquals(
+            listOf(
+                "switch_dispatch" to 36, "switch_cases" to 32, "dispatch_loop_backedge" to 20,
+                "large_constant_payload" to 14, "array_index_ops" to 32, "big_literal_consts" to 8,
+                "method_size" to 8, "call_fanout" to 8,
+            ),
+            scored.contributions,
+        )
+        // 历史 API（scoreOf）逐字段不变
+        val legacy = ToolkitVmSurvey.scoreOf(shell, 64)
+        assertEquals(100, legacy.first)
+        assertEquals(scored.contributions, legacy.second)
+        val plain = ToolkitVmSurvey.MethodFeatures(8, 0, 0, 0, 0, 0, 0, 0)
+        assertEquals(0, ToolkitVmSurvey.scoreOf(plain, 64).first)
+        assertTrue(ToolkitVmSurvey.scoreOf(plain, 64).second.isEmpty())
+    }
+
+    /** 工具层冻结：默认权重下候选的 score/rawScore/contributions 必须等于「用返回的 features 重算纯函数」。 */
+    @Test fun surveyDefaultWeightsMatchTheFrozenPureFunction() {
+        val data = surveyOfDex(dexOf(sampleSmali))
+        assertEquals("default", data.get("weightsSource").asString)
+        val table = data.getAsJsonObject("weights")
+        ToolkitVmSurvey.ADJUSTABLE_WEIGHTS.forEach { key ->
+            assertEquals(key, ToolkitVmSurvey.DEFAULT_WEIGHTS.getValue(key), table.get(key).asInt)
+        }
+        assertEquals(2, data.getAsJsonObject("weightsFixed").get("big_literal_consts").asInt)
+        assertTrue(data.get("scoreFormula").asString.contains("min(100"))
+        assertTrue(data.get("scoreFormula").asString.contains("rawScore"))
+        assertEquals(8, data.getAsJsonObject("normalizations").keySet().size)
+        assertTrue(data.get("weightsNote").asString.contains("INVALID_ARGUMENT"))
+        assertTrue(data.getAsJsonArray("notes").joinToString(" ") { it.asString }.contains("weights"))
+        val candidates = data.getAsJsonArray("candidates").map { it.asJsonObject }
+        assertTrue(candidates.isNotEmpty())
+        candidates.forEach { candidate ->
+            val f = candidate.getAsJsonObject("features")
+            val recomputed = ToolkitVmSurvey.scoreWeighted(
+                ToolkitVmSurvey.MethodFeatures(
+                    f.get("instructionCount").asInt, f.get("switchCount").asInt, f.get("switchCases").asInt,
+                    f.get("dispatchLoopBackEdges").asInt, f.get("arrayIndexOps").asInt, f.get("invokeCount").asInt,
+                    0, f.get("classPayloadBytes").asInt,
+                ),
+                16,
+            )
+            assertEquals(candidate.get("evidenceRef").asString, candidate.get("score").asInt, recomputed.score)
+            assertEquals(candidate.get("evidenceRef").asString, candidate.get("rawScore").asInt, recomputed.rawScore)
+            val expected = JsonObject().apply { recomputed.contributions.forEach { addProperty(it.first, it.second) } }
+            assertEquals(candidate.get("evidenceRef").asString, expected, candidate.getAsJsonObject("contributions"))
+        }
+    }
+
+    /** 自定义权重能改变排序，且 contributions 必须按实际权重缩放。 */
+    @Test fun customWeightsChangeOrderingAndScaleContributions() {
+        val dex = dexOfFiles(payloadSmali, dispatchOnlySmali)
+        val base = ToolkitVmSurvey.survey(dexes = listOf("classes.dex" to ToolkitDex(dex).classes), payloadMinBytes = 16)
+        assertEquals("default", base.get("weightsSource").asString)
+        val basePayload = candidateOf(base, "touch(")
+        val baseDispatch = candidateOf(base, "run(")
+        assertTrue(
+            "默认权重下 dispatch 应排在大常量方法之前：" + baseDispatch.get("score").asInt + " vs " + basePayload.get("score").asInt,
+            baseDispatch.get("score").asInt > basePayload.get("score").asInt,
+        )
+        assertTrue(base.getAsJsonArray("candidates")[0].asJsonObject.get("method").asString.startsWith("run("))
+
+        val custom = ToolkitVmSurvey.survey(
+            dexes = listOf("classes.dex" to ToolkitDex(dex).classes),
+            payloadMinBytes = 16,
+            weights = ToolkitIo.json("classPayloadBytes" to 1000),
+        )
+        assertEquals("custom", custom.get("weightsSource").asString)
+        val customTable = custom.getAsJsonObject("weights")
+        assertEquals(1000, customTable.get("classPayloadBytes").asInt)
+        assertEquals("未给的键必须保持默认", 18, customTable.get("switchCount").asInt)
+        assertTrue(
+            "把 classPayloadBytes 拉满后大常量方法应排到最前",
+            custom.getAsJsonArray("candidates")[0].asJsonObject.get("method").asString.startsWith("touch("),
+        )
+        val customPayload = candidateOf(custom, "touch(")
+        val customDispatch = candidateOf(custom, "run(")
+        assertEquals(100, customPayload.get("score").asInt)
+        // 默认权重下该权重是 1 => 默认 contribution 就是归一化值；自定义权重必须是它的 1000 倍
+        val normalized = basePayload.getAsJsonObject("contributions").get("large_constant_payload").asInt
+        val scaled = customPayload.getAsJsonObject("contributions").get("large_constant_payload").asInt
+        assertEquals(1000 * normalized, scaled)
+        assertEquals("只有这一项时 rawScore 必须等于它", scaled, customPayload.get("rawScore").asInt)
+        assertEquals("dispatch 候选不受 classPayloadBytes 权重影响", baseDispatch.get("score").asInt, customDispatch.get("score").asInt)
+        assertTrue(custom.getAsJsonArray("notes").joinToString(" ") { it.asString }.contains("weightsSource=custom"))
+    }
+
+    /** 坏权重：负 / 全 0 / 未知键 / 非对象 / 非整数 / 超上限 一律 INVALID_ARGUMENT，并列出可用键。 */
+    @Test fun invalidWeightsAreRejectedWithAvailableKeys() {
+        val dex = dexOfFiles(payloadSmali, dispatchOnlySmali)
+        fun attempt(raw: JsonElement?): ToolkitException = assertThrows(ToolkitException::class.java) {
+            ToolkitVmSurvey.survey(dexes = listOf("classes.dex" to ToolkitDex(dex).classes), weights = raw)
+        }
+        val negative = attempt(ToolkitIo.json("switchCount" to -1))
+        assertEquals("INVALID_ARGUMENT", negative.code)
+        assertTrue(negative.message!!.contains("负数"))
+        val unknown = attempt(ToolkitIo.json("switch_count" to 3))
+        assertEquals("INVALID_ARGUMENT", unknown.code)
+        assertTrue("未知键必须列出可用键", unknown.message!!.contains("switchCount") && unknown.message!!.contains("classPayloadBytes"))
+        // 只有**生效表**全为 0 才拒（单项 0 = 关闭该项，合法）；这里把 7 个键都给 0
+        val allZero = attempt(ToolkitIo.json(
+            "switchCount" to 0, "switchCases" to 0, "dispatchLoopBackEdges" to 0, "arrayIndexOps" to 0,
+            "invokeCount" to 0, "instructionCount" to 0, "classPayloadBytes" to 0,
+        ))
+        assertEquals("INVALID_ARGUMENT", allZero.code)
+        assertTrue(allZero.message!!.contains("全为 0"))
+        // 单项 0 是合法用法
+        assertTrue(ToolkitVmSurvey.weightsFrom(ToolkitIo.json("switchCount" to 0)).values.getValue("classPayloadBytes") > 0)
+        assertEquals("INVALID_ARGUMENT", attempt(com.google.gson.JsonPrimitive(5)).code)
+        assertEquals("INVALID_ARGUMENT", attempt(ToolkitIo.json("switchCount" to 1.5)).code)
+        assertEquals("INVALID_ARGUMENT", attempt(ToolkitIo.json("switchCount" to 1000001)).code)
+        // 纯函数层同样拒绝（便于不发版时先本地验）
+        assertEquals("INVALID_ARGUMENT", assertThrows(ToolkitException::class.java) {
+            ToolkitVmSurvey.weightsFrom(ToolkitIo.json("nope" to 1))
+        }.code)
+    }
+
+    /** 权重 0 = 关闭该项：contributions 里仍出现且为 0；关到 0 分的候选诚实掉出候选集。 */
+    @Test fun zeroWeightDisablesTermButStaysVisible() {
+        val features = ToolkitVmSurvey.MethodFeatures(
+            instructionCount = 31, switchCount = 3, switchCases = 0, backBranches = 0,
+            arrayOps = 0, invokeCount = 0, bigLiterals = 0, classPayloadBytes = 0,
+        )
+        val zeroed = ToolkitVmSurvey.scoreWeighted(features, 64, ToolkitVmSurvey.weightsFrom(ToolkitIo.json("switchCount" to 0)))
+        assertEquals(0, zeroed.score)
+        assertEquals(0, zeroed.rawScore)
+        assertEquals(listOf("switch_dispatch" to 0), zeroed.contributions)
+        // 没显式给过的 0 贡献项保持历史行为：不出现
+        assertTrue(ToolkitVmSurvey.scoreWeighted(ToolkitVmSurvey.MethodFeatures(4, 0, 0, 0, 0, 0, 0, 0), 64).contributions.isEmpty())
+
+        // weightsSource / 生效表：空对象与 null 都是 default；单项覆盖是 custom 且其余保持默认
+        assertEquals("default", ToolkitVmSurvey.weightsFrom(ToolkitIo.json()).source)
+        val defaults = ToolkitVmSurvey.weightsFrom(null)
+        assertEquals("default", defaults.source)
+        assertEquals(ToolkitVmSurvey.DEFAULT_WEIGHTS, defaults.values)
+        val custom = ToolkitVmSurvey.weightsFrom(ToolkitIo.json("invokeCount" to 7))
+        assertEquals("custom", custom.source)
+        assertEquals(7, custom.values["invokeCount"])
+        assertEquals(18, custom.values["switchCount"])
+        assertEquals(7, custom.table().get("invokeCount").asInt)
+
+        // 工具层：switchCount 关掉后 dispatch 候选 0 分 -> 不进候选；大常量候选仍在
+        val dex = dexOfFiles(payloadSmali, dispatchOnlySmali)
+        val zeroedRun = ToolkitVmSurvey.survey(
+            dexes = listOf("classes.dex" to ToolkitDex(dex).classes),
+            payloadMinBytes = 16,
+            weights = ToolkitIo.json("switchCount" to 0),
+        )
+        val methods = zeroedRun.getAsJsonArray("candidates").map { it.asJsonObject.get("method").asString }
+        assertTrue("0 分的 dispatch 候选应诚实掉出候选集：" + methods, methods.none { it.startsWith("run(") })
+        assertTrue(methods.any { it.startsWith("touch(") })
+    }
+
+    @Test fun schemaDeclaresWeightsObject() {
+        val schemas = com.google.gson.JsonParser().parse(File("src/main/assets/mcp/toolkit-apk-schemas.json").readText()).asJsonObject
+        val weights = schemas.getAsJsonObject("vm_survey").getAsJsonObject("properties").getAsJsonObject("weights")
+        assertEquals("object", weights.get("type").asString)
+        assertEquals(false, weights.get("additionalProperties").asBoolean)
+        val props = weights.getAsJsonObject("properties")
+        assertEquals(ToolkitVmSurvey.ADJUSTABLE_WEIGHTS.toSet(), props.keySet())
+        ToolkitVmSurvey.ADJUSTABLE_WEIGHTS.forEach { key ->
+            assertEquals(key + " 必须是 integer", "integer", props.getAsJsonObject(key).get("type").asString)
+            assertEquals(key + " 最小值必须是 0", 0, props.getAsJsonObject(key).get("minimum").asInt)
+        }
+        assertTrue(weights.get("description").asString.contains("INVALID_ARGUMENT"))
+        assertTrue(weights.get("description").asString.contains("rawScore"))
     }
 }

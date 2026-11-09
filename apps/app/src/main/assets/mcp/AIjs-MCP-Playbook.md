@@ -68,7 +68,7 @@ INVALID_ARGUMENT / 缺参数时，message 仍有人类可读的「可用参数/�
 
 > 版本边界：`running` 同源、`persistedRunning`、`listener{...}`、`status=degraded`、`recovery` 的 30 秒冷却都是 **dev-1414 起** 的语义。**dev-1413 及更早为旧契约**：`running` 是持久化布尔、没有 `persistedRunning`/`listener`、`status` 没有 `degraded`（那时 `recovery` 也没有 30 秒冷却）。
 
-（顺带）`get_status` 还有 `toolCatalog{toolCount,build,fingerprint}`、顶层 `toolCount`/`canonicalToolCount`（dev-1412 实测 **219 / 210**）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`、`toolCategories{}`、`baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
+（顺带）`get_status` 还有 `toolCatalog{toolCount,build,fingerprint}`、顶层 `toolCount`/`canonicalToolCount`（**dev-1429** 实测 **224 / 215**）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`、`toolCategories{}`、`baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
 
 ### HTTP 503 不是工具失败
 
@@ -138,6 +138,18 @@ preloadMode 有三个取值：provider（默认）、dt_needed、clinit（**dev-
 - Frida 上游默认 on_load:"wait" 会阻塞目标启动，直到控制端明确 resume；我们的 frida_runner.c 只做 attach/load/eval/unload/detach，没有 frida_session_resume（frida_runner.c:1019 attach、:1190-1192 detach）；代码里既没有 %resume 也没有 session resume，detach 不是 resume，所以 wait 包需要外部控制端放行或改回 resume。
 - 手工改成 wait 时：不要依赖断开连接自动恢复；unload/detach 不是 resume。用支持 resume 的 Frida 控制端（CLI %resume / API Session.resume() 或 Device.resume()），或改回 on_load:"resume" 重新注入。上游：https://frida.re/docs/gadget/
 - 想要“启动早期加载脚本”而不是“启动时阻塞”：优先 interactionType=script（同样 on_load:"resume"），不要用 wait。
+
+## 新工具速查（dev-1422~1428）
+
+四个逆向/构建向 + 一个 UI 向。**参数以 `tool_schema{tool:"…"}` 为准**，这里只给「怎么用对 + 别踩什么」。
+
+- **`vm_survey`**（dev-1422）：静态找 dispatch 壳候选（`candidates[].score/contributions`）、opcode 聚类、大常量负载、dispatch 数组、按 `opcodeRules` 线性反汇编、只到块起点的 CFG。**只给 `blobHex`(+`opcodeRules`) 就是 blob-only**（不扫 DEX、不需要 workspace）；`scoreBuckets` 与 `candidateCount` 同集合、不被 `limit` 截断。**0 候选是合法结果**（返回会写扫了多少 dex/类/方法）；不做反编译、不承诺一键还原；权重未用真实 VMP 样本校准。**可用 `weights{switchCount,switchCases,dispatchLoopBackEdges,arrayIndexOps,invokeCount,instructionCount,classPayloadBytes}` 自行校准（dev-1430 起）**：返回 `weightsSource=default|custom` + 生效权重表 + `scoreFormula`；**封顶 100 会并列，校准看 `rawScore`（不封顶）**；负数/非整数/**全 0**/未知键 → `INVALID_ARGUMENT`（列可用键），**显式 0 = 关闭该项**（仍出现在 `contributions`）。→ 别把候选多当壳多，别把分数当结论。
+- **`dev_screen_diff`**（dev-1424）：与 `capture_screen` **同一条截图管线**（`captureMode` 同套预设），**无必填**；不传 `baseline` 就与进程内上一帧比。返回 `changedPixels/ratio/bbox/maxChannelDelta/frameSha256/baselineSource/sizeSource`。**`ratio` ≠ 界面变化程度**；尺寸不一致**直接 `SIZE_MISMATCH`**（不裁剪不缩放，等比时给可抄的 `suggestedArguments`/`copyableCommand`）。→ 第一次报 `NO_BASELINE` 属正常，**同参数再调一次**即可。
+- **`entry_`**（dev-1425）：一次拿入口画像（`application` 含 `appComponentFactory`、`launcher` 含 `activity-alias` 声明值/展开值、`exportedComponents` 含 `android:process`、`nativeEntryHints`、`preloadRecommendation`）。参数 `path` 或 `workspaceId` 二选一。**纯静态、`runtimeVerified=false`**；**「没找到 JNI_OnLoad」≠「没有 native 初始化」**；建议与 `apk_inject_gadget` **同源**（`reasonSource` 回显），但注入时以 `PRELOAD_*` 失败码为准。→ 别把建议当保证。
+- **`chain_resume`**（dev-1426/1427）：`checkpoint → 回编 → 对齐/签名 → 验签`。必填 `workspaceId`+`editSessionId`；`steps` 默认 `all`、`checkpoint` 必须配 `expectedRevision`。**任一步失败返回 payload `ok=false`（不抛异常）——必须看 `ok`**，另有 `stoppedAt`/`failure{where,phase,code,message}`/后续 `skipped`；`finalArtifact.sha256` 是磁盘实测，**`verified` 只来自 verifier 逐方案结论**（≠「签过名」）。dev-1427 起「Manifest 缺资源上下文」不再阻断构建（转 `warnings[]` 的 `MANIFEST_PRIMARY_DECODER_FALLBACK`）。→ 别把 `schemes` 存在当验签通过。
+- **`crypto_`**（dev-1428）：`op=hash|hmac|aes_gcm|rsa_sign|rsa_verify`（只 **`op` 必填**）；输入 `inputHex|inputText|path` 三选一；密钥**只允许显式** `keyHex` 或**工具目录内** `keyRef`（不读 App 私有密钥库，只回显 `keyBytes/keySha256Prefix`）。失败码 `ALG_UNSUPPORTED/KEY_INVALID/MAC_INVALID/DECRYPT_FAILED/INPUT_TOO_LARGE`，**失败不留半成品**（校验+运算都在写盘前）。不做 KDF/PSS/CBC/密钥管理；GCM 通过只说明 tag 校验通过，**不构成信任判断**；仅私钥时用「重签后常量时间比较」。→ `keyRef:"../x"` 会 `KEY_INVALID`；`inputHex` 与 `path` 同给会 `INVALID_ARGUMENT`。
+
+**族前缀别名（dev-1429）**：`dex_*` → `apk_dex_*`、`so_*` → `apk_native_*` 共 **16 个**，**只派发不广播**（不进 `tools/list`，advertised 仍 224）；新旧名等价、旧名长期保留。查参数：`tool_schema{tool:"dex_xref"}` → `resolved=apk_dex_xref` + `familyAliases[]`。
 
 ## 附录 A · 坑表（症状 → 根因 → 正确做法）
 

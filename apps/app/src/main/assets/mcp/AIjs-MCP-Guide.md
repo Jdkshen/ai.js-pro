@@ -15,12 +15,12 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 工作区 | workspace_open/list/read/write/delete/diff/request_apply/mkdir/cancel/cleanup |
 | 项目目录 | project_folder（state/create/set/tidy；产出自动归置） |
 | 引擎与 API | list_engines、list_engine_api、probe_engine_api、engine_api_diff、call_engine_api |
-| 设备与无障碍 | get_ui_layout、capture_screen、ui_find/click/long_click/node_action/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
+| 设备与无障碍 | get_ui_layout、capture_screen、**dev_screen_diff**、ui_find/click/long_click/node_action/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
 | 终端与构建 | terminal_exec/read/write/stop/list、shell_rish、get_build_tools |
 | 悬浮窗 | list_overlays、close_overlays |
 | 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
-| 文件与 APK 工具 | toolkit_status、file_*、zip_*、apk_*（工作区/会话/列表/读取/编辑/搜索/DEX/Smali/资源/ELF/打包/签名元数据；签名元数据不是密码学验签） |
-| 逆向分析 | reverse_guide/capabilities/plan、Apktool 工程解包/回编译、native_*、yara_scan、native_emulate、frida_*；按需组件状态以 apk_component_status 为准 |
+| 文件与 APK 工具 | toolkit_status、file_*、zip_*、apk_*（工作区/会话/列表/读取/编辑/搜索/DEX/Smali/资源/ELF/打包/签名元数据；签名元数据不是密码学验签）、**vm_survey**、**chain_resume**、**crypto_** |
+| 逆向分析 | reverse_guide/capabilities/plan、**entry_**、Apktool 工程解包/回编译、native_*、yara_scan、native_emulate、frida_*；按需组件状态以 apk_component_status 为准 |
 
 ## 快速开始（AI 客户端必读）
 
@@ -41,7 +41,7 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 
 新代码优先读 structuredContent.data；老代码继续读 content[0].text 即可。若当前构建还没有 data 镜像（升级前），以 content[0].text 为准；升级后两处字段应等价，不要因为多了一个 data 就认为旧字段被删除。当前实现里 get_status/get_build_tools 已加镜像；toolkit_status 结果来自 :tools 桥接进程，若该构建尚未镜像同样以 text 为准。
 
-`get_status` 里还有几块**不属于扁平标量**的自检信息，不要漏读：`toolCatalog{toolCount,build,fingerprint}` 与顶层 `toolCount`/`canonicalToolCount`（K40 dev-1412 实测 **219 / 210**）、`mcp{...}`（MCP 服务自身状态，字段与排查顺序见 Playbook「get_status.mcp」）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`（dev-1404：打包**实际会用哪份模板**、是否含 require 根修复——`templateStale=true` 时按 `nextActions` 重建模板）、`toolCategories{}`（各分类工具数）、以及 `baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
+`get_status` 里还有几块**不属于扁平标量**的自检信息，不要漏读：`toolCatalog{toolCount,build,fingerprint}` 与顶层 `toolCount`/`canonicalToolCount`（K40 **dev-1429** 实测 **224 / 215**，另有 **16 个只派发族别名**不进 tools/list）、`mcp{...}`（MCP 服务自身状态，字段与排查顺序见 Playbook「get_status.mcp」）、`template{source,path,sizeBytes,sha256,engineRequireRootFix,templateStale,warnings,nextActions}`（dev-1404：打包**实际会用哪份模板**、是否含 require 根修复——`templateStale=true` 时按 `nextActions` 重建模板）、`toolCategories{}`（各分类工具数）、以及 `baseline{}`/`jobs{}`/`limits{}`/`outputConventions{}`。
 
 ### 参数类错误的 error.details
 
@@ -862,6 +862,60 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 
 **怎么验证**：分别用 `run_script {engine:"rhino",...}` 与 `engine:"nodejs"` 打印 `Packages.java.lang.String.valueOf(42)`；dev-1380+ Rhino 应为 `42`，`.4` dev-1378 是 `42.0`，Node 一直 `42`；报告里写清构建版本。
 
+
+## 新增工具（dev-1422~1428）
+
+以下 5 个工具是 dev-1422 起陆续加入的：**用途 / 最小参数 / 返回关键字段 / 诚实边界 / 常见误用**。参数细节一律以 `tool_schema{tool:"..."}` 为准。
+
+### `vm_survey`（dev-1422，静态 VM/dispatch 壳调查）
+
+- **用途**：对 APK/DEX 做**静态启发式**调查——逐方法给可解释分数找 switch/dispatch 候选（`features`/`contributions` 逐项）、按 opcode 直方图聚类、列大常量负载候选、摊平 dispatch 数组、用你给的 `opcodeRules` 做**线性**反汇编、给只到基本块起点的 CFG。
+- **最小参数**：`workspaceId`(+`editSessionId`) 或工具目录内 `path`；**只给非空 `blobHex`(+`opcodeRules`) 即走 blob-only**——不扫 DEX、不需要 workspace。
+- **返回关键字段**：`candidates[]`（`score`+`rawScore`+`contributions`）、`scoreBuckets`（与 `candidateCount` **同集合**、不受 `limit` 截断）、`clusters[]`、`payloads[]`、`dispatchArray{entries,indexBase,truncated,entriesSha256}`、`instructions[]`+`coveragePercent`+`stopsAt`/`stopReason`、`sources[]`/`dexCount`、`notes[]`。
+- **权重可校准（dev-1430 起）**：可选 `weights{switchCount,switchCases,dispatchLoopBackEdges,arrayIndexOps,invokeCount,instructionCount,classPayloadBytes}` 覆盖这 **7 个**特征权重；返回 `weightsSource=default|custom`、**实际生效的权重表**、`scoreFormula`（`score=min(100, Σ normalized×weight)`）。**封顶 100 会让候选并列**，所以校准时看候选的 **`rawScore`（不封顶）**；非法权重（负数 / 非整数 / **全 0** / 未知键）→ `INVALID_ARGUMENT`（消息会列出 7 个可用键），**显式给 0 = 关闭该项**（该贡献项仍出现在 `contributions` 里、值为 0）。
+- **诚实边界**：静态启发式；**不做反编译、不承诺任意 VMP 一键还原**；**0 候选是合法结果**（返回会写清扫了多少 dex/类/方法，以及为何可能为 0：没有 switch/大常量表、被 R8 内联、壳加密）；权重**未用真实 VMP 样本校准**（可用 `weights` 自行校准，见上一条）；CFG 偏移是 code units；大常量负载只看静态字段初始值（`fill-array-data`/native 解密后的 blob 看不到）。
+- **常见误用**：把 `candidateCount` 大当成「壳多」（先看 `scoreBuckets` 分布，notes 有提示）；把分数当结论；用 `payloadRef` 却不给 dex 集。
+
+### `dev_screen_diff`（dev-1424，逐帧像素差异）
+
+- **用途**：截当前帧（与 `capture_screen` **同一条管线**、支持 `region`）与基线比，给像素级差异。
+- **最小参数**：**无必填**——`{"mode":"count"}` 即可（不传 `baseline` 就与进程内**上一帧**比）；`captureMode` 与 `capture_screen` 的 `mode` 是**同一套预设**。常用：`{"baseline":"shot.png","mode":"mask","saveDiffTo":"diff/"}`。
+- **返回关键字段**：`changedPixels`/`ratio`/`bbox{x,y,w,h}`/`comparedPixels`/`maxChannelDelta`/`tolerance`/`frameSha256`/`baselineSha256`/`baselineSource`/`sizeSource`；`mode=mask` 另出掩码（变化=白）。
+- **诚实边界**：**像素级**，不做语义/模板匹配（模板匹配用 `matchTemplate` 系列）；**`ratio` = 变化像素/比较像素，不等于界面变化程度**；两次调用的 `region`/`captureMode`/`maxDims` 要一致，**尺寸不一致直接 `SIZE_MISMATCH`（不裁剪、不缩放）**，等比时给可抄的 `suggestedArguments`/`copyableCommand`；帧缓存是**进程内只留一帧**。
+- **常见误用**：第一次调用报 `NO_BASELINE` 就以为坏了——它已把这帧记为上一帧，**同参数再调一次**就拿到 `ratio`；`capture_screen{mode:"fast"}` 之后直接 diff 没问题（省略 `maxDims` 会沿用上一帧宽度），但**显式传了不同 `maxDims` 就会 MISMATCH**。
+
+### `entry_`（dev-1425，静态入口分析）
+
+- **用途**：一次拿到 APK 入口画像，并给**与注入器同源**的提前加载建议。
+- **最小参数**：`path`（工具目录内）或 `workspaceId`(+`editSessionId`)，二选一。
+- **返回关键字段**：`application{class,classSource,appComponentFactory}`、`launcher[]`（`activity-alias` 给 `targetActivity` 的声明值与展开值）、`exportedComponents[]`（含 `android:process`）、`nativeEntryHints[]`（`soname`/`needed[]`/`jniOnLoad{address,size,binding}`/`initArray`，按 confidence 分层）、`preloadRecommendation{mode,reason,reasonSource,suggestedArguments}`、`modes.*.checkedBy`、`staticConclusions[]`/`needsDynamicConfirmation[]`。
+- **诚实边界**：**纯静态**，`runtimeVerified=false`；组件可能被壳动态注册/替换；**「没找到 JNI_OnLoad」≠「没有 native 初始化」**（可能在 `.init_array`/`DT_INIT`、被壳 dlopen 或加密、符号被裁剪）；`preloadRecommendation` 是**静态建议不是保证**，注入时以 `apk_inject_gadget` 的 `PRELOAD_*` 失败码为准（`reasonSource` 回显用了哪个函数与实参，便于交叉核对）。
+- **常见误用**：把 `preloadRecommendation.mode` 当成「一定能成功」；只读 `staticConclusions[]` 而忽略 `needsDynamicConfirmation[]`。
+
+### `chain_resume`（dev-1426，配合 dev-1427 的构建侧 AXML 分层）
+
+- **用途**：`checkpoint → 回编 → 对齐/签名 → 验签` 一条链跑完。
+- **最小参数**：`workspaceId`+`editSessionId`；可选 `checkpoint`（给了就必须带 `expectedRevision`）、`steps`（默认 `all`；`build`/`sign`/`verify` 是依赖闭包）。
+- **返回关键字段**：`ok`、`stoppedAt`、`failure{where,phase,code,message}`、`steps[]`（含 `skipped`）、`finalArtifact{path,bytes,sha256}`（**磁盘实测**）、`verified`（**只来自 verifier 的逐方案结论**）、`runtimeVerified`、`restoredFrom{source:current|checkpoint}`。
+- **诚实边界**：**任一步失败立即停**，返回 payload `ok=false`（**不是抛异常**——客户端必须看 `ok`，不能只看有没有报错）；**`verified` 不是「签过名」的同义词**；`finalArtifact` ≠ 可安装证明；不重编资源、不安装、不覆盖源包；不传 `expectedRevision` 只是弱并发保护。
+- **dev-1427（构建侧）**：Manifest 需要资源上下文才能解析时，构建检查**不再硬失败**，改为回退独立 AXML 解析、在 `warnings[]` 记 `MANIFEST_PRIMARY_DECODER_FALLBACK`（带 `failureKind`/`primaryError`）并**继续构建**；`res/**/*.xml` 仍按原样失败。
+- **常见误用**：因为没抛异常就当成功；把 `schemes=V1/V2/V3` 存在当成验签通过（看 `verified`）；裁剪 `steps` 后仍声称「未签名产物可安装」。
+
+### `crypto_`（dev-1428，现场通用密码学）
+
+- **用途**：JCA 原语——`op=hash`（MD5/SHA-1/256/384/512）、`hmac`、`aes_gcm`（仅 NoPadding，`mode=encrypt|decrypt` 或 `decrypt=true`）、`rsa_sign`/`rsa_verify`（PKCS#1 v1.5）。
+- **最小参数**：只 **`op` 必填**；输入 `inputHex`|`inputText`|`path` 三选一；密钥**只允许显式** `keyHex` 或**工具目录内** `keyRef`；输出 `outputHex`（≤64 KiB）或 `outPath`（原子写、不覆盖已存在）。
+- **返回关键字段**：`bytes`、`digestOfInput`、`provider`（实际 JCA 实例）、`algorithmSource=JCA`、`keyBytes`/`keySha256Prefix`、`integrityVerified`、RSA 的 `valid`/`verificationMethod`。
+- **诚实边界**：**不管理密钥**（不读 App 私有密钥库/签名身份；只承诺「不返回密钥内容」，**不**承诺「密钥不落任何日志」）；**不做 KDF、不做 RSA-PSS、不做口令加密 PEM、不做 CBC 等模式**；AES-GCM 解密通过只说明 **tag 校验通过，不构成信任判断**；`rsa_verify` 用公钥时 `valid=false` 表示**签名不匹配（工具执行成功）**，不是工具失败；输入 >64 MiB 在读之前就 `INPUT_TOO_LARGE`。
+- **失败码**：`ALG_UNSUPPORTED`/`KEY_INVALID`/`MAC_INVALID`/`DECRYPT_FAILED`/`INPUT_TOO_LARGE`；**失败不留半成品**（所有校验与运算都在写盘前完成）。
+- **常见误用**：`keyRef` 指向工具目录外（`../x` → `KEY_INVALID`）；同时给 `inputHex` 和 `path`（`INVALID_ARGUMENT`）；把 hash/HMAC 当密钥派生用。
+
+### 族前缀别名：`dex_*` / `so_*`（dev-1429）
+
+- **16 个只派发别名**：`dex_read_class_outline`/`dex_xref`/`dex_search_members`/`dex_call_graph`/`dex_hierarchy`/`dex_interface_table`/`dex_list_classes`/`dex_list_methods` → 对应 `apk_dex_*`；`so_inspect`/`so_list_items`/`so_map_address`/`so_xref`/`so_disassemble`/`so_analyze_control_flow`/`so_patch_instructions`/`so_patch_string` → 对应 `apk_native_*`。
+- **新旧等价、旧名（canonical）长期保留**：`dex_xref` 与 `apk_dex_xref` 是同一个工具，同一 workspace 调用返回键集逐字相同。
+- **别名不出现在 `tools/list`**（advertised 仍是 224，不占客户端上下文）；用 `tool_schema{tool:"dex_xref"}` 查参数会回显 `resolved=apk_dex_xref` 与 `familyAliases[]`。
+- 未知工具名仍会给近邻建议（近邻池含族别名）；`tier=core`/`groups` 过滤**不含**别名。
 
 ## 常见错误与修法
 

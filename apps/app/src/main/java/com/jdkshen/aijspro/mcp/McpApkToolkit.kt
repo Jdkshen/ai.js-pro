@@ -1853,6 +1853,7 @@ internal class McpApkToolkit(
             cfgMethodLocator = args.tString("method", "").ifEmpty { null },
             dispatchArrayRef = args.tString("dispatchArray", "").ifEmpty { null },
             blobOnly = blobOnly,
+            weights = args.get("weights"),
         )
         data.addProperty("workspaceId", workspaceId.ifEmpty { null })
         data.addProperty("path", path.ifEmpty { null })
