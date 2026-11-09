@@ -1,11 +1,18 @@
 package com.jdkshen.aijspro.flutterpoc;
 
+import android.content.SharedPreferences;
 import android.graphics.drawable.ColorDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
+import android.preference.PreferenceManager;
 import android.util.Log;
 
 import com.jdkshen.aijspro.Pref;
+import com.jdkshen.aijspro.autojs.AutoJs;
+import com.jdkshen.aijspro.tool.AccessibilityCheck;
+import com.stardust.autojs.execution.ScriptExecution;
+import com.stardust.autojs.execution.ScriptExecutionListener;
 import com.jdkshen.aijspro.theme.AppThemeRepository;
 import com.jdkshen.aijspro.theme.HostUiAppearance;
 import com.jdkshen.aijspro.external.HostScripts;
@@ -38,8 +45,21 @@ public class GlassFlutterActivity extends FlutterActivity {
     private MethodChannel mBackChannel;
     private BasicMessageChannel<String> mLocalChannel;
     private ConsoleLogEvents mLogEvents;
+    /** F2（task-48）：原生→Dart 的状态推送（5 个事件，150ms 合并，只在 Flutter 存活时发）。 */
+    private FlutterBridgeEvents mBridgeEvents;
+    private SharedPreferences mPrefs;
+    private SharedPreferences.OnSharedPreferenceChangeListener mPrefsListener;
+    private ScriptExecutionListener mScriptListener;
+    private String mLastAccessibilityKey;
     private static java.lang.ref.WeakReference<GlassFlutterActivity> sVisible =
             new java.lang.ref.WeakReference<>(null);
+
+    /** F2：给 PocBridge 等调用点用（Flutter 不存活时是 no-op，不产生开销）。 */
+    static void emitDebugConnectionState(String state, String detail) {
+        GlassFlutterActivity activity = sVisible.get();
+        if (activity == null || activity.mBridgeEvents == null) return;
+        activity.mBridgeEvents.debugConnectionState(state, detail);
+    }
 
     public static boolean revealLogsIfVisible() {
         GlassFlutterActivity activity = sVisible.get();
@@ -55,6 +75,39 @@ public class GlassFlutterActivity extends FlutterActivity {
         super.onResume();
         updateWindowBackground(AppThemeRepository.get(this).isDark());
         sVisible = new java.lang.ref.WeakReference<>(this);
+        // F2：进程回到前台 + 无障碍状态（用户可能刚从系统设置回来）——都只在变化时发。
+        if (mBridgeEvents != null) mBridgeEvents.processResumed();
+        emitAccessibilityIfChanged();
+    }
+
+    /** F2：无障碍状态变化（判据**复用** AccessibilityCheck，不另写一套）。 */
+    private void emitAccessibilityIfChanged() {
+        if (mBridgeEvents == null) return;
+        try {
+            AccessibilityCheck.AccessibilityCheckResult result = AccessibilityCheck.INSTANCE.checkNow();
+            boolean connected = result instanceof AccessibilityCheck.AccessibilityCheckResult.Success;
+            String reason;
+            boolean automationReady = false;
+            Boolean settingsContains = null;
+            long elapsedMs = 0L;
+            if (connected) {
+                reason = AccessibilityCheck.REASON_CONNECTED;
+            } else {
+                AccessibilityCheck.AccessibilityCheckResult.Failure failure =
+                        (AccessibilityCheck.AccessibilityCheckResult.Failure) result;
+                reason = failure.getReason();
+                automationReady = failure.getAutomationConnectionReady();
+                settingsContains = failure.getSettingsContainsComponent();
+                elapsedMs = failure.getElapsedMs();
+            }
+            String key = connected + "|" + reason;
+            if (key.equals(mLastAccessibilityKey)) return;
+            mLastAccessibilityKey = key;
+            mBridgeEvents.accessibilityState(connected, reason, connected ? "enabled" : "disabled",
+                    automationReady, settingsContains, elapsedMs);
+        } catch (Throwable error) {
+            Log.w(TAG, "accessibility state emit failed", error);
+        }
     }
 
     @Override protected void onPause() {
@@ -145,6 +198,25 @@ public class GlassFlutterActivity extends FlutterActivity {
                 PocBridge.CHANNEL, StringCodec.INSTANCE);
         mLocalChannel = channel;
         mLogEvents = new ConsoleLogEvents(flutterEngine.getDartExecutor().getBinaryMessenger());
+        // F2（task-48）：状态推送分发器。存活守卫 = 通道存在 + 未 finishing/destroyed（没有 Flutter 界面就零开销）。
+        mBridgeEvents = new FlutterBridgeEvents(new FlutterBridgeEvents.Sender() {
+            @Override public boolean alive() {
+                return mLocalChannel != null && !isFinishing() && !isDestroyed();
+            }
+            @Override public void send(String json) {
+                try {
+                    if (mLocalChannel != null) mLocalChannel.send(json);
+                } catch (Throwable error) {
+                    Log.w(TAG, "bridge event send failed", error);
+                }
+            }
+            @Override public void log(String line) { Log.i(TAG, line); }
+            @Override public long now() { return SystemClock.uptimeMillis(); }
+            @Override public void postDelayed(Runnable runnable, long delayMs) { mMain.postDelayed(runnable, delayMs); }
+            @Override public void removeCallbacks(Runnable runnable) { mMain.removeCallbacks(runnable); }
+        });
+        registerPrefsEvents();
+        registerScriptEvents();
         channel.setMessageHandler((message, reply) ->
                 PocBridge.handle(this, message, json -> {
                     if (reply != null) {
@@ -169,6 +241,52 @@ public class GlassFlutterActivity extends FlutterActivity {
         Log.i(TAG, "back channel registered on " + BACK_CHANNEL);
     }
 
+    /** F2：偏好变化 → prefsChanged（**只给 key**，值可能含密钥/路径，绝不出通道）。 */
+    private void registerPrefsEvents() {
+        try {
+            mPrefs = PreferenceManager.getDefaultSharedPreferences(this);
+            mPrefsListener = (prefs, key) -> {
+                if (mBridgeEvents != null && key != null) mBridgeEvents.prefsChanged(key);
+            };
+            mPrefs.registerOnSharedPreferenceChangeListener(mPrefsListener);
+        } catch (Throwable error) {
+            Log.w(TAG, "prefs event registration failed", error);
+        }
+    }
+
+    /** F2：脚本/任务启停 → taskChanged（全局执行监听；引擎没起来时静默降级）。 */
+    private void registerScriptEvents() {
+        try {
+            mScriptListener = new ScriptExecutionListener() {
+                @Override public void onStart(ScriptExecution execution) {
+                    taskChanged("script_started", execution, "running");
+                }
+                @Override public void onSuccess(ScriptExecution execution, Object result) {
+                    taskChanged("script_finished", execution, "finished");
+                }
+                @Override public void onException(ScriptExecution execution, Throwable error) {
+                    taskChanged("script_failed", execution, "failed");
+                }
+            };
+            AutoJs.getInstance().getScriptEngineService()
+                    .registerGlobalScriptExecutionListener(mScriptListener);
+        } catch (Throwable error) {
+            Log.w(TAG, "script execution listener registration failed", error);
+        }
+    }
+
+    private void taskChanged(String reason, ScriptExecution execution, String state) {
+        if (mBridgeEvents == null) return;
+        String path = null;
+        try {
+            if (execution != null && execution.getSource() != null) {
+                path = String.valueOf(execution.getSource());
+            }
+        } catch (Throwable ignored) {
+        }
+        mBridgeEvents.taskChanged(reason, path, state);
+    }
+
     @Override
     public void onNewIntent(android.content.Intent intent) {
         super.onNewIntent(intent);
@@ -179,6 +297,21 @@ public class GlassFlutterActivity extends FlutterActivity {
     @Override
     protected void onDestroy() {
         if (mLogEvents != null) mLogEvents.dispose();
+        if (mBridgeEvents != null) mBridgeEvents.dispose();
+        if (mPrefs != null && mPrefsListener != null) {
+            try {
+                mPrefs.unregisterOnSharedPreferenceChangeListener(mPrefsListener);
+            } catch (Throwable ignored) {
+            }
+        }
+        if (mScriptListener != null) {
+            try {
+                AutoJs.getInstance().getScriptEngineService()
+                        .unregisterGlobalScriptExecutionListener(mScriptListener);
+            } catch (Throwable ignored) {
+            }
+        }
+        mBridgeEvents = null;
         mLocalChannel = null;
         super.onDestroy();
     }

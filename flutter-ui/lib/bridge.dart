@@ -16,6 +16,55 @@ class LocalBridge {
     'autojs.local.logs',
   ).receiveBroadcastStream();
   static bool _notificationsInstalled = false;
+
+  /// F2（task-48）：原生→Dart 的**状态推送**五类事件。
+  ///
+  /// 订阅方**只做数据刷新**（收到事件后重新调用对应桥方法拉数据），不要在这里改 UI 布局/导航；
+  /// 事件载荷形如 {"event":"taskChanged","reason":"script_started","path":"main.js","state":"running"}。
+  /// 节流由原生侧做（150ms 合并、同 key 只发一次），这里拿到的已经是合并后的结果。
+  static final Stream<Map<String, dynamic>> taskChanged = _eventsOf('taskChanged');
+  static final Stream<Map<String, dynamic>> accessibilityState = _eventsOf(
+    'accessibilityState',
+  );
+  static final Stream<Map<String, dynamic>> debugConnectionState = _eventsOf(
+    'debugConnectionState',
+  );
+  static final Stream<Map<String, dynamic>> prefsChanged = _eventsOf(
+    'prefsChanged',
+  );
+  static final Stream<Map<String, dynamic>> processResumed = _eventsOf(
+    'processResumed',
+  );
+
+  static final Map<String, StreamController<Map<String, dynamic>>>
+  _controllers = <String, StreamController<Map<String, dynamic>>>{};
+
+  /// 五个事件名（与 docs/guides/Flutter本地桥API.md / tools/flutter-bridge-contract.mjs 对齐）。
+  static const Set<String> pushedEventNames = <String>{
+    'taskChanged',
+    'accessibilityState',
+    'debugConnectionState',
+    'prefsChanged',
+    'processResumed',
+  };
+
+  static Stream<Map<String, dynamic>> _eventsOf(String name) {
+    return _controllers
+        .putIfAbsent(
+          name,
+          () => StreamController<Map<String, dynamic>>.broadcast(),
+        )
+        .stream;
+  }
+
+  static void _dispatch(Map<String, dynamic> value) {
+    final event = value['event'];
+    if (event is! String) return;
+    final controller = _controllers[event];
+    // 未知事件忽略（原生侧可能先于 Dart 增加事件）。
+    controller?.add(value);
+  }
+
   static void listenForNativePackaging() {
     if (_notificationsInstalled) return;
     _notificationsInstalled = true;
@@ -26,6 +75,9 @@ class LocalBridge {
           onNativePackagingReady?.call();
         } else if (value is Map && value['event'] == 'pendingAction') {
           onPendingAction?.call();
+        }
+        if (value is Map) {
+          _dispatch(Map<String, dynamic>.from(value));
         }
       } catch (_) {}
       return '{}';
@@ -42,7 +94,6 @@ class LocalBridge {
         method == 'shizukuEnableAccessibility' ||
         method == 'toolkitCall' ||
         // 示例包按需下载最大约 9MB，20s 默认超时不够。
-        method == 'sampleDownload' ||
         method == 'share' ||
         method == 'shareFile';
     final reply = await channel

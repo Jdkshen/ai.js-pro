@@ -55,6 +55,27 @@ final class PocBridge {
 
     private static final String TAG = "GlassFlutterPoc";
     static final String CHANNEL = "autojs.local.bridge";
+
+    /** F2：从 computerPluginState 的返回里取稳定状态码（看不懂就 unknown，绝不抛）。 */
+    private static String debugStateOf(Object linkState) {
+        try {
+            if (linkState instanceof JSONObject) {
+                JSONObject json = (JSONObject) linkState;
+                String state = json.optString("state", "");
+                if (!state.isEmpty()) return state;
+                if (json.has("connected")) return json.optBoolean("connected") ? "connected" : "disconnected";
+            }
+            if (linkState instanceof java.util.Map) {
+                java.util.Map<?, ?> map = (java.util.Map<?, ?>) linkState;
+                Object state = map.get("state");
+                if (state != null) return String.valueOf(state);
+                Object connected = map.get("connected");
+                if (connected instanceof Boolean) return ((Boolean) connected) ? "connected" : "disconnected";
+            }
+        } catch (Throwable ignored) {
+        }
+        return "unknown";
+    }
     private static final String PREFS_GLASS = "flutter-glass";
     private static final int MAX_ENTRIES = 5000;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
@@ -410,8 +431,12 @@ final class PocBridge {
             case "aboutInfo":
                 return PocAppInfo.execute(activity, method, args);
 
-            case "computerPluginState":
-                return PocDeviceLink.state(activity);
+            case "computerPluginState": {
+                // F2：电脑/调试连接状态变化时推一条事件（只在变化时，且 Flutter 不在时是 no-op）。
+                Object linkState = PocDeviceLink.state(activity);
+                GlassFlutterActivity.emitDebugConnectionState(debugStateOf(linkState), null);
+                return linkState;
+            }
             case "computerPluginSet":
                 throw new IllegalStateException("异步桥方法不应走到同步分支");
 
