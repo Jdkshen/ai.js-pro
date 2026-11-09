@@ -477,6 +477,7 @@ public class ApkBuilder {
         copyProjectToWorkspace();
         copySplashIcon();
         removeDisabledFeatures();
+        enforcePackagingPolicy();
         // 等级 × 引擎的实际载荷形态记一条：等级 2 对 Node 不是字节码，日志里必须能看出来。
         Log.i("C-PKG", "script protection level=" + mEncryptLevel
                 + " storage=" + mScriptStorage + " payload=" + mPayloadKind);
@@ -527,6 +528,176 @@ public class ApkBuilder {
         }
     }
 
+    /**
+     * task-63：打包不变量（全部集中在 build() 的同一个点，便于审计与单测纯逻辑）。
+     *
+     * 1) 产物 lib/ 只保留「模板必需 / 工程策略（removeOpenCv、pikafish）/ 内建 OCR」能解释的 .so，
+     *    其余按泄漏删除并记日志（判据见 NativeLibPolicy，device4 实测 libpikafish.so 就是这么漏进去的）；
+     * 2) project.json 声明的 abis 必须被尊重（AbiPolicy 两档）：声明的 ABI 里**至少有一个能产出** → 产出可用的 + 显式 warning 并回显（abisDeclared/abisProduced/abisMissing）；**一个都产不出**才报错。**不许静默少出**，但也不因为模板缺 v7a 把用户的工程挡死（v7a 属模板能力缺口）。
+     * 3) 模板自带的 assets/autojs.keystore 是第三方打包器的旧签名身份，绝不能随产物分发 → 删除并记日志。
+     */
+    private final List<String> mPackagingWarnings = new ArrayList<>();
+    private final JSONObject mPackagingReport = new JSONObject();
+
+    /** task-63：打包过程中用户可执行的 warning（ABI 缺口、未覆盖插件…），调用方可直接展示。 */
+    public List<String> getPackagingWarnings() {
+        return new ArrayList<>(mPackagingWarnings);
+    }
+
+    /** task-63：结构化打包报告（abisDeclared/abisProduced/abisMissing/plugins/pluginCoverage/droppedNativeLibs/…）。 */
+    public JSONObject getPackagingReport() {
+        return mPackagingReport;
+    }
+
+    private void report(String key, Object value) {
+        try {
+            mPackagingReport.put(key, value);
+        } catch (Throwable ignored) {
+            // 只用于可观测，失败不影响打包
+        }
+    }
+
+    private void enforcePackagingPolicy() throws IOException {
+        File projectRoot = new File(mWorkspacePath, "assets/project");
+        JSONObject project = null;
+        File projectJson = new File(projectRoot, "project.json");
+        if (projectJson.isFile()) {
+            try {
+                project = new JSONObject(new String(PFiles.readBytes(projectJson.getPath()), "UTF-8"));
+            } catch (Throwable error) {
+                Log.w("C-PKG", "读取 project.json 失败，按默认策略处理：" + error.getMessage());
+            }
+        }
+        boolean removeOpenCv = false;
+        List<String> plugins = new ArrayList<>();
+        List<String> declaredAbis = new ArrayList<>();
+        if (project != null) {
+            JSONObject optimization = project.optJSONObject("optimization");
+            removeOpenCv = optimization != null && optimization.optBoolean("removeOpenCv", false);
+            JSONObject pluginConfig = project.optJSONObject("plugins");
+            if (pluginConfig != null) {
+                java.util.Iterator<String> keys = pluginConfig.keys();
+                while (keys.hasNext()) plugins.add(keys.next());
+            }
+            org.json.JSONArray abis = project.optJSONArray("abis");
+            if (abis != null) {
+                for (int index = 0; index < abis.length(); index++) declaredAbis.add(String.valueOf(abis.opt(index)));
+            }
+        }
+        boolean usesPuzzleEngine = projectReferencesPuzzleEngine(projectRoot);
+        NativeLibPolicy.ProjectNeeds needs = new NativeLibPolicy.ProjectNeeds(removeOpenCv, plugins, usesPuzzleEngine);
+
+        File libRoot = new File(mWorkspacePath, "lib");
+        List<String> availableAbis = new ArrayList<>();
+        org.json.JSONArray droppedEntries = new org.json.JSONArray();
+        int dropped = 0;
+        File[] abiDirs = libRoot.isDirectory() ? libRoot.listFiles() : null;
+        if (abiDirs != null) {
+            for (File abiDir : abiDirs) {
+                if (abiDir == null || !abiDir.isDirectory()) continue;
+                File[] libs = abiDir.listFiles();
+                boolean hasAny = false;
+                if (libs != null) {
+                    for (File lib : libs) {
+                        if (lib == null || !lib.isFile()) continue;
+                        String entry = "lib/" + abiDir.getName() + "/" + lib.getName();
+                        NativeLibPolicy.Verdict verdict = NativeLibPolicy.classify(entry, needs);
+                        if (verdict.getDecision() == NativeLibPolicy.Decision.DROP) {
+                            //noinspection ResultOfMethodCallIgnored
+                            lib.delete();
+                            dropped++;
+                            droppedEntries.put(entry + " :: " + verdict.getReason());
+                            Log.i("C-PKG", "native lib dropped " + entry + " reason=" + verdict.getReason());
+                        } else {
+                            hasAny = true;
+                        }
+                    }
+                }
+                if (hasAny) availableAbis.add(abiDir.getName());
+            }
+        }
+        if (dropped > 0) {
+            Log.i("C-PKG", "packaging policy dropped native libs=" + dropped
+                    + " (removeOpenCv=" + removeOpenCv + " plugins=" + plugins + ")");
+        }
+        report("droppedNativeLibs", droppedEntries);
+        try {
+            // task-63 ③（Lead 定夺两档）：至少一个可产出 → 产出 + 显式 warning；一个都产不出 → 硬报错。
+            AbiPolicy.Resolution resolution = AbiPolicy.resolve(declaredAbis, availableAbis);
+            Log.i("C-PKG", resolution.logLine() + " note=" + resolution.getNote());
+            report("abisDeclared", resolution.getDeclared());
+            report("abisProduced", resolution.getProduced());
+            report("abisMissing", resolution.getMissing());
+            if (resolution.getWarning() != null) {
+                Log.w("C-PKG", "abis warning: " + resolution.getWarning());
+                mPackagingWarnings.add("abis: " + resolution.getWarning());
+            }
+        } catch (IllegalArgumentException error) {
+            throw new IOException(error.getMessage(), error);
+        }
+        // task-63 ④（Lead 定夺）：插件只做显式回显 + 不静默，不按 Pro 形态带插件 APK。
+        Log.i("C-PKG", NativeLibPolicy.pluginSummaryLine(plugins));
+        report("plugins", plugins);
+        org.json.JSONArray pluginCoverage = new org.json.JSONArray();
+        for (NativeLibPolicy.PluginCoverage coverage : NativeLibPolicy.pluginCoverage(plugins)) {
+            JSONObject row = new JSONObject();
+            try {
+                row.put("plugin", coverage.getPlugin());
+                row.put("coveredBy", coverage.getCoveredBy() == null ? JSONObject.NULL : coverage.getCoveredBy());
+                row.put("note", coverage.getNote());
+            } catch (Throwable ignored) {
+                // report 只是可观测，不因它失败而中断打包
+            }
+            pluginCoverage.put(row);
+            if (coverage.getCoveredBy() == null) {
+                Log.w("C-PKG", "plugin not covered: " + coverage.getPlugin() + " - " + coverage.getNote());
+                mPackagingWarnings.add("plugin " + coverage.getPlugin() + ": " + coverage.getNote());
+            } else {
+                Log.i("C-PKG", "plugin " + coverage.getPlugin() + " coveredBy=" + coverage.getCoveredBy());
+            }
+        }
+        report("pluginCoverage", pluginCoverage);
+        File keystore = new File(mWorkspacePath, "assets/autojs.keystore");
+        if (keystore.isFile()) {
+            long size = keystore.length();
+            //noinspection ResultOfMethodCallIgnored
+            keystore.delete();
+            Log.i("C-PKG", "removed bundled signing identity assets/autojs.keystore (" + size
+                    + " B)：第三方打包器旧默认密钥，绝不能随产物分发");
+            report("keystoreRemoved", size);
+        }
+    }
+
+    /** 工程（被复制进包的文本）里是否提到象棋引擎：命中才需要 libpikafish.so。 */
+    private static boolean projectReferencesPuzzleEngine(File projectRoot) {
+        if (!projectRoot.isDirectory()) return false;
+        java.util.ArrayDeque<File> stack = new java.util.ArrayDeque<>();
+        stack.add(projectRoot);
+        int visited = 0;
+        while (!stack.isEmpty() && visited < 512) {
+            File current = stack.removeLast();
+            File[] children = current.listFiles();
+            if (children == null) continue;
+            for (File child : children) {
+                visited++;
+                if (visited > 512) break;
+                if (child.isDirectory()) {
+                    stack.add(child);
+                } else if (child.length() <= 512 * 1024) {
+                    String name = child.getName().toLowerCase(Locale.ROOT);
+                    if (name.endsWith(".apk") || name.endsWith(".zip") || name.endsWith(".so")) continue;
+                    try {
+                        String text = new String(PFiles.readBytes(child.getPath()), "UTF-8").toLowerCase(Locale.ROOT);
+                        if (text.contains("pikafish") || text.contains("xiangqi")) return true;
+                    } catch (Throwable ignored) {
+                        // 二进制/读不了的文件跳过
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     private void copyProjectToWorkspace() throws Exception {
         if (mAppConfig == null || mAppConfig.sourcePath == null) {
             if (mScriptFile != null) {
@@ -537,8 +708,16 @@ public class ApkBuilder {
         }
         File source = new File(mAppConfig.sourcePath);
         if (source.isDirectory()) {
-            copyDir(source.getPath(), mWorkspacePath + "/assets/project",
-                    excludedOutputDir(source));
+            // task-63 ②：默认排除「打包产物目录」（工程根 build/ + 产物目录若在工程内 + 显式 ignoredDirs），
+            // 判据与理由见 PackageOutputExclusions（device4 实测：产物在工程外时旧逻辑什么都没排 → +59MB 套娃）。
+            java.util.Set<String> excluded = PackageOutputExclusions.projectExclusions(
+                    source, mOutApkFile, mAppConfig.ignoredDirs == null ? null : mAppConfig.ignoredDirs.stream()
+                            .map(String::valueOf).collect(java.util.stream.Collectors.toList()));
+            if (!excluded.isEmpty()) {
+                Log.i("C-PKG", "project copy excludes=" + PackageOutputExclusions.describe(excluded, source));
+                report("excludedProjectPaths", new org.json.JSONArray(excluded));
+            }
+            copyDir(source.getPath(), mWorkspacePath + "/assets/project", excluded);
             syncProjectJsonAndDeriveKeys();
             writeEntryScript(new File(mWorkspacePath, "assets/project/" + mMainScriptFile));
             // 除入口外的所有脚本收进加密容器：解包 APK 不该能读到工程源码。
@@ -1115,7 +1294,7 @@ public class ApkBuilder {
         copyDir(src, dst, null);
     }
 
-    private void copyDir(String src, String dst, File excluded) throws IOException {
+    private void copyDir(String src, String dst, java.util.Set<String> excluded) throws IOException {
         File srcDir = new File(src);
         File[] children = srcDir.listFiles();
         if (children == null) {
@@ -1130,9 +1309,9 @@ public class ApkBuilder {
         // 排除项必须按规范路径比较：从 /sdcard/... 这类符号链接路径打开工程时，
         // child 的规范路径是 /storage/emulated/0/...，直接比字符串会漏排除，
         // 结果把上一次的产物 APK 又打进新包（曾经产出过一个翻倍的包）。
-        File excludedCanonical = excluded == null ? null : excluded.getCanonicalFile();
         for (File child : children) {
-            if (excludedCanonical != null && child.getCanonicalFile().equals(excludedCanonical)) {
+            if (excluded != null && !excluded.isEmpty()
+                    && excluded.contains(child.getCanonicalFile().getPath())) {
                 continue;
             }
             if (child.isDirectory()) {

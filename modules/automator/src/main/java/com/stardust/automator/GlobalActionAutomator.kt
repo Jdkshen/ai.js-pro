@@ -115,6 +115,17 @@ class GlobalActionAutomator(private val mHandler: Handler?, private val serviceP
 
     @RequiresApi(api = Build.VERSION_CODES.N)
     private fun gesturesWithHandler(handler: Handler, description: GestureDescription): Boolean {
+        // task-60（P0-3）：阻塞等待只有在「回调投递线程」上才会必然死锁（该线程自己在 wait，回调永远送不到）
+        // → 具名异常；主线程可用但会卡 UI → 只记 warning（不改既有行为，避免误伤现在能跑的脚本）。
+        val caller = Thread.currentThread()
+        val callerLooper = Looper.myLooper()
+        GestureThreadGuard.refusesBlockingGesture(caller.name,
+                callerLooper != null && callerLooper === handler.looper)?.let {
+            throw GestureOnMainThreadException(it)
+        }
+        if (callerLooper != null && callerLooper === Looper.getMainLooper()) {
+            Log.w(GESTURE_TAG, GestureThreadGuard.mainThreadWarning(caller.name, "strokes=" + description.strokeCount))
+        }
         val result = VolatileDispose<Boolean>()
         Log.d(GESTURE_TAG, "submit strokes=" + description.strokeCount)
         // 诊断计数（带回调 = 会进框架回调表的那条路径）；未 init 时是 no-op，绝不影响手势。

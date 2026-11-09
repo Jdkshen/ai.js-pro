@@ -7,7 +7,7 @@ import android.content.IntentFilter
 import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
-import org.json.JSONObject
+import com.stardust.automator.AccessibilityEventWrapper
 
 /**
  * task-156：把主进程的无障碍事件以同 UID 广播转发给 :node24 进程，供 Node 的
@@ -160,34 +160,26 @@ object AccessibilityEventForwarder {
     }
 
     private fun forward(context: Context, event: AccessibilityEvent) {
-        val payload = JSONObject()
-        payload.put("kind", kindOf(event))
-        payload.put("eventType", event.eventType)
-        payload.put("packageName", event.packageName?.toString() ?: "")
-        payload.put("className", event.className?.toString() ?: "")
-        payload.put("windowId", event.windowId)
-        payload.put("eventTime", event.eventTime)
+        // task-60：JSON 快照的唯一映射放在 com.stardust.automator.AccessibilityEventWrapper
+        // （纯 JVM 可单测、有单测钉住键集）；这里只做 Android → 包装对象的字段抽取，键与改造前逐字相同。
         val texts = event.text
-        payload.put("text", if (texts == null) "" else texts.joinToString(" "))
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
-            payload.put("contentChangeTypes", event.contentChangeTypes)
-        }
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            payload.put("windowChangeTypes", event.windowChanges)
-        }
         context.sendBroadcast(Intent(ACTION_EVENT)
                 .setPackage(context.packageName)
-                .putExtra("json", payload.toString()))
+                .putExtra("json", wrapperOf(event, texts).toJson()))
     }
 
-    private fun kindOf(event: AccessibilityEvent): String = when (event.eventType) {
-        AccessibilityEvent.TYPE_VIEW_CLICKED -> "view_clicked"
-        AccessibilityEvent.TYPE_VIEW_LONG_CLICKED -> "view_long_clicked"
-        AccessibilityEvent.TYPE_WINDOWS_CHANGED -> "windows_changed"
-        AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "window_state_changed"
-        AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "window_content_changed"
-        AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED ->
-            if ((event.className?.toString() ?: "").contains("Toast", true)) "toast" else "notification"
-        else -> "accessibility_event"
+    /** 从框架事件抽字段（唯一的 Android 依赖点；映射规则见 AccessibilityEventWrapper 的文档与单测）。 */
+    private fun wrapperOf(event: AccessibilityEvent, texts: List<CharSequence>?): AccessibilityEventWrapper {
+        val className = event.className?.toString() ?: ""
+        return AccessibilityEventWrapper(
+                kind = AccessibilityEventWrapper.kindOf(event.eventType, className),
+                eventType = event.eventType,
+                packageName = event.packageName?.toString() ?: "",
+                className = className,
+                text = if (texts == null) "" else texts.joinToString(" "),
+                windowId = event.windowId,
+                eventTime = event.eventTime,
+                contentChangeTypes = event.contentChangeTypes,
+                windowChangeTypes = event.windowChanges)
     }
 }

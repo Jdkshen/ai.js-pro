@@ -2,6 +2,7 @@ package com.stardust.autojs.core.ui.attribute;
 
 import android.view.View;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.google.android.material.appbar.AppBarLayout;
@@ -36,6 +37,10 @@ public class ViewAttributesFactory {
         // （以前没人管，app:title / app:menu 被静默丢掉）
         sViewAttributesCreators.put(Toolbar.class, ToolbarAttributes::new);
         sViewAttributesCreators.put(BottomNavigationView.class, BottomNavigationViewAttributes::new);
+        // task-59（对齐 P0-5）：LinearLayout 的 XML 属性补进脚本侧属性表（Pro 的 LinearLayoutAttributes）——
+        // 以前 attr('orientation','vertical') 这类写法是**静默无效**的（本表没注册这个名字）。
+        // 按类层级查找，所以 RadioGroup/TableLayout/TableRow 等子类也一并覆盖。
+        sViewAttributesCreators.put(LinearLayout.class, LinearLayoutAttributes::new);
     }
 
     public static void put(Class<? extends View> clazz, ViewAttributesCreator creator) {
