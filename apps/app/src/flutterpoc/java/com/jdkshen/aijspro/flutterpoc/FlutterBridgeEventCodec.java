@@ -98,6 +98,27 @@ final class FlutterBridgeEventCodec {
         return payload;
     }
 
+    /**
+     * task-50：TimedTask 的 ModelChange action（1=INSERT/2=UPDATE/3=DELETE）→ taskChanged 的 reason。
+     * 未知 action 返回空串（调用方跳过，不发明新事件）。
+     */
+    static String timedTaskReason(int action) {
+        switch (action) {
+            case 1: return "task_added";
+            case 2: return "task_updated";
+            case 3: return "task_removed";
+            default: return "";
+        }
+    }
+
+    /** 与 reason 对齐的 state（字段名与既有 taskChanged 一致）。 */
+    static String timedTaskState(String reason) {
+        if ("task_added".equals(reason)) return "added";
+        if ("task_updated".equals(reason)) return "updated";
+        if ("task_removed".equals(reason)) return "removed";
+        return "changed";
+    }
+
     static Map<String, Object> processResumed(long uptimeMs) {
         Map<String, Object> payload = base(EVENT_PROCESS_RESUMED);
         payload.put("uptimeMs", uptimeMs);

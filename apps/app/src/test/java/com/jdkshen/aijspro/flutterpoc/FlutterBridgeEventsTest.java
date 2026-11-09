@@ -178,6 +178,44 @@ public class FlutterBridgeEventsTest {
         assertEquals("{\"event\":\"processResumed\",\"uptimeMs\":12345}", sender.sent.get(0));
     }
 
+    /** task-50（②）：TimedTask 变更 → task_added/updated/removed（事件名仍是 taskChanged，字段不变）。 */
+    @Test
+    public void timedTaskChangesMapToTheContractTaskChanged() {
+        assertEquals("task_added", FlutterBridgeEventCodec.timedTaskReason(1));
+        assertEquals("task_updated", FlutterBridgeEventCodec.timedTaskReason(2));
+        assertEquals("task_removed", FlutterBridgeEventCodec.timedTaskReason(3));
+        assertEquals("", FlutterBridgeEventCodec.timedTaskReason(99));
+        assertEquals("added", FlutterBridgeEventCodec.timedTaskState("task_added"));
+        assertEquals("updated", FlutterBridgeEventCodec.timedTaskState("task_updated"));
+        assertEquals("removed", FlutterBridgeEventCodec.timedTaskState("task_removed"));
+        Map<String, Object> payload = FlutterBridgeEventCodec.taskChanged(
+                FlutterBridgeEventCodec.timedTaskReason(3), "a.js", FlutterBridgeEventCodec.timedTaskState("task_removed"));
+        assertEquals("taskChanged", FlutterBridgeEventCodec.eventName(payload));
+        assertEquals("task_removed", payload.get("reason"));
+        assertEquals("removed", payload.get("state"));
+        // 拿不到 path → 省略字段（不填 null）
+        Map<String, Object> noPath = FlutterBridgeEventCodec.taskChanged("task_added", null, "added");
+        assertFalse(noPath.containsKey("path"));
+        // 事件名集合不许被 TimedTask 改动
+        assertEquals(5, FlutterBridgeEventCodec.EVENT_NAMES.size());
+        assertEquals(150L, FlutterBridgeEventCodec.THROTTLE_MS);
+    }
+
+    /** task-50（①）：MCP runner 的三条生命周期都要经同一个出口（源码钉，android 层无法在 JVM 直跑）。 */
+    @Test
+    public void mcpRunnerEmitsScriptLifecycleThroughTheSink() throws Exception {
+        // Gradle 单测的工作目录是 apps/app；手工 javac/手动跑时可能是仓库根 —— 两种都试。
+        java.nio.file.Path path = java.nio.file.Paths.get("apps/app/src/main/java/com/jdkshen/aijspro/mcp/McpTools.kt");
+        if (!java.nio.file.Files.exists(path)) {
+            path = java.nio.file.Paths.get("src/main/java/com/jdkshen/aijspro/mcp/McpTools.kt");
+        }
+        String source = new String(java.nio.file.Files.readAllBytes(path), java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue(source.contains("McpTaskEventSink.emit(\"script_started\", record.path, \"running\")"));
+        assertTrue(source.contains("McpTaskEventSink.emit(\"script_finished\", record.path,"));
+        assertTrue(source.contains("McpTaskEventSink.emit(\"script_finished\", record.path, \"stopped\")"));
+        assertTrue(source.contains("McpTaskEventSink.emit(\"script_failed\", record.path, \"failed\")"));
+    }
+
     @Test
     public void jsonEncodingEscapesSafely() {
         Map<String, Object> payload = FlutterBridgeEventCodec.taskChanged("reason", "a\"b\\c\n.js", "running");

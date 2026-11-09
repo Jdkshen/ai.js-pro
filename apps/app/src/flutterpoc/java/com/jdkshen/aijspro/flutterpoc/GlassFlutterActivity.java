@@ -10,6 +10,9 @@ import android.util.Log;
 
 import com.jdkshen.aijspro.Pref;
 import com.jdkshen.aijspro.autojs.AutoJs;
+import com.jdkshen.aijspro.mcp.McpTaskEventSink;
+import com.jdkshen.aijspro.timing.TimedTask;
+import com.jdkshen.aijspro.timing.TimedTaskManager;
 import com.jdkshen.aijspro.tool.AccessibilityCheck;
 import com.stardust.autojs.execution.ScriptExecution;
 import com.stardust.autojs.execution.ScriptExecutionListener;
@@ -50,6 +53,8 @@ public class GlassFlutterActivity extends FlutterActivity {
     private SharedPreferences mPrefs;
     private SharedPreferences.OnSharedPreferenceChangeListener mPrefsListener;
     private ScriptExecutionListener mScriptListener;
+    /** task-50：TimedTask 变更流（复用既有 ModelChange Observable，不改 TimedTaskManager）。 */
+    private io.reactivex.disposables.Disposable mTimedTaskSubscription;
     private String mLastAccessibilityKey;
     private static java.lang.ref.WeakReference<GlassFlutterActivity> sVisible =
             new java.lang.ref.WeakReference<>(null);
@@ -217,6 +222,8 @@ public class GlassFlutterActivity extends FlutterActivity {
         });
         registerPrefsEvents();
         registerScriptEvents();
+        registerMcpTaskEvents();
+        registerTimedTaskEvents();
         channel.setMessageHandler((message, reply) ->
                 PocBridge.handle(this, message, json -> {
                     if (reply != null) {
@@ -275,6 +282,38 @@ public class GlassFlutterActivity extends FlutterActivity {
         }
     }
 
+    /**
+     * task-50（①）：MCP 的脚本执行走自己的 runner（不经过引擎全局监听）——它在开始/结束/异常时
+     * 通过 {@link McpTaskEventSink} 报出来，这里转成同一条 taskChanged（同一 codec/分发器）。
+     */
+    private void registerMcpTaskEvents() {
+        McpTaskEventSink.setListener((reason, path, state) -> {
+            if (mBridgeEvents != null) mBridgeEvents.taskChanged(reason, path, state);
+        });
+    }
+
+    /**
+     * task-50（②）：TimedTask 增删改 → task_added/task_updated/task_removed。
+     * 复用既有的 ModelChange 流（TimedTaskManager.getTimeTaskChanges），不改 TimedTaskManager；
+     * 拿不到 path 就传 null（codec 会**省略字段**）。
+     */
+    private void registerTimedTaskEvents() {
+        try {
+            mTimedTaskSubscription = TimedTaskManager.getInstance().getTimeTaskChanges()
+                    .subscribe(change -> {
+                        if (mBridgeEvents == null || change == null) return;
+                        String reason = FlutterBridgeEventCodec.timedTaskReason(change.getAction());
+                        if (reason.isEmpty()) return;
+                        String path = null;
+                        Object data = change.getData();
+                        if (data instanceof TimedTask) path = ((TimedTask) data).getScriptPath();
+                        mBridgeEvents.taskChanged(reason, path, FlutterBridgeEventCodec.timedTaskState(reason));
+                    }, error -> Log.w(TAG, "timed task events failed", error));
+        } catch (Throwable error) {
+            Log.w(TAG, "timed task event registration failed", error);
+        }
+    }
+
     private void taskChanged(String reason, ScriptExecution execution, String state) {
         if (mBridgeEvents == null) return;
         String path = null;
@@ -310,6 +349,18 @@ public class GlassFlutterActivity extends FlutterActivity {
                         .unregisterGlobalScriptExecutionListener(mScriptListener);
             } catch (Throwable ignored) {
             }
+        }
+        // task-50：撤掉 MCP/TimedTask 两条来源，避免界面销毁后还往旧引用发事件。
+        try {
+            McpTaskEventSink.clearListener();
+        } catch (Throwable ignored) {
+        }
+        if (mTimedTaskSubscription != null) {
+            try {
+                mTimedTaskSubscription.dispose();
+            } catch (Throwable ignored) {
+            }
+            mTimedTaskSubscription = null;
         }
         mBridgeEvents = null;
         mLocalChannel = null;

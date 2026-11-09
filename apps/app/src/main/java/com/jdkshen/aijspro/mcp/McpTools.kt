@@ -806,6 +806,8 @@ internal class McpTools(private val context: Context, private val event: (String
                 }
                 record.status = "RUNNING"; record.startedAt = System.currentTimeMillis()
                 event("$key · 开始 · ${record.path}")
+                // task-50：MCP 走自己的 runner，不经过引擎全局监听 —— 这里补发同名的 taskChanged。
+                McpTaskEventSink.emit("script_started", record.path, "running")
             }
             override fun onSuccess(execution: ScriptExecution, result: Any?) {
                 try {
@@ -815,6 +817,8 @@ internal class McpTools(private val context: Context, private val event: (String
                     // 先保存结果和日志，再发布结束状态，避免等待方拿到空日志。
                     record.status = if (record.stopRequested) "STOPPED" else "SUCCEEDED"
                     event("$key · ${record.status.lowercase()} · ${record.path}")
+                    McpTaskEventSink.emit("script_finished", record.path,
+                        if (record.status == "STOPPED") "stopped" else "finished")
                 } finally { cleanup() }
             }
             override fun onException(execution: ScriptExecution, error: Throwable) {
@@ -827,6 +831,7 @@ internal class McpTools(private val context: Context, private val event: (String
                         record.logs = runLogs(record, execution)
                         record.status = "STOPPED"
                         event("$key · stopped · ${record.path}")
+                        McpTaskEventSink.emit("script_finished", record.path, "stopped")
                         return
                     }
                     record.errorType = execution.engine.getTag("host.errorType") as? String ?: error.javaClass.name
@@ -837,6 +842,7 @@ internal class McpTools(private val context: Context, private val event: (String
                     record.logs = runLogs(record, execution)
                     if (record.status != "STOPPED") {
                         record.status = "FAILED"
+                        McpTaskEventSink.emit("script_failed", record.path, "failed")
                         McpEngineDiagnostics.recordFailure(record.engine, record.id, record.finishedAt, record.errorType)
                     }
                     event("$key · ${record.status.lowercase()} · ${record.errorMessage.take(100)}")

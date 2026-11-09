@@ -26,7 +26,48 @@ public final class JavaReflectiveInvocation {
 
     public static Object invoke(Method method, Object target, Object[] rawArgs)
             throws InvocationTargetException, IllegalAccessException {
-        return method.invoke(target, coerceArguments(method, rawArgs));
+        // Method.invoke 的第二个形参是 Object[]：脚本写 m.invoke(target, argArray) 时，按 Java varargs
+        // 语义这个 argArray **就是** varargs 数组本身，必须先展开成目标方法的实参列表（见 expandInvokeArguments）。
+        // 三引擎（Rhino/QuickJS/Node24）的反射桥都只走这一个入口，所以展开点放在这里，一处修三处正确。
+        return method.invoke(target, coerceArguments(method, expandInvokeArguments(rawArgs)));
+    }
+
+    /**
+     * {@code Method.invoke(Object target, Object... args)} 的 Java varargs 语义：**单个 Object[] 实参要展开**。
+     *
+     * <p><b>为什么单个数组必须展开</b>：{@code Method.invoke} 的第二个形参是 {@code Object[]}，javac 对
+     * {@code m.invoke(target, argArray)} 的处理是「这个数组就是 varargs 数组」（等价于
+     * {@code m.invoke(target, (Object[]) argArray)}），它的<b>元素</b>才是目标方法的实参。三引擎的反射桥都
+     * 按「脚本实参逐个装箱」构建参数列表（Rhino {@code ReflectiveMethodObject}、QuickJS
+     * {@code QuickJsJavaInterop.callReflective}、Node24 {@code Node24HostBridge.invokeMethod}），于是
+     * {@code Object[]{3, 7}} 变成「1 个参数」，{@code max(int,int)} 直接报「Java 反射参数个数不匹配：
+     * max 需要 2 个，实际 1 个」——脚本里最经典的 {@code getMethod(...).invoke(target, argArray)} 全废。
+     *
+     * <p>规则（与 javac 对该调用点的实参处理一致）：
+     * <ul>
+     * <li>参数列表恰好 1 个元素、且该元素是 {@code Object[]}（含 {@code String[]} 等引用类型数组）→ 展开为它的元素；</li>
+     * <li>{@code null} 不是数组：{@code m.invoke(target, null)} 是「一个 null 实参」，长度保持 1；</li>
+     * <li>原始类型数组（{@code int[]}/{@code long[]}…）不是 {@code Object[]}：保持「1 个参数」
+     *     （javac 也不会把它当 varargs 数组）；</li>
+     * <li>0 个实参 / 多个实参 / 单个非数组 → 原样返回。</li>
+     * </ul>
+     *
+     * <p>想把「一个 Object[] 参数」传给形参本身就是 {@code Object[]} 的目标方法时，脚本要包一层：
+     * {@code m.invoke(target, [theArray])}——外层数组才是 varargs 数组（Java 里同样要写
+     * {@code m.invoke(target, (Object) theArray)}）。
+     */
+    public static Object[] expandInvokeArguments(Object[] reflectionArgs) {
+        if (reflectionArgs == null) {
+            return new Object[0];
+        }
+        if (reflectionArgs.length != 1) {
+            return reflectionArgs;
+        }
+        Object single = reflectionArgs[0];
+        if (!(single instanceof Object[])) {
+            return reflectionArgs;
+        }
+        return (Object[]) single;
     }
 
     public static Object[] coerceArguments(Method method, Object[] rawArgs) {

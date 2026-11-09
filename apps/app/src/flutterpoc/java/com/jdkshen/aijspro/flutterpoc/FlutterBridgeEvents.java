@@ -45,8 +45,12 @@ final class FlutterBridgeEvents {
         this.sender = sender;
     }
 
-    /** 发一个事件；Flutter 不存活或事件名未知时静默丢弃（契约：未知事件忽略）。 */
-    void emit(Map<String, Object> payload) {
+    /**
+     * 发一个事件；Flutter 不存活或事件名未知时静默丢弃（契约：未知事件忽略）。
+     * task-50：调用方可能来自 Rx/后台线程（TimedTask 变更流）——pending 与 scheduled 都在锁内维护，
+     * 真正发送仍在 postDelayed 的主线程回调里。
+     */
+    synchronized void emit(Map<String, Object> payload) {
         if (payload == null) return;
         String event = FlutterBridgeEventCodec.eventName(payload);
         if (!FlutterBridgeEventCodec.isKnownEvent(event)) return;
@@ -63,7 +67,7 @@ final class FlutterBridgeEvents {
     }
 
     /** 立刻把待发事件全部发出去（测试可直接调用；生产由 postDelayed 触发）。 */
-    void flushNow() {
+    synchronized void flushNow() {
         scheduled = false;
         sender.removeCallbacks(flush);
         if (pending.isEmpty()) return;
