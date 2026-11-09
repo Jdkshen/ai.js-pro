@@ -47,8 +47,15 @@ public class QuickJsPluginsModuleTest {
 
     @Test
     public void absentOfficialMlkitPluginFallsBackToOfflineOcr() throws Exception {
-        assertEquals("mlkit:9", evaluate("var MLKit = $plugins.load('org.autojs.autojspro.plugin.mlkit.ocr');"
+        // 期望值是 ppocr（离线）而不是 mlkit：假宿主对非示例包一律抛 NameNotFound，
+        // qjs-plugins.js 的降级分支（:61 → :129）会退到随包 ppocr 并把 degradedFrom 标成 mlkit。
+        // 这条断言原先写成 "mlkit:9"，与用例名/实现都不符（Lead 2026-11-09 修正）。
+        assertEquals("ppocr:9", evaluate("var MLKit = $plugins.load('org.autojs.autojspro.plugin.mlkit.ocr');"
                 + "new MLKit().detect({ id: 9 }).text;"));
+        assertEquals("mlkit", evaluate("var MLKit = $plugins.load('org.autojs.autojspro.plugin.mlkit.ocr');"
+                + "String(new MLKit().degradedFrom);"));
+        assertEquals("true", evaluate("var MLKit = $plugins.load('org.autojs.autojspro.plugin.mlkit.ocr');"
+                + "String(new MLKit().degraded);"));
     }
 
     @Test

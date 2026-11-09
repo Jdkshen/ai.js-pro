@@ -168,7 +168,13 @@ class McpHttpServer(
             }
         } finally {
             // 循环真的退出了（stop() 或 break）：get_status.mcp 必须能看出「已不在监听」。
-            acceptLoopAlive = false
+            //
+            // task-55（真机 flaky 的根因，产品侧）：这里必须**只在自己仍是当前监听器时**才清标志。
+            // 否则 stop()→start() 之后，上一轮循环稍后到达 finally 会把新循环刚置上的 true 清成 false
+            // → get_status.mcp 在重启后误报 listening=false（`running = liveListening && listenerAlive` 也跟着翻假），
+            // 单测 `acceptLoopAliveTracksStartAndStop` 因此偶发失败（不是测试写错，是产品状态机漏了「换代」）。
+            // stop() 已经把 listener 置 null 并同步清了标志，所以「不是当前监听器」时这里什么都不用做。
+            if (listener === server) acceptLoopAlive = false
         }
     }
 

@@ -105,6 +105,10 @@ if (evCodeMissing.length) gaps.push('FlutterBridgeEvents.java 有、文档未列
 if (TOOLKIT_TOOLS.some((t) => !doc.includes(t))) gaps.push('文档未列全 toolkitCall 工具名');
 
 const strict = process.argv.includes('--strict');
+const showUnused = process.argv.includes('--native-unused');
+// 原生有、Dart 侧未直接命中（只报告、不 FAIL；防止以后接线漂移）
+const nativeUnused = nativeBridge.filter((n) => !dartNames.includes(n));
+console.log('native-unused=' + nativeUnused.length + (showUnused ? ' [' + nativeUnused.join(',') + ']' : ' (加 --native-unused 看名单)'));
 if (strict && dartNotNative.length) gaps.push('dart 死调用(原生无该方法): ' + dartNotNative.join(','));
 const out = [
   'native=' + nativeBridge.length,

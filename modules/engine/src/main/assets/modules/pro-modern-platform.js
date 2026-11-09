@@ -362,8 +362,40 @@
         getInstalledApps(options) { return toArray(context().getPackageManager().getInstalledApplications(pmFlags(options))); },
         getInstalledPackages(options) { return toArray(context().getPackageManager().getInstalledPackages(pmFlags(options))); },
         getApkInfo(path, options) { return context().getPackageManager().getPackageArchiveInfo(filePath(path), pmFlags(options)); },
-        registerBroadcastReceiver() { return unsupported('Android BroadcastReceiver callbacks'); },
-        unregisterBroadcastReceiver() { return unsupported('Android BroadcastReceiver callbacks'); }
+        // task-54：脚本侧广播接收（动态注册；只收系统允许动态注册的广播）。
+        registerBroadcastReceiver(actionOrFilter, callback, options) {
+            const spec = normalizeReceiverSpec(actionOrFilter, callback && typeof callback === 'object' ? callback : options);
+            const handler = typeof callback === 'function' ? callback
+                : (callback && typeof callback.onReceive === 'function' ? callback.onReceive : null);
+            if (typeof handler !== 'function') throw new TypeError('registerBroadcastReceiver: callback 必须是函数');
+            const onError = (callback && typeof callback.onError === 'function') ? callback.onError
+                : (options && typeof options.onError === 'function' ? options.onError : null);
+            const meta = JSON.parse(String(receiverClass().register(context(), spec.actions, spec.categories,
+                spec.schemes, spec.permission, spec.exported, handler, onError, g.__aiModernScope || null)));
+            const handle = {
+                id: meta.id, actions: meta.actions, categories: meta.categories, schemes: meta.schemes,
+                permission: meta.permission, exported: meta.exported, registeredAt: meta.registeredAt,
+                exportFlag: meta.exportFlag, active: true,
+                unregister() { handle.active = app.unregisterBroadcastReceiver(handle.id); return handle.active; },
+                toString() { return handle.id; }
+            };
+            receiverHandles.push(handle);
+            return handle;
+        },
+        unregisterBroadcastReceiver(idOrHandle) {
+            const id = idOrHandle && typeof idOrHandle === 'object' && idOrHandle.id != null ? idOrHandle.id : idOrHandle;
+            if (id == null || String(id).trim() === '') return false;
+            const removed = !!receiverClass().unregister(String(id).trim());
+            const handle = receiverHandles.find(item => item.id === String(id).trim());
+            if (handle) handle.active = false;
+            return removed;
+        },
+        unregisterAllBroadcastReceivers() {
+            const count = Number(receiverClass().unregisterAll());
+            receiverHandles.forEach(item => { item.active = false; });
+            receiverHandles.length = 0;
+            return count;
+        },
     };
     Object.defineProperty(app, 'packageName', { enumerable: true, get() { return context().getPackageName(); } });
     function pmFlags(options) {
@@ -380,13 +412,69 @@
         });
         return flags;
     }
+    const receiverHandles = [];
+    function receiverClass() {
+        return java('com.stardust.autojs.core.content.ScriptBroadcastReceivers');
+    }
+    /** 归一化 actionOrFilter：字符串 / 数组 / {action,actions,categories,schemes,permission,exported}。 */
+    function normalizeReceiverSpec(actionOrFilter, options) {
+        const spec = { actions: [], categories: [], schemes: [], permission: null, exported: false };
+        function addActions(value) {
+            if (value == null) return;
+            const list = Array.isArray(value) ? value : [value];
+            list.forEach(item => {
+                if (item == null) return;
+                const text = String(item).trim();
+                if (text) spec.actions.push(text);
+            });
+        }
+        if (typeof actionOrFilter === 'string' || Array.isArray(actionOrFilter)) {
+            addActions(actionOrFilter);
+        } else if (actionOrFilter && typeof actionOrFilter === 'object') {
+            addActions(actionOrFilter.actions != null ? actionOrFilter.actions : actionOrFilter.action);
+        } else if (actionOrFilter != null) {
+            throw new TypeError('registerBroadcastReceiver: actionOrFilter 必须是字符串、字符串数组或 filter 对象');
+        }
+        const extra = options && typeof options === 'object' ? options : {};
+        [actionOrFilter, extra].forEach(source => {
+            if (!source || typeof source !== 'object') return;
+            const categories = source.categories != null ? source.categories : source.category;
+            if (categories != null) (Array.isArray(categories) ? categories : [categories]).forEach(item => {
+                const text = item == null ? '' : String(item).trim();
+                if (text) spec.categories.push(text);
+            });
+            const schemes = source.schemes != null ? source.schemes : source.scheme;
+            if (schemes != null) (Array.isArray(schemes) ? schemes : [schemes]).forEach(item => {
+                const text = item == null ? '' : String(item).trim();
+                if (text) spec.schemes.push(text);
+            });
+            if (source.permission != null && String(source.permission).trim()) spec.permission = String(source.permission).trim();
+            if (source.exported != null) spec.exported = !!source.exported;
+        });
+        if (!spec.actions.length) throw new TypeError('registerBroadcastReceiver: actionOrFilter 至少要有一个非空 action');
+        return spec;
+    }
     function openFile(path, action) {
         const fullPath = filePath(path), extension = fullPath.split('/').pop().split('.');
         const mime = extension.length > 1 ? java('android.webkit.MimeTypeMap').getSingleton().getMimeTypeFromExtension(extension.pop().toLowerCase()) : null;
         activity(makeIntent({ action, data: getUriForFile(fullPath), type: mime || '*/*', flags: ['grant_read_uri_permission','grant_write_uri_permission'] }));
     }
+    // 脚本结束（exit()/stop()）时全部注销：包一层，幂等且不改变原返回值语义。
+    ['exit', 'stop'].forEach(name => {
+        if (typeof g[name] !== 'function' || g[name].__aiModernReceiverWrapped) return;
+        const original = g[name];
+        const wrapped = function () {
+            try { app.unregisterAllBroadcastReceivers(); } catch (error) { /* 注销失败不能影响退出 */ }
+            return original.apply(this, arguments);
+        };
+        wrapped.__aiModernReceiverWrapped = true;
+        g[name] = wrapped;
+    });
     register('app', app, [
-        'Android BroadcastReceiver callback registration is unavailable and throws.',
+        'Broadcast receivers are registered dynamically through Context.registerReceiver; only broadcasts the system allows to be registered at runtime are delivered (no static manifest registration).',
+        'Android 13+/14+ requires an explicit export flag: we default to RECEIVER_NOT_EXPORTED (safer). Pass exported:true to opt into RECEIVER_EXPORTED, which lets other apps reach the callback through this filter - do that deliberately.',
+        'Receivers are unregistered on exit()/stop(), on unregisterBroadcastReceiver/unregisterAllBroadcastReceivers, and when the owning script thread ends; a killed process does not restore them.',
+        'onReceive exceptions are isolated inside the registry (logged + optional onError) and never propagate into the Android process.',
         'Named inspector broadcasts are unavailable in this adapter; legacy app.sendBroadcast remains available.',
         'Intent extras use typed Bundle writes for primitives and homogeneous arrays; plain JS object extras are unavailable.',
         'File intents require a registered FileProvider and its configured paths.',

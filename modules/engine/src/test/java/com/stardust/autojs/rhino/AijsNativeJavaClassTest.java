@@ -214,6 +214,7 @@ public class AijsNativeJavaClassTest {
         IntLongTarget target = new IntLongTarget();
         ContextFactory factory = new AijsContextFactory();
         Context cx = factory.enterContext();
+        cx.setLanguageVersion(Context.VERSION_ES6);
         try {
             Scriptable scope = cx.initStandardObjects();
             ScriptableObject.putProperty(scope, "t",
@@ -240,6 +241,7 @@ public class AijsNativeJavaClassTest {
     public void reflectiveInvokeWrapperGainsApply() throws Exception {
         ContextFactory factory = new AijsContextFactory();
         Context cx = factory.enterContext();
+        cx.setLanguageVersion(Context.VERSION_ES6);
         try {
             Scriptable scope = cx.initStandardObjects();
             Method max = Math.class.getMethod("max", int.class, int.class);
@@ -258,6 +260,7 @@ public class AijsNativeJavaClassTest {
         IntLongTarget target = new IntLongTarget();
         ContextFactory factory = new AijsContextFactory();
         Context cx = factory.enterContext();
+        cx.setLanguageVersion(Context.VERSION_ES6);
         try {
             Scriptable scope = cx.initStandardObjects();
             ScriptableObject.putProperty(scope, "w", new ScriptJavaObject(scope, target, IntLongTarget.class,

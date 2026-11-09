@@ -39,13 +39,13 @@
 
 ## 2. 与 Pro 的功能面对照（Pro 方法名被混淆，只能按**功能**对）
 
-| Pro 的 Flutter 层 | 证据（可读残留） | 我们 | 差距判定 |
-|---|---|---|---|
-| `FlutterScriptsChannel`：脚本/任务状态**推送**、`stopAll*`、以 `TimedTask`/`execution`/`path` 为参数 | 方法名 `notifyTaskChanged`、`stopAll*` 可读；`android.intent.extra.shortcut.INTENT`；Kotlin 协程 | 请求式控制已有（`run`/`stopAllScripts`/`stopTasks`/`tasks`/`timedTask`/`runProject`） | **推送缺** → F2 |
-| `SettingsService`（50KB）：设置面 + **五类状态回调** `onAccessibilityServiceStateChanged` / `onDebugConnectionStateChanged` / `onCircularMenuStateChange` / `onProcessResume` / `onSharedPreferenceChanged` | 方法名可读 | 请求式设置已有（`appearance`/`editorSettings`/`engineSettings`/`runtimePreferences`/`drawerPreferences`/`browserPreferences`/`overlaySettings`/`mcpState`/`theme`…） | **状态推送缺** → F2 |
-| `FlutterService`：绑定型前台服务（`onBind`/`onServiceConnected`/`onServiceDisconnected`） | 方法名可读 | 无对应（Flutter 跑在 app 进程内） | **不做**（运行方式不变） |
-| `FlutterActivity`：承载 Flutter 界面 + `onActivityResult`/`onNewIntent`/状态保存 | 方法名可读 | `GlassFlutterActivity` 已有同类职责 | 已等价 |
-| `FlutterExports(channel="googleplay")` | 字符串常量 `googleplay` | 无 | 不需要（渠道标记） |
+| Pro 的 Flutter 层 | 证据（可读残留） | 我们 | 差距判定 | **终态（F5，2026-11-09）** |
+|---|---|---|---|---|
+| `FlutterScriptsChannel`：脚本/任务状态**推送**、`stopAll*`、以 `TimedTask`/`execution`/`path` 为参数 | 方法名 `notifyTaskChanged`、`stopAll*` 可读；`android.intent.extra.shortcut.INTENT`；Kotlin 协程 | 请求式控制已有（`run`/`stopAllScripts`/`stopTasks`/`tasks`/`timedTask`/`runProject`） | **推送缺** → F2 | **✅ 补了（功能等价）**：F2 的 `taskChanged` 覆盖脚本启停；**task-50（dev-1440）起同时覆盖 MCP 运行路径与 TimedTask 增删改**。Pro 的 `notifyTaskChanged` 对应我们的 `taskChanged`（名字/字段我们自定，不抄 Pro）。请求式控制面早已齐。 |
+| `SettingsService`（50KB）：设置面 + **五类状态回调** `onAccessibilityServiceStateChanged` / `onDebugConnectionStateChanged` / `onCircularMenuStateChange` / `onProcessResume` / `onSharedPreferenceChanged` | 方法名可读 | 请求式设置已有（`appearance`/`editorSettings`/`engineSettings`/`runtimePreferences`/`drawerPreferences`/`browserPreferences`/`overlaySettings`/`mcpState`/`theme`…） | **状态推送缺** → F2 | **✅ 4/5 补了，1 项不补**：`accessibilityState` / `debugConnectionState` / `processResumed` / `prefsChanged`（只给 key）已补并真机验；**`onCircularMenuStateChange` 不补**——悬浮菜单状态我们走 `floatingWindow`/`floating_menu` **拉取式**，没有独立推送源，硬造会引入重复状态。``debugConnectionState` 无独立推送源，靠 Dart 轮询比较（已在契约文档写明）。 |
+| `FlutterService`：绑定型前台服务（`onBind`/`onServiceConnected`/`onServiceDisconnected`） | 方法名可读 | 无对应（Flutter 跑在 app 进程内） | **不做**（运行方式不变） | **⛔ 不补**：用户已明确「运行方式与 UI 布局不变」；引入绑定服务会改进程/生命周期模型。 |
+| `FlutterActivity`：承载 Flutter 界面 + `onActivityResult`/`onNewIntent`/状态保存 | 方法名可读 | `GlassFlutterActivity` 已有同类职责 | 已等价 | **✅ 已等价**（无需动作）。 |
+| `FlutterExports(channel="googleplay")` | 字符串常量 `googleplay` | 无 | 不需要（渠道标记） | **⛔ 不补**：纯渠道标记，无功能面。 |
 
 ## 3. 对齐方案（只动 API/功能）
 
@@ -73,9 +73,9 @@
 | F1 契约成文 + 核对脚本 | ✅ 完成（`docs/guides/Flutter本地桥API.md` + `tools/flutter-bridge-contract.mjs`，`--strict` PASS/0 gaps） |
 | F2 状态推送 5 事件 | ✅ 交付并真机验三类：`processResumed` / `accessibilityState` / `prefsChanged`（logcat `FlutterBridgeEvent`）；`debugConnectionState` 未真机触发（需 Dart 轮询路径） |
 | F3 两个未命中方法 | ✅ 完成（`sampleDownload` 清死调用、`storageIntroduce` 改现行名） |
-| F4「原生有、Dart 未用」核实 | ⬜ 未做（脚本目前只 gate Dart 死调用方向） |
-| F5 功能面终判表 | ⬜ 未做 |
-| **taskChanged 覆盖 MCP 路径 + TimedTask** | ⬜ 已派 task-50（真机证实：MCP `run_script` 不触发） |
+| F4「原生有、Dart 未用」核实 | ✅ 完成（**实测 22 条**，不是 24——task-49 清掉的 2 处 Dart 死调用不计入）：**16 条动态调用**（9 个动态调用点）+ **6 条未接线**（`share`/`openLog`/`openAbout`/`openLicenses`/`openBuildPage` 属有意并存，**`engineSettings` 是唯一值得定夺的低危缺口**——Dart 无入口）。逐条表见 `docs/guides/Flutter本地桥API.md` `八；脚本新增 `--native-unused` 只报告不 FAIL。 |
+| F5 功能面终判表 | ✅ 完成（本方案 §2 表已加「终态」列）：**补 1 项**（`taskChanged` 族，task-50 起含 MCP+TimedTask）、**部分补 4/5 状态回调**（`onCircularMenuStateChange` 不补）、**不补 2 项**（`FlutterService`、`FlutterExports`）、**已等价 1 项**（`FlutterActivity`）。 |
+| **taskChanged 覆盖 MCP 路径 + TimedTask** | ✅ 完成（task-50，dev-1440，K40 实测 `taskChanged` 出现 `script_started`/`script_finished`；事件名与字段未变，F1 契约 `--strict` 仍 PASS） |
 
 ## 5. 风险与边界
 

@@ -117,6 +117,35 @@ const androidContext = {
     startService(intent) { if (state.failService) throw new Error('SecurityException'); calls.push(['service',intent]); return {name:'started'}; },
     sendBroadcast(intent) { calls.push(['broadcast',intent]); }
 };
+class MockBroadcastReceivers {
+    constructor() { this.handles = new Map(); this.sequence = 0; this.counters = {registered:0,unregistered:0,dispatched:0,callbackErrors:0}; }
+    register(context, actions, categories, schemes, permission, exported, onIntent, onError) {
+        const id = 'bcr-' + (++this.sequence);
+        // 与 Java 侧 BroadcastFilter.normalize 同一套语义：trim + 去空 + 去重（保序）。
+        const clean = values => Array.from(new Set((values || []).map(value => String(value).trim()).filter(value => value.length > 0)));
+        this.handles.set(id, {id, actions: clean(actions), categories: clean(categories), schemes: clean(schemes), onIntent, onError});
+        this.counters.registered++;
+        const exportFlag = state.sdk >= 33 ? (exported ? 2 : 4) : 0;
+        return JSON.stringify({id, actions: clean(actions), categories: clean(categories), schemes: clean(schemes), permission,
+            exported: !!exported, registeredAt: 1700000000000 + this.sequence, exportFlag});
+    }
+    unregister(id) { const removed = this.handles.delete(String(id)); if (removed) this.counters.unregistered++; return removed; }
+    unregisterAll() { const count = this.handles.size; this.counters.unregistered += count; this.handles.clear(); return count; }
+    describe() { return JSON.stringify({counters: Object.assign({}, this.counters, {active: this.handles.size}),
+        active: Array.from(this.handles.values()).map(handle => ({id: handle.id, actions: handle.actions}))}); }
+    dispatch(id, intent) {
+        const handle = this.handles.get(String(id));
+        if (!handle) return 0;   // 注销后不再回调
+        this.counters.dispatched++;
+        try { handle.onIntent(intent); return 1; }
+        catch (error) {
+            this.counters.callbackErrors++;
+            if (typeof handle.onError === 'function') { try { handle.onError(error); } catch (ignored) {} }
+            return 2;
+        }
+    }
+}
+const broadcastReceivers = new MockBroadcastReceivers();
 const classMap = {
     'android.os.Build$VERSION': {get SDK_INT() {return state.sdk;},INCREMENTAL:'incremental',RELEASE:'11',SECURITY_PATCH:'2026-09-01'},
     'android.os.Build': {PRODUCT:'product',DEVICE:'device',BOARD:'board',BRAND:'brand',MODEL:'model',SUPPORTED_ABIS:['arm64-v8a'],ID:'id',DISPLAY:'display',BOOTLOADER:'loader',HARDWARE:'hardware',FINGERPRINT:'fingerprint',getSerial(){throw new Error('READ_PRIVILEGED_PHONE_STATE');}},
@@ -132,7 +161,8 @@ const classMap = {
     'android.webkit.MimeTypeMap': {getSingleton: () => ({getMimeTypeFromExtension: ext => ext === 'txt' ? 'text/plain' : null})},
     'com.stardust.autojs.ScriptEngineService': {getInstance: () => manager},
     'com.stardust.autojs.execution.ExecutionConfig': ExecutionConfig,
-    'com.stardust.autojs.script.JavaScriptFileSource': FileSource, 'java.util.HashMap': JavaMap, 'java.util.ArrayList': JavaList
+    'com.stardust.autojs.script.JavaScriptFileSource': FileSource, 'java.util.HashMap': JavaMap, 'java.util.ArrayList': JavaList,
+    'com.stardust.autojs.core.content.ScriptBroadcastReceivers': broadcastReceivers
 };
 const sandbox = {
     console, setTimeout, clearTimeout, context: androidContext, events: {bus:sharedBus},
@@ -188,7 +218,47 @@ const {device,Device,OS,BrightnessMode} = modules.device, app = modules.app, eng
     check('APK info resolves path and null parsing result',()=>{assert.equal(app.getApkInfo('demo.apk').packageName,'archive');assert.equal(app.getApkInfo('bad.txt'),null);});
     check('file viewer sends MIME type and grant flags',()=>{app.viewFile('notes.txt');const intent=calls.at(-1)[1];assert.equal(intent.type,'text/plain');assert.equal(intent.flags,0x10000003);assert.equal(intent.data.getScheme(),'content');});
     check('email builds address arrays and chooser',()=>{app.sendEmail({email:'a@example.test',cc:['b@example.test'],text:'message',chooserTitle:'Choose'});const chooser=calls.at(-1)[1];assert.equal(chooser.title,'Choose');assert.deepEqual(plain(chooser.intent.extras.email),['a@example.test']);assert.equal(chooser.intent.type,'message/rfc822');});
-    check('receiver callbacks reject explicitly',()=>assert.throws(()=>app.registerBroadcastReceiver('demo'),/not available/));
+    check('script broadcast receiver: 默认 NOT_EXPORTED、句柄可读、注销幂等且注销后不回调',()=>{
+        state.sdk=30;
+        const received=[];
+        const handle=app.registerBroadcastReceiver('  demo.event  ',intent=>received.push(intent.action));
+        assert.equal(handle.id,'bcr-1');
+        assert.deepEqual(plain(handle.actions),['demo.event']);
+        assert.equal(handle.exported,false);
+        assert.equal(handle.exportFlag,0);                 // API<33 不带 flags
+        assert.equal(String(handle),'bcr-1');
+        assert.ok(handle.registeredAt>0);
+        assert.equal(broadcastReceivers.dispatch(handle.id,{action:'demo.event'}),1);
+        assert.deepEqual(received,['demo.event']);
+        assert.equal(app.unregisterBroadcastReceiver(handle),true);   // 传句柄对象
+        assert.equal(app.unregisterBroadcastReceiver(handle.id),false); // 幂等
+        assert.equal(handle.active,false);
+        assert.equal(broadcastReceivers.dispatch(handle.id,{action:'demo.event'}),0);
+        assert.deepEqual(received,['demo.event']);          // 注销后不再回调
+        state.sdk=33;
+        const errors=[];
+        const exported=app.registerBroadcastReceiver({action:['demo.a','demo.a',' demo.b '],categories:['demo.cat'],schemes:['https']},
+            {onReceive:()=>{throw new Error('callback blew up');},onError:error=>errors.push(String(error.message)),exported:true});
+        assert.deepEqual(plain(exported.actions),['demo.a','demo.b']);   // trim + 去重
+        assert.deepEqual(plain(exported.categories),['demo.cat']);
+        assert.deepEqual(plain(exported.schemes),['https']);
+        assert.equal(exported.exportFlag,2);                // RECEIVER_EXPORTED（显式覆盖）
+        assert.equal(broadcastReceivers.dispatch(exported.id,{action:'demo.a'}),2);   // 异常被隔离
+        assert.deepEqual(errors,['callback blew up']);      // onError 收到
+        assert.equal(broadcastReceivers.dispatch(exported.id,{action:'demo.a'}),2);   // 进程没被拖垮，可继续收
+        assert.equal(app.unregisterAllBroadcastReceivers(),1);
+        const counters=JSON.parse(String(broadcastReceivers.describe())).counters;
+        assert.equal(counters.registered,2);
+        assert.equal(counters.unregistered,2);
+        assert.equal(counters.active,0);
+        assert.equal(counters.callbackErrors,2);
+        assert.throws(()=>app.registerBroadcastReceiver('',()=>{}),/至少要有一个非空 action/);
+        assert.throws(()=>app.registerBroadcastReceiver('demo.a','not a function'),/callback 必须是函数/);
+        const limitations=sandbox.__aiModernModuleCoverage.app.limitations.join(' ');
+        assert.ok(limitations.includes('RECEIVER_NOT_EXPORTED'));
+        assert.ok(limitations.includes('static manifest registration'));
+        state.sdk=30;
+    });
     check('current engine is stable and backed by Java source/config',()=>{assert.equal(engines.myEngine(),engines.myEngine());assert.equal(engines.myEngine().id,7);assert.equal(engines.myEngine().sourceFile,'/project/main.js');assert.equal(engines.myEngine().workingDirectory,'/project');assert.equal(engines.myEngine().execArgv.initial,42);assert.equal(engines.myEngine().executionConfig.workingDirectory,'/project');});
     check('private collection implementation is copied through public ArrayList',()=>{const saved=manager.getEngines;manager.getEngines=()=>({__javaHandle:17,values:[current,rhino],toArray(){throw new Error('IllegalAccessException');}});assert.deepEqual(plain(engines.getRunningEngines().map(engine=>engine.id)),[7,8]);manager.getEngines=saved;});
     check('private Map entries are avoided and nested collection arguments become JS values',()=>{const nested=new JavaMap(),list=new JavaList();list.add(1);list.add(null);nested.put('list',list);currentConfig.setArgument('nested',nested);const keys=currentConfig.args.keySet;currentConfig.args.keySet=()=>({__javaHandle:18,values:Array.from(currentConfig.args.values.keys()),toArray(){throw new Error('IllegalAccessException');}});assert.deepEqual(plain(engines.myEngine().execArgv.nested),{list:[1,null]});currentConfig.args.keySet=keys;});

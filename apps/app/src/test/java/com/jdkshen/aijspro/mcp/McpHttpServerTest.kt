@@ -586,6 +586,52 @@ class McpHttpServerTest {
     }
 
     /**
+     * W4 task-55：**flaky 的确定性复现**（不是靠概率碰运气）。
+     *
+     * 竞态：accept 循环的 `finally { acceptLoopAlive = false }` 只知道自己要退出，**不知道已经换了一轮**；
+     * 于是 stop()→start() 之后，旧循环稍后到达 finally 时会把新循环刚置上的 true 清成 false
+     * → get_status.mcp 误报 listening=false（产品侧问题），测试 :585 断言随之偶发失败。
+     *
+     * 这里用 seam 精确制造这个交错：旧循环在 accept() 里阻塞 → stop() → start() → 再放旧循环退出 → join 断言。
+     * 全程用 latch/join 做时序，不依赖 sleep。
+     */
+    @Test
+    fun staleAcceptLoopMustNotClearTheFlagAfterRestart() {
+        val staleSocket = BlockingServerSocket()
+        val stalePool = ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue(1))
+        val staleLoop = Thread({ server.acceptConnections(staleSocket, stalePool) }, "stale-accept-loop")
+        staleLoop.isDaemon = true
+        staleLoop.start()
+        assertTrue("旧循环未能在 2s 内进入 accept()", staleSocket.acceptEntered.await(2, TimeUnit.SECONDS))
+
+        server.stop()   // 真实 listener 关闭、flag=false
+        server.start()  // 新一轮：新 listener + flag=true
+        assertTrue("start() 之后应为 true", server.acceptLoopAlive)
+
+        staleSocket.close()  // 旧循环此刻退出，它的 finally 会执行
+        staleLoop.join(3000)
+        assertFalse("旧循环应已退出", staleLoop.isAlive)
+
+        assertTrue("旧循环的 finally 不能清掉新循环的状态（task-55 根因）", server.acceptLoopAlive)
+        stalePool.shutdownNow()
+    }
+
+    /** accept() 立刻发信号并阻塞到 close()：让「旧循环已进入 accept 但还没退出」这个状态可精确构造。 */
+    private class BlockingServerSocket : ServerSocket() {
+        val acceptEntered = CountDownLatch(1)
+        override fun accept(): Socket {
+            acceptEntered.countDown()
+            while (!isClosed) {
+                try { Thread.sleep(10) } catch (_: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+            }
+            throw IOException("stale socket closed")
+        }
+    }
+
+    /**
      * 只用于 task-5 A/C 的 seam：第一次 accept() 返回 first（若非 null），之后永远抛瞬时
      * IOException，直到测试 close() 它。
      */
