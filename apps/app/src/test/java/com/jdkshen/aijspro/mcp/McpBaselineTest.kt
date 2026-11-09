@@ -85,9 +85,14 @@ class McpBaselineTest {
         val partialProjected = McpBaseline.toolchain(partial)
         assertEquals(false, partialProjected.get("ready").asBoolean)
         assertTrue(partialProjected.getAsJsonArray("missing").map { it.asString }.contains("python3"))
-        // 未采样：明确 null + note，不编数字
+        // 采样后：sampled=true（与 get_build_tools 逐字相等由上面三条断言保证）
+        assertEquals(true, projected.get("sampled").asBoolean)
+        // task-38（②）：未采样**不能**输出空 missing/present 数组（会被读成「什么都不缺」）
         val unsampled = McpBaseline.toolchain(null)
-        assertTrue(unsampled.get("ready").isJsonNull)
+        assertEquals(false, unsampled.get("sampled").asBoolean)
+        assertFalse("未采样不能有 missing", unsampled.has("missing"))
+        assertFalse("未采样不能有 present", unsampled.has("present"))
+        assertFalse("未采样不能有 ready（null 也误导）", unsampled.has("ready"))
         assertTrue(unsampled.get("note").asString.contains("get_build_tools"))
     }
 
@@ -157,6 +162,40 @@ class McpBaselineTest {
             McpBaseline.bytesOf(trimmed) < fatBytes)
     }
 
+    /**
+     * task-38（①④）：失败信封**始终**带失败专用裁剪版 baseline（版本 + recovery，体积远小于完整版）。
+     */
+    @Test
+    fun failureViewIsSmallAndAlwaysSelfRescuing() {
+        val missing = readiness(false, allComponents, emptyList())
+        val full = McpBaseline.assemble(
+            7, "/storage/emulated/0/脚本", "p",
+            ToolkitIo.json("script" to 4, "apk" to ToolkitIo.json("used" to 3, "quota" to 16, "temporary" to 1, "ttlHint" to "temporary 会过期")),
+            McpBaseline.toolchain(missing),
+            McpBaseline.jobs("6h / 64 条", "终态立刻 result 或 export"),
+        )
+        val view = McpBaseline.failureView(full)
+        assertEquals(7, view.get("version").asInt)
+        assertTrue("失败时必须能给自救建议", view.get("recovery").asString.contains("apk_component_install"))
+        assertTrue(view.getAsJsonArray("missing").map { it.asString }.contains("python3"))
+        assertEquals("failure", view.get("trimmed").asString)
+        assertTrue(view.get("trimNote").asString.contains("失败专用裁剪"))
+        assertFalse("失败版不带宽表统计", view.has("workspaces"))
+        assertFalse(view.has("jobs"))
+        assertFalse(view.has("toolchain"))
+        assertTrue("失败裁剪版必须 ≤ 完整版（fat=" + McpBaseline.bytesOf(full) + "B, view=" + McpBaseline.bytesOf(view) + "B）",
+            McpBaseline.bytesOf(view) <= McpBaseline.bytesOf(full))
+        // 无缺失时只保 version（不带 recovery），同样不带宽表统计
+        val clean = McpBaseline.failureView(McpBaseline.assemble(3, "/r", null,
+            ToolkitIo.json("script" to 0, "apk" to JsonObject()), McpBaseline.toolchain(fullReadiness()),
+            McpBaseline.jobs("6h / 64 条", "x")))
+        assertEquals(3, clean.get("version").asInt)
+        assertFalse(clean.has("recovery"))
+        assertFalse(clean.has("missing"))
+        // 连续两次失败必须都带（不受「首个 tools/call」latch 影响）
+        assertEquals(view.toString(), McpBaseline.failureView(full).toString())
+    }
+
     @Test
     fun versionIsStableWhileContentIsUnchanged() {
         val version = McpBaselineVersion()
@@ -177,10 +216,20 @@ class McpBaselineTest {
         assertTrue("get_status 走同一份", mcpToolsSource.contains("add(\"baseline\", baselineSnapshot(jobsSummary))"))
         assertTrue("get_baseline 走同一份且可强刷",
             mcpToolsSource.contains("\"get_baseline\" -> toolJson(baselineSnapshot(force = args.booleanOr(\"refresh\", false)))"))
-        assertTrue("失败信封带 baseline（toolFailure/toolResult）", mcpToolsSource.contains("if (!has(\"baseline\")) add(\"baseline\", baselineSnapshot())"))
-        assertTrue("桥接失败带 baseline", mcpToolsSource.contains("add(\"baseline\", baselineSnapshot())"))
+        // task-38（①）：失败信封走失败专用裁剪版，且**兜底在 rpcResult**（任何 isError 都补）
+        assertTrue("toolFailure 把裁剪版放进信封", mcpToolsSource.contains("envelope.add(\"baseline\", failureBaseline.deepCopy())"))
+        assertTrue("toolFailure 顶层也带", mcpToolsSource.contains("add(\"baseline\", failureBaseline)"))
+        assertTrue("toolResult(error) 带裁剪版", mcpToolsSource.contains("if (error && !has(\"baseline\")) add(\"baseline\", failureBaselineView())"))
+        assertTrue("桥接失败带裁剪版", mcpToolsSource.contains("add(\"baseline\", failureBaselineView())"))
+        assertTrue("rpcResult 兜底所有 isError", mcpToolsSource.contains("add(\"result\", withFailureBaseline(result))"))
+        assertTrue("失败版不受 latch 影响", mcpToolsSource.contains("private fun failureBaselineView(): JsonObject = runCatching {"))
+        assertTrue("失败路径不触发采样（保持轻量）", mcpToolsSource.contains("McpBaseline.failureView(baselineSnapshot(sampleIfMissing = false))"))
+        assertTrue("未采样时触发一次同源采样（30s 内不重试）", mcpToolsSource.contains("if (now - toolchainSampleAt < 30_000L) return McpBuildTools.cachedReadiness()"))
+        assertTrue(mcpToolsSource.contains("McpBuildTools.inspect(terminalBackend, root); McpBuildTools.cachedReadiness()"))
         // 同源生产侧：baseline 的工具链只取 get_build_tools 的内存缓存（不重新探测 PATH）
-        assertTrue(mcpToolsSource.contains("McpBaseline.toolchain(McpBuildTools.cachedReadiness())"))
+        assertTrue("工具链只取 cachedReadiness（采样走同一条 inspect）",
+            mcpToolsSource.contains("val readiness = McpBuildTools.cachedReadiness() ?: if (sampleIfMissing) sampleToolchain() else null") &&
+                mcpToolsSource.contains("McpBaseline.toolchain(readiness)"))
         val buildToolsSource = File("src/main/java/com/jdkshen/aijspro/mcp/McpBuildTools.kt").readText()
         assertTrue("readiness 是 get_build_tools 的唯一判定实现", buildToolsSource.contains("internal fun readiness(commandResults: Map<String, String>"))
         assertTrue("cachedReadiness 暴露的是同一份判定", buildToolsSource.contains("fun cachedReadiness(): JsonObject? = lastReadiness?.deepCopy()"))

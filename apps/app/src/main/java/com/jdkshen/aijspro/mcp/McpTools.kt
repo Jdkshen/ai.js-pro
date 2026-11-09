@@ -60,6 +60,8 @@ internal class McpTools(private val context: Context, private val event: (String
     @Volatile private var baselineCacheAt = 0L
     @Volatile private var jobsSummaryCache: JsonObject? = null
     @Volatile private var jobsSummaryCacheAt = 0L
+    /** task-38：工具链采样尝试时间（30s 内不重复探测）。 */
+    @Volatile private var toolchainSampleAt = 0L
     /** baseline 缓存：失败/入口调用很频繁，15s 内复用同一份（内容变才变 version）。 */
     private val baselineTtlMillis = 15_000L
     private val workspaces = McpWorkspaceStore(context, root)
@@ -482,8 +484,8 @@ internal class McpTools(private val context: Context, private val event: (String
             return toolJson(result).apply {
                 if (result.get("ok")?.asBoolean == false) {
                     addProperty("isError", true)
-                    // §6.4：工具桥（:tools 进程）的失败也要带 baseline。
-                    add("baseline", baselineSnapshot())
+                    // task-38（①）：工具桥（:tools 进程）的失败也带**失败专用裁剪版** baseline。
+                    add("baseline", failureBaselineView())
                     // `.4` 终检 minor：错误码要能不解析正文就取到；桥接结果的 code 在 payload 顶层或 error.code。
                     val code = result.get("errorCode") ?: result.getAsJsonObject("error")?.get("code")
                     code?.takeIf { it.isJsonPrimitive }?.asString?.let { addProperty("errorCode", it) }
@@ -1519,7 +1521,8 @@ internal class McpTools(private val context: Context, private val event: (String
      * 15s 内复用同一份；内容不变时 version 不变（客户端可去重）；最后过 [McpBaseline.fitBudget]。
      */
     @Synchronized
-    private fun baselineSnapshot(jobsSummary: JsonObject? = toolkitJobsSummary(), force: Boolean = false): JsonObject {
+    private fun baselineSnapshot(jobsSummary: JsonObject? = toolkitJobsSummary(), force: Boolean = false,
+                                 sampleIfMissing: Boolean = true): JsonObject {
         val now = System.currentTimeMillis()
         if (!force) baselineCache?.let { if (now - baselineCacheAt < baselineTtlMillis) return it.deepCopy() }
         val workspaces = runCatching {
@@ -1527,19 +1530,54 @@ internal class McpTools(private val context: Context, private val event: (String
         }.getOrElse {
             ToolkitIo.json("script" to null, "apk" to McpBaseline.apkWorkspacesUnavailable("脚本工作区统计不可用"))
         }
-        val toolchain = runCatching { McpBaseline.toolchain(McpBuildTools.cachedReadiness()) }
+        // task-38（②）：未采样就触发一次与 get_build_tools **同一条** readiness（30s 内不重试）；失败路径不触发。
+        val readiness = McpBuildTools.cachedReadiness() ?: if (sampleIfMissing) sampleToolchain() else null
+        val toolchain = runCatching { McpBaseline.toolchain(readiness) }
             .getOrElse { McpBaseline.toolchain(null) }
         val jobs = McpBaseline.jobs(
             runCatching { retentionSummary(jobsSummary ?: toolkitJobsSummary()) }.getOrDefault("不可用"),
             "终态立刻 result 或 export",
         )
-        val content = McpBaseline.assemble(0, root.path, currentProjectName(), workspaces, toolchain, jobs)
+        // outputRule 用**短**形式（设备4 §6.4 样例的那句）：完整 RULE 文案 ~200B，会把 512B 预算撑爆而被裁掉。
+        val content = McpBaseline.assemble(0, root.path, currentProjectName(), workspaces, toolchain, jobs,
+            "所有产出落 <root>/<项目名>/")
         val version = runCatching { baselineVersion.versionFor(content) }.getOrDefault(0)
         content.addProperty("version", version)
         val fitted = runCatching { McpBaseline.fitBudget(content) }.getOrElse { content }
         baselineCache = fitted.deepCopy()
         baselineCacheAt = now
         return fitted
+    }
+
+    /**
+     * task-38（②）：未采样时触发一次采样（复用 get_build_tools 的 inspect → 同一份 readiness），30s 内不重试。
+     */
+    private fun sampleToolchain(): JsonObject? {
+        val now = System.currentTimeMillis()
+        if (now - toolchainSampleAt < 30_000L) return McpBuildTools.cachedReadiness()
+        toolchainSampleAt = now
+        return runCatching { McpBuildTools.inspect(terminalBackend, root); McpBuildTools.cachedReadiness() }.getOrNull()
+    }
+
+    /**
+     * task-38（①）：**失败专用**基线 —— 不受 latch 影响、只带 version(+recovery/missing)、体积远小于完整版。
+     */
+    private fun failureBaselineView(): JsonObject = runCatching {
+        McpBaseline.failureView(baselineSnapshot(sampleIfMissing = false))
+    }.getOrElse {
+        ToolkitIo.json("version" to -1, "trimmed" to "failure",
+            "trimNote" to "失败专用裁剪：基线暂不可用（完整基线用 get_baseline）")
+    }
+
+    /**
+     * task-38（①）兜底：**任何** isError 结果都必须带失败裁剪版 baseline（覆盖桥接与将来新增的失败路径）。
+     */
+    private fun withFailureBaseline(result: JsonObject): JsonObject {
+        if (result.get("isError")?.asBoolean != true) return result
+        val view = result.get("baseline")?.takeIf { it.isJsonObject }?.asJsonObject ?: failureBaselineView()
+        result.add("baseline", view)
+        result.getAsJsonObject("structuredContent")?.let { if (!it.has("baseline")) it.add("baseline", view.deepCopy()) }
+        return result
     }
 
     /**
@@ -1716,26 +1754,34 @@ internal class McpTools(private val context: Context, private val event: (String
             "argument" to argument, "recoverable" to true, "retrySameArguments" to false)
         // `.4` v8 后续：把「可用参数/必填」做成结构化字段，机读不用解析 message。
         if (details != null) error.add("details", details)
+        // task-38（①）：失败信封**始终**带 baseline（失败专用裁剪版：version + recovery/missing），
+        // 不受「首个 tools/call」latch 影响；同时放进信封（客户端常只解析 structuredContent）。
+        val failureBaseline = failureBaselineView()
         val envelope = ToolkitIo.json(
             "ok" to false, "data" to null, "error" to error, "nextActions" to emptyList<Any>())
+        envelope.add("baseline", failureBaseline.deepCopy())
         return toolResult(envelope.toString(), true, errorCode = code, argument = argument).apply {
             add("structuredContent", envelope)
             if (details != null) add("details", details)
-            // §6.4：失败时最需要自救 —— 所有失败信封都带一条紧凑 baseline（同源、15s 缓存）。
-            if (!has("baseline")) add("baseline", baselineSnapshot())
+            add("baseline", failureBaseline)
         }
     }
 
     private fun toolResult(text: String, error: Boolean = false, errorCode: String? = null, argument: String? = null) = JsonObject().apply {
         add("content", JsonArray().apply { add(JsonObject().apply { addProperty("type", "text"); addProperty("text", text) }) })
         if (error) addProperty("isError", true)
-        // §6.4：失败信封都带 baseline（IllegalState/Security/IOException 这几条 catch 走这里）。
-        if (error) add("baseline", baselineSnapshot())
+        // task-38（①）：失败信封带**失败专用裁剪版** baseline（IllegalState/Security/IOException 这几条 catch 走这里）。
+        if (error && !has("baseline")) add("baseline", failureBaselineView())
         // 反馈 #8/#11：结构化错误码不能只在正文里；让调用方在不解析文本的情况下也能判定失败类型。
         if (errorCode != null) addProperty("errorCode", errorCode)
         if (argument != null) addProperty("argument", argument)
     }
-    private fun rpcResult(id: JsonElement?, result: JsonObject) = JsonObject().apply { addProperty("jsonrpc", "2.0"); add("id", id ?: JsonNull.INSTANCE); add("result", result) }
+    private fun rpcResult(id: JsonElement?, result: JsonObject) = JsonObject().apply {
+        addProperty("jsonrpc", "2.0")
+        add("id", id ?: JsonNull.INSTANCE)
+        // task-38（①）兜底：任何 isError 结果都补失败裁剪版 baseline（一条覆盖所有失败路径）。
+        add("result", withFailureBaseline(result))
+    }
     private fun rpcError(id: JsonElement?, code: Int, message: String) = JsonObject().apply { addProperty("jsonrpc", "2.0"); add("id", id ?: JsonNull.INSTANCE); add("error", JsonObject().apply { addProperty("code", code); addProperty("message", message) }) }
     private fun JsonObject.string(name: String): String = get(name)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: throw ToolError("缺少参数 $name")
     private fun JsonObject.stringOr(name: String, fallback: String) = runCatching { string(name) }.getOrDefault(fallback)

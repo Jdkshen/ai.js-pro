@@ -40,19 +40,44 @@ internal object McpBaseline {
         "used" to null, "quota" to null, "temporary" to null, "note" to note,
     )
 
-    /** 工具链投影：只搬 get_build_tools 的 ready/missing/present。 */
+    /**
+     * 工具链投影：只搬 get_build_tools 的 ready/missing/present。
+     *
+     * task-38（②）：**未采样时不输出空数组**（旧形状 `missing:[]/present:[]` 会被读成「什么都不缺」），
+     * 改为 `{sampled:false, note}`；采样后 `sampled:true` + ready/missing/present（与 get_build_tools 逐字相等）。
+     */
     fun toolchain(readiness: JsonObject?): JsonObject {
         if (readiness == null) {
             return ToolkitIo.json(
-                "ready" to null, "missing" to JsonArray(), "present" to JsonArray(),
-                "note" to "先调用 get_build_tools 采样",
+                "sampled" to false,
+                "note" to "未采样：先 get_build_tools（或 get_baseline{refresh:true}）拿 ready/missing/present",
             )
         }
         return ToolkitIo.json(
+            "sampled" to true,
             "ready" to readiness.get("ready"),
             "missing" to (readiness.getAsJsonArray("missing") ?: JsonArray()),
             "present" to (readiness.getAsJsonArray("present") ?: JsonArray()),
         )
+    }
+
+    /**
+     * task-38（①）：**失败专用裁剪版** —— 只保 `version` + `recovery`（有缺失时额外带 `missing`），
+     * 不带宽表统计（workspaces/jobs/toolchain 明细），并回显 trimmed/trimNote 说明这是失败专用裁剪。
+     * 失败信封必须始终能自救，所以它不受「首个 tools/call」latch 影响。
+     */
+    fun failureView(full: JsonObject): JsonObject {
+        val out = JsonObject()
+        out.addProperty("version", full.tIntOrNull("version") ?: -1)
+        val recovery = full.get("recovery")
+        if (recovery != null && !recovery.isJsonNull) out.add("recovery", recovery.deepCopy())
+        val missing = full.getAsJsonArray("missing")
+            ?: full.getAsJsonObject("toolchain")?.getAsJsonArray("missing")
+        if (missing != null && missing.size() > 0) out.add("missing", missing.deepCopy())
+        out.addProperty("trimmed", "failure")
+        out.addProperty("trimNote", "失败专用裁剪：只带 version" + (if (out.has("recovery")) "/recovery" else "") +
+            (if (out.has("missing")) "/missing" else "") + "；完整基线用 get_baseline")
+        return out
     }
 
     fun jobs(retention: String, advice: String): JsonObject = ToolkitIo.json("retention" to retention, "advice" to advice)
@@ -85,11 +110,13 @@ internal object McpBaseline {
         workspaces: JsonObject,
         toolchain: JsonObject,
         jobs: JsonObject,
+        outputRule: String? = null,
     ): JsonObject = ToolkitIo.json(
-        // 只留 §6.4 要的字段：outputRule/backends/notes 这类静态文案不进 512 字节预算（描述里已经写了）。
+        // §6.4 的字段；outputRule 是设备4 样例里就有的短文案（超预算时由 fitBudget 第一个丢）。
         "version" to version,
         "root" to root,
         "currentProject" to currentProject,
+        "outputRule" to outputRule,
         "workspaces" to workspaces,
         "toolchain" to toolchain,
         "jobs" to jobs,
