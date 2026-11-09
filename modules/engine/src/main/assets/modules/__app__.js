@@ -18,6 +18,73 @@ module.exports = function (runtime, global) {
         return result;
     }
 
+
+    /**
+     * task-54：脚本侧广播接收（挂到脚本真正拿到的 app 对象上；Rhino 的 app = Object.create(runtime.app)）。
+     * 默认取更安全的 RECEIVER_NOT_EXPORTED；exported:true 才用 RECEIVER_EXPORTED（其它应用可达，慎用）。
+     * 注销：unregisterBroadcastReceiver(句柄或 id) / unregisterAllBroadcastReceivers()；退出/线程结束也会清理。
+     */
+    var BroadcastReceivers = Packages.com.stardust.autojs.core.content.ScriptBroadcastReceivers;
+    var broadcastHandle = function (meta) {
+        var handle = {
+            id: meta.id, actions: meta.actions, categories: meta.categories, schemes: meta.schemes,
+            permission: meta.permission, exported: meta.exported, registeredAt: meta.registeredAt,
+            exportFlag: meta.exportFlag, active: true
+        };
+        handle.unregister = function () {
+            handle.active = app.unregisterBroadcastReceiver(handle.id);
+            return handle.active;
+        };
+        handle.toString = function () { return handle.id; };
+        return handle;
+    };
+    app.registerBroadcastReceiver = function (actionOrFilter, callback, options) {
+        var spec = broadcastSpec(actionOrFilter, callback && typeof callback === 'object' ? callback : options);
+        var onIntent = typeof callback === 'function' ? callback
+            : (callback && typeof callback.onReceive === 'function' ? callback.onReceive : null);
+        if (typeof onIntent !== 'function') throw new TypeError('registerBroadcastReceiver: callback 必须是函数');
+        var onError = (callback && typeof callback.onError === 'function') ? callback.onError
+            : (options && typeof options.onError === 'function' ? options.onError : null);
+        var json = String(BroadcastReceivers.register(context, spec.actions, spec.categories, spec.schemes,
+            spec.permission, spec.exported, onIntent, onError, this));
+        return broadcastHandle(JSON.parse(json));
+    };
+    app.unregisterBroadcastReceiver = function (idOrHandle) {
+        var id = idOrHandle && typeof idOrHandle === 'object' && idOrHandle.id != null ? idOrHandle.id : idOrHandle;
+        if (id == null || String(id).trim() === '') return false;
+        return !!BroadcastReceivers.unregister(String(id).trim());
+    };
+    app.unregisterAllBroadcastReceivers = function () {
+        return Number(BroadcastReceivers.unregisterAll());
+    };
+    /** 归一化 actionOrFilter（字符串/数组/{action,actions,categories,schemes,permission,exported}）。 */
+    function broadcastSpec(actionOrFilter, options) {
+        var spec = { actions: [], categories: [], schemes: [], permission: null, exported: false };
+        function push(target, value) {
+            if (value == null) return;
+            (value instanceof Array ? value : [value]).forEach(function (item) {
+                if (item == null) return;
+                var text = String(item).trim();
+                if (text) target.push(text);
+            });
+        }
+        if (typeof actionOrFilter === 'string' || actionOrFilter instanceof Array) push(spec.actions, actionOrFilter);
+        else if (actionOrFilter && typeof actionOrFilter === 'object') {
+            push(spec.actions, actionOrFilter.actions != null ? actionOrFilter.actions : actionOrFilter.action);
+        } else if (actionOrFilter != null) {
+            throw new TypeError('registerBroadcastReceiver: actionOrFilter 必须是字符串、字符串数组或 filter 对象');
+        }
+        [actionOrFilter, options && typeof options === 'object' ? options : {}].forEach(function (source) {
+            if (!source || typeof source !== 'object') return;
+            push(spec.categories, source.categories != null ? source.categories : source.category);
+            push(spec.schemes, source.schemes != null ? source.schemes : source.scheme);
+            if (source.permission != null && String(source.permission).trim()) spec.permission = String(source.permission).trim();
+            if (source.exported != null) spec.exported = !!source.exported;
+        });
+        if (!spec.actions.length) throw new TypeError('registerBroadcastReceiver: actionOrFilter 至少要有一个非空 action');
+        return spec;
+    }
+
     // app.viewFile(path, {fresh:true}) 不需要 JS 包装：AppUtils 已有 viewFile(String,Object) 重载（返回 ViewerResult）。
     // 曾经在这里赋值覆盖 Java 方法 → Rhino 报 `Java method "viewFile" cannot be assigned to`（K40 实测 dev-1372）。
 

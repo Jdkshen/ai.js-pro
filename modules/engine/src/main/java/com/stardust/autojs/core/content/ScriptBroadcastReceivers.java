@@ -124,7 +124,10 @@ public final class ScriptBroadcastReceivers {
             if (!(functionLike instanceof Function)) return;
             org.mozilla.javascript.Context cx = org.mozilla.javascript.Context.enter();
             try {
-                ((Function) functionLike).call(cx, scope, scope, args);
+                // scope 允许为 null（例如从 AppUtils 直接调用时没有脚本作用域）：退化成用函数自身当作用域/thisObj。
+                Scriptable effective = scope != null ? scope
+                        : (functionLike instanceof Scriptable ? (Scriptable) functionLike : null);
+                ((Function) functionLike).call(cx, effective, effective, args);
             } finally {
                 org.mozilla.javascript.Context.exit();
             }

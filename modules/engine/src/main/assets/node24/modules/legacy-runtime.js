@@ -233,6 +233,17 @@
   appModule.launchApp = launchApp;
   appModule.intent = makeIntent;
   appModule.makeIntent = makeIntent;
+  // task-54：脚本侧广播接收。Node24 宿主的 app op 目前没有「注册接收器 + 回调通道」这一路，
+  // 所以这里显式给出可辨识错误（typeof 仍是 function，调用时明确说清缺什么），不伪装成可用。
+  appModule.registerBroadcastReceiver = function () {
+    throw apiError('app.registerBroadcastReceiver 在 nodejs 引擎暂不可用：Node24 宿主缺少 kind:"app" action:"registerBroadcastReceiver" 与回调回传通道；rhino/quickjs 已支持');
+  };
+  appModule.unregisterBroadcastReceiver = function () {
+    throw apiError('app.unregisterBroadcastReceiver 在 nodejs 引擎暂不可用（rhino/quickjs 已支持）');
+  };
+  appModule.unregisterAllBroadcastReceivers = function () {
+    throw apiError('app.unregisterAllBroadcastReceivers 在 nodejs 引擎暂不可用（rhino/quickjs 已支持）');
+  };
   globalThis.app = appModule;
   globalThis.$app = appModule;
   autojs.app = appModule;

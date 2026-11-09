@@ -655,6 +655,17 @@
                 if (viewOptions === undefined) return originalGlobalApp.viewFile(file);
                 return app.viewFile(file, viewOptions);
             };
+            // task-54：脚本真正拿到的是这个冻结副本（C++ bootstrap 的 global app），所以必须把新 API 拷进来，
+            // 只挂在模块自己的 app 上脚本看不到（dev-1442 真机实测：quickjs typeof === 'undefined'）。
+            appCompat.registerBroadcastReceiver = function (actionOrFilter, callback, options) {
+                return app.registerBroadcastReceiver(actionOrFilter, callback, options);
+            };
+            appCompat.unregisterBroadcastReceiver = function (idOrHandle) {
+                return app.unregisterBroadcastReceiver(idOrHandle);
+            };
+            appCompat.unregisterAllBroadcastReceivers = function () {
+                return app.unregisterAllBroadcastReceivers();
+            };
             g.app = Object.freeze(appCompat);
         }
     } catch (_) { /* leave C++ global app untouched */ }
