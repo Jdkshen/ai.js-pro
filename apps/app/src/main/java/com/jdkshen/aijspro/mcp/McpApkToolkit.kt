@@ -486,7 +486,7 @@ internal class McpApkToolkit(
         "apk_edit_text" -> "按 targetVersion 原子编辑会话文本：普通条目、DEX 类/方法 smali、axml: 或 zip_entry: 的二进制 XML/Manifest（内部 ToolkitResources.encodeXml，拒绝 DOCTYPE/ENTITY）；AXML 先 apk_read_text(locator=axml:<entry>) 再传完整 XML 到 write_target。"
         "apk_patch_bytes" -> "等长原始字节补丁，只适用于普通条目；classes*.dex、resources.arsc、二进制 AXML/AndroidManifest.xml 会被拒绝。改 AXML 用 apk_read_text + apk_edit_text（axml: locator），或 apk_decode_project → file_edit_text → apk_build_project。"
         "apk_resource_read", "apk_resource_edit", "apk_resource_add" -> "只操作 resources.arsc 的资源表/资源 XML，不包含 AXML/AndroidManifest.xml；AXML 请用 apk_read_text/apk_edit_text 的 axml: locator。"
-        "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。"
+        "apk_build" -> "校验编辑会话，导出新 APK；不修改源包。sign=true 使用本机 AI.js Pro 签名身份，不能沿用原作者签名。构建前检查只关心「能不能安全回编」：AXML 需要资源上下文（例如加固包/无 resources.arsc）**不再阻断构建**，改用与 apk_verify 同一条独立 AXML 解析取回基础字段并在返回 warnings 里记 MANIFEST_PRIMARY_DECODER_FALLBACK（含同源的 failureKind/primaryError），构建继续；真损坏/格式不支持/后端异常仍失败，错误码区分 MANIFEST_UNREADABLE / MANIFEST_FORMAT_UNSUPPORTED / MANIFEST_BACKEND_ERROR（原错误原文在 primaryError）。若构建产物依赖资源引用，请用 apk_verify 复核资源级完整性（兜底解析不解码资源引用与组件级 XML）。"
         "apk_native_disassemble", "apk_native_xref", "apk_native_analyze_control_flow" -> "有界直接指令分析：原生库可用时覆盖 AArch64、ARM/Thumb、x86/x86-64（Capstone 5.0.6），否则回退 AArch64 常见指令子集；未知指令明确标出，间接引用与完整数据流不作成功保证。"
         "apk_native_patch_instructions" -> "会话中汇编并等长修改 AArch64、ARM/Thumb、x86/x86-64 指令，expectedHex 防旧数据。常见指令可直接处理，一般汇编可通过可选 C/C++ 组件完成。"
         "apk_read_bytes", "apk_delete_target", "apk_copy_entry" ->
@@ -1399,6 +1399,7 @@ internal class McpApkToolkit(
     private fun check(workspace: String, session: String, run: Boolean): JsonObject {
         val beforeRevision = revision(workspace, session)
         val info = sessionInfo(workspace, session); val changed = info.getAsJsonObject("changedEntries").keySet().toSet(); val failures = ArrayList<JsonObject>()
+        val warnings = ArrayList<JsonObject>()
         val names = entries(workspace, session).toSet()
         val base = ZipFile(snapshot(workspace)).use { it.entries().asSequence().map { entry -> entry.name }.toSet() }
         val deleted = info.getAsJsonArray("deleted").map { it.asString }.toSet()
@@ -1421,9 +1422,43 @@ internal class McpApkToolkit(
                     ToolkitGadget.isConfiguration(entry,bytes) -> Unit
                     entry.endsWith(".so") -> ToolkitElf(bytes)
                     entry == "AndroidManifest.xml" -> {
-                        val text = if(ToolkitResources.isBinaryXml(bytes)) ToolkitResources.decodeXml(bytes, optionalResources(workspace, session)) else ToolkitIo.text(bytes)
-                        ToolkitResources.safeXml(text)
-                        require(com.reandroid.xml.XMLDocument.load(text).documentElement?.name == "manifest") { "Manifest 不是有效 XML" }
+                        val binary = ToolkitResources.isBinaryXml(bytes) || ToolkitAxmlLite.looksBinaryXml(bytes)
+                        try {
+                            val text = if (binary) ToolkitResources.decodeXml(bytes, optionalResources(workspace, session)) else ToolkitIo.text(bytes)
+                            ToolkitResources.safeXml(text)
+                            require(com.reandroid.xml.XMLDocument.load(text).documentElement?.name == "manifest") { "Manifest 不是有效 XML" }
+                        } catch (primary: Throwable) {
+                            // §4.1（构建侧）：检查的目的是「能不能安全回编」，不是「能不能完整解码资源引用」。
+                            // AXML 需要资源上下文时不再硬失败，改用与 apk_verify 同一条独立解析路径取回基础字段并记 warning。
+                            if (primary is VirtualMachineError) throw primary
+                            val primaryError = primary.message ?: primary.javaClass.name
+                            val failureKind = ToolkitApkVerifier.manifestFailureKind(primaryError)
+                            val facts = if (binary) ToolkitAxmlLite.parseManifest(bytes) else null
+                            if (facts != null) {
+                                warnings.add(ToolkitIo.json(
+                                    "locator" to "zip_entry:$entry", "code" to "MANIFEST_PRIMARY_DECODER_FALLBACK",
+                                    "severity" to "warning",
+                                    "message" to ("完整 XML 解码失败（" + failureKind + "），已用独立 AXML 解析取回基础字段；构建继续（构建检查只关心能不能安全回编）"),
+                                    "failureKind" to failureKind, "primaryError" to primaryError,
+                                    "packageName" to facts.packageName, "minSdk" to facts.minSdk,
+                                    "elementCount" to facts.elementCount, "attributeCount" to facts.attributeCount,
+                                    "note" to "资源引用与组件级 XML 不可用；若构建产物依赖资源引用，请用 apk_verify 复核资源级完整性"))
+                                if (facts.packageName.isNullOrBlank()) {
+                                    failure(entry, "MANIFEST_PACKAGE_MISSING", "独立 AXML 解析也拿不到 package")
+                                }
+                            } else {
+                                val code = when {
+                                    !binary -> "MANIFEST_UNREADABLE"
+                                    failureKind == "resource_context_missing" -> "MANIFEST_UNREADABLE"
+                                    failureKind == "unsupported_binary_xml" || failureKind == "unsupported_format" -> "MANIFEST_FORMAT_UNSUPPORTED"
+                                    else -> "MANIFEST_BACKEND_ERROR"
+                                }
+                                failures.add(ToolkitIo.json(
+                                    "locator" to "zip_entry:$entry", "errorCode" to code,
+                                    "message" to primaryError, "error" to primaryError,
+                                    "failureKind" to failureKind, "primaryError" to primaryError))
+                            }
+                        }
                     }
                     ToolkitResources.isBinaryXml(bytes) -> ToolkitResources.decodeXml(bytes, optionalResources(workspace, session))
                 }
@@ -1432,8 +1467,13 @@ internal class McpApkToolkit(
         val classes = info.getAsJsonObject("classChanges")
         val completeCounts = info.get("classChangesComplete")?.asBoolean == true
         fun count(kind: String) = if(completeCounts) classes?.entrySet()?.count { it.value.asString == kind } ?: 0 else null
+        val nextActions = JsonArray()
+        if (warnings.isNotEmpty()) {
+            nextActions.add("Manifest 走的是独立 AXML 兜底解析（MANIFEST_PRIMARY_DECODER_FALLBACK）：构建可以继续，但资源引用/组件级 XML 未解码；若产物依赖资源引用，请用 apk_verify{workspaceId} 复核资源级完整性")
+        }
         return ToolkitIo.json("workspaceId" to workspace, "editSessionId" to session, "changedEntries" to changed, "deleted" to deleted,
             "buildChecksRun" to run, "runBuildChecks" to run, "valid" to if(run) failures.isEmpty() else null,
+            "warnings" to warnings, "warningCount" to warnings.size, "nextActions" to nextActions,
             "buildCheckStatus" to if(!run) "not_requested" else if(failures.isEmpty()) "passed" else "failed",
             "pendingCompileCount" to 0, "failedCount" to failures.size, "failures" to failures,
             "changedDexEntries" to (changed + deleted).filter { ToolkitApkTargets.isDex(it) },
@@ -1513,7 +1553,10 @@ internal class McpApkToolkit(
             "signatureSummary" to signature, "verification" to verification,
             // 只读对齐诊断：不改变导出流程；计数来自最终 APK 的 verifier 报告（见对齐/签名路径）。
             "alignment" to alignmentDiagnostics(verification, true),
-            "signingIdentity" to if(signing) "AI.js Pro 本机身份，替换原签名" else "unsigned", "sourceUnchanged" to true)
+            "signingIdentity" to if(signing) "AI.js Pro 本机身份，替换原签名" else "unsigned", "sourceUnchanged" to true,
+            // §4.1（构建侧）：会话检查里的非阻断警告（目前只有 MANIFEST_PRIMARY_DECODER_FALLBACK）原样带出，
+            // 让调用方能看到「Manifest 走了独立 AXML 兜底解析」，而不是以为构建做了完整资源解码。
+            "warnings" to (checked.get("warnings") ?: JsonArray()), "warningCount" to (checked.get("warningCount") ?: 0))
         listOf("changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries").forEach {
             result.add(it, checked.get(it))
         }
@@ -1522,7 +1565,7 @@ internal class McpApkToolkit(
         if (args.tString("detail", "full").equals("summary", true)) {
             val keep = listOf("path", "size", "sha256", "signed", "signer", "signerFallbackReason", "schemesApplied", "schemesVerified",
                 "changedDexEntries", "changedClassCount", "deletedClassCount", "addedClassCount", "addedZipEntries", "changedZipEntries", "deletedZipEntries",
-                "signingIdentity", "sourceUnchanged", "organized")
+                "signingIdentity", "sourceUnchanged", "organized", "warnings", "warningCount")
             val summary = com.google.gson.JsonObject()
             keep.forEach { key -> result.get(key)?.let { value -> summary.add(key, value) } }
             result.getAsJsonObject("signature")?.let { signature ->

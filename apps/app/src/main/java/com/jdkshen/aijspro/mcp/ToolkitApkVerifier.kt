@@ -707,8 +707,11 @@ internal object ToolkitApkVerifier {
         return manifestSection(info, issues, minSdk, maxSdk)
     }
 
-    /** 把 AXML 解码失败分类，避免把「资源上下文缺失」当成「目标清单损坏」。 */
-    private fun manifestFailureKind(message: String): String = when {
+    /**
+     * 把 AXML 解码失败分类，避免把「资源上下文缺失」当成「目标清单损坏」。
+     * 构建侧会话检查（McpApkToolkit.check）复用本函数，保证 apk_verify 与 apk_build 给出同一个 failureKind。
+     */
+    internal fun manifestFailureKind(message: String): String = when {
         message.contains("without package", ignoreCase = true) -> "resource_context_missing"
         message.contains("axml", ignoreCase = true) || message.contains("binary xml", ignoreCase = true) ->
             "unsupported_binary_xml"
