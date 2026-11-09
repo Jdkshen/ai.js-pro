@@ -43,6 +43,9 @@ internal object McpDeviceTools {
                             addProperty("active", window.isActive); addProperty("focused", window.isFocused)
                             addProperty("layer", window.layer); addProperty("packageName", root?.packageName?.toString())
                             addProperty("rawChildren", root?.childCount ?: 0)
+                            // task-76：Pro 的 WindowInfo.getTitle() 是 API>=24；低版本**给 null，不伪造**。
+                            // 放在最后，保持既有字段与顺序不变（客户端可能按字段名读）。
+                            addProperty("title", if (Build.VERSION.SDK_INT >= 24) window.title?.toString() else null)
                         })
                     } catch (error: RuntimeException) { diagnostic.add(error.message.orEmpty()) }
                     finally { window.recycle() }

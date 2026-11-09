@@ -65,6 +65,22 @@ module.exports = function (runtime, global) {
         return out;
     }
 
+    /**
+     * task-74：当前 ABI 是否有 libppocr.so。
+     * 返回 true/false；**查不到**（QuickJS/Node 等没有这个 Java 桥）返回 null，
+     * 调用方据此保持旧行为（v7a 之外的引擎行为逐字不变）。
+     */
+    function ppocrIsAvailable() {
+        try {
+            var bridge = Packages.com.stardust.autojs.runtime.api.PPOcrBridge;
+            if (bridge != null && typeof bridge.isAvailable === 'function') {
+                return bridge.isAvailable() === true;
+            }
+        } catch (ignore) {
+        }
+        return null;
+    }
+
     // 文档：根据给定选项创建 OCR 对象（每次调用都是一个新对象）
     ocr.create = function (options) {
         options = options || {};
@@ -75,7 +91,20 @@ module.exports = function (runtime, global) {
         if (backend !== 'ppocr' && !Ocr.ensureMlKitInitialized()) {
             // ML Kit 在本进程起不来（拿不到 Application Context / 组件被裁剪）：
             // 以前 create() 会「成功」直到 detect() 才抛 MlKitContext has not been initialized，
-            // 现在提前退到随包 ppocr，并如实标注降级来源。
+            // 所以这里提前退到随包 ppocr，并如实标注降级来源。
+            // task-74：**只有 ppocr 真的可用**（本 ABI 带了 libppocr.so）才允许退；v7a 不带 libppocr.so，
+            // 谎报降级会在 detect 时炸成 native 错误 —— 直接给「两个后端都不可用」的清晰错误。
+            // ppocrAvailable === null 表示「查不到」（QuickJS/Node 等没有这个 Java 桥）→ 保持旧行为。
+            var ppocrAvailable = ppocrIsAvailable();
+            if (ppocrAvailable === false) {
+                var failure = new Error('内置 OCR 不可用：ML Kit 初始化失败，且当前 ABI 没有 libppocr.so'
+                    + '（PP-OCR 只随包 arm64-v8a，v7a 请用 backend:"mlkit" 或装 mlkit 插件）');
+                failure.code = 'OCR_UNAVAILABLE';
+                failure.reason = 'MlKitContext has not been initialized';
+                failure.ppocrAvailable = false;
+                failure.requestedBackend = String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase();
+                throw failure;
+            }
             degradedFrom = backend;
             degradeReason = 'MlKitContext has not been initialized（本进程无法初始化 ML Kit）';
             backend = 'ppocr';

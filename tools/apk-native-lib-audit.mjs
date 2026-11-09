@@ -151,6 +151,27 @@ if (flag('--aar')) {
   process.exit(0);
 }
 
+// ---------------- 体积占比（--by-module）：把 .so 归到「模块」并按体积排序 ----------------
+function moduleOf(name) {
+  const oc = /^libopencv_(.+)\.so$/.exec(name);
+  if (oc) return oc[1].startsWith('java') ? 'opencv-jni' : 'opencv-' + oc[1];
+  if (name === 'libtbb.so') return 'tbb';
+  if (name === 'libppocr.so' || name === 'libmlkit_google_ocr_pipeline.so') return 'ocr';
+  if (['libaijscrypto.so','libc++_shared.so','libquickjs.so','libquickjs_jni.so'].includes(name)) return 'runtime-required';
+  if (name === 'libpikafish.so') return 'puzzle';
+  return 'other';
+}
+function groupByModule(rows, abiFilter) {
+  const sel = abiFilter ? rows.filter((r) => r.abi === abiFilter) : rows;
+  const map = new Map();
+  for (const r of sel) {
+    const m = moduleOf(r.name);
+    const e = map.get(m) || { module: m, bytes: 0, libs: [] };
+    e.bytes += r.size; e.libs.push(r.name); map.set(m, e);
+  }
+  const total = sel.reduce((s, r) => s + r.size, 0);
+  return { total, items: Array.from(map.values()).sort((a, b) => b.bytes - a.bytes) };
+}
 const needs = { removeOpenCv: flag('--remove-opencv'), plugins: String(opt('--plugins', '')).split(',').filter(Boolean), puzzle: flag('--puzzle') };
 const rows = libs.map((e) => ({ entry: e.name, abi: e.name.split('/')[1], size: e.rawSize, name: e.name.split('/').pop(), v: classify(e.name, needs) }));
 const leaks = rows.filter((r) => r.v.source === 'leak' && r.v.decision === 'DROP');
@@ -158,8 +179,18 @@ const unknown = rows.filter((r) => r.v.source === 'unknown');
 const expected = String(opt('--expect-abi', '')).split(',').filter(Boolean);
 const missingAbi = expected.filter((a) => !abis.includes(a));
 
+const byModule = flag('--by-module') ? abis.map((a) => { const g = groupByModule(rows, a); return { abi: a, total: g.total, items: g.items }; }) : null;
+if (byModule && !flag('--json')) {
+  for (const g of byModule) {
+    console.log('== by-module [' + g.abi + ']  total ' + (g.total / 1048576).toFixed(2) + ' MiB / ' + (g.total / 1000000).toFixed(1) + ' MB');
+    for (const it of g.items) {
+      const pct = g.total ? (it.bytes * 100 / g.total) : 0;
+      console.log('   ' + it.module.padEnd(20) + (it.bytes / 1048576).toFixed(2).padStart(8) + ' MiB  ' + (it.bytes / 1000000).toFixed(1).padStart(7) + ' MB  ' + pct.toFixed(1).padStart(5) + '%  [' + it.libs.join(',') + ']');
+    }
+  }
+}
 if (flag('--json')) {
-  console.log(JSON.stringify({ apk: target, bytes: buf.length, abis, libs: rows, leaks, unknown, missingAbi }, null, 1));
+  console.log(JSON.stringify({ apk: target, bytes: buf.length, abis, libs: rows, leaks, unknown, missingAbi, byModule }, null, 1));
 } else {
   console.log('APK ' + basename(target) + '  ' + buf.length + ' B  libs=' + rows.length + '  abis=[' + abis.join(',') + ']');
   for (const r of rows) console.log('  ' + r.v.decision.padEnd(4) + ' ' + r.name.padEnd(34) + r.abi.padEnd(13) + String(r.size).padStart(10) + '  source=' + r.v.source.padEnd(8) + '  ' + r.v.reason);

@@ -5,7 +5,12 @@
                     "lib/arm64-v8a/libmlkit_google_ocr_pipeline.so",
                     "lib/arm64-v8a/libppocr.so",
                     "lib/arm64-v8a/libquickjs.so",
-                    "lib/arm64-v8a/libquickjs_jni.so"
+                    "lib/arm64-v8a/libquickjs_jni.so",
+                    "lib/armeabi-v7a/libaijscrypto.so",
+                    "lib/armeabi-v7a/libc++_shared.so",
+                    "lib/armeabi-v7a/libmlkit_google_ocr_pipeline.so",
+                    "lib/armeabi-v7a/libquickjs.so",
+                    "lib/armeabi-v7a/libquickjs_jni.so"
                 ],
     "opencv":  [
                    "lib/arm64-v8a/libopencv_core.so",
@@ -16,7 +21,8 @@
                    "lib/arm64-v8a/libopencv_imgcodecs.so",
                    "lib/arm64-v8a/libopencv_imgproc.so",
                    "lib/arm64-v8a/libopencv_java5.so",
-                   "lib/arm64-v8a/libtbb.so"
+                   "lib/arm64-v8a/libtbb.so",
+                   "lib/armeabi-v7a/libopencv_java5.so"
                ],
     "v8":  [
 

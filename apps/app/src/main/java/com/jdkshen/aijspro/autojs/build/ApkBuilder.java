@@ -184,17 +184,33 @@ public class ApkBuilder {
         if (context == null || workspace == null) {
             throw new IOException("补全模板 lib 失败：缺少 Context 或工作区");
         }
-        File abiDir = new File(workspace, HOST_LIB_PREFIX);
-        File[] existing = abiDir.isDirectory()
-                ? abiDir.listFiles((dir, name) -> name != null && name.endsWith(".so")) : null;
-        if (existing != null && existing.length > 0) {
-            Log.i("C-PKG", "template libs already present count=" + existing.length
-                    + " (旧全量模板，跳过从宿主补齐)");
-            return 0;
-        }
         File hostApk = hostApkFile(context);
         List<String> wanted = loadExcludedLibNames(context, workspace);
         boolean fallbackAll = wanted.isEmpty();
+        // task-74：模板是否已带「清单里所有 ABI」的 lib —— 只带 arm64 的模板**仍要**补 v7a。
+        // 单一事实来源 = excluded-zip-files.json（这里不写第二份 ABI 清单，也不写死 lib/arm64-v8a）。
+        java.util.Set<String> presentAbis = TemplateLibCompletion.abisWithLibs(workspace);
+        if (!fallbackAll) {
+            java.util.Set<String> wantedAbis = TemplateLibCompletion.abisOf(wanted);
+            List<String> missingAbis = new ArrayList<>(wantedAbis);
+            missingAbis.removeAll(presentAbis);
+            if (missingAbis.isEmpty()) {
+                Log.i("C-PKG", TemplateLibCompletion.describeSkip(wanted, presentAbis));
+                return 0;
+            }
+            wanted = TemplateLibCompletion.entriesForMissingAbis(wanted, presentAbis);
+            Log.i("C-PKG", "template libs completion: wantedAbis=" + wantedAbis + " presentAbis=" + presentAbis
+                    + " missingAbis=" + missingAbis + " entriesToCopy=" + wanted.size());
+        } else {
+            File abiDir = new File(workspace, HOST_LIB_PREFIX);
+            File[] existing = abiDir.isDirectory()
+                    ? abiDir.listFiles((dir, name) -> name != null && name.endsWith(".so")) : null;
+            if (existing != null && existing.length > 0) {
+                Log.i("C-PKG", "template libs already present count=" + existing.length
+                        + " (模板自带 arm64 且无清单，跳过从宿主补齐)");
+                return 0;
+            }
+        }
         int added = 0;
         int general = 0;
         int opencv = 0;
@@ -207,11 +223,12 @@ public class ApkBuilder {
         }
         try {
             if (fallbackAll) {
-                wanted = listHostArm64Libs(zip);
+                wanted = listHostRuntimeLibs(zip);
                 if (wanted.isEmpty()) {
-                    throw new IOException("补全模板 lib 失败：宿主 APK 里没有 lib/arm64-v8a/*.so：" + hostApk);
+                    throw new IOException("补全模板 lib 失败：宿主 APK 里没有可用的 lib/<abi>/*.so：" + hostApk);
                 }
-                Log.i("C-PKG", "excluded-zip-files.json 不可用，兜底扫描宿主 APK libs=" + wanted.size());
+                Log.i("C-PKG", "excluded-zip-files.json 不可用，兜底扫描宿主 APK libs=" + wanted.size()
+                        + " abis=" + TemplateLibCompletion.abisOf(wanted));
             }
             for (String entryName : wanted) {
                 ZipEntry entry = zip.getEntry(entryName);
@@ -371,14 +388,21 @@ public class ApkBuilder {
         out.add(HOST_LIB_PREFIX + name);
     }
 
-    private static List<String> listHostArm64Libs(ZipFile zip) {
+    /** 无清单时的兜底：扫描宿主 APK **所有 ABI** 的 lib/<abi>/*.so，再按运行时白名单过滤（task-74：不再只扫 arm64）。 */
+    private static List<String> listHostRuntimeLibs(ZipFile zip) {
         List<String> result = new ArrayList<>();
         Enumeration<? extends ZipEntry> entries = zip.entries();
         while (entries.hasMoreElements()) {
             ZipEntry entry = entries.nextElement();
             String name = entry.getName();
-            if (!entry.isDirectory() && name.startsWith(HOST_LIB_PREFIX) && name.endsWith(".so")
-                    && isRuntimeLibrary(name.substring(HOST_LIB_PREFIX.length()))) {
+            if (entry.isDirectory() || !name.endsWith(".so")) {
+                continue;
+            }
+            String abi = TemplateLibCompletion.abiOf(name);
+            if (abi == null) {
+                continue;
+            }
+            if (isRuntimeLibrary(name.substring(name.lastIndexOf('/') + 1))) {
                 result.add(name);
             }
         }
