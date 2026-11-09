@@ -56,14 +56,14 @@ internal class McpTools(private val context: Context, private val event: (String
     private val baselineVersion = McpBaselineVersion()
     /** §6.4：首个 tools/call（或 get_status）成功后就不再重复挂 baseline（省上下文）。 */
     private val entryBaselineDelivered = java.util.concurrent.atomic.AtomicBoolean(false)
-    @Volatile private var baselineCache: JsonObject? = null
-    @Volatile private var baselineCacheAt = 0L
     @Volatile private var jobsSummaryCache: JsonObject? = null
     @Volatile private var jobsSummaryCacheAt = 0L
     /** task-38：工具链采样尝试时间（30s 内不重复探测）。 */
     @Volatile private var toolchainSampleAt = 0L
     /** baseline 缓存：失败/入口调用很频繁，15s 内复用同一份（内容变才变 version）。 */
     private val baselineTtlMillis = 15_000L
+    /** task-42：缓存带「是否已采样」语义；失败路径只读不写（见 failureBaselineView）。 */
+    private val baselineCache = McpBaselineCache(baselineTtlMillis)
     private val workspaces = McpWorkspaceStore(context, root)
     private val terminalBackend = McpAndroidTerminal(context)
     private val terminals = McpTerminalJobs(root, terminalBackend::launch)
@@ -1522,9 +1522,12 @@ internal class McpTools(private val context: Context, private val event: (String
      */
     @Synchronized
     private fun baselineSnapshot(jobsSummary: JsonObject? = toolkitJobsSummary(), force: Boolean = false,
-                                 sampleIfMissing: Boolean = true): JsonObject {
+                                 sampleIfMissing: Boolean = true, cacheWrite: Boolean = true): JsonObject {
         val now = System.currentTimeMillis()
-        if (!force) baselineCache?.let { if (now - baselineCacheAt < baselineTtlMillis) return it.deepCopy() }
+        // task-42（B）：命中缓存但缓存里是**未采样**值时，入口调用仍要重建一次（采样 30s 不重试的规则不变），
+        // 这样「冷启动失败把未采样基线写进缓存」不会再让紧随其后的 get_status 跳过采样。
+        val samplingDue = now - toolchainSampleAt >= 30_000L
+        if (!force) baselineCache.peek(now, sampleIfMissing, samplingDue)?.let { return it }
         val workspaces = runCatching {
             ToolkitIo.json("script" to workspaces.list().size, "apk" to apkWorkspacesBaseline())
         }.getOrElse {
@@ -1544,8 +1547,11 @@ internal class McpTools(private val context: Context, private val event: (String
         val version = runCatching { baselineVersion.versionFor(content) }.getOrDefault(0)
         content.addProperty("version", version)
         val fitted = runCatching { McpBaseline.fitBudget(content) }.getOrElse { content }
-        baselineCache = fitted.deepCopy()
-        baselineCacheAt = now
+        // task-42（A）：失败路径只读不写缓存（cacheWrite=false）——它拿不到采样值，不该污染共享缓存。
+        if (cacheWrite) {
+            val sampled = toolchain.get("sampled")?.isJsonPrimitive == true && toolchain.get("sampled").asBoolean
+            baselineCache.store(now, fitted, sampled)
+        }
         return fitted
     }
 
@@ -1563,7 +1569,8 @@ internal class McpTools(private val context: Context, private val event: (String
      * task-38（①）：**失败专用**基线 —— 不受 latch 影响、只带 version(+recovery/missing)、体积远小于完整版。
      */
     private fun failureBaselineView(): JsonObject = runCatching {
-        McpBaseline.failureView(baselineSnapshot(sampleIfMissing = false))
+        // task-42：失败路径**只读**（sampleIfMissing=false 不采样、cacheWrite=false 不写缓存），保持零成本。
+        McpBaseline.failureView(baselineSnapshot(sampleIfMissing = false, cacheWrite = false))
     }.getOrElse {
         ToolkitIo.json("version" to -1, "trimmed" to "failure",
             "trimNote" to "失败专用裁剪：基线暂不可用（完整基线用 get_baseline）")

@@ -209,6 +209,47 @@ internal object McpBaseline {
 }
 
 /**
+ * task-42：baseline 快照的 15s 缓存（纯，可单测）。
+ *
+ * 关键规则：**只有「调用方允许采样」或「缓存里已经是采样值」才复用** —— 否则失败路径（只读、不采样）
+ * 写进去的「未采样」基线会让紧随其后的 get_status 命中缓存、跳过采样（K40 dev-1435 实测：之后 15s 内
+ * 失败版一直只说「未采样」）。失败路径另由 `McpTools` 的 `cacheWrite=false` 保证**根本不写缓存**。
+ */
+internal class McpBaselineCache(private val ttlMillis: Long = 15_000L) {
+    private var snapshot: JsonObject? = null
+    private var storedAt = 0L
+    private var sampled = false
+
+    /** 命中且可复用才返回副本；是否可复用在 [canReuse]。 */
+    @Synchronized
+    fun peek(now: Long, sampleIfMissing: Boolean, samplingDue: Boolean): JsonObject? {
+        val current = snapshot ?: return null
+        if (now - storedAt >= ttlMillis) return null
+        return if (canReuse(sampled, sampleIfMissing, samplingDue)) current.deepCopy() else null
+    }
+
+    @Synchronized
+    fun store(now: Long, baseline: JsonObject, sampled: Boolean) {
+        snapshot = baseline.deepCopy()
+        storedAt = now
+        this.sampled = sampled
+    }
+
+    @Synchronized
+    fun clear() {
+        snapshot = null
+        storedAt = 0L
+        sampled = false
+    }
+
+    companion object {
+        /** 已采样 → 可复用；未采样 → 只有「调用方不允许采样」或「30s 内已试过采样」才复用。 */
+        fun canReuse(cachedSampled: Boolean, sampleIfMissing: Boolean, samplingDue: Boolean): Boolean =
+            cachedSampled || !sampleIfMissing || !samplingDue
+    }
+}
+
+/**
  * 内容摘要版本号：**内容不变则不变**（客户端可据此去重），内容变了才 +1。
  * task-37 从 McpBuildTools.kt 移到这里（与 baseline 同一文件，纯 JVM 可测）。
  */

@@ -262,6 +262,53 @@ class McpBaselineTest {
         assertFalse("不触发桥调用", recoveryBody.contains("toolkit_status"))
     }
 
+    /**
+     * task-42：缓存不能因为失败路径写了「未采样」基线，就让紧随其后的入口跳过采样（K40 dev-1435 实测缺陷）。
+     */
+    @Test
+    fun baselineCacheDoesNotLetFailuresPoisonSampling() {
+        val apk = ToolkitIo.json("used" to 0, "quota" to 16, "temporary" to 0)
+        val unsampledSnapshot = McpBaseline.assemble(1, "/r", null,
+            ToolkitIo.json("script" to 0, "apk" to apk), McpBaseline.toolchain(null), McpBaseline.jobs("6h", "x"))
+        val sampledSnapshot = McpBaseline.assemble(2, "/r", null,
+            ToolkitIo.json("script" to 0, "apk" to apk),
+            McpBaseline.toolchain(readiness(false, listOf("jdk17"), listOf("aapt2"))), McpBaseline.jobs("6h", "x"))
+
+        // 空缓存：失败路径也读不到东西（它会自己算一份只读基线）
+        val emptyCache = McpBaselineCache()
+        assertNull(emptyCache.peek(0L, sampleIfMissing = false, samplingDue = true))
+
+        // 1) 极端情形：缓存里只有「未采样」值（旧缺陷会把它写进去）——入口**不能**复用，必须重建去采样
+        val poisoned = McpBaselineCache()
+        poisoned.store(1_000L, unsampledSnapshot, sampled = false)
+        assertNull("入口（允许采样 + 采样到期）不能吃未采样缓存",
+            poisoned.peek(1_000L, sampleIfMissing = true, samplingDue = true))
+        assertNotNull("失败路径（只读）可以复用它，零成本",
+            poisoned.peek(1_000L, sampleIfMissing = false, samplingDue = true))
+        assertNotNull("30s 内不该重复采样 → 入口可复用未采样缓存（探测已试过）",
+            poisoned.peek(1_000L, sampleIfMissing = true, samplingDue = false))
+        assertNull("TTL 过期", poisoned.peek(1_000L + 15_000L, sampleIfMissing = false, samplingDue = true))
+
+        // 2) 入口采样成功后写入 sampled=true：紧随其后的失败立刻能拿到 missing/点名组件（不回归）
+        val primed = McpBaselineCache()
+        primed.store(2_000L, sampledSnapshot, sampled = true)
+        val forFailure = primed.peek(2_000L, sampleIfMissing = false, samplingDue = true)
+        assertNotNull("采样后失败路径要命中真值", forFailure)
+        val toolchain = forFailure!!.getAsJsonObject("toolchain")
+        assertEquals(true, toolchain.get("sampled").asBoolean)
+        val recovery = McpBaseline.recoveryFor(toolchain, apk)
+        assertNotNull("紧随 get_status 之后的失败要能点名组件", recovery)
+        assertTrue("要点名组件：" + recovery, recovery!!.contains("jdk17") && recovery.contains("apk_component_install"))
+        assertFalse("采样后不该再说未采样", recovery.contains("未采样"))
+
+        // 3) 源码钉：失败路径只读（cacheWrite=false）、入口写入才记 sampled
+        assertTrue(mcpToolsSource.contains("baselineSnapshot(sampleIfMissing = false, cacheWrite = false)"))
+        assertTrue(mcpToolsSource.contains("baselineCache.peek(now, sampleIfMissing, samplingDue)"))
+        assertTrue(mcpToolsSource.contains("baselineCache.store(now, fitted, sampled)"))
+        assertTrue("只有 cacheWrite 时才写缓存", mcpToolsSource.contains("if (cacheWrite) {"))
+        assertTrue("30s 不重试规则不变", mcpToolsSource.contains("if (now - toolchainSampleAt < 30_000L) return McpBuildTools.cachedReadiness()"))
+    }
+
     /** task-39（③）：注入必须在**序列化单点**，成功路径按描述**有意不带**文本镜像。 */
     @Test
     fun failureTextIsInjectedAtTheSingleSerializationPointOnly() {
@@ -307,7 +354,8 @@ class McpBaselineTest {
         assertTrue("桥接失败带裁剪版", mcpToolsSource.contains("add(\"baseline\", failureBaselineView())"))
         assertTrue("rpcResult 兜底所有 isError", mcpToolsSource.contains("add(\"result\", withFailureBaseline(result))"))
         assertTrue("失败版不受 latch 影响", mcpToolsSource.contains("private fun failureBaselineView(): JsonObject = runCatching {"))
-        assertTrue("失败路径不触发采样（保持轻量）", mcpToolsSource.contains("McpBaseline.failureView(baselineSnapshot(sampleIfMissing = false))"))
+        assertTrue("失败路径不触发采样且不写缓存（保持轻量）",
+            mcpToolsSource.contains("McpBaseline.failureView(baselineSnapshot(sampleIfMissing = false, cacheWrite = false))"))
         assertTrue("未采样时触发一次同源采样（30s 内不重试）", mcpToolsSource.contains("if (now - toolchainSampleAt < 30_000L) return McpBuildTools.cachedReadiness()"))
         assertTrue(mcpToolsSource.contains("McpBuildTools.inspect(terminalBackend, root); McpBuildTools.cachedReadiness()"))
         // 同源生产侧：baseline 的工具链只取 get_build_tools 的内存缓存（不重新探测 PATH）
