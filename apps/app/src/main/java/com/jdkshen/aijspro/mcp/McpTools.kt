@@ -211,6 +211,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "重分析（native_analyze/native_functions/native_compare/yara_scan 等）占 30s 级后台槽位，连续调用前先 apk_job_list；frida_status/frida_processes 是只读快路径，不占槽。",
             "分页游标只对产生它的工具（同工具、同 revision）有效：拿 A 工具的 nextCursor 去调 apk_continue 会报错，请用原工具继续翻页。",
             "调用失败时先看错误指出的参数名/类型，再调用 learn_autojs_skill 查对应章节；不要猜字段。",
+            "族前缀别名（长期共存、只派发）：dex_* = apk_dex_*（例 dex_xref = apk_dex_xref、dex_list_classes = apk_dex_list_classes）、so_* = apk_native_*（例 so_list_items = apk_native_list_items、so_xref = apk_native_xref）；新旧名等价都接受，别名不出现在 tools/list（省上下文），参数用 tool_schema{tool:\"dex_xref\"} 查。",
         ).joinToString("\n"))
 
         // 第七章（上下文成本）：把分组暴露给客户端，便于用 tools/list{groups:[...]} 或 {tier:"core"} 裁剪。
@@ -1628,7 +1629,8 @@ internal class McpTools(private val context: Context, private val event: (String
         val canonical = runCatching { McpToolCatalog.canonicalName(requested) }.getOrDefault(requested)
         val definition = toolDefinitionsByName[requested] ?: toolDefinitionsByName[canonical]
         if (definition == null) {
-            val near = McpToolSuggest.suggest(requested, McpToolCatalog.names)
+            // task-33：近邻池含族前缀别名（dex_*/so_*）。
+            val near = McpToolSuggest.suggest(requested, McpToolCatalog.names + McpToolCatalog.familyAliases.keys)
             throw ToolError(buildString {
                 append("未知工具：").append(requested)
                 if (near.isNotEmpty()) append("。最接近的：").append(near.joinToString("、"))
@@ -1643,6 +1645,10 @@ internal class McpTools(private val context: Context, private val event: (String
             addProperty("description", definition.get("description")?.asString.orEmpty())
             add("aliases", JsonArray().apply {
                 McpToolCatalog.aliases.filterValues { it == McpToolCatalog.canonicalName(name) }.keys.forEach { add(it) }
+            })
+            // task-33：族前缀别名是「只派发」的，不进 tools/list，但在 schema 查询里点名，便于发现。
+            add("familyAliases", JsonArray().apply {
+                McpToolCatalog.familyAliasesOf(McpToolCatalog.canonicalName(name)).forEach { add(it) }
             })
             if (schema != null) add("inputSchema", schema)
             add("required", JsonArray().apply { required.forEach { add(it) } })

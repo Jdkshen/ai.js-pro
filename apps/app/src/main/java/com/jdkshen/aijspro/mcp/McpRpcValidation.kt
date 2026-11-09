@@ -43,7 +43,8 @@ internal object McpRpcValidation {
             throw McpInvalidParamsException(buildString {
             append("未知工具：").append(requestedName)
             // `.4` P0-1：只报「未知工具」时调用方只能穷举；给出近邻名 + schema 入口。
-            val near = McpToolSuggest.suggest(requestedName, McpToolCatalog.names)
+            // task-33：近邻池含族前缀别名（它们不进 tools/list，但名字应该能被提示出来）。
+            val near = McpToolSuggest.suggest(requestedName, McpToolCatalog.names + McpToolCatalog.familyAliases.keys)
             if (near.isNotEmpty()) append("。最接近的：").append(near.joinToString("、"))
             append("；用 tool_schema{\"tool\":\"<名字>\"} 可看参数与必填项。")
         })

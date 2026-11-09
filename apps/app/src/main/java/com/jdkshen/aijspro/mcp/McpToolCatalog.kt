@@ -114,8 +114,34 @@ internal object McpToolCatalog {
         }.joinToString("")
     }
 
+    /**
+     * 族前缀别名（W4 task-33）：`dex_*` → `apk_dex_*`、`so_*` → `apk_native_*`。
+     *
+     * **只派发、不广播**：它们进 [canonicalByAlias] 让 `tools/call` 能用，但**不进** [names]/tools/list ——
+     * 否则 advertised 会从 224 涨到 240，白占客户端上下文。旧名（canonical）长期保留，两边等价。
+     * 前缀策略见范围提案 §5：只做别名 + 长期共存，不做破坏性改名。
+     */
+    val familyAliases: Map<String, String> = linkedMapOf(
+        "dex_read_class_outline" to "apk_dex_read_class_outline",
+        "dex_xref" to "apk_dex_xref",
+        "dex_search_members" to "apk_dex_search_members",
+        "dex_call_graph" to "apk_dex_call_graph",
+        "dex_hierarchy" to "apk_dex_hierarchy",
+        "dex_interface_table" to "apk_dex_interface_table",
+        "dex_list_classes" to "apk_dex_list_classes",
+        "dex_list_methods" to "apk_dex_list_methods",
+        "so_inspect" to "apk_native_inspect",
+        "so_list_items" to "apk_native_list_items",
+        "so_map_address" to "apk_native_map_address",
+        "so_xref" to "apk_native_xref",
+        "so_disassemble" to "apk_native_disassemble",
+        "so_analyze_control_flow" to "apk_native_analyze_control_flow",
+        "so_patch_instructions" to "apk_native_patch_instructions",
+        "so_patch_string" to "apk_native_patch_string",
+    )
+
     private val canonicalByAlias: Map<String, String> =
-        dispatchAliases.entries.associate { entry -> entry.value to entry.key } + aliases + McpToolkitCatalog.aliases
+        dispatchAliases.entries.associate { entry -> entry.value to entry.key } + familyAliases + aliases + McpToolkitCatalog.aliases
 
     val names = canonicalNames + aliases.keys
 
@@ -131,7 +157,25 @@ internal object McpToolCatalog {
         })
         check(aliases.all { (alias, canonical) -> canonicalByAlias[alias] == canonical })
         check(names.toSet().size == names.size)
+        // W4 task-33：族前缀别名只派发、不广播。
+        check(familyAliases.all { (_, canonical) -> canonical in canonicalNames }) {
+            "族前缀别名的目标必须是 canonical：" + familyAliases.filterValues { it !in canonicalNames }.keys
+        }
+        check(familyAliases.keys.none { it in canonicalNames }) {
+            "族前缀别名不能与 canonical 名冲突：" + familyAliases.keys.filter { it in canonicalNames }
+        }
+        check(familyAliases.keys.none { it in names }) {
+            "族前缀别名不能进 names/tools/list（只派发）：" + familyAliases.keys.filter { it in names }
+        }
+        check(familyAliases.keys.none { it in dispatchAliases.values || it in aliases.keys || it in McpToolkitCatalog.aliases.keys }) {
+            "族前缀别名不能覆盖既有别名：" + familyAliases.keys.filter { it in dispatchAliases.values || it in aliases.keys || it in McpToolkitCatalog.aliases.keys }
+        }
+        check(familyAliases.all { (alias, canonical) -> canonicalByAlias[alias] == canonical })
+        check(familyAliases.size == familyAliases.keys.toSet().size)
     }
 
     fun canonicalName(name: String): String = canonicalByAlias[name] ?: name
+
+    /** 某 canonical 的族前缀别名（给 tool_schema 回显用；不含 Pro 别名）。 */
+    fun familyAliasesOf(canonical: String): List<String> = familyAliases.filterValues { it == canonical }.keys.toList()
 }
