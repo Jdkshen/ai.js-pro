@@ -1,22 +1,19 @@
 package com.jdkshen.aijspro.tool;
 
+import com.stardust.view.accessibility.AccessibilityServiceUtils;
+
 /** Preserve other accessibility services and recognize Android's shortened component spelling. */
 final class AccessibilityServiceComponents {
     private AccessibilityServiceComponents() { }
 
+    /**
+     * 把 expected 追加进 configured（已含则不重复）。判定复用 AccessibilityServiceUtils.settingsContainsComponent，
+     * 与「检查是否已启用」用同一份解析（避免两处归一化/漂移）。
+     */
     static String enable(String configured, String expected) {
         if (configured == null || configured.isEmpty() || "null".equals(configured)) return expected;
-        String normalized = normalize(expected);
-        for (String component : configured.split(":")) {
-            if (normalized.equals(normalize(component))) return configured;
-        }
-        return configured + ":" + expected;
-    }
-
-    private static String normalize(String component) {
-        int slash = component.indexOf('/');
-        if (slash >= 0 && slash + 1 < component.length() && component.charAt(slash + 1) == '.')
-            return component.substring(0, slash + 1) + component.substring(0, slash) + component.substring(slash + 1);
-        return component;
+        return AccessibilityServiceUtils.INSTANCE.settingsContainsComponent(configured, expected)
+                ? configured
+                : configured + ":" + expected;
     }
 }

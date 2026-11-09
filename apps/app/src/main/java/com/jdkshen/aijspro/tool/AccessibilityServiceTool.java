@@ -35,7 +35,42 @@ public class AccessibilityServiceTool {
     private static final AtomicBoolean sFastEnableInProgress = new AtomicBoolean(false);
     private static volatile String sFastEnableError = "";
 
+    static {
+        // 检查（AccessibilityCheck）与启用（本类）必须指向同一个服务：
+        // 漂移在这里立刻抛异常，而不是两处静默不一致（Pro 对齐 ② 的「同一份组件名」要求）。
+        if (!AccessibilityCheck.SERVICE_CLASS_NAME.equals(sAccessibilityServiceClass.getName())) {
+            throw new IllegalStateException("无障碍服务类名漂移：AccessibilityCheck.SERVICE_CLASS_NAME="
+                    + AccessibilityCheck.SERVICE_CLASS_NAME + "，实际服务类=" + sAccessibilityServiceClass.getName());
+        }
+    }
+
     public static String getFastEnableError() { return sFastEnableError; }
+
+    /** 系统设置里的服务组件名：唯一来源是 {@link AccessibilityCheck#componentName(String)}。 */
+    public static String getAccessibilityServiceComponentName(Context context) {
+        return AccessibilityCheck.componentName(context.getPackageName());
+    }
+
+    /**
+     * 读取 {@link Settings.Secure#ENABLED_ACCESSIBILITY_SERVICES} 原文。
+     *
+     * <p><b>读失败原样抛异常（不吞）</b>：检查链路要靠它区分两件完全不同的事——
+     * ①「读抛异常」（权限/ROM 限制 → `settings_unreadable`）；②「读成功但返回 null/空」
+     * （系统里没有任何已启用服务 → `not_enabled`）。返回 null 只表示 ②，绝不表示 ①。
+     */
+    public static String readEnabledAccessibilityServices(Context context) {
+        return Settings.Secure.getString(context.getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+    }
+
+    /** 我们的服务走唯一来源；调用方显式传其它服务类时仍按调用方给的类拼（不改变既有重载语义）。 */
+    private static String componentNameFor(Context context,
+            Class<? extends android.accessibilityservice.AccessibilityService> accessibilityService) {
+        if (accessibilityService == sAccessibilityServiceClass) {
+            return getAccessibilityServiceComponentName(context);
+        }
+        return context.getPackageName() + "/" + accessibilityService.getName();
+    }
 
     public static void enableAccessibilityService() {
         if (hasSecureSettingsPermission() || ShizukuShell.isAvailable()) {
@@ -97,7 +132,7 @@ public class AccessibilityServiceTool {
 
     private static String enableCommand(
             Class<? extends android.accessibilityservice.AccessibilityService> accessibilityService) {
-        String serviceName = GlobalAppContext.get().getPackageName() + "/" + accessibilityService.getName();
+        String serviceName = componentNameFor(GlobalAppContext.get(), accessibilityService);
         return String.format(Locale.US, ENABLE_COMMAND, serviceName);
     }
 
@@ -122,7 +157,7 @@ public class AccessibilityServiceTool {
             Class<? extends android.accessibilityservice.AccessibilityService> accessibilityService) {
         if (!hasSecureSettingsPermission()) return false;
         Context context = GlobalAppContext.get();
-        String serviceName = context.getPackageName() + "/" + accessibilityService.getName();
+        String serviceName = componentNameFor(context, accessibilityService);
         try {
             String enabled = Settings.Secure.getString(context.getContentResolver(),
                     Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
@@ -193,7 +228,7 @@ public class AccessibilityServiceTool {
             }
         }
         long deadline = SystemClock.uptimeMillis() + Math.max(1L, timeOut);
-        String component = context.getPackageName() + "/" + sAccessibilityServiceClass.getName();
+        String component = componentNameFor(context, sAccessibilityServiceClass);
         String binderError = "";
         boolean written = false;
         if (Build.VERSION.SDK_INT >= 24) {
