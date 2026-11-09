@@ -10,6 +10,7 @@ import com.stardust.autojs.runtime.accessibility.AccessibilityConfig;
 import com.stardust.theme.ThemeColorManager;
 
 import com.jdkshen.aijspro.autojs.key.GlobalKeyObserver;
+import com.stardust.autojs.core.pref.MultiProcessPrefs;
 import com.jdkshen.aijspro.theme.ThemeColorManagerCompat;
 
 import java.io.File;
@@ -84,6 +85,8 @@ public class Pref {
 
     public static void setStableModeEnabled(boolean enabled) {
         def().edit().putBoolean(getString(R.string.key_stable_mode), enabled).apply();
+        // task-66：稳定模式是「主进程写、:script（引擎）读」的 key → 同时写跨进程 store（双写，XML 不变）。
+        MultiProcessPrefs.putBoolean(GlobalAppContext.get(), getString(R.string.key_stable_mode), enabled);
     }
 
     public static void setEnableAccessibilityServiceByRoot(boolean enabled) {
@@ -194,7 +197,8 @@ public class Pref {
     }
 
     public static boolean isStableModeEnabled() {
-        return def().getBoolean(getString(R.string.key_stable_mode), false);
+        // task-66：先问跨进程 store（:script 刚写过的值立刻可见），再回退 XML。
+        return MultiProcessPrefs.getBoolean(GlobalAppContext.get(), getString(R.string.key_stable_mode), false);
     }
 
     public static String getDocumentationUrl() {
@@ -244,6 +248,18 @@ public class Pref {
     }
 
     public static String getScriptDirPath() {
+        // task-66：脚本目录这两个 key 是「主进程写、:script 读」→ 先问跨进程 store，再回退 XML。
+        String storedPath = MultiProcessPrefs.getString(GlobalAppContext.get(),
+                getString(R.string.key_script_dir_path), null);
+        boolean storedAbsolute = MultiProcessPrefs.getBoolean(GlobalAppContext.get(), KEY_SCRIPT_DIR_ABSOLUTE, false);
+        if (storedPath != null && storedAbsolute) {
+            try {
+                return ScriptDirectory.resolvePreference(storedPath, Environment.getExternalStorageDirectory(),
+                        true).getPath();
+            } catch (IOException error) {
+                // 落回下面的 XML 路径（新机制出问题时不能让「脚本目录」读不出来）。
+            }
+        }
         SharedPreferences prefs = scriptDirectoryPreferences();
         String dir = prefs.getString(getString(R.string.key_script_dir_path),
                 getString(R.string.default_value_script_dir_path));
@@ -259,16 +275,19 @@ public class Pref {
     @SuppressWarnings("deprecation")
     private static SharedPreferences scriptDirectoryPreferences() {
         Context context = GlobalAppContext.get();
-        // Root writes are owned by the settings bridge. Recheck the preference file
-        // for script/editor processes that were already alive before the change.
+        // task-66：这里原来用 Context.MODE_MULTI_PROCESS（API 23 起废弃、官方明说不可靠，且不提供变更通知）。
+        // 跨进程一致改由 MultiProcessPrefs（文件锁 + 原子写 + 指纹重载）负责；本方法只作为 XML 回退路径。
         return context.getSharedPreferences(context.getPackageName() + "_preferences",
-                Context.MODE_PRIVATE | Context.MODE_MULTI_PROCESS);
+                Context.MODE_PRIVATE);
     }
 
     public static void setScriptDirPath(String canonicalPath) throws IOException {
         if (!scriptDirectoryPreferences().edit().putString(getString(R.string.key_script_dir_path), canonicalPath)
                 .putBoolean(KEY_SCRIPT_DIR_ABSOLUTE, true).commit())
             throw new IOException("脚本目录保存失败，请重试");
+        // task-66：双写跨进程 store（:script/编辑器进程下一次读就能看到，不用重启进程）。
+        MultiProcessPrefs.putString(GlobalAppContext.get(), getString(R.string.key_script_dir_path), canonicalPath);
+        MultiProcessPrefs.putBoolean(GlobalAppContext.get(), KEY_SCRIPT_DIR_ABSOLUTE, true);
     }
 
     public static boolean isForegroundServiceEnabled() {

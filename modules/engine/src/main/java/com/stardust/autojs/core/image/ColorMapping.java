@@ -66,6 +66,11 @@ public class ColorMapping {
      */
     public static void recycleSingleton() {
         singleton.recycle();
+        // 顺带执行作用域图像池的未回收护栏：这里是引擎已有的「最后一个 runtime 结束」时序点
+        // （ScriptRuntime.onExit -> closeCleanables -> ScriptRuntimeGlobals.close），
+        // 和 MemoryLeakDetector.reset() 同一处。护栏本身在 core/image（ImagePools），
+        // 脚本侧看不到池，但运维/真机可以在 logcat 的 "ImagePool" tag 上验收。
+        ImagePools.drainAll("script-exit");
     }
 
     /** 文档没写、验收用的查询接口。 */

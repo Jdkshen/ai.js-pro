@@ -46,13 +46,17 @@ public class ColorFinder {
         if (matOfPoint == null) {
             return null;
         }
-        Point point = matOfPoint.toArray()[0];
-        if (rect != null) {
-            point.x = mScreenMetrics.scaleX((int) (point.x + rect.x));
-            point.y = mScreenMetrics.scaleX((int) (point.y + rect.y));
+        try {
+            Point point = matOfPoint.toArray()[0];
+            if (rect != null) {
+                point.x = mScreenMetrics.scaleX((int) (point.x + rect.x));
+                point.y = mScreenMetrics.scaleX((int) (point.y + rect.y));
+            }
+            return point;
+        } finally {
+            // toArray() 抛异常时也要归还，否则这个 MatOfPoint 要等 GC 才被 ResourceMonitor 报出来
+            OpenCVHelper.release(matOfPoint);
         }
-        OpenCVHelper.release(matOfPoint);
-        return point;
     }
 
     public Point[] findAllPointsForColor(ImageWrapper image, int color, int threshold, Rect rect) {
@@ -61,8 +65,12 @@ public class ColorFinder {
         if (matOfPoint == null) {
             return new Point[0];
         }
-        Point[] points = matOfPoint.toArray();
-        OpenCVHelper.release(matOfPoint);
+        Point[] points;
+        try {
+            points = matOfPoint.toArray();
+        } finally {
+            OpenCVHelper.release(matOfPoint);
+        }
         if (rect != null) {
             for (int i = 0; i < points.length; i++) {
                 points[i].x = mScreenMetrics.scaleX((int) (points[i].x + rect.x));
@@ -73,29 +81,27 @@ public class ColorFinder {
     }
 
     private MatOfPoint findColorInner(ImageWrapper image, int color, int threshold, Rect rect) {
-        Mat bi = new Mat();
         Scalar lowerBound = new Scalar(Color.red(color) - threshold, Color.green(color) - threshold,
                 Color.blue(color) - threshold, 255);
         Scalar upperBound = new Scalar(Color.red(color) + threshold, Color.green(color) + threshold,
                 Color.blue(color) + threshold, 255);
-        if (rect != null) {
-            Mat m = new Mat(image.getMat(), rect);
-            Core.inRange(m, lowerBound, upperBound, bi);
-            OpenCVHelper.release(m);
-        } else {
-            Core.inRange(image.getMat(), lowerBound, upperBound, bi);
+        // 作用域池（对齐 Pro 在 ColorFinder 里的 ImagePool 用法）：无论正常返回还是中途抛异常，
+        // 这些中间 Mat 都在离开作用域时归还；返回值 result 不进池，由调用方 release()。
+        try (ImagePool pool = new ImagePool(4)) {
+            Mat bi = pool.mat();
+            if (rect != null) {
+                Mat m = pool.mat(image.getMat(), rect);
+                Core.inRange(m, lowerBound, upperBound, bi);
+            } else {
+                Core.inRange(image.getMat(), lowerBound, upperBound, bi);
+            }
+            Mat nonZeroPos = pool.mat();
+            Core.findNonZero(bi, nonZeroPos);
+            if (nonZeroPos.rows() == 0 || nonZeroPos.cols() == 0) {
+                return null;
+            }
+            return OpenCVHelper.newMatOfPoint(nonZeroPos);
         }
-        Mat nonZeroPos = new Mat();
-        Core.findNonZero(bi, nonZeroPos);
-        MatOfPoint result;
-        if (nonZeroPos.rows() == 0 || nonZeroPos.cols() == 0) {
-            result = null;
-        } else {
-            result = OpenCVHelper.newMatOfPoint(nonZeroPos);
-        }
-        OpenCVHelper.release(bi);
-        OpenCVHelper.release(nonZeroPos);
-        return result;
     }
 
     /**
