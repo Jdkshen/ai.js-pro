@@ -68,6 +68,30 @@ public class BroadcastReceiverRegistryTest {
         }
     }
 
+    /**
+     * 口径钉住（K40 dev-1443 实测更正）：默认 NOT_EXPORTED **不**能拿 am broadcast 当反例——
+     * shell/system 的广播仍会送达；本机可验的证据是 flags（4 vs 2）。这条断言防止措辞回退成错的。
+     */
+    @Test public void notExportedIsDocumentedWithShellSystemCaveat() throws Exception {
+        String text = null;
+        java.io.File dir = new java.io.File(".").getCanonicalFile();
+        for (int depth = 0; depth < 5 && text == null; depth++) {
+            for (String candidate : new String[]{
+                    "modules/engine/src/main/java/com/stardust/autojs/core/content/BroadcastFilter.java",
+                    "src/main/java/com/stardust/autojs/core/content/BroadcastFilter.java"}) {
+                java.io.File file = new java.io.File(dir, candidate);
+                if (file.isFile()) {
+                    text = new String(java.nio.file.Files.readAllBytes(file.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+                    break;
+                }
+            }
+            dir = dir.getParentFile();
+        }
+        assertNotNull("找不到 BroadcastFilter.java（工作目录：" + new java.io.File(".").getCanonicalPath() + "）", text);
+        assertTrue("必须写明 shell/system 仍会送达", text.contains("shell/system"));
+        assertTrue("必须写明别拿 am broadcast 当反例", text.contains("别拿 am broadcast"));
+    }
+
     @Test public void receiverFlagsFollowApiLevelAndExportedChoice() {
         BroadcastFilter safe = BroadcastFilter.of(new String[]{"a"}, null, null, null, false);
         BroadcastFilter exported = BroadcastFilter.of(new String[]{"a"}, null, null, null, true);

@@ -256,6 +256,8 @@ const {device,Device,OS,BrightnessMode} = modules.device, app = modules.app, eng
         assert.throws(()=>app.registerBroadcastReceiver('demo.a','not a function'),/callback 必须是函数/);
         const limitations=sandbox.__aiModernModuleCoverage.app.limitations.join(' ');
         assert.ok(limitations.includes('RECEIVER_NOT_EXPORTED'));
+        // K40 dev-1443 实测更正：shell/system（含 adb am broadcast）仍会送达 NOT_EXPORTED，别拿它当反例。
+        assert.ok(limitations.includes('shell/system') && limitations.includes('am broadcast'));
         assert.ok(limitations.includes('static manifest registration'));
         state.sdk=30;
     });

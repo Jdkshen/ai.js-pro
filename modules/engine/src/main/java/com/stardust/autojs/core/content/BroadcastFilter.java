@@ -62,8 +62,9 @@ public final class BroadcastFilter {
 
     /**
      * API 33+ 必须显式导出标志；更早的版本传 flags 会被忽略（部分 ROM 还会抛），所以小于 33 一律 0。
-     * 默认取更安全的 RECEIVER_NOT_EXPORTED：其它应用用显式组件或同进程广播才送达，
-     * 普通 am broadcast（隐式广播）不会命中它。
+     * 默认取更安全的 RECEIVER_NOT_EXPORTED：**其它应用**发的隐式广播不会送达；
+     * 但 **shell/system（含 adb shell am broadcast）仍会送达**（K40 dev-1443 实测），
+     * 所以别拿 am broadcast 当 NOT_EXPORTED 的反例 —— 本机可验的证据是这里的 receiverFlags（4 vs 2）。
      */
     public int receiverFlags(int apiLevel) {
         if (apiLevel < FLAGS_REQUIRED_API) return 0;

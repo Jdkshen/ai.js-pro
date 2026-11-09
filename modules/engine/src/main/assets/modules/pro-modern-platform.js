@@ -472,7 +472,7 @@
     });
     register('app', app, [
         'Broadcast receivers are registered dynamically through Context.registerReceiver; only broadcasts the system allows to be registered at runtime are delivered (no static manifest registration).',
-        'Android 13+/14+ requires an explicit export flag: we default to RECEIVER_NOT_EXPORTED (safer). Pass exported:true to opt into RECEIVER_EXPORTED, which lets other apps reach the callback through this filter - do that deliberately.',
+        'Android 13+/14+ requires an explicit export flag: we default to RECEIVER_NOT_EXPORTED (safer). It keeps implicit broadcasts from OTHER APPS out, but broadcasts from shell/system (including adb shell am broadcast) are still delivered - so do not use am broadcast as the counter-example; the local evidence for the default is exportFlag (RECEIVER_NOT_EXPORTED=4 vs RECEIVER_EXPORTED=2). Pass exported:true to opt into RECEIVER_EXPORTED deliberately.',
         'Receivers are unregistered on exit()/stop(), on unregisterBroadcastReceiver/unregisterAllBroadcastReceivers, and when the owning script thread ends; a killed process does not restore them.',
         'onReceive exceptions are isolated inside the registry (logged + optional onError) and never propagate into the Android process.',
         'Named inspector broadcasts are unavailable in this adapter; legacy app.sendBroadcast remains available.',
