@@ -55,7 +55,8 @@ internal class AijsNativeJavaClass(scope: Scriptable, private val targetClass: C
             throw missing
         }
         return if (value is Function && value !is NativeJavaClass) {
-            AijsJavaStaticMethod(targetClass, name, value)
+            // task-52：包装必须带上 scope 与 Function.prototype，否则 .apply/.call/.bind 全找不到。
+            AijsJavaStaticMethod(start, targetClass, name, value)
         } else value
     }
 
@@ -88,10 +89,11 @@ internal class AijsNativeJavaClass(scope: Scriptable, private val targetClass: C
 }
 
 private class AijsJavaStaticMethod(
+    scope: Scriptable,
     private val owner: Class<*>,
     private val methodName: String,
     private val original: Function,
-) : BaseFunction() {
+) : BaseFunction(scope, ScriptFunctions.functionPrototype(scope)) {
 
     override fun call(cx: Context?, scope: Scriptable?, thisObj: Scriptable?, args: Array<out Any>): Any? {
         val context = cx ?: Context.getCurrentContext()

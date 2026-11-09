@@ -37,7 +37,8 @@ public class ReflectiveMethodObject extends NativeJavaObject {
     @Override
     public Object get(String name, Scriptable start) {
         if ("invoke".equals(name)) {
-            return new BaseFunction() {
+            // task-52：带 scope 与 Function.prototype —— m.invoke.apply(null, [target, args]) 是脚本常见写法。
+            return new BaseFunction(start, ScriptFunctions.functionPrototype(start)) {
                 @Override
                 public Object call(Context cx, Scriptable scope, Scriptable thisObj, Object[] args) {
                     if (args == null || args.length == 0) {

@@ -32,7 +32,8 @@ class PreferIntJavaObject(
         val result = super.get(name, start)
         val wrapped: Any? = if (result is Function) {
             val intMethod = intOverloadFor(name)
-            if (intMethod == null) result else Wrapper(this, result, intMethod)
+            // task-52：包装带上 scope 与 Function.prototype，否则 paint.setColor.apply(...) 这类写法会挂。
+            if (intMethod == null) result else Wrapper(start, this, result, intMethod)
         } else {
             result
         }
@@ -56,10 +57,11 @@ class PreferIntJavaObject(
 
     /** 缓存住的包装函数：数字参数走 int 重载，其它情况退化到原函数。 */
     private class Wrapper(
+        scope: Scriptable,
         private val owner: PreferIntJavaObject,
         private val original: Function,
         private val intMethod: Method
-    ) : BaseFunction() {
+    ) : BaseFunction(scope, ScriptFunctions.functionPrototype(scope)) {
 
         override fun call(cx: Context?, scope: Scriptable?, thisObj: Scriptable?, args: Array<out Any>): Any? {
             val first = if (args.isNotEmpty()) args[0] else null

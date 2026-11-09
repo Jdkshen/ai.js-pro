@@ -13,6 +13,8 @@ import com.stardust.autojs.rhino.ArrowFunctionSupport;
 import com.stardust.autojs.rhino.NativeJavaObjectWithPrototype;
 
 import org.mozilla.javascript.BaseFunction;
+
+import com.stardust.autojs.rhino.ScriptFunctions;
 import org.mozilla.javascript.Context;
 import org.mozilla.javascript.Function;
 import org.mozilla.javascript.NativeJavaObject;
@@ -122,6 +124,8 @@ public class NativeView extends NativeJavaObjectWithPrototype {
         private final WebView mWebView;
 
         SetWebViewClientFunction(Function original, WebView webView) {
+            // task-52：包装器必须带 scope 与 Function.prototype（否则 webView.setWebViewClient.apply(...) 找不到 apply）。
+            super(original.getParentScope(), ScriptFunctions.functionPrototype(original.getParentScope()));
             mOriginal = original;
             mWebView = webView;
         }

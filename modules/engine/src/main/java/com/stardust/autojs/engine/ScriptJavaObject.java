@@ -32,6 +32,8 @@ public final class ScriptJavaObject extends NativeJavaObject {
         Function cached = methods.get(name);
         if (cached != null) return cached;
         Function original = (Function) member;
+        // task-52 审计结论：这里**不需要改** —— 下面 :52-53 已经在构造后补上 parentScope 与
+        // Function.prototype（getFunctionPrototype），所以 .apply/.call 从一开始就是可用的。
         BaseFunction wrapper = new BaseFunction() {
             @Override public String getFunctionName() { return name; }
             @Override public Object call(Context cx, Scriptable scope, Scriptable receiver, Object[] args) {
