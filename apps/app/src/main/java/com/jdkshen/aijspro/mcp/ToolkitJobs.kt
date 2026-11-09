@@ -64,6 +64,8 @@ internal class ToolkitJobs internal constructor(
         @Volatile var notes: List<String> = emptyList()
         /** P1-5：真正被判成 warning 的原因；SUCCEEDED 时为 null。 */
         @Volatile var warningReason: String? = null
+        /** P1-5：warning 的**判据来源**（empty_result/truncated/decode_error/component_warning/incomplete）；SUCCEEDED 时为 null。 */
+        @Volatile var warningSource: String? = null
         @Volatile var resultReady = false
         @Volatile var resultBytes = 0L
         @Volatile var lostByRestart = false
@@ -272,26 +274,57 @@ internal class ToolkitJobs internal constructor(
             offset == 0 || offset == text.length || !Character.isLowSurrogate(text[offset]) ||
                 !Character.isHighSurrogate(text[offset - 1]),
         ) { "结果offset不能切开UTF-16代理对，请使用nextOffset" }
-        var end = minOf(text.length, offset + max)
-        if (end in (offset + 1) until text.length && Character.isHighSurrogate(text[end - 1]) &&
-            Character.isLowSurrogate(text[end])
-        ) end--
-        require(end > offset || offset == text.length) { "maxChars太小，不能容纳当前Unicode字符，请至少使用2" }
-        val format = args.tString("format", "json").lowercase()
-        require(format in setOf("json", "text")) { "format 必须是 json 或 text，收到：$format" }
-        val rawContent = text.substring(offset, end)
+        // 具体切片统一走下面的 pageOf()：raw 与 text 两种形态共用同一套边界/代理对规则。
+        // 格式：**文本型任务默认 text**（内容型结果不再被 JSON-in-JSON 包两层，content/text 直接是正文）；
+        // 结构化任务默认仍是 json；显式 format 一律尊重，并回显 formatDefaulted/formatSource 供审计。
+        val textJob = isTextOperation(job.operation)
+        val explicitFormat = args.get("format")
+            ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }
+            ?.asString?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+        val formatDefaulted = explicitFormat == null
+        val format = explicitFormat ?: if (textJob) DEFAULT_TEXT_JOB_FORMAT else DEFAULT_STRUCTURED_JOB_FORMAT
+        require(format == "json" || format == "text") { "format 必须是 json 或 text，收到：$format" }
         val textResult = format == "text"
-        val suggestedPath = suggestedExportPath(job, text = textResult || isTextOperation(job.operation))
+        // 分页同源：text 形态下 nextOffset/hasMore/totalChars/chars/truncated 都描述**正文**；
+        // json 形态下描述**原始结果**；另一侧始终用 raw* 回显，避免两套偏移混用。
+        fun pageOf(value: String, label: String): Triple<String, Int, Int> {
+            require(offset <= value.length) { label + " offset 超出范围（长度 " + value.length + "）" }
+            require(
+                offset == 0 || offset == value.length || !Character.isLowSurrogate(value[offset]) ||
+                    !Character.isHighSurrogate(value[offset - 1]),
+            ) { "结果offset不能切开UTF-16代理对，请使用nextOffset" }
+            var pageEnd = minOf(value.length, offset + max)
+            if (pageEnd in (offset + 1) until value.length && Character.isHighSurrogate(value[pageEnd - 1]) &&
+                Character.isLowSurrogate(value[pageEnd])
+            ) pageEnd--
+            require(pageEnd > offset || offset == value.length) { "maxChars太小，不能容纳当前Unicode字符，请至少使用2" }
+            return Triple(value.substring(offset, pageEnd), pageEnd, value.length)
+        }
+        val rawPage = pageOf(text, "结果")
+        val fullText = if (textResult) extractTextContent(text) else null
+        val bodyPage = fullText?.let { pageOf(it, "正文") }
+        val page = bodyPage ?: rawPage
+        val suggestedPath = suggestedExportPath(job, text = textResult || textJob)
         val result = ToolkitIo.json(
             "jobId" to job.id,
             "operation" to job.operation,
             "state" to job.state,
             "format" to format,
-            "content" to rawContent,
-            "nextOffset" to end,
-            "rawNextOffset" to end,
-            "hasMore" to (end < text.length),
-            "totalChars" to text.length,
+            "formatDefaulted" to formatDefaulted,
+            "formatSource" to if (formatDefaulted) "default" else "explicit",
+            "formatDefaultNote" to if (!formatDefaulted) null else if (textJob)
+                "文本型任务（" + job.operation + "）默认 text：顶层 content/text 直接是正文，不再 JSON-in-JSON；要旧形状显式传 format=json" else
+                "结构化任务默认 json（结果不是正文文本）",
+            "pagingSource" to if (textResult) "text" else "raw_json",
+            "content" to page.first,
+            "nextOffset" to page.second,
+            "hasMore" to (page.second < page.third),
+            "totalChars" to page.third,
+            "chars" to page.first.length,
+            "truncated" to (page.second < page.third),
+            "rawNextOffset" to rawPage.second,
+            "rawHasMore" to (rawPage.second < rawPage.third),
+            "rawTotalChars" to rawPage.third,
             "resultChars" to text.length,
             "maxChars" to max,
             "defaultMaxChars" to DEFAULT_RESULT_CHARS,
@@ -304,32 +337,21 @@ internal class ToolkitJobs internal constructor(
             "lostByRestart" to job.lostByRestart,
             "warningCode" to job.warningCode,
             "warningReason" to job.warningReason,
+            "warningSource" to job.warningSource,
+            "warningCriteria" to WARNING_CRITERIA,
             "notes" to job.notes,
             "noteCount" to job.notes.size,
+            "notesCount" to job.notes.size,
             "suggestedExportPath" to suggestedPath,
             "exportHint" to exportHint(job, suggestedPath),
             "retention" to retentionJson(),
         )
-        if (textResult) {
-            val fullText = extractTextContent(text)
-            require(offset <= fullText.length) { "结果 offset 超出正文范围（text 长度 " + fullText.length + "）" }
-            require(
-                offset == 0 || offset == fullText.length || !Character.isLowSurrogate(fullText[offset]) ||
-                    !Character.isHighSurrogate(fullText[offset - 1]),
-            ) { "结果offset不能切开UTF-16代理对，请使用nextOffset" }
-            var textEnd = minOf(fullText.length, offset + max)
-            if (textEnd in (offset + 1) until fullText.length && Character.isHighSurrogate(fullText[textEnd - 1]) &&
-                Character.isLowSurrogate(fullText[textEnd])
-            ) textEnd--
-            require(textEnd > offset || offset == fullText.length) { "maxChars太小，不能容纳当前Unicode字符，请至少使用2" }
-            val page = fullText.substring(offset, textEnd)
-            result.addProperty("text", page)
-            result.addProperty("chars", page.length)
-            result.addProperty("truncated", textEnd < fullText.length)
-            result.addProperty("nextOffset", textEnd)
+        if (textResult && bodyPage != null) {
+            result.addProperty("text", bodyPage.first)
             result.addProperty("textOffset", offset)
-            result.addProperty("textTotalChars", fullText.length)
-            result.addProperty("textHasMore", textEnd < fullText.length)
+            result.addProperty("textTotalChars", bodyPage.third)
+            result.addProperty("textHasMore", bodyPage.second < bodyPage.third)
+            result.addProperty("textSource", "data.content|data.text|content（extractTextContent 解析结果 envelope）")
         }
         return result
     }
@@ -453,6 +475,7 @@ internal class ToolkitJobs internal constructor(
         val warningCode: String?,
         val warningReason: String?,
         val notes: List<String>,
+        val warningSource: String? = null,
     )
 
     /**
@@ -498,7 +521,15 @@ internal class ToolkitJobs internal constructor(
             (warningCode != null && warningCode != "DECOMPILE_INCOMPLETE") ||
             (incomplete && fatal)
         if (!hardWarning) {
-            return SuccessClassification("SUCCEEDED", null, null, notes.take(8).map { it.take(500) })
+            return SuccessClassification("SUCCEEDED", null, null, notes.take(8).map { it.take(500) }, null)
+        }
+        // 判据来源：调用方据此区分「真不完整 / 解码失败 / 截断 / 空结果」，不用猜 warningCode。
+        val source = when {
+            warningCode == "EMPTY_RESULT" || ((textOperation || incomplete) && content.isBlank()) -> "empty_result"
+            warningCode == "RESULT_TRUNCATED" -> "truncated"
+            fatal -> "decode_error"
+            warningCode != null && warningCode != "DECOMPILE_INCOMPLETE" -> "component_warning"
+            else -> "incomplete"
         }
         val code = warningCode ?: if (incomplete) "DECOMPILE_INCOMPLETE" else "RESULT_INCOMPLETE"
         val reason = warningHint.ifBlank { incompleteReason.ifBlank {
@@ -509,7 +540,7 @@ internal class ToolkitJobs internal constructor(
                 else -> "任务完成但结果不完整（" + code + "）"
             }
         } }
-        return SuccessClassification("SUCCEEDED_WITH_WARNINGS", code, reason.take(1000), notes.take(8).map { it.take(500) })
+        return SuccessClassification("SUCCEEDED_WITH_WARNINGS", code, reason.take(1000), notes.take(8).map { it.take(500) }, source)
     }
 
     private fun runWork(job: Job, timeout: ScheduledFuture<*>) {
@@ -536,6 +567,7 @@ internal class ToolkitJobs internal constructor(
                 job.notes = classification.notes
                 job.warningCode = classification.warningCode
                 job.warningReason = classification.warningReason
+                job.warningSource = classification.warningSource
                 if (job.state == "SUCCEEDED_WITH_WARNINGS") {
                     job.reason = classification.warningReason
                         ?: "任务完成但结果不完整（" + (classification.warningCode ?: "RESULT_INCOMPLETE") + "）"
@@ -622,6 +654,8 @@ internal class ToolkitJobs internal constructor(
             "errorCode" to if (lost) "SERVICE_RESTARTED" else job.errorCode,
             "warningCode" to if (lost) null else job.warningCode,
             "warningReason" to if (lost) null else job.warningReason,
+            "warningSource" to if (lost) null else job.warningSource,
+            "warningCriteria" to WARNING_CRITERIA,
             "stateSemantics" to ToolkitIo.json(
                 "SUCCEEDED_WITH_WARNINGS" to "任务完成但结果不完整；看 warningCode/warningReason 和结果正文",
                 "decompileIncomplete" to "反编译专用字段，只在 apk_decompile_* 结果中表示正文不完整；与 frida scriptErrorCount 无关",
@@ -630,6 +664,7 @@ internal class ToolkitJobs internal constructor(
             ),
             "notes" to job.notes,
             "noteCount" to job.notes.size,
+            "notesCount" to job.notes.size,
             "errorHint" to if (lost) "任务因工具进程重启丢失，未自动重放；请确认需要后重新提交"
                 else job.errorCode?.let { "任务失败的结构化码；详细原因见 reason 与 apk_job_result 正文" },
             "metadataFromIndex" to job.metadataFromIndex,
@@ -797,6 +832,7 @@ internal class ToolkitJobs internal constructor(
             "lostByRestart" to job.lostByRestart,
             "warningCode" to job.warningCode,
             "warningReason" to job.warningReason,
+            "warningSource" to job.warningSource,
             "notes" to job.notes,
             "timeoutSeconds" to job.timeout,
         )
@@ -850,8 +886,10 @@ internal class ToolkitJobs internal constructor(
             "lostByRestart" to job.lostByRestart,
             "warningCode" to job.warningCode,
             "warningReason" to job.warningReason,
+            "warningSource" to job.warningSource,
             "notes" to job.notes,
             "noteCount" to job.notes.size,
+            "notesCount" to job.notes.size,
         )
     }
 
@@ -979,6 +1017,7 @@ internal class ToolkitJobs internal constructor(
                 job.reason = source.optString("reason") ?: ""
                 job.warningCode = source.optString("warningCode")?.takeIf { it.isNotEmpty() }
                 job.warningReason = source.optString("warningReason")?.takeIf { it.isNotEmpty() }
+                job.warningSource = source.optString("warningSource")?.takeIf { it.isNotEmpty() }
                 job.notes = source.getAsJsonArray("notes")?.mapNotNull { element -> element.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList()
                 job.lostByRestart = source.get("lostByRestart")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: false
                 val result = resultFile(id)
@@ -1021,6 +1060,7 @@ internal class ToolkitJobs internal constructor(
                     job.reason = if (job.lostByRestart) RESTART_REASON else ""
                     job.warningCode = record.optString("warningCode")?.takeIf { it.isNotEmpty() }
                     job.warningReason = record.optString("warningReason")?.takeIf { it.isNotEmpty() }
+                    job.warningSource = record.optString("warningSource")?.takeIf { it.isNotEmpty() }
                     job.notes = record.getAsJsonArray("notes")?.mapNotNull { element -> element.takeIf { it.isJsonPrimitive }?.asString } ?: emptyList()
                     // 反馈实测（K40 dev-1374）：恢复时只改内存状态、不回写元数据 → 元数据文件里仍是 RUNNING/QUEUED，
                     // 于是 workspace 清单的 scanActiveJobs() 永远认为有 activeJobs，apk_workspace_gc 永久保守跳过所有临时工作区
@@ -1204,6 +1244,13 @@ internal class ToolkitJobs internal constructor(
         const val WORKER_THREADS = 2
         const val REGISTRY_VERSION = 1
         const val RESTART_REASON = "工具进程已重启，任务没有自动重放"
+        /** P1-5 判据（写进描述并回显给调用方；测试也引用它，避免文案漂移）。 */
+        const val WARNING_CRITERIA = "真 warning 判据（任一）：文本型任务正文为空；warningCode=EMPTY_RESULT 或 RESULT_TRUNCATED；" +
+            "正文含 JADX ERROR 或 Method dump skipped；组件给出其它非 DECOMPILE_INCOMPLETE 的 warningCode。" +
+            "JADX INFO 注释、errorsCount/warningsCount 等全局计数只进 notes（notesCount），不改变 SUCCEEDED。"
+        /** 文本型任务默认格式（内容型结果不再 JSON-in-JSON）；显式 format 时保持调用方选择。 */
+        const val DEFAULT_TEXT_JOB_FORMAT = "text"
+        const val DEFAULT_STRUCTURED_JOB_FORMAT = "json"
         private val ACTIVE_STATES = setOf("QUEUED", "RUNNING", "CANCELLING")
         private val TERMINAL_STATES = setOf("SUCCEEDED", "SUCCEEDED_WITH_WARNINGS", "FAILED", "CANCELLED", "INTERRUPTED")
         private val WORKERS = Executors.newFixedThreadPool(2) { r ->

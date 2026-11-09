@@ -22,7 +22,9 @@ internal object McpToolSchema {
         // 反馈 bug#1：withLogs 之前不在本表里 → 被默认声明成 string，客户端传布尔直接被拒，整个功能不可用。
         "withLogs",
         // 同类漏网（本次审计发现）：workspace_cleanup 的两个开关。
-        "dryRun", "protectApplied")
+        "dryRun", "protectApplied",
+        // task-37：get_baseline{refresh} 是布尔开关。
+        "refresh")
 
     fun terminalSchema(): JsonObject = terminalCommandSchema(includeBackend = true)
     fun shellRishSchema(): JsonObject = terminalCommandSchema(includeBackend = false)

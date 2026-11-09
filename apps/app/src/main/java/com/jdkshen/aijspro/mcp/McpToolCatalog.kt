@@ -4,6 +4,8 @@ package com.jdkshen.aijspro.mcp
 internal object McpToolCatalog {
     val canonicalNames = listOf(
         "get_status",
+        // §6.4 基线自检：只读入口，数字与既有工具同源。
+        "get_baseline",
         "list_scripts",
         "read_script",
         "search_scripts",

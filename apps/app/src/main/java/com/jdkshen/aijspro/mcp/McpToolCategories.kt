@@ -28,7 +28,7 @@ internal object McpToolCategories {
         McpToolkitCatalog.names.forEach { put(it, "toolkit") }
         ToolkitReverseTools.names.forEach { put(it,"reverse") }
         listOf(
-            "get_status", "read_apk_logs", "get_mcp_log", "tool_schema",
+            "get_status", "get_baseline", "read_apk_logs", "get_mcp_log", "tool_schema",
         ).forEach { put(it, "status") }
         listOf(
             "list_scripts", "read_script", "search_scripts", "continue_result",

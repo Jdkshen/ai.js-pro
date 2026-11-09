@@ -61,10 +61,10 @@ class McpFamilyAliasTest {
     @Test
     fun familyAliasesAreDispatchOnlyAndDoNotChangeTheAdvertisedList() {
         McpToolCatalog.familyAliases.keys.forEach { alias ->
-            assertFalse(alias + " 不能进 tools/list（advertised 必须仍是 224）", alias in McpToolCatalog.names)
+            assertFalse(alias + " 不能进 tools/list（advertised 必须仍是 225）", alias in McpToolCatalog.names)
         }
-        assertEquals("advertised 数量不能被族前缀别名改变", 224, McpToolCatalog.names.size)
-        assertEquals("canonical 数量不变", 215, McpToolCatalog.canonicalNames.size)
+        assertEquals("advertised 数量不能被族前缀别名改变", 225, McpToolCatalog.names.size)
+        assertEquals("canonical 数量不变", 216, McpToolCatalog.canonicalNames.size)
         assertEquals(McpToolCatalog.canonicalNames.size + McpToolCatalog.aliases.size, McpToolCatalog.names.size)
         // 每个别名都能走真实的 tools/call 解析（McpRpcValidation → canonicalName）
         McpToolCatalog.familyAliases.forEach { (alias, canonical) ->

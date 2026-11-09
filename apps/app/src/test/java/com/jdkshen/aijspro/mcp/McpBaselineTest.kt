@@ -1,0 +1,188 @@
+package com.jdkshen.aijspro.mcp
+
+import com.google.gson.JsonObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+
+/**
+ * task-37 / 设备4 §6.4：MCP 基线自检（紧凑 baseline）。
+ *
+ * 覆盖：字段齐全 + 完整基线 ≤512 字节；同源断言（workspaces.apk ↔ ToolkitWorkspaceInventory、
+ * toolchain ↔ McpBuildTools.readiness）；recovery 只有一条且点名组件/命令；预算裁剪保自救字段；
+ * version 内容不变则不变；入口挂载点（首个 tools/call / 失败信封 / get_baseline）的源码契约。
+ */
+class McpBaselineTest {
+    @get:Rule val temp = TemporaryFolder()
+
+    private val mcpToolsSource: String by lazy {
+        File("src/main/java/com/jdkshen/aijspro/mcp/McpTools.kt").readText()
+    }
+
+    private fun workspace(store: File, id: String, temporary: Boolean, bytes: Int) {
+        val dir = File(store, id)
+        assertTrue(dir.mkdirs())
+        File(dir, "base.apk").writeBytes(ByteArray(bytes))
+        File(dir, "workspace.json").writeText(ToolkitIo.json(
+            "workspaceId" to id,
+            "temporary" to temporary,
+            "size" to bytes.toLong(),
+            "createdAt" to System.currentTimeMillis(),
+            "sha256" to ("sha-" + id),
+        ).toString(), Charsets.UTF_8)
+    }
+
+    private fun inventoryFixture(): JsonObject {
+        val store = temp.newFolder("store")
+        workspace(store, "ws-temporary", true, 16)
+        workspace(store, "ws-saved", false, 32)
+        return ToolkitWorkspaceInventory(store).inventory(ToolkitIo.json("limit" to 5))
+    }
+
+    /**
+     * 与 McpBuildTools.readiness(...) **同形状**的就绪对象（ready/missing/present/missingCount）。
+     * 为什么不用真函数：McpBuildTools 依赖 McpAndroidTerminal/ToolkitApkVerifier 的 Android 依赖链，
+     * 而 apps/app/build 已被构建清空、独立编译拉不起来；这里只验证**投影同源**（同形状 → 同值），
+     * 生产侧的同源由 [entryAttachmentPolicyIsPinnedInTheSingleAssemblyPoint] 的源码断言 + Lead 的 gradle 复核覆盖。
+     */
+    private fun readiness(ready: Boolean, missing: List<String>, present: List<String>): JsonObject = ToolkitIo.json(
+        "ready" to ready, "missing" to missing, "present" to present, "missingCount" to missing.size,
+    )
+
+    private val allComponents = listOf("jdk17", "aapt2", "d8", "apksigner", "python3", "aidl")
+
+    private fun fullReadiness(): JsonObject = readiness(true, emptyList(), allComponents)
+
+    @Test
+    fun apkWorkspaceProjectionIsTheSameSourceAsInventory() {
+        val inventory = inventoryFixture()
+        val apk = McpBaseline.apkWorkspaces(inventory)
+        assertEquals("baseline.workspaces.apk.quota 必须等于 inventory.quota",
+            inventory.get("quota").asInt, apk.get("quota").asInt)
+        assertEquals("used 必须等于 inventory.quotaUsedCount",
+            inventory.get("quotaUsedCount").asInt, apk.get("used").asInt)
+        assertEquals(2, apk.get("used").asInt)
+        assertEquals(1, apk.get("temporary").asInt)
+        assertTrue(apk.get("ttlHint").asString.contains("过期"))
+    }
+
+    @Test
+    fun toolchainProjectionIsTheSameSourceAsGetBuildToolsReadiness() {
+        val readiness = fullReadiness()
+        val projected = McpBaseline.toolchain(readiness)
+        assertEquals("baseline.toolchain.ready 必须等于 get_build_tools.ready",
+            readiness.get("ready").asBoolean, projected.get("ready").asBoolean)
+        assertEquals(readiness.getAsJsonArray("missing").toString(), projected.getAsJsonArray("missing").toString())
+        assertEquals(readiness.getAsJsonArray("present").toString(), projected.getAsJsonArray("present").toString())
+        // 缺组件时 ready=false 且 missing 如实透传
+        val partial = readiness(false, listOf("python3", "aidl"), listOf("jdk17", "aapt2", "d8", "apksigner"))
+        val partialProjected = McpBaseline.toolchain(partial)
+        assertEquals(false, partialProjected.get("ready").asBoolean)
+        assertTrue(partialProjected.getAsJsonArray("missing").map { it.asString }.contains("python3"))
+        // 未采样：明确 null + note，不编数字
+        val unsampled = McpBaseline.toolchain(null)
+        assertTrue(unsampled.get("ready").isJsonNull)
+        assertTrue(unsampled.get("note").asString.contains("get_build_tools"))
+    }
+
+    @Test
+    fun recoveryIsSingleAndNamesTheConcreteObject() {
+        val missing = McpBaseline.toolchain(readiness(false, allComponents, emptyList()))
+        val apk = ToolkitIo.json("used" to 0, "quota" to 16, "temporary" to 0)
+        val recovery = McpBaseline.recoveryFor(missing, apk)
+        assertNotNull(recovery)
+        assertTrue("必须点名组件：" + recovery, recovery!!.contains("jdk17") || recovery.contains("aapt2"))
+        assertTrue("必须给可执行命令：" + recovery, recovery.contains("apk_component_install"))
+        val ready = McpBaseline.toolchain(fullReadiness())
+        assertEquals(true, ready.get("ready").asBoolean)
+        assertNull("没有缺失就不能给 recovery", McpBaseline.recoveryFor(ready, apk))
+        val full = McpBaseline.recoveryFor(ready, ToolkitIo.json("used" to 16, "quota" to 16, "temporary" to 3))
+        assertNotNull("配额满也要能自救", full)
+        assertTrue(full!!.contains("apk_workspace_gc"))
+        assertTrue(full.contains("16/16"))
+    }
+
+    @Test
+    fun assembledBaselineHasDocumentedFieldsAndFitsTheBudget() {
+        val inventory = inventoryFixture()
+        val baseline = McpBaseline.assemble(
+            1, "/storage/emulated/0/脚本", "my-project",
+            ToolkitIo.json("script" to 3, "apk" to McpBaseline.apkWorkspaces(inventory)),
+            McpBaseline.toolchain(fullReadiness()),
+            McpBaseline.jobs("6h / 64 条", "终态立刻 result 或 export"),
+        )
+        assertEquals(1, baseline.get("version").asInt)
+        assertEquals("/storage/emulated/0/脚本", baseline.get("root").asString)
+        assertEquals("my-project", baseline.get("currentProject").asString)
+        assertEquals(3, baseline.getAsJsonObject("workspaces").get("script").asInt)
+        assertEquals(16, baseline.getAsJsonObject("workspaces").getAsJsonObject("apk").get("quota").asInt)
+        assertEquals(true, baseline.getAsJsonObject("toolchain").get("ready").asBoolean)
+        assertEquals("6h / 64 条", baseline.getAsJsonObject("jobs").get("retention").asString)
+        assertTrue(baseline.get("recovery").isJsonNull)
+        assertFalse(baseline.has("trimmed"))
+        assertTrue("完整基线必须 ≤512 字节，实际 " + McpBaseline.bytesOf(baseline) + "B",
+            McpBaseline.bytesOf(baseline) <= McpBaseline.MAX_BYTES)
+    }
+
+    @Test
+    fun budgetTrimKeepsSelfRescueFieldsAndDropsStatistics() {
+        val fat = McpBaseline.assemble(
+            9,
+            "/storage/emulated/0/" + "很长的根目录".repeat(8),
+            "p",
+            ToolkitIo.json("script" to 2147483647, "apk" to ToolkitIo.json(
+                "used" to 16, "quota" to 16, "temporary" to 16, "ttlHint" to "temporary 会过期，过期后重新 open")),
+            McpBaseline.toolchain(readiness(false, allComponents, emptyList())),
+            McpBaseline.jobs("6h / 64 条", "终态立刻 result 或 export"),
+        )
+        val fatBytes = McpBaseline.bytesOf(fat)
+        assertTrue("构造的基线必须超预算，实际 " + fatBytes + "B", fatBytes > McpBaseline.MAX_BYTES)
+        val trimmed = McpBaseline.fitBudget(fat, maxBytes = 200)
+        assertTrue("裁剪不能改调用方对象（缓存那份要完整）", McpBaseline.bytesOf(fat) == fatBytes)
+        assertTrue("裁剪后必须保留 version/missing/recovery，实际 keys=" + trimmed.keySet(),
+            trimmed.has("version") && trimmed.has("missing") && trimmed.has("recovery"))
+        assertFalse("先丢统计：jobs 必须被丢", trimmed.has("jobs"))
+        assertFalse(trimmed.has("backends"))
+        assertFalse(trimmed.has("outputRule"))
+        assertTrue(trimmed.has("trimmed"))
+        assertNotNull(trimmed.getAsJsonArray("missing"))
+        assertTrue(trimmed.getAsJsonArray("missing").map { it.asString }.contains("python3"))
+        assertTrue("裁剪后必须显著变小（fat=" + fatBytes + "B, trimmed=" + McpBaseline.bytesOf(trimmed) + "B）",
+            McpBaseline.bytesOf(trimmed) < fatBytes)
+    }
+
+    @Test
+    fun versionIsStableWhileContentIsUnchanged() {
+        val version = McpBaselineVersion()
+        val content = McpBaseline.assemble(0, "/root", "p",
+            ToolkitIo.json("script" to 1, "apk" to JsonObject()),
+            McpBaseline.toolchain(null), McpBaseline.jobs("6h / 64 条", "x"))
+        val first = version.versionFor(content)
+        assertEquals("内容不变 → version 不变（客户端可去重）", first, version.versionFor(content))
+        val changed = content.deepCopy().apply { addProperty("currentProject", "other") }
+        assertEquals(first + 1, version.versionFor(changed))
+    }
+
+    @Test
+    fun entryAttachmentPolicyIsPinnedInTheSingleAssemblyPoint() {
+        assertTrue(mcpToolsSource.contains("private fun baselineSnapshot("))
+        assertTrue("首个 tools/call 成功挂载", mcpToolsSource.contains("withEntryBaseline(McpToolResultShapes.mirrorFlatResult("))
+        assertTrue("入口只挂一次", mcpToolsSource.contains("entryBaselineDelivered.compareAndSet(false, true)"))
+        assertTrue("get_status 走同一份", mcpToolsSource.contains("add(\"baseline\", baselineSnapshot(jobsSummary))"))
+        assertTrue("get_baseline 走同一份且可强刷",
+            mcpToolsSource.contains("\"get_baseline\" -> toolJson(baselineSnapshot(force = args.booleanOr(\"refresh\", false)))"))
+        assertTrue("失败信封带 baseline（toolFailure/toolResult）", mcpToolsSource.contains("if (!has(\"baseline\")) add(\"baseline\", baselineSnapshot())"))
+        assertTrue("桥接失败带 baseline", mcpToolsSource.contains("add(\"baseline\", baselineSnapshot())"))
+        // 同源生产侧：baseline 的工具链只取 get_build_tools 的内存缓存（不重新探测 PATH）
+        assertTrue(mcpToolsSource.contains("McpBaseline.toolchain(McpBuildTools.cachedReadiness())"))
+        val buildToolsSource = File("src/main/java/com/jdkshen/aijspro/mcp/McpBuildTools.kt").readText()
+        assertTrue("readiness 是 get_build_tools 的唯一判定实现", buildToolsSource.contains("internal fun readiness(commandResults: Map<String, String>"))
+        assertTrue("cachedReadiness 暴露的是同一份判定", buildToolsSource.contains("fun cachedReadiness(): JsonObject? = lastReadiness?.deepCopy()"))
+    }
+}

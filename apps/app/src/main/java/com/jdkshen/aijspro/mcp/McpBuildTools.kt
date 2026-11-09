@@ -365,17 +365,4 @@ internal object McpBuildTools {
     )
 }
 
-internal class McpBaselineVersion {
-    private var lastDigest: String? = null
-    private var current = 0
-
-    @Synchronized
-    fun versionFor(content: JsonObject): Int {
-        val digest = ToolkitIo.version(content.toString().toByteArray(Charsets.UTF_8)).take(16)
-        if (digest != lastDigest) {
-            lastDigest = digest
-            current += 1
-        }
-        return current
-    }
-}
+// task-37：McpBaselineVersion 移到 McpBaseline.kt（与 baseline 组装同一文件，便于纯 JVM 单测）。

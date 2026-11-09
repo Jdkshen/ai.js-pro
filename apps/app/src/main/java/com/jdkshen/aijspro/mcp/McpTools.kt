@@ -54,6 +54,14 @@ internal class McpTools(private val context: Context, private val event: (String
     }
     private val toolkitStore = File(File(context.filesDir, "apk-toolkit"), ToolkitIo.version(root.path.toByteArray()).take(16))
     private val baselineVersion = McpBaselineVersion()
+    /** §6.4：首个 tools/call（或 get_status）成功后就不再重复挂 baseline（省上下文）。 */
+    private val entryBaselineDelivered = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var baselineCache: JsonObject? = null
+    @Volatile private var baselineCacheAt = 0L
+    @Volatile private var jobsSummaryCache: JsonObject? = null
+    @Volatile private var jobsSummaryCacheAt = 0L
+    /** baseline 缓存：失败/入口调用很频繁，15s 内复用同一份（内容变才变 version）。 */
+    private val baselineTtlMillis = 15_000L
     private val workspaces = McpWorkspaceStore(context, root)
     private val terminalBackend = McpAndroidTerminal(context)
     private val terminals = McpTerminalJobs(root, terminalBackend::launch)
@@ -110,11 +118,12 @@ internal class McpTools(private val context: Context, private val event: (String
                     eventName = invocation.requestedName
                     // W4 task-21：主进程 / 工具桥 / 自动化三条路径都收敛到这里；给扁平结果统一补 data 镜像
                     // （含纯标量工具），>64KiB 不补并写 dataOmitted 说明原因；已是信封或已有 data 的不动。
-                    McpToolResultShapes.mirrorFlatResult(
+                    // §6.4：首个 tools/call 成功也带一条 baseline（失败由 toolFailure/toolResult/bridge 三条路径带）。
+                    withEntryBaseline(McpToolResultShapes.mirrorFlatResult(
                         applyScalarMirror(invocation.requestedName, call(invocation)),
                         // task-27（c）：用 canonical 名判定摘要名单（别名 captureScreen 之类也能命中）。
                         McpToolCatalog.canonicalName(invocation.requestedName),
-                    )
+                    ))
                 }
                 "resources/list"->knowledge.resourcesList(McpRpcValidation.optionalParams(params)?:JsonObject())
                 "resources/templates/list"->knowledge.resourceTemplatesList(McpRpcValidation.optionalParams(params)?:JsonObject())
@@ -258,6 +267,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun listTools(params: JsonObject? = null) = JsonObject().apply {
         add("tools", JsonArray().apply {
             add(tool("get_status", "读取 MCP、脚本目录、任务和工作区状态"))
+            add(tool("get_baseline", "运行时就绪基线（自检，只读）：root/currentProject、workspaces{script,apk{used,quota,temporary,ttlHint}}、toolchain{ready,missing,present}、jobs{retention,advice}，有缺失时给一条最短 recovery。数字与 get_build_tools / apk_workspace_inventory / toolkit_status 同源（不另算一份），15s 内复用同一份缓存；内容不变时 version 不变（可去重）；总量 ≤512 字节，超了按「先丢统计、保 version/missing/recovery」裁剪并标注 trimmed。同一条 baseline 也会自动出现在首个 tools/call（或 get_status）与所有失败信封里；tools/list 与普通工具返回不带（省上下文）。refresh:true 强制重建。", objSchema("refresh")))
             add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）；示例：{\"path\":\"\",\"recursive\":true}", objSchema("path", "offset", "limit", "recursive")))
             add(tool("read_script", "分块读取脚本目录中的文本文件；示例：{\"path\":\"main.js\",\"maxBytes\":65536}", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
             add(tool("search_scripts", "递归搜索脚本文件名与内容；截断时返回 scanCursor（可传回本工具继续扫描）和分页 cursor（用于继续分页取出已返回的 items）", objSchema("query", "path", "limit", "scanCursor", "resumeCursor", "cursor", required = arrayOf("query")).apply {
@@ -472,6 +482,8 @@ internal class McpTools(private val context: Context, private val event: (String
             return toolJson(result).apply {
                 if (result.get("ok")?.asBoolean == false) {
                     addProperty("isError", true)
+                    // §6.4：工具桥（:tools 进程）的失败也要带 baseline。
+                    add("baseline", baselineSnapshot())
                     // `.4` 终检 minor：错误码要能不解析正文就取到；桥接结果的 code 在 payload 顶层或 error.code。
                     val code = result.get("errorCode") ?: result.getAsJsonObject("error")?.get("code")
                     code?.takeIf { it.isJsonPrimitive }?.asString?.let { addProperty("errorCode", it) }
@@ -486,6 +498,7 @@ internal class McpTools(private val context: Context, private val event: (String
         if (McpAutomationTransport.supports(name)) return McpAutomationTransport.call(context, name, args)
         return when (name) {
             "tool_schema" -> toolJson(toolSchema(args))
+            "get_baseline" -> toolJson(baselineSnapshot(force = args.booleanOr("refresh", false)))
             "get_status" -> toolJson(JsonObject().apply {
                 // P1-9：直接回答「这是哪个 build、有多少工具、更新了什么」，不用再去 app_info 绕。
                 add("toolCatalog", toolCatalogStatus())
@@ -541,24 +554,9 @@ internal class McpTools(private val context: Context, private val event: (String
                     addProperty("unavailable", true)
                     addProperty("note", "工具进程未就绪，无法读取任务保留统计；请稍后重试 get_status 或先调用 toolkit_status")
                 })
-                // 第六章基线自检：全部为现有内存/文件读取，不新增 MCP 往返、不写盘。
-                val currentProject = outputConventions.get("defaultProject")
-                    ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
-                val apkWorkspaces = apkWorkspaceBaseline()
-                val baselineWorkspaces = ToolkitIo.json(
-                    "script" to workspaces.list().size,
-                    "apk" to apkWorkspaces,
-                )
-                val baselineToolchain = compactToolchain()
-                val baselineJobs = ToolkitIo.json(
-                    "retention" to retentionSummary(jobsSummary),
-                    "advice" to "终态立刻 result 或 export",
-                )
-                val baseline = McpBuildTools.baselineContent(
-                    root.path, currentProject, baselineWorkspaces, baselineToolchain, baselineJobs,
-                )
-                baseline.addProperty("version", baselineVersion.versionFor(baseline))
-                add("baseline", baseline)
+                // 第六章 §6.4 基线自检：与 get_baseline 同一份实现（同源、15s 缓存、≤512 字节预算）。
+                entryBaselineDelivered.set(true)
+                add("baseline", baselineSnapshot(jobsSummary))
                 addProperty("overlayCount", OverlayStateReader.countAggregated(context))
                 addProperty("overlayState", if (OverlayStateReader.isAvailable(context)) "ok" else "unavailable")
                 add("engineDiagnostics", engineDiagnostics())
@@ -1488,31 +1486,72 @@ internal class McpTools(private val context: Context, private val event: (String
         return value.toInt()
     }
     private fun logLevel(level: Int) = when (level) { Log.VERBOSE -> "VERBOSE"; Log.DEBUG -> "DEBUG"; Log.INFO -> "INFO"; Log.WARN -> "WARN"; Log.ERROR -> "ERROR"; Log.ASSERT -> "ASSERT"; else -> level.toString() }
-    /** baseline 的 APK 工作区统计：本地只读清单，不新增 MCP 往返、不写盘。 */
-    private fun apkWorkspaceBaseline(): JsonObject = runCatching {
+    /**
+     * baseline 的 APK 工作区统计：**同一份** ToolkitWorkspaceInventory 输出做投影（不另算一份），
+     * 本地只读清单、不新增 MCP 往返、不写盘。
+     */
+    private fun apkWorkspacesBaseline(): JsonObject = runCatching {
         val inventory = ToolkitWorkspaceInventory(toolkitStore).inventory(ToolkitIo.json("limit" to 1))
-        val byState = inventory.getAsJsonObject("byState")
-        ToolkitIo.json(
-            "used" to inventory.tInt("quotaUsedCount", 0),
-            "quota" to inventory.tInt("quota", 16),
-            "temporary" to (byState?.tInt("temporary", 0) ?: 0),
-            "ttlHint" to "temporary 会过期，过期后重新 open",
-        )
+        McpBaseline.apkWorkspaces(inventory)
     }.getOrElse {
-        ToolkitIo.json("used" to null, "quota" to null, "temporary" to null,
-            "note" to "APK 工作区统计不可用；用 apk_workspace_inventory 查询")
+        McpBaseline.apkWorkspacesUnavailable("APK 工作区统计不可用；用 apk_workspace_inventory 查询")
     }
 
-    /** 只取 get_build_tools 的内存缓存，不在 get_status 里重新跑 PATH 探测。 */
-    private fun compactToolchain(): JsonObject {
-        val cached = McpBuildTools.cachedReadiness()
-            ?: return ToolkitIo.json("ready" to null, "missing" to JsonArray(), "present" to JsonArray(),
-                "note" to "先调用 get_build_tools 采样")
-        return ToolkitIo.json(
-            "ready" to cached.get("ready"),
-            "missing" to cached.get("missing"),
-            "present" to cached.get("present"),
+    /** jobs retention 摘要：走 get_status 用过的同一条 toolkit_status 桥（30s 缓存，失败/入口调用不额外探测）。 */
+    private fun toolkitJobsSummary(force: Boolean = false): JsonObject? {
+        val cached = jobsSummaryCache
+        if (!force && cached != null && System.currentTimeMillis() - jobsSummaryCacheAt < 30_000L) return cached
+        return runCatching {
+            McpToolkitBridge.call(context, root, "toolkit_status", JsonObject())
+                .getAsJsonObject("data")?.getAsJsonObject("jobs")
+        }.getOrNull()?.also { jobsSummaryCache = it.deepCopy(); jobsSummaryCacheAt = System.currentTimeMillis() }
+    }
+
+    private fun currentProjectName(): String? = runCatching {
+        // 注意：get_status 里那个 outputConventions 是函数内局部量，这里必须自己取（同一实现，不另算规则）。
+        McpOutputConventions.describeFor(root, toolkitStore).get("defaultProject")
+            ?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+    }.getOrNull()
+
+    /**
+     * §6.4 基线快照：**唯一**的 baseline 组装点（get_status / get_baseline / 首个 tools/call / 失败信封都走它）。
+     * 数字全部来自既有实现（ToolkitWorkspaceInventory、McpBuildTools.cachedReadiness、toolkit_status 的 retention），
+     * 15s 内复用同一份；内容不变时 version 不变（客户端可去重）；最后过 [McpBaseline.fitBudget]。
+     */
+    @Synchronized
+    private fun baselineSnapshot(jobsSummary: JsonObject? = toolkitJobsSummary(), force: Boolean = false): JsonObject {
+        val now = System.currentTimeMillis()
+        if (!force) baselineCache?.let { if (now - baselineCacheAt < baselineTtlMillis) return it.deepCopy() }
+        val workspaces = runCatching {
+            ToolkitIo.json("script" to workspaces.list().size, "apk" to apkWorkspacesBaseline())
+        }.getOrElse {
+            ToolkitIo.json("script" to null, "apk" to McpBaseline.apkWorkspacesUnavailable("脚本工作区统计不可用"))
+        }
+        val toolchain = runCatching { McpBaseline.toolchain(McpBuildTools.cachedReadiness()) }
+            .getOrElse { McpBaseline.toolchain(null) }
+        val jobs = McpBaseline.jobs(
+            runCatching { retentionSummary(jobsSummary ?: toolkitJobsSummary()) }.getOrDefault("不可用"),
+            "终态立刻 result 或 export",
         )
+        val content = McpBaseline.assemble(0, root.path, currentProjectName(), workspaces, toolchain, jobs)
+        val version = runCatching { baselineVersion.versionFor(content) }.getOrDefault(0)
+        content.addProperty("version", version)
+        val fitted = runCatching { McpBaseline.fitBudget(content) }.getOrElse { content }
+        baselineCache = fitted.deepCopy()
+        baselineCacheAt = now
+        return fitted
+    }
+
+    /**
+     * §6.4 入口策略：baseline 只挂「入口型」返回 —— 首个 tools/call 成功、或**任何**失败信封；
+     * tools/list 与普通工具返回不带（省上下文）。
+     */
+    private fun withEntryBaseline(result: JsonObject): JsonObject {
+        if (result.has("baseline")) { entryBaselineDelivered.set(true); return result }
+        val failed = result.get("isError")?.asBoolean == true
+        if (failed) return result.apply { add("baseline", baselineSnapshot()) }
+        if (entryBaselineDelivered.compareAndSet(false, true)) result.add("baseline", baselineSnapshot())
+        return result
     }
 
     /** 6h / 64 条；jobs 摘要不可用时仍给产品默认值。 */
@@ -1682,12 +1721,16 @@ internal class McpTools(private val context: Context, private val event: (String
         return toolResult(envelope.toString(), true, errorCode = code, argument = argument).apply {
             add("structuredContent", envelope)
             if (details != null) add("details", details)
+            // §6.4：失败时最需要自救 —— 所有失败信封都带一条紧凑 baseline（同源、15s 缓存）。
+            if (!has("baseline")) add("baseline", baselineSnapshot())
         }
     }
 
     private fun toolResult(text: String, error: Boolean = false, errorCode: String? = null, argument: String? = null) = JsonObject().apply {
         add("content", JsonArray().apply { add(JsonObject().apply { addProperty("type", "text"); addProperty("text", text) }) })
         if (error) addProperty("isError", true)
+        // §6.4：失败信封都带 baseline（IllegalState/Security/IOException 这几条 catch 走这里）。
+        if (error) add("baseline", baselineSnapshot())
         // 反馈 #8/#11：结构化错误码不能只在正文里；让调用方在不解析文本的情况下也能判定失败类型。
         if (errorCode != null) addProperty("errorCode", errorCode)
         if (argument != null) addProperty("argument", argument)
