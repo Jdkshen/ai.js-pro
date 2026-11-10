@@ -1,0 +1,13 @@
+{
+  "id": "ocr",
+  "displayName": "OCR 插件",
+  "package": "com.jdkshen.ocr.plugin",
+  "file": "ocr-plugin.apk",
+  "minAppVersion": 1465,
+  "requiresRestart": true,
+  "abis": [
+    "arm64-v8a"
+  ],
+  "draft": true,
+  "notes": "草稿：把内建 OCR（PP-OCR 模型 + libppocr/libmlkit + $ocr 桥）从主程序剥离；加载契约以 W1 task-130 为准，契约定稿后去掉 draft 并补 project-versions.json 的 ocrPluginVersionName/VersionCode。"
+}

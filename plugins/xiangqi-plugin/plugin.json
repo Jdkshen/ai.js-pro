@@ -1,0 +1,12 @@
+{
+  "id": "xiangqi",
+  "displayName": "象棋插件",
+  "package": "com.jdkshen.xiangqi.plugin",
+  "file": "xiangqi-plugin.apk",
+  "minAppVersion": 1465,
+  "requiresRestart": true,
+  "abis": [
+    "arm64-v8a"
+  ],
+  "notes": "提供 libpikafish.so 与 xiangqi.quickjs 桥；随包与否由打包页勾选（默认不带）。"
+}
