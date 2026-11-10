@@ -295,6 +295,46 @@ public final class NativeProjectStaging {
         if (!apk.isFile()) {
             return;
         }
+        File resSidecar = new File(sourceBuild, COMPILED_RES_JSON);
+        // task-131 A′（W1 取证后的精确落点）：运行期 JS（预编译 Node/UI，node24/ui.js）会**自己**读
+        // build/project-res.apk，在 Java 装载器的判定之前就抛「资源包与宿主资源表不匹配」⇒ 唯一可靠的
+        // 拦截点就是**暂存期**（文件还在我们手里）。规则与 CompiledProjectResources 完全同源：
+        //   摘要一致 / sidecar 缺失 / 摘要缺失 / 取不到宿主摘要 ⇒ 照旧复制（默认行为逐字不变）
+        //   摘要确定不同 ⇒ 这一对都不复制 + Log.w(我们那句可执行文案，不抄第二份)
+        if (resSidecar.isFile()) {
+            String expected = null;
+            try {
+                byte[] raw = java.nio.file.Files.readAllBytes(resSidecar.toPath());
+                expected = com.jdkshen.aijspro.autojs.build.ProjectResSidecarPolicy
+                        .extractHostDigest(new String(raw, "UTF-8"));
+            } catch (Throwable error) {
+                android.util.Log.w("NativeProjectStaging", "读取 project-res.json 失败（照旧复制）：" + error.getMessage());
+            }
+            if (expected != null) {
+                String actual = null;
+                try {
+                    actual = com.stardust.autojs.core.ui.inflater.CompiledProjectResources
+                            .hostResourcesSha256OrNull(
+                                    com.stardust.app.GlobalAppContext.get().getPackageCodePath());
+                } catch (Throwable error) {
+                    android.util.Log.w("NativeProjectStaging", "取宿主摘要失败（照旧复制）：" + error.getMessage());
+                }
+                if (actual != null && !expected.equalsIgnoreCase(actual)) {
+                    android.util.Log.w("NativeProjectStaging", "project-res DROP: expected="
+                            + expected.substring(0, 12) + " host=" + actual.substring(0, 12)
+                            + " apk=" + apk.getPath());
+                    android.util.Log.w("NativeProjectStaging",
+                            com.stardust.autojs.core.ui.inflater.CompiledProjectResources
+                                    .staleResourcePackMessage(expected, actual, apk));
+                    return;
+                }
+                android.util.Log.i("NativeProjectStaging", "project-res KEEP: digest equal expected="
+                        + expected.substring(0, 12) + " host=" + (actual == null ? "(null)" : actual.substring(0, 12)));
+            } else {
+                android.util.Log.i("NativeProjectStaging", "project-res KEEP: sidecar 无摘要（照旧复制）sidecar="
+                        + resSidecar.getPath());
+            }
+        }
         File targetBuild = new File(targetDir, DIR_BUILD);
         if (!targetBuild.mkdirs() && !targetBuild.isDirectory()) {
             throw new IOException("暂存项目失败：无法创建目录：" + targetBuild.getPath());

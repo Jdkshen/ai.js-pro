@@ -43,7 +43,7 @@ public class CompiledProjectResources {
      * <p>判据：sidecar 里的宿主摘要 == 当前宿主摘要时**完全不进这里**（行为逐字不变）。
      */
     /** 取当前宿主资源表摘要；取不到返回 null（只用于日志，绝不影响判定结果）。 */
-    private static String hostResourcesSha256OrNull(String appApkPath) {
+    public static String hostResourcesSha256OrNull(String appApkPath) {
         try {
             return hostResourcesSha256(appApkPath);
         } catch (Throwable error) {

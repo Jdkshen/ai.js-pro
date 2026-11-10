@@ -53,6 +53,29 @@ object ProjectResSidecarPolicy {
     }
 
     /**
+     * 摘要直接比较版：actual 由调用方取（打包端用 CompiledProjectResources.hostResourcesSha256OrNull
+     * 于**宿主 APK**，即运行期同一算法；本类不再自己算宿主摘要，避免第二份派生）。
+     */
+    @JvmStatic
+    fun decide(expectedDigest: String?, actualDigest: String?): Decision {
+        if (expectedDigest.isNullOrBlank()) {
+            return Decision(Action.KEEP, "sidecar 里没有可用的宿主摘要 ⇒ 判不出来，保持原样", null, null)
+        }
+        if (actualDigest.isNullOrBlank()) {
+            return Decision(Action.KEEP, "取不到产物宿主摘要 ⇒ 判不出来，保持原样", expectedDigest, null)
+        }
+        return if (expectedDigest.equals(actualDigest, ignoreCase = true)) {
+            Decision(Action.KEEP, "摘要一致（" + actualDigest.take(12) + "…）⇒ 原样保留", expectedDigest, actualDigest)
+        } else {
+            Decision(
+                Action.DROP,
+                "样例资源包是按别的宿主编的（期望 " + expectedDigest.take(12) + "… / 产物宿主 " + actualDigest.take(12) + "…）⇒ 丢掉该 apk+json",
+                expectedDigest, actualDigest
+            )
+        }
+    }
+
+    /**
      * @param sidecar  样例的 project-res.json（可空：缺 sidecar ⇒ 判不出来 ⇒ KEEP）
      * @param hostArsc 产物宿主的 resources.arsc（打包工作区里那份；可空 ⇒ KEEP）
      */

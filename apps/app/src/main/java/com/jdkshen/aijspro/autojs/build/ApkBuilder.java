@@ -513,15 +513,17 @@ public class ApkBuilder {
         if (mArscPackageName != null) {
             buildArsc();
         }
-        // task-131 批次 A：样例工程资源包（project-res.apk+json）是按**构建期宿主**编的，
-        // 打进产物后必然与产物宿主的资源表不匹配（真机 JS hostCall 会直接抛「资源包与宿主资源表不匹配」）。
-        // 这里做**打包期**清理：只在**确定不匹配**时删（判不出来就原样保留，默认行为不变）。
-        pruneStaleProjectResPacks();
+        // （task-131 批次 A 的 prune 调用已下移到工程内容进工作区之后，见 copyProjectToWorkspace 之后的同一带）
         copyProjectToWorkspace();
         copySplashIcon();
         removeDisabledFeatures();
         stageSjbcAssets();
         pruneDisabledPackagingAssets();
+        // task-131 批次 A：必须放在**工程内容已进工作区之后**（真机 dev-1478 证据：放在 buildArsc 之后时
+        // sidecars=0，因为 copyProjectToWorkspace() 还没跑）。判定对象 = 工作区 assets/**/build/project-res.json，
+        // 与 sidecar 记录的构建期宿主摘要比对（宿主摘要用 W1 的算法取宿主 APK）。
+        // 只在**确定不匹配**时删（判不出来一律原样保留，默认行为不变）。
+        pruneStaleProjectResPacks();
         enforcePackagingPolicy();
         // 等级 × 引擎的实际载荷形态记一条：等级 2 对 Node 不是字节码，日志里必须能看出来。
         Log.i("C-PKG", "script protection level=" + mEncryptLevel
@@ -672,12 +674,35 @@ public class ApkBuilder {
      * 放早了会拿旧摘要去比，误删好包。</p>
      */
     private void pruneStaleProjectResPacks() {
+        // 产物宿主摘要：用 W1 的同一套算法（宿主 APK 的 resources.arsc），**不自己算第二份**。
+        // 工作区那份 arsc 只作为兜底（拿不到宿主 APK 时用）。
         File hostArsc = new File(mWorkspacePath, "resources.arsc");
+        String hostDigest = null;
+        try {
+            hostDigest = CompiledProjectResources.hostResourcesSha256OrNull(
+                    hostApkFile(GlobalAppContext.get()).getPath());
+        } catch (Throwable error) {
+            Log.w("C-PKG", "project-res: 取宿主摘要失败，回退工作区 arsc：" + error.getMessage());
+        }
+        String fallbackDigest = hostDigest != null ? hostDigest : ProjectResSidecarPolicy.sha256(hostArsc);
         List<File> sidecars = new ArrayList<>();
         collectNamedFiles(new File(mWorkspacePath, "assets"), ProjectResSidecarPolicy.SIDECAR_NAME, sidecars, 0);
+        Log.i("C-PKG", "project-res check: sidecars=" + sidecars.size()
+                + " hostDigest=" + (fallbackDigest == null ? "(null)" : fallbackDigest.substring(0, 12))
+                + " firstSidecar=" + (sidecars.isEmpty() ? "(none)" : sidecars.get(0).getPath()));
         for (File sidecar : sidecars) {
             File apk = ProjectResSidecarPolicy.apkFor(sidecar);
-            ProjectResSidecarPolicy.Decision decision = ProjectResSidecarPolicy.decide(sidecar, hostArsc);
+            String expected = null;
+            try {
+                expected = ProjectResSidecarPolicy.extractHostDigest(
+                        new String(PFiles.readBytes(sidecar.getPath()), "UTF-8"));
+            } catch (Throwable error) {
+                Log.w("C-PKG", "project-res: 读 sidecar 失败：" + error.getMessage());
+            }
+            ProjectResSidecarPolicy.Decision decision =
+                    ProjectResSidecarPolicy.decide(expected, fallbackDigest);
+            // 每个 sidecar 都留一条决策日志（KEEP 也打）：下次真机若有问题，一眼看出是"没扫到"还是"判等"
+            Log.i("C-PKG", "project-res decision: " + decision.getReason() + " sidecar=" + sidecar.getPath());
             if (decision.getAction() != ProjectResSidecarPolicy.Action.DROP) {
                 continue;
             }
