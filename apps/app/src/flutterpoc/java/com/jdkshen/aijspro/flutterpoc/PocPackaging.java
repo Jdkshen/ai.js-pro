@@ -1024,6 +1024,18 @@ final class PocPackaging {
             if (log != null) {
                 for (int i = 0; i < log.length(); i++) job.events.add(log.optString(i));
             }
+            // task-112（真根因）：**任务完成后 ACTIVE 已被清空（runBuild 的 finally），页面轮询只传 path
+            // ⇒ status() 必然走文件路径（readJob/latestJob）**；而这里原来不还原 warnings ⇒
+            // projectBuildStatus 恒返回 warnings:[]（内存路径有、文件路径丢）。两条读路径共用本方法。
+            JSONArray warnings = json.optJSONArray("warnings");
+            if (warnings != null) {
+                for (int i = 0; i < warnings.length(); i++) {
+                    String item = warnings.optString(i);
+                    if (item != null && !item.trim().isEmpty() && job.warnings.size() < 50) {
+                        job.warnings.add(item);
+                    }
+                }
+            }
             return job;
         }
 
