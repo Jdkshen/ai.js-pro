@@ -709,6 +709,9 @@ public class ApkBuilder {
             String warning = CompiledProjectResources.staleResourcePackMessage(
                     decision.getExpectedDigest(), decision.getActualDigest(), apk);
             Log.w("C-PKG", "stale project-res dropped: " + decision.getReason() + " apk=" + apk);
+            // task-131：丢了文件之后运行期**无文件可判** ⇒ 写一个极小标记把可执行文案带进产物
+            //（LogActivity 才有东西可显示）。只在 DROP 写：KEEP 一律不写 ⇒ 默认行为不变。
+            writeStaleResMarker(sidecar, decision, warning);
             //noinspection ResultOfMethodCallIgnored
             apk.delete();
             //noinspection ResultOfMethodCallIgnored
@@ -716,6 +719,32 @@ public class ApkBuilder {
             mPackagingWarnings.add(warning);
         }
     }
+
+    /**
+     * task-131：丢掉 stale 资源包时留下**极小标记**（只给运行期读），让用户看到我们的可执行文案
+     * 而不是白屏。命名与同类样例一致：与被丢的那个 sidecar 同目录，固定叫 project-res.stale.json。
+     *
+     * <p>内容：expected（sidecar 记录的原宿主摘要）/ actual（本次产物宿主摘要）/ message
+     *（W1 的 staleResourcePackMessage 原文，不抄第二份）。只在 DROP 分支调用。</p>
+     */
+    private void writeStaleResMarker(File sidecar, ProjectResSidecarPolicy.Decision decision, String message) {
+        try {
+            org.json.JSONObject marker = new org.json.JSONObject();
+            marker.put("expected", decision.getExpectedDigest() == null ? "" : decision.getExpectedDigest());
+            marker.put("actual", decision.getActualDigest() == null ? "" : decision.getActualDigest());
+            marker.put("message", message);
+            byte[] bytes = marker.toString().getBytes("UTF-8");
+            File target = new File(sidecar.getParentFile(), STALE_RES_MARKER);
+            writeBytes(target, bytes);
+            Log.w("C-PKG", "project-res stale marker: " + target.getPath() + " bytes=" + bytes.length);
+        } catch (Throwable error) {
+            // 标记写不出来不该让打包失败：打包提示与 C-PKG 日志已经记录过这件事。
+            Log.w("C-PKG", "写 project-res stale 标记失败（不影响打包）：" + error.getMessage());
+        }
+    }
+
+    /** 丢包后留给运行期的标记文件名（与 project-res.apk/json 同目录、同类样例一致）。 */
+    private static final String STALE_RES_MARKER = "project-res.stale.json";
 
     /** 递归找指定文件名的文件（只用于工作区 assets/ 下的样例资源包，深度有界）。 */
     private static void collectNamedFiles(File dir, String name, List<File> out, int depth) {

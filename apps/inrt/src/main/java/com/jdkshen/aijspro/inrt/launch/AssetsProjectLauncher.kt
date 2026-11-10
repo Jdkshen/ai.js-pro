@@ -17,6 +17,7 @@ import com.stardust.autojs.engine.encryption.ScriptEncryption
 import com.stardust.autojs.engine.encryption.ScriptPayloadV2
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecutionTask
+import com.stardust.autojs.core.ui.inflater.CompiledProjectResources
 import com.stardust.autojs.execution.ScriptHostRouting
 import com.stardust.autojs.execution.ScriptExecution
 import com.stardust.autojs.project.AppSignature
@@ -43,6 +44,14 @@ import java.util.zip.ZipInputStream
  */
 
 open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private val mActivity: Context) {
+        /**
+         * task-140: the last staged-resource warning (our actionable sentence), for whoever prints the
+         * first console line of the packaged app (LogActivity). Empty when nothing was wrong.
+         */
+        // 无 @JvmStatic：本类的这个字段只有同包 Kotlin 用它（`@JvmStatic` 只能在 companion/object 里，会编译不过）。
+        var lastStagedResourceWarning: String? = null
+            private set
+
     private val mProjectDir: String = File(mActivity.filesDir, "project/").path
     private val mProjectConfig: ProjectConfig = ProjectConfig.fromAssets(mActivity, ProjectConfig.configFileOfDir(mAssetsProjectDir))
     private val mMainScriptFile: File = File(mProjectDir, mProjectConfig.mainScriptFile)
@@ -168,6 +177,17 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
                 activity?.finish()
             }
             mScriptExecution = executeSource(source, config)
+            // task-133/140：把「资源包被丢弃/不匹配」写进**用户能看到的控制台**（LogActivity），
+            // 而不只是 logcat —— 否则用户只看到白屏，比原来那句难懂报错更难排查（K40 dev-1479 实测）。
+            lastStagedResourceWarning?.let { warning ->
+                runCatching {
+                    // inrt 的包装只有 `instance`（companion 里的 lateinit var），没有 getInstance()；
+                    // 与同文件既有写法（AutoJs.instance?.globalConsole?.error(...)）保持一致。
+                    com.jdkshen.aijspro.inrt.autojs.AutoJs.instance.globalConsole
+                            ?.println(android.util.Log.WARN, warning)
+                }
+                lastStagedResourceWarning = null
+            }
             // task-115：ui.layout 项目改由 :script 内的 ScriptExecuteActivity 承载，透明 trampoline
             // 退场（否则脚本结束/失败后露出空白底）。headless 的 ImGui/浮窗项目保持 trampoline 存活。
             if (InrtScriptThreadHost.isScriptThread() && wantsScriptExecuteActivity(source)) {
@@ -313,6 +333,8 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         PFiles.deleteRecursively(File(mProjectDir))
         try {
             PFiles.copyAssetDir(mActivity.assets, mAssetsProjectDir, mProjectDir, null)
+        // task-133/140: stale project resource pack must not be handed to the script; say so where users look.
+        reportStaleResourcePackIfAny()
         } catch (e: IOException) {
             throw UncheckedIOException(e)
         }
@@ -371,6 +393,53 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
     }.getOrElse { error ->
         Log.w(TAG, "C-INRT: 读主脚本头判断 v2 失败，按 v1 处理：$error")
         false
+    }
+
+    /**
+     * task-133/140: if the staged build/project-res.apk sidecar was compiled for another host, drop it
+     * (do NOT hand it to the script) and say so with OUR actionable message. Same digest + same sentence
+     * as CompiledProjectResources (single source). Default: sidecar missing or matching => do nothing.
+     */
+    private fun reportStaleResourcePackIfAny() {
+        // task-140：打包期「已丢弃 stale 包」这条路径产物里没有资源包文件，只留一个极小标记；
+        // 存在就把同一句写进控制台（并删标记），否则用户仍然只看到白屏（K40 dev-1479 实测）。
+        val resApk = File(mProjectDir, "build/project-res.apk")
+        val staleMarker = File(mProjectDir, "build/project-res.stale.json")
+        if (staleMarker.isFile) {
+            val marker = runCatching { org.json.JSONObject(staleMarker.readText()) }.getOrNull()
+            val message = marker?.optString("message", null)?.takeIf { it.isNotBlank() }
+                ?: CompiledProjectResources.staleResourcePackMessage(
+                        marker?.optString("expectedHostDigest", marker?.optString("expected", null)),
+                        marker?.optString("actualHostDigest", marker?.optString("actual", null)),
+                        resApk)
+            Log.w(TAG, message)
+            lastStagedResourceWarning = message
+            Log.w(TAG, "C-INRT: stale project-res marker found (packaging-time drop), reported to console")
+            staleMarker.delete()
+            return
+        }
+        val resJson = File(mProjectDir, "build/project-res.json")
+        if (!resApk.isFile || !resJson.isFile) {
+            return
+        }
+        val expected = runCatching {
+            org.json.JSONObject(resJson.readText()).optString("appResourcesSha256", null)
+        }.getOrNull()?.trim()?.lowercase()
+        if (expected.isNullOrEmpty()) {
+            return
+        }
+        val actual = CompiledProjectResources.hostResourcesSha256OrNull(mActivity.applicationInfo.sourceDir)
+        // Lead 口径（与打包期一致）：**判不出来就别动** ——
+        // actual 取不到时宁可放行（维持今天行为），只在「确定不一致」时丢弃，避免误伤可用的资源包。
+        if (actual == null || actual.equals(expected, ignoreCase = true)) {
+            return
+        }
+        val message = CompiledProjectResources.staleResourcePackMessage(expected, actual, resApk)
+        Log.w(TAG, message)
+        lastStagedResourceWarning = message
+        val removedApk = resApk.delete()
+        val removedJson = resJson.delete()
+        Log.w(TAG, "C-INRT: dropped stale project-res pack (apk=" + removedApk + " json=" + removedJson + ")")
     }
 
     private fun initKey(projectConfig: ProjectConfig) {
