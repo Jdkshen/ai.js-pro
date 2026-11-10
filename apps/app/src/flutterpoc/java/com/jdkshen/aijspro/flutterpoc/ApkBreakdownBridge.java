@@ -1,6 +1,7 @@
 package com.jdkshen.aijspro.flutterpoc;
 
 import android.app.Activity;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -19,7 +20,19 @@ final class ApkBreakdownBridge {
     private ApkBreakdownBridge() {
     }
 
+    private static final String TAG = "GlassFlutterPoc";
+
     static JSONObject execute(Activity activity, JSONObject args) throws Exception {
+        try {
+            return breakdown(args);
+        } catch (Exception error) {
+            // task-100：不再静默 —— 失败至少留一条 logcat，便于真机定位（页面另有一行「暂不可用」）
+            Log.w(TAG, "apkBreakdown 失败: " + error.getClass().getSimpleName() + ": " + error.getMessage());
+            throw error;
+        }
+    }
+
+    private static JSONObject breakdown(JSONObject args) throws Exception {
         String path = args == null ? null : args.optString("path", null);
         if (path == null || path.trim().isEmpty()) {
             throw new IllegalArgumentException("缺少输出参数 path");

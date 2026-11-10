@@ -17,6 +17,9 @@ void main() {
     expect(source.contains('大小构成（未压缩）：'), isTrue);
     expect(source.contains('return const SizedBox.shrink();'), isTrue,
         reason: '拿不到数据必须整行不显示');
+    // task-100：调用失败不许静默 —— 卡片要写「暂不可用（原因）」
+    expect(source.contains('大小构成：暂不可用（'), isTrue);
+    expect(source.contains("{'error': failure.toString()}"), isTrue);
 
     final start = source.indexOf('FutureBuilder<Map<String, dynamic>?>(');
     final end = source.indexOf("SelectableText('SHA-256");

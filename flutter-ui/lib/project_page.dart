@@ -1194,9 +1194,11 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
   Future<Map<String, dynamic>?> apkBreakdown(String path) async {
     try {
       final value = await LocalBridge.call('apkBreakdown', {'path': path});
-      return value is Map ? Map<String, dynamic>.from(value) : null;
-    } catch (_) {
-      return null;
+      if (value is Map) return Map<String, dynamic>.from(value);
+      // task-100：桥回了但不是对象（例如空/纯字符串）→ 也要说清楚，不静默
+      return {'error': '桥返回了非对象结果'};
+    } catch (failure) {
+      return {'error': failure.toString()};
     }
   }
 
@@ -1312,13 +1314,21 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
               future: apkBreakdown(current['path'].toString()),
               builder: (context, snapshot) {
                 final data = snapshot.data;
+                // task-100：不再静默 —— 调用失败要显式说出来（原因来自桥/异常）
+                final failure = data?['error']?.toString();
+                if (failure != null) {
+                  return Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Text('大小构成：暂不可用（' + failure + '）',
+                          style: const TextStyle(fontSize: 12)));
+                }
                 final buckets = data?['buckets'];
                 if (data == null || buckets is! List) return const SizedBox.shrink();
                 final parts = <String>[];
                 for (final item in buckets) {
                   if (item is! Map) continue;
                   final mib = item['uncompressedMiB'];
-                  if (mib is! num || mib <= 0) continue;
+                  if (mib is! num) continue;
                   parts.add(breakdownLabel(item['key']?.toString() ?? '') +
                       ' ~' + mib.toString() + ' MB');
                 }

@@ -34,7 +34,7 @@ public final class ApkSizeBreakdown {
     public static final String BUCKET_PROJECT = "project";
 
     /** 展示顺序（也是 JSON 里的顺序）。 */
-    public static final String[] BUCKET_ORDER = {BUCKET_ENGINE, BUCKET_OCR, BUCKET_OPENCV, BUCKET_PROJECT};
+    public static final String[] BUCKET_ORDER = {BUCKET_ENGINE, BUCKET_OPENCV, BUCKET_OCR, BUCKET_PROJECT};
 
     private ApkSizeBreakdown() {
     }

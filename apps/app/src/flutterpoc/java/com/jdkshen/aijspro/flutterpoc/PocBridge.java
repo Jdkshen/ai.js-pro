@@ -374,6 +374,8 @@ final class PocBridge {
             case "sampleAction":
             case "openBuildPage":
             // ---- 玻璃打包页（PocPackaging）-----------------------------------
+            // task-100：只读大小构成（漏登记会被当「未知方法」拒掉，Dart 侧静默吞掉 ⇒ 真机看不到那一行）
+            case "apkBreakdown":
             case "projectLoad":
             case "projectSave":
             case "projectBuild":
