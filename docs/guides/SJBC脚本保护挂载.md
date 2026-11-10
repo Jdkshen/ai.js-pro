@@ -16,6 +16,7 @@
 | 形态 | `.sjbc` 放进 APK 的 `assets/sjbc/`，随包分发，运行期由 App 解密执行 | 放**外置目录**（免重装热加载）或由**你自己**的宿主/VM 控制；App 侧不接管 |
 | 配置 | `project.json` → `sjbc.assetsDir`（默认 `assets/sjbc`）+ `sjbc.certSha` | 无（走 `build_all.js` 顶部 `deployTo` 投放目录） |
 | 落地命令 | 打包 CLI 产 `.sjbc` → 放进 `assets/sjbc/` → `zipalign -p 4` → `apksigner sign`（**必须与 `--cert` 同一把证书**） | `adb push out/hello.sjbc /sdcard/Android/data/<宿主包名>/files/modules/` → 宿主内点「刷新」 |
+> **热加载写文件的操作注记**：MCP 的文件工具**限根 `/storage/emulated/0/脚本`** ⇒ 要往 `/sdcard/Android/data/<宿主包名>/files/modules/` 投放，**先写到该根下、再用 `shell_rish`（shell uid）`cp` 过去**（`files/` 属 shell，可写）。
 | 我们侧落点 | `ProjectConfig.SjbcConfig`（`assetsDir`/`certSha` 已有）；打包侧 = `SjbcPackaging.kt` + `ApkBuilder.stageSjbcAssets()`（**已落地**，只收 `.sjbc`+`manifest.json`；无 `.sjbc` 时零行为变化） | 工具链已入库（`tools/sjbc/build_all.js` 的 `deployTo`、`build-all.mjs --deploy-to`）；App 侧 VM = `SjbcVm`/`SjbcApi`（**已落地**，Rhino 口径） |
 | 典型用途 | 交付给用户的成品包 | 迭代期、自控宿主、第三方宿主 |
 
@@ -42,6 +43,34 @@ C-PKG: template available=true source=…/apk-builder/1456/template.apk ← 用�
 1. **Dart 改动默认不进包**：`tools/flutter-poc/build-release-candidate.ps1` 默认复用锁定的 AOT payload ⇒ 要带上 UI 改动必须加 **`-RebuildAot`**（本次下拉新文案就是靠它才在真机出现）。
 2. **打包时 `abis` 会带上 v7a ⇒ 每次出 `abis warning`**（**只警告不失败**，属「打包模板重建」那条线）；产物 `lib/` 仍只有 arm64。
 
+## 1.6 出包前必跑：构件新鲜度自检（今天两次真机踩坑的教训）
+
+**动机**：签入的二进制构件会**静默过期**，不重建就出包 ⇒ 真机跑的是旧东西。今天两次：
+1. `apps/app/src/main/assets/template.apk` 没重建 ⇒ **打包版一直跑旧引擎**（dex 里 `SjbcApi`/`ScriptHostRouting`/`MultiProcessPrefs` 全 0 命中，表现就是 `typeof sjbc === 'undefined'`）。
+2. `libapp.so` 没加 `-RebuildAot` ⇒ **UI 新文案永远看不见**。
+
+**命令**：
+~~~powershell
+pwsh -File tools/check-artifact-freshness.ps1             # 快速（mtime 判据）；退出码 0=FRESH / 1=STALE
+pwsh -File tools/check-artifact-freshness.ps1 -Deep -Json  # 内容级（dex 标记 + 推导标记），机器可读
+~~~
+
+**已经接线了（不用记着手跑）**：`tools/flutter-poc/build-release-candidate.ps1` 会在调 gradle **之前**自动跑 `check-artifact-freshness.ps1 -Root $repo -Deep`；**STALE 直接 throw** 并打印指引（模板 → `tools/build-slim-template.ps1`；AOT → `-RebuildAot`）。确要强过时用 **`-SkipFreshnessCheck`**（跳过检查，风险自担）。
+
+**看到什么就做什么**：
+
+| 输出 | 含义 | 动作 |
+|---|---|---|
+| `FRESH(kind=template)` / `FRESH(kind=aot)` | 构件不旧于源码 | 直接出包 |
+| `STALE(kind=template, marker-missing:<name>)` | 模板 **dex 里找不到**源码刚加的成员（如 `liveBridgeCount` / `registeredIds`）——正是「改了引擎但模板没重建」 | **先跑 `tools/build-slim-template.ps1`**（重建 `assets/template.apk`），再复跑本检查到 FRESH |
+| `STALE(kind=template, … newest=<file>@<time>)` | 模板 mtime 比「引擎/inrt 源集合」旧 | 同上；若怀疑只是 checkout 打乱 mtime，用 `-Deep` 复核内容判据 |
+| `STALE(kind=aot, …)` | `libapp.so` 比 `flutter-ui/lib/**` 旧 | 出包时**加 `-RebuildAot`**（`tools/flutter-poc/build-release-candidate.ps1`） |
+| `WARN(…)` | 注册表/启发式提示（不挡构建） | 看一眼；反复出现就更新 `tools/artifact-markers.json` |
+
+**边界（别当万灵药）**：
+- **AOT 侧只有 mtime 能当门禁**：明文判据**已被证伪**（K40 上确认存在的文案在 `libapp.so` 里明文 0 命中 ⇒ Flutter AOT 字面量不是明文），所以 AOT 的假 STALE / 假 FRESH 都可能出现，**以 mtime + 实际装包验证为准**。
+- **模板侧的 `-Deep` 全量约 77s**（要扫 dex）；推导标记是**启发式**（`tools/artifact-markers.json` 注册表 + 从模板 mtime 之后改过的源文件里正则抽成员名，最多 5 个），应急可加 `-NoDerived`。
+- 该脚本**只读不构建**：报 STALE 时**不会**替你重建 —— 重建（模板 / AOT）由 Lead 跑。
 ## 2. 三件必须对齐的事（用户 md §三）
 
 ### 2.1 证书指纹 `certSha`
@@ -97,8 +126,8 @@ body   : ivP(12) | tagP(16) | poolLen(4, big-endian) | poolEnc | ivC(12) | tagC(
 | `不支持的 kdf/cipher：kdf=… cipher=…`（`:79`） | 头字节被改 / 非本实现产出 | 用 `tools/sjbc/` 的 CLI 重产 |
 | `SJBC 容器在 ivP\|tagP\|ivC\|tagC 处被截断` / `poolLen 越界` / `容器太短`（`:66/:89/:95/:246`） | 文件被截断/传输损坏 | 重传（`adb push` 后再比 sha256） |
 | `池文本格式不对：首行应为 SJBC5` / `第 2 行应为 ENTRIES n o1..` / `池文本行类型未知（应为 N/S）`（`:181/:186/:217`） | 池被手工编辑 / 上游打包器 bug | 用 CLI 重产；**不要手改池** |
-| **编译期**「未定义函数 push」 | 宿主函数表与实现不一致 | 对齐 `HOST`（见 `2.2）：CLI 与宿主必须同表 |
-| Demo 自证文件写 `FAILED: FileNotFoundException sjbc/module_v5.enc` | Demo 宿主在找 `sjbc/module_v5.enc` 但 **assets 里没有这个名字的模块**（现有材料里模块名是 `<name>.sjbc`，如 `数组与统计.sjbc`） | **（真机现状，Lead 实测报）**：先确认 Demo `assets/sjbc/` 里到底有什么 + 宿主读的路径常量；**命名不一致（`module_v5.enc` vs `*.sjbc`）待核** |
+| **编译期**「未定义函数 push」 | 宿主函数表与实现不一致 | 对齐 `HOST`（见 §2.2）：CLI 与宿主必须同表 |
+| Demo 自证文件写 `FAILED: FileNotFoundException sjbc/module_v5.enc` | **已定性**：那个 demo 的 host 期待 **assets** 里的 `sjbc/module_v5.enc`，而它 assets 只有 `manifest.json` + 4 个具名模块 ⇒ **旧 host 与其自身 assets 版本不一致，不是我们链路的缺陷**（我们的 `.sjbc`/manifest 与其 manifest 的 `cert` + sha256 前缀完全一致） | 要 `status=ok` 需**重建该 demo 的 host APK**（材料 `m10/host`，属用户 demo，未动）；我们的链路证据不依赖它（app 内 Rhino/QuickJS + 打包版三处均已真机跑通） |
 
 ## 5. 我们这边的落点（真名 / 待落）
 
@@ -115,21 +144,58 @@ body   : ivP(12) | tagP(16) | poolLen(4, big-endian) | poolEnc | ivC(12) | tagC(
 | **打包侧接线** | `apps/app/src/main/java/com/jdkshen/aijspro/build/SjbcPackaging.kt`（`TARGET_DIR="assets/sjbc"`、只收 `.sjbc`+`manifest.json`）+ `ApkBuilder.java:517/612 stageSjbcAssets()`；`certSha` 取自**真签名证书**；logcat `C-PKG: sjbc certSha=… files=… manifest=… source=sjbc` | ✅ **已落地**（dev-1456） |
 | `sjbc` 的随包文档/MCP 面 | — | **（待落）**（本文件是仓库内第一份 SJBC 指南） |
 
-### 5.1 脚本侧用法（Rhino 口径，2026-11-10 真机实测）
+### 5.1 脚本侧用法（Rhino + QuickJS，2026-11-10 真机实测）
 
 ~~~js
 typeof sjbc            // 'object'
 typeof sjbc.run        // 'function'
 var r = sjbc.runEntry('assets/sjbc/hello.sjbc', 0);
-r.get('steps')         // 1990      ← 现在返回 Java Map ⇒ 必须用 get()
-r.get('ok')            // true
-r.get('prints')        // ['fib(10)=55','counter=1,2','sum=12','caught:boom','done']
-r.get('certShaUsed')   // '1b57505e…'   ← 实际用来解密的那把证书指纹
+
+r.steps                // 1990                                  ← 属性直读（Rhino dev-1457+ / QuickJS dev-1460+）
+r.ok                   // true
+r.codeBytes            // 476
+r.prints[0]            // 'fib(10)=55'
+r.prints.length        // 5
+r.prints.forEach(...)  // 可用（真 JS 数组）
+r.certShaUsed          // '1b57505e…'   ← 实际用来解密的那把证书指纹
+
+// 兼容写法（仅在 Rhino 无上下文、退回 Map 的路径上才需要；QuickJS 不需要）
+r.get('steps')         // 1990
 ~~~
 
-- **⚠️ 用法更正（重要）**：入口返回 **Java `Map`** ⇒ 脚本要写 **`r.get('steps')`**，**不能**写 `r.steps`（会得到 `undefined`）。**W1 正在改成「属性访问可用的 Rhino 友好对象」；落地后本节会改成 `r.steps` 并注明起始版本**（在那之前请用 `get()`）。
+- **✅ 属性直读（Rhino + QuickJS 都支持）**：`r.ok` / `r.steps` / `r.codeBytes` / `r.prints[0]` / `r.entries.length` **直接读**。**Rhino** 自 **dev-1457** 起返回 `NativeObject`（`SjbcApi.toScriptValue`；`prints` 是**真 JS 数组**，`forEach` 可用）；**QuickJS** 自 **dev-1460** 起走 `sjbcCall` + `JSON.parse`（普通 JS 对象/数组，同样直读）。
+- **`r.get('steps')` 仅作兼容保留**：Rhino 在**没有** Rhino 上下文时会回退返回 `Map`（纯 JVM/其它宿主路径），那时才需要 `get()`；QuickJS 走 JSON 通道**不需要** `get()`。
 - **真机实测**（K40 dev-1456，打包版自己解自己跑）：`runEntry(…,0) → ok=true steps=1990 codeBytes=476 certShaUsed=1b57505e…`；`entry1/2 → steps=5/6`（无打印）；`sjbc.run(path)` 等价 entry0；**与用户 `pc-tools/vm.js` 逐条一致**（比结果 + 步数）。
-- **入口目前只有 Rhino 口径**：QuickJS / Node24 未接（§5 表末）。
+- **三引擎口径（唯一口径见 [SJBC入口三引擎口径表](../../reports/2026-11-10_SJBC入口三引擎口径（task-73_83_87）.md)）**：
+
+| 引擎 | 入口 | 属性直读 | 真机状态 |
+|---|---|---|---|
+| **Rhino** | `sjbc.run(path)` / `sjbc.runEntry(path, idx)`（`__globals__.js` 从 `runtime.getProperty('sjbc')` 挂 `global.sjbc`） | `r.steps` / `r.prints[0]`；`prints` 是真 JS 数组（`forEach` 可用） | ✅ **已真机验证**（dev-1456/1457） |
+| **QuickJS** | 同左（`assets/modules/qjs-sjbc.js` 挂 `global.sjbc`）→ 宿主 `QuickJsHostBridge.sjbcCall(op, path, entryIndex)`（**只读白名单 op = `run` / `runEntry`**，不做反射）→ `JSON.parse` | 同样 **属性直读**（`r.steps` / `r.prints[0]` / `r.prints.forEach`），**不需要 `get()`** | ✅ **已真机验证**（**dev-1460**，K40 `run_script{engine:'quickjs'}`：`steps=1990`、`prints` 5 条可 `forEach`、错证书抛 `SjbcException(AEAD 拒绝)`） |
+| **Node24** | ❌ **不可用**：`sjbc` 与 `require('sjbc')` 都不存在，宿主也没有取 `ScriptRuntime` 属性的通道 | — | ❌ 未接（**将来补法**：Node24 host 新增 op + `node24/modules/` 绑定，建议入口 `require('sjbc').run(path)`） |
+
+### 5.2 `sjbc.debug()` 诊断 + 排障三步
+
+`sjbc.debug()` **只读、不跑字节码**，QuickJS 侧出问题先看它：
+
+~~~js
+sjbc.debug()   // { engineId, hasEngines, activeBridgeCount, liveBridgeCount, registeredIds,
+               //   engineHandleFromHost, bridgeResolved, bridgeResolvedVia, bridgeError, hostOp }
+~~~
+
+| 字段 | 看什么 |
+|---|---|
+| `engineId` / `engineHandleFromHost` | 脚本侧拿到的引擎 id 与宿主句柄（`0` = 没取到） |
+| `hasEngines` | JS 侧 `engines` 是否可用 |
+| `activeBridgeCount` / `registeredIds` | **按 id 注册**的 bridge 数量与 id 列表 |
+| `liveBridgeCount` | **活着的** bridge 数量（不依赖 id） |
+| `bridgeResolved` / `bridgeResolvedVia` | 最终是否解析到 bridge，以及走的是哪条路（`forEngine(id)` / **`forCurrentEngine(fallback)`**） |
+| `bridgeError` / `hostOp` | 失败原因原文 / 实际调用的宿主 op |
+
+**排障三步**：
+1. **先看 `sjbc.debug()`**：`bridgeResolved=false` ⇒ 读 `bridgeError` + 两个计数（`activeBridgeCount` / `liveBridgeCount`）。
+2. **`activeBridgeCount=0` 但 `liveBridgeCount=1` 的兜底属正常**：引擎 id 登记这条路径可能没触发（`ScriptEngineManager` **在 `init` 之后**才 `setId`），此时 `forCurrentEngine()` 用**唯一活着的** bridge 兜底 ⇒ `bridgeResolvedVia='forCurrentEngine(fallback)'`、`bridgeResolved=true`，**行为正确且安全**（多于一个时拒绝并报数量，绝不猜）。**只要 `r.steps` 出得来，不用管 `activeBridgeCount`**。
+3. **`hasEngines=false` 或两个计数都 0** ⇒ 该引擎的宿主 bridge **从未注册**：顺着 `QuickJsJavaScriptEngine.attachEngine` 与 `setOwnerEngineId` 的调用点查，或直接用 Rhino 跑同一模块做对照。
 - **一个踩过的坑**：`runtime.putProperty("sjbc", …)` **只是 `mProperties`、不是脚本全局**（app 版与打包版都实测 `typeof sjbc` / `runtime.sjbc` 为 undefined，而 `runtime.getProperty('sjbc')` **拿得到对象**）⇒ 现由 `__globals__.js` 用既有公共方法读出来挂 `global.sjbc`。
 
 ## 6. 语言能力边界（**别写你写不了的代码**）
@@ -158,7 +224,7 @@ r.get('certShaUsed')   // '1b57505e…'   ← 实际用来解密的那把证书�
 
 ## 8. 未验证 / 待核（诚实边界）
 1. **用户两份 md 原文未读到**（device4 `adb offline`）：§三/§四 的**小节号**来自 `tools/sjbc/README.md:4` 的对照说明，**内容按材料与代码重建**；若原文有出入，以原文为准（我可在设备上线后逐条核对）。
-2. **`module_v5.enc` 命名不一致**：真机 demo 自证文件当前是 `FAILED: FileNotFoundException sjbc/module_v5.enc`（Lead 实测报），而材料里的模块名形如 `数组与统计.sjbc`/`hello.sjbc` ⇒ **宿主读的路径常量与打包产出的命名需要对齐**（未核）。
+2. **`sjbc/module_v5.enc` 已定性（2026-11-10）**：用户 demo `com.aijs.sjbc.demo` 自证仍 `FAILED`，但根因是**那个 demo 的 host 期待 `assets` 里有 `sjbc/module_v5.enc`，而它自己的 assets 只有 `manifest.json` + 4 个具名模块**（往它的外部 modules 目录放满用**它自己证书**加密的模块也无效 ⇒ 它读的是 assets）⇒ **旧 host 与其 assets 版本不一致，不是我们链路的缺陷**；要 `status=ok` 需重建该 demo 的 host APK（材料 `m10/host`，**属用户 demo，未动**）。
 3. ~~App 侧 VM/加载器/打包接线三处均（待落）~~ → **已落地并在 K40 真机端到端跑通（dev-1456）**：打包版自己解自己跑 `steps=1990`，`C-PKG: sjbc certSha=…` 与 `C-PKG: template available=true …` 两行日志可核。**仍待落/未验**：① 入口只有 **Rhino** 口径（QuickJS/Node24 未接）；② 用户 Demo `com.aijs.sjbc.demo` 的自证文件仍是 `FAILED`（其宿主找遗留名 `sjbc/module_v5.enc`）；③ `GET_SIGNING_CERTIFICATES`/`GET_SIGNATURES` 只跑了 **API≥28** 那条分支。
 4. **__sjbc__ 的运行时安全性未评**：密钥主根是证书指纹（公开信息）+ 固定 salt/info ⇒ 属于**防呆式保护**（防直接读源码），**不防有动机的攻击者**（能从 APK 里拿到证书指纹并复现 HKDF）。这条**不是本次新发现**，但必须写进指南，避免误当成强加密。
 5. **本文件未跑任何命令**（只写文档）；`7` 的 1–2 条我**没有执行**（不跑构建/产物的约定），`3–5 条是材料里记录的既有结论。

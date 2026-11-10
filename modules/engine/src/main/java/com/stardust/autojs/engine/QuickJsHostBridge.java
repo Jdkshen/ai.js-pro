@@ -365,6 +365,23 @@ final class QuickJsHostBridge implements AutoCloseable,
         return ids;
     }
 
+    /**
+     * task-92：同样的 id 快照，但以 **JSON 数组字符串**返回 —— 脚本侧（QuickJS/Node24 的 Java 桥会把
+     * `java.util.List` 包成 `{__javaHandle:…}` 这种宿主对象）因此拿不到可读列表；JSON 字符串 `JSON.parse` 后
+     * 就是普通整数数组。
+     */
+    public static String registeredIdsJson() {
+        StringBuilder json = new StringBuilder("[");
+        java.util.List<Integer> ids = registeredIds();
+        for (int i = 0; i < ids.size(); i++) {
+            if (i > 0) {
+                json.append(',');
+            }
+            json.append(ids.get(i));
+        }
+        return json.append(']').toString();
+    }
+
     /** task-90 诊断：本 bridge 的原生引擎 handle（-1 表示还没 attach）。 */
     public long engineHandle() {
         return mEngineHandle;

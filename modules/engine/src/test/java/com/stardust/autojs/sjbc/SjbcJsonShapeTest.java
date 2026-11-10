@@ -86,6 +86,10 @@ public class SjbcJsonShapeTest {
         assertTrue("init 里 attach 之后也补登记", engine.contains("hostBridge.setOwnerEngineId(getId());"));
         assertTrue("debug 有 engineHandleFromHost", module.contains("engineHandleFromHost"));
         assertTrue("debug 有 registeredIds", module.contains("registeredIds"));
+        // task-92：Java List 会被宿主包成 {__javaHandle:…} ⇒ 走 JSON 字符串再 parse（普通整数数组）。
+        assertTrue("宿主提供 JSON 形式的 id 列表", bridge.contains("public static String registeredIdsJson()"));
+        assertTrue("JS 侧 parse 成普通数组", module.contains("JSON.parse(String(cls.registeredIdsJson()))"));
+        assertTrue("debug 注释写清兜底是正常路径", module.contains("正常兜底路径"));
         assertTrue("提供 sjbc.debug()", module.contains("debug: function ()"));
         assertTrue("debug 回显引擎 id 与桥解析结果", module.contains("engineId") && module.contains("bridgeResolved"));
         String bridgeFile = read("src/main/java/com/stardust/autojs/engine/QuickJsHostBridge.java");

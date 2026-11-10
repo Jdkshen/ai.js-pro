@@ -61,7 +61,12 @@
         runEntry: function (path, entryIndex) {
             return call('runEntry', path, entryIndex);
         },
-        /** task-89 诊断：一次调用看清「引擎 id / 宿主 op / 桥能不能拿到」（只读，不执行字节码）。 */
+        /**
+         * task-89/90/92 诊断（只读，不执行字节码）：
+         * `engineId`/`registeredIds`（按 id 注册的那条路，MCP 建引擎时可能**从头到尾没有 id** ⇒ 空）、
+         * `liveBridgeCount`（不依赖 id 的存活计数）、`bridgeResolvedVia`（'forEngine' = id 路径 /
+         * 'forCurrentEngine(fallback)' = **正常兜底路径**：恰好一个在跑时用它，多于一个会拒绝）。
+         */
         debug: function () {
             var id = engineId();
             var resolved = false;
@@ -91,7 +96,8 @@
                 var cls = g.Java && typeof g.Java.type === 'function'
                         ? g.Java.type('com.stardust.autojs.engine.QuickJsHostBridge') : null;
                 if (cls) {
-                    registeredIds = cls.registeredIds();
+                    // task-92：Java List 会被宿主包成 {__javaHandle:…}，所以走 JSON 字符串再 parse 成普通整数数组。
+                    registeredIds = JSON.parse(String(cls.registeredIdsJson()));
                     liveCount = cls.liveBridgeCount();
                     if (resolved) {
                         handle = cls.forCurrentEngine().engineHandle();
