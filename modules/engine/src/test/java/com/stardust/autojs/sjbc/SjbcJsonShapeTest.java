@@ -74,6 +74,15 @@ public class SjbcJsonShapeTest {
         assertTrue("JS 侧必须 JSON.parse（⇒ r.steps/r.prints 属性可直读，不需要 get()）", module.contains("JSON.parse"));
         assertTrue("JS 侧挂 global.sjbc", module.contains("g.sjbc = sjbc"));
         assertTrue("与 Rhino 同源：只调 SjbcApi（本模块不复制实现）", !module.contains("SjbcV5Container") && !module.contains("SjbcVm"));
+        // task-89：forEngine 失败必须点名为可诊断错误 + 提供 debug()（真机只看到「脚本引擎已经结束」查不动）。
+        assertTrue("失败要点名 forEngine(id) 与注册点", module.contains("forEngine(") && module.contains("QuickJsHostBridge.java"));
+        assertTrue("task-89 兜底：id 取不到时退回唯一活动 bridge", module.contains("forCurrentEngine()"));
+        assertTrue("task-89 兜底在宿主侧存在且多 engine 不猜", bridge.contains("public static QuickJsHostBridge forCurrentEngine()") && bridge.contains("活动 bridge="));
+        assertTrue("提供 sjbc.debug()", module.contains("debug: function ()"));
+        assertTrue("debug 回显引擎 id 与桥解析结果", module.contains("engineId") && module.contains("bridgeResolved"));
+        String bridgeFile = read("src/main/java/com/stardust/autojs/engine/QuickJsHostBridge.java");
+        assertTrue("根因位置仍在（forEngine 查 sActiveBridges → null 则抛）",
+                bridgeFile.contains("sActiveBridges.get(engineId)") && bridgeFile.contains("throw new IllegalStateException(\"脚本引擎已经结束\")"));
     }
 
     private static String read(String relativePath) throws Exception {

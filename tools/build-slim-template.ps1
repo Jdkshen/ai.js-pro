@@ -49,7 +49,11 @@ try {
     if (-not $NoBuild) {
         Write-Host '[C-SLIM] :inrt:packageRelease 构建中（不会触碰插件模板）...'
         . (Join-Path $repoRoot 'tools/jdk17.ps1') | Out-Null
-        & (Join-Path $repoRoot 'gradlew.bat') ':inrt:packageRelease' '--console=plain' *> $buildLog
+        # Windows PowerShell 5.1 下 gradlew 往 stderr 打的「注: …过时 API」会被当成 NativeCommandError，配合 Stop 直接中止整脚本（Lead 2026-11-10 撞了三次）⇒ 这两处临时降到 Continue，失败仍看 LASTEXITCODE。
+        $__eap = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+& (Join-Path $repoRoot 'gradlew.bat') ':inrt:packageRelease' '--console=plain' *> $buildLog
+        $ErrorActionPreference = $__eap
         if ($LASTEXITCODE -ne 0) {
             throw " :inrt:packageRelease 失败（exit=$LASTEXITCODE），日志：$buildLog"
         }
@@ -182,7 +186,11 @@ try {
 
         if (-not $NoVerify) {
             Write-Host '[C-SLIM] :app:verifySlimPackagingTemplate 校验中...'
-            & (Join-Path $repoRoot 'gradlew.bat') ':app:verifySlimPackagingTemplate' '--console=plain' *> $verifyLog
+            # Windows PowerShell 5.1 下 gradlew 往 stderr 打的「注: …过时 API」会被当成 NativeCommandError，配合 Stop 直接中止整脚本（Lead 2026-11-10 撞了三次）⇒ 这两处临时降到 Continue，失败仍看 LASTEXITCODE。
+            $__eap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+& (Join-Path $repoRoot 'gradlew.bat') ':app:verifySlimPackagingTemplate' '--console=plain' *> $verifyLog
+            $ErrorActionPreference = $__eap
             if ($LASTEXITCODE -ne 0) {
                 throw ":app:verifySlimPackagingTemplate 失败（exit=$LASTEXITCODE），日志：$verifyLog"
             }

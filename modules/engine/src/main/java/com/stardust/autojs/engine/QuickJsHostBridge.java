@@ -322,6 +322,26 @@ final class QuickJsHostBridge implements AutoCloseable,
         return bridge;
     }
 
+    /**
+     * task-89：**兜底取回当前脚本的 bridge** —— 脚本侧若拿不到引擎 id（`engines.myEngine().id` 取不到 /
+     * 该 id 未注册），`forEngine()` 只会抛一句「脚本引擎已经结束」，真机查不动。
+     *
+     * <p>这里只在**注册表里恰好一个活动 bridge**时兜底（单脚本场景；多脚本并存时仍然要求用 id 定位，绝不猜错引擎）。
+     */
+    public static QuickJsHostBridge forCurrentEngine() {
+        int size = sActiveBridges.size();
+        if (size == 1) {
+            return sActiveBridges.values().iterator().next();
+        }
+        throw new IllegalStateException("无法定位当前脚本引擎（活动 bridge=" + size
+                + "）；请用 forEngine(engines.myEngine().id)");
+    }
+
+    /** 诊断用：当前注册的活动 bridge 数量（只读，不暴露实例）。 */
+    public static int activeBridgeCount() {
+        return sActiveBridges.size();
+    }
+
     /** 浮窗注册表 ownerTag：qjs-<native handle>（同一脚本的宿主/worker 可区分）。 */
     private String overlayOwnerTag() {
         return "qjs-" + mEngineHandle;
