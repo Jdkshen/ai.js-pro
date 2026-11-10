@@ -564,23 +564,42 @@ public class ApkBuilder {
         JSONObject optimization = project.optJSONObject("optimization");
         boolean removeOcr = optimization != null && optimization.optBoolean("removeOcr", false);
         boolean nodejsDisabled = isNodeJsDisabled(project);
+        // task-104 ③：四个字段**两态都写**（关时写 0/空串）——报告消费方不必区分「没有」与「0」。
+        int[] ocrRemoved = new int[2];
+        String ocrPrefix = "";
         if (removeOcr) {
-            int[] removed = new int[2];
-            deletePathRecursively(new File(mWorkspacePath, "assets/mlkit-google-ocr-models"), removed);
-            deletePathRecursively(new File(mWorkspacePath, "assets/modules/__ocr__.js"), removed);
-            Log.i("C-PKG", "ocr removed (removeOcr=true) files=" + removed[0] + " bytes=" + removed[1]);
-            report("ocrRemovedFiles", removed[0]);
-            report("ocrRemovedBytes", removed[1]);
+            // task-104 ②：不写死 assets/mlkit-google-ocr-models/**，扫 assets 里实际存在的 OCR 资产；
+            // 命中前缀回显到日志与报告，模板改名不会再静默变成 files=0。
+            List<File> ocrTargets = OcrAssetDiscovery.find(new File(mWorkspacePath, "assets"));
+            for (File target : ocrTargets) {
+                deletePathRecursively(target, ocrRemoved);
+            }
+            ocrPrefix = OcrAssetDiscovery.describe(ocrTargets);
+            // QuickJS 侧（task-104 ①）：qjs-plugins.js / __plugins__.js 是**共享插件门面**，不能剪；
+            // 它们只在运行期用 $ocr 全局（拿不到时自身有 guard + 引擎点名错误）⇒ 打包侧只剪 Rhino 的 __ocr__.js。
+            boolean rhinoModuleRemoved = ocrTargets.stream().anyMatch(
+                    file -> file.getName().equals("__ocr__.js"));
+            Log.i("C-PKG", "ocr removed (removeOcr=true) files=" + ocrRemoved[0] + " bytes=" + ocrRemoved[1]
+                    + " prefix=" + (ocrPrefix.isEmpty() ? "(none)" : ocrPrefix)
+                    + " rhinoModule=" + (rhinoModuleRemoved ? "__ocr__.js" : "(already absent)")
+                    + " quickjs=kept(qjs-plugins.js 是共享插件门面，运行期 $ocr 缺失走点名错误)");
+            if (ocrTargets.isEmpty()) {
+                Log.w("C-PKG", "ocr removed: 工作区里没找到任何 OCR 资产（模板可能改名）——前缀发现为空");
+            }
             mPackagingWarnings.add("optimization.removeOcr=true：产物不含内建 OCR（$ocr 会点名报错）");
         }
+        int[] node24Skipped = new int[2];
         if (nodejsDisabled) {
-            int[] removed = new int[2];
-            deletePathRecursively(new File(mWorkspacePath, "assets/node24"), removed);
-            deletePathRecursively(new File(mWorkspacePath, "assets/source-engine-upgrade"), removed);
-            Log.i("C-PKG", "node24 assets skipped (nodejs=disabled) entries=" + removed[0] + " bytes=" + removed[1]);
-            report("node24SkippedEntries", removed[0]);
-            report("node24SkippedBytes", removed[1]);
+            deletePathRecursively(new File(mWorkspacePath, "assets/node24"), node24Skipped);
+            deletePathRecursively(new File(mWorkspacePath, "assets/source-engine-upgrade"), node24Skipped);
+            Log.i("C-PKG", "node24 assets skipped (nodejs=disabled) entries=" + node24Skipped[0]
+                    + " bytes=" + node24Skipped[1]);
         }
+        report(PackagingReportFields.OCR_REMOVED_FILES, ocrRemoved[0]);
+        report(PackagingReportFields.OCR_REMOVED_BYTES, ocrRemoved[1]);
+        report(PackagingReportFields.OCR_REMOVED_PREFIX, ocrPrefix);
+        report(PackagingReportFields.NODE24_SKIPPED_ENTRIES, node24Skipped[0]);
+        report(PackagingReportFields.NODE24_SKIPPED_BYTES, node24Skipped[1]);
     }
 
     /** project.json 的 {@code features.nodejs} 是否是 {@code disabled}（task-101）。 */

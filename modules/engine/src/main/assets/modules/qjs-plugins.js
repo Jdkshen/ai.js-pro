@@ -95,9 +95,12 @@
         }
     }
 
+    // task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致（三引擎同源）。
+    var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；如需 OCR 请把该开关关掉并重新打包。';
+
     function builtInOcrUnavailable(reason, ppocrError) {
-        var failure = new Error('内置 OCR 不可用：mlkit 原因=' + reason
-            + '；ppocr 创建失败=' + text(ppocrError));
+        var failure = new Error(OCR_NOT_PACKAGED + '（内置 OCR 不可用：mlkit 原因=' + reason
+            + '；ppocr 创建失败=' + text(ppocrError) + '）');
         failure.degraded = true;
         failure.degradedFrom = 'mlkit';
         failure.degradeReason = reason;

@@ -313,7 +313,10 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
           ? config['optimization'] as Map
           : const {};
       optimization = {
-        for (final key in optimization.keys) key: rawOptimization[key] == true
+        for (final key in optimization.keys) key: rawOptimization[key] == true,
+        // task-103：removeOcr **只在文件里已有该键时**回填 —— 没有该键就不写回 project.json
+        if (rawOptimization.containsKey('removeOcr'))
+          'removeOcr': rawOptimization['removeOcr'] == true
       };
       signing = next['signing'] is Map
           ? Map<String, dynamic>.from(next['signing'] as Map)
@@ -1476,7 +1479,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
           featureChoice('nodejs', 'Node.js 运行库', {
             'auto': '自动按项目决定',
             'enabled': '包含 Node.js 运行库',
-            'disabled': '不包含 Node.js 运行库'
+            'disabled': '不包含 Node.js 运行库（产物少约 1.4 MB）'
           }),
           featureChoice('builtInOCR', '内置 OCR', {
             'disabled': '关闭 OCR',
@@ -1535,6 +1538,8 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
           ...{
             'unusedResources': '移除未使用资源',
             'removeOpenCv': '移除 OpenCV',
+            // task-103：与 removeOpenCv 同一套 optimization 读写路径；默认不勾（键不在 map 里 ⇒ 不写回）
+            'removeOcr': '移除内建 OCR（省约 17 MB 未压缩）',
             'removeAccessibilityService': '移除无障碍服务',
             'obfuscateComponents': '混淆 Android 组件名'
           }.entries.map((entry) => CheckboxListTile(
@@ -1549,6 +1554,10 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                         entry.key: value == true
                       }))),
           const Text('移除 OpenCV 后不能使用相关图像功能；移除无障碍服务后不能使用无障碍自动操作。',
+              style: TextStyle(fontSize: 12)),
+          const Text(
+              '「移除内建 OCR」会剔除 libppocr / libmlkit 的 OCR 库与识别模型（约 17 MB 未压缩）；'
+              '剔除后脚本里 \$ocr 的可用性会变（调用时会点名提示未随包）。',
               style: TextStyle(fontSize: 12))
         ]),
         card('架构与权限', [

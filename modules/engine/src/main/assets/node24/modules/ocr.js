@@ -79,7 +79,20 @@
       return wrapped;
     }
 
-    /** 调 kind:"ocr" 宿主；返回 envelope.value，错误统一成 AutoJsOcrError。 */
+    /** task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致（三引擎同源）。 */
+var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；如需 OCR 请把该开关关掉并重新打包。';
+
+/** 宿主报「能力未随包」时统一成同一句点名错误（默认路径不受影响）。 */
+function canonicalOcrError(message) {
+    var text = String(message == undefined ? '' : message);
+    if (text.indexOf('未随包') >= 0 || text.indexOf('libppocr') >= 0 || text.indexOf('libmlkit') >= 0
+            || text.indexOf('UnsatisfiedLinkError') >= 0) {
+        return OCR_NOT_PACKAGED;
+    }
+    return text;
+}
+
+/** 调 kind:"ocr" 宿主；返回 envelope.value，错误统一成 AutoJsOcrError。 */
     function callHost(request) {
       var raw;
       try {
@@ -98,7 +111,7 @@
         }
       }
       if (!response || response.ok !== true) {
-        throw ocrError(response && response.error ? String(response.error) : '宿主返回未知错误');
+        throw ocrError(response && response.error ? canonicalOcrError(response.error) : '宿主返回未知错误');
       }
       return response.value;
     }

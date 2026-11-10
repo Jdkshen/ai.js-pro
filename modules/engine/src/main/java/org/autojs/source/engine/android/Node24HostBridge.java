@@ -630,8 +630,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
             // task-99：OCR 库被按 optimization.removeOcr 剔除时，给**点名**错误（而不是 UnsatisfiedLinkError/NoClassDefFoundError）。
             if (isOcrAbilityMissing(failure)) {
                 Log.w(TAG, "ocr " + action + " unavailable: OCR 能力未随包（optimization.removeOcr=true）");
-                return error("OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；"
-                        + "如需 OCR 请把该开关关掉并重新打包。");
+                return error(com.stardust.autojs.runtime.api.OcrAvailability.NOT_PACKAGED_MESSAGE);
             }
             Log.w(TAG, "ocr " + action + " failed: " + request, failure);
             return error("OCR " + (action.isEmpty() ? "操作" : action) + " 失败："
@@ -643,18 +642,8 @@ public final class Node24HostBridge implements Node24Engine.Host {
      * task-99：判断失败是不是「OCR 能力没随包」——只看类/库缺失这一类，其它失败保持原样文本（默认逐字不变）。
      */
     static boolean isOcrAbilityMissing(Throwable failure) {
-        for (Throwable current = failure; current != null; current = current.getCause()) {
-            if (current instanceof UnsatisfiedLinkError || current instanceof NoClassDefFoundError
-                    || current instanceof ClassNotFoundException) {
-                return true;
-            }
-            String message = current.getMessage();
-            if (message != null && (message.contains("libppocr") || message.contains("libmlkit")
-                    || message.contains("couldn't find") && message.contains("dlopen"))) {
-                return true;
-            }
-        }
-        return false;
+        // task-105：判据与文案都收敛到 OcrAvailability（三引擎同源）。
+        return com.stardust.autojs.runtime.api.OcrAvailability.isAbilityMissing(failure);
     }
 
     private JSONObject createOcr(JSONObject request) throws Exception {

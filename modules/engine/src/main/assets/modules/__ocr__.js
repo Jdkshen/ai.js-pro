@@ -8,6 +8,8 @@
 module.exports = function (runtime, global) {
     var Ocr = com.stardust.autojs.runtime.api.Ocr;
     var PPOcr = com.stardust.autojs.runtime.api.PPOcr;
+// task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致的共用文案（三引擎同源）。
+var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；如需 OCR 请把该开关关掉并重新打包。';
     var ocr = {};
 
     // 探针用：当前进程内未释放的 OCR 会话数（脚本忘 release() 时应该在下个脚本里看到 0）
@@ -85,6 +87,10 @@ module.exports = function (runtime, global) {
     ocr.create = function (options) {
         options = options || {};
         var backend = String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase();
+        // task-105：ppocr 未随包时**点名**报错（不是 UnsatisfiedLinkError / 静默 undefined）。
+        if ((backend === 'ppocr' || backend === 'paddle' || backend === 'paddleocr') && !ppocrIsAvailable()) {
+            throw new Error(OCR_NOT_PACKAGED);
+        }
         var degradedFrom = null;
         var degradeReason = null;
         var session;
