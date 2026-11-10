@@ -81,6 +81,21 @@ module.exports = function(runtime, global){
 
     global.setScreenMetrics = runtime.setScreenMetrics.bind(runtime);
 
+    // task-79 片3 补漏（Lead 在 app 版与打包版真机都抓到）：`runtime.putProperty("sjbc", …)` 只写进
+    // ScriptRuntime.mProperties，**既不是 JavaBean 属性也不是脚本全局**（真机实测 `typeof sjbc`/`runtime.sjbc`
+    // 都是 undefined，而 `runtime.getProperty('sjbc')` 能拿到对象）⇒ 这里用**既有公共方法**把它读出来挂成全局。
+    // 只读入口，不改任何既有行为；老引擎没有该属性时保持 undefined。
+    if (!global.sjbc && runtime.getProperty) {
+        try {
+            var sjbcApi = runtime.getProperty("sjbc");
+            if (sjbcApi) {
+                global.sjbc = sjbcApi;
+            }
+        } catch (e) {
+            console.warn("sjbc 入口不可用：" + e);
+        }
+    }
+
     global.requiresApi = runtime.requiresApi.bind(runtime);
     global.requiresAutojsVersion = function(version){
         if(typeof(version) == 'number'){

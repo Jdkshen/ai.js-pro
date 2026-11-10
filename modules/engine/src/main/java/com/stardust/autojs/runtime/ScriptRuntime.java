@@ -321,6 +321,9 @@ public class ScriptRuntime {
         events = new Events(uiHandler.getContext(), accessibilityBridge, this);
         mThread = Thread.currentThread();
         sensors = new Sensors(uiHandler.getContext(), this);
+        // task-79 片3：SJBC 只读入口（脚本里 sjbc.run(path) → {prints,steps,entries,certShaUsed}）。
+        // 只多挂一个对象，不改任何既有行为；主密钥来自本包签名证书（见 SjbcKeySource）。
+        putProperty("sjbc", new com.stardust.autojs.sjbc.SjbcApi(uiHandler.getContext(), null));
     }
 
     public TopLevelScope getTopLevelScope() {
