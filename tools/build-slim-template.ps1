@@ -31,6 +31,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Lead 2026-11-10：gradlew 会把「注: …使用了已过时的 API」/ JAVA_TOOL_OPTIONS 这类提示写到 stderr,
+# PowerShell 5.1 会当成 NativeCommandError（配合上面 Stop）⇒ 整个脚本中止。这一行让原生命令的 stderr
+# 不再升级为终止性错误；真失败仍由 $LASTEXITCODE 判定。
+$PSNativeCommandUseErrorActionPreference = $false
 $repoRoot = Split-Path (Split-Path $MyInvocation.MyCommand.Path -Parent) -Parent
 Push-Location $repoRoot
 try {
