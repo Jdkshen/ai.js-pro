@@ -111,6 +111,8 @@ public class ApkBuilderPluginHelper {
             return new TemplateSelection(ApkTemplateInspector.inspect(mergedBundled, ApkTemplateInspector.SOURCE_BUNDLED),
                     new FileInputStream(mergedBundled));
         }
+        // task-116：**默认不找插件**。走到这里说明 1) /sdcard 覆盖 2) 宿主缓存 3) merged 内置 三档都不成立
+        // （正常设备「不装插件」必然在前三档之一命中）。插件模板只是最后手段：仅当内置模板损坏时才会用到。
         if (!forceBundled) {
             File extracted = extractTemplateFromPlugin(context);
             if (extracted != null) {
@@ -133,7 +135,7 @@ public class ApkBuilderPluginHelper {
                     ApkTemplateInspector.SOURCE_BUNDLED, "assets/" + TEMPLATE_APK_PATH);
             return new TemplateSelection(info, new ByteArrayInputStream(bytes));
         } catch (IOException error) {
-            throw new IOException(missingTemplateMessage(), error);
+            throw new IOException(missingTemplateMessage(context), error);
         }
     }
 
@@ -182,20 +184,23 @@ public class ApkBuilderPluginHelper {
         File cached = cachedTemplateFile(context);
         if (isUsableTemplate(cached)) {
             String origin = readTextQuietly(cacheVersionMarker(context));
+            // task-116：宿主缓存是「内置瘦身模板 + 宿主 lib 合成」的产物（默认路径），别再说成必须来自插件。
             return new TemplateStatus(true, cached.getPath(),
-                    origin.isEmpty() ? "已从打包插件落地" : "来自打包插件 " + origin);
+                    origin.isEmpty() ? "宿主缓存（内置模板与宿主 lib 合成）" : "宿主缓存（模板来源：" + origin + "）");
         }
         if (isPluginInstalled(context)) {
-            return new TemplateStatus(true, pluginLabel(context), "插件已安装，首次打包时会把模板落地");
+            // task-116：插件档只是最后手段，不是必需（文案里不写成「需要装」）。
+            return new TemplateStatus(true, pluginLabel(context), "最后手段：插件模板（仅当内置模板损坏时才会用到）");
         }
         try {
             InputStream bundled = context.getAssets().open(TEMPLATE_APK_PATH);
             bundled.close();
-            return new TemplateStatus(true, "assets/" + TEMPLATE_APK_PATH, "随主程序分发");
+            return new TemplateStatus(true, "assets/" + TEMPLATE_APK_PATH, "随主程序分发（默认路径）");
         } catch (IOException ignored) {
-            // 没有自带模板，确实需要装插件。
+            // task-116：内置资产都读不到 —— 给自足修法，不引导装插件。
         }
-        return new TemplateStatus(false, "", "未安装打包插件");
+        return new TemplateStatus(false, "",
+                "内置模板不可用：请重装主程序、或清掉 files/apk-builder/ 后重试、或把 template.apk 放到 /sdcard/template.apk");
     }
 
     /** 现在能不能拿到模板（不真读模板，只看文件尺寸与插件是否在位）。 */
@@ -406,11 +411,24 @@ public class ApkBuilderPluginHelper {
                 + " (" + info.versionCode + ")";
     }
 
-    private static String missingTemplateMessage() {
-        return "找不到打包用的运行时模板（template.apk，约 43MB）。\n"
-                + "请任选一种：\n"
-                + "1) 安装「APK 打包插件」后重试（设置 → 插件，或从更新源下载 apkbuilder-plugin.apk）；\n"
-                + "2) 手动把 template.apk 放到 " + manualTemplateFile().getPath() + "。";
+    /**
+     * task-116：兜底错误文案改成**自足指引** —— 用户拍板「不要打包插件，就在软件里面打包」。
+     *
+     * <p>插件仍保留为**最后手段**（仅当内置模板损坏时才可能用到），但文案里**不得**把它写成必需；
+     * 这里给的是应用内可自愈的三条：重装（内置模板随包）/清缓存/手动覆盖。</p>
+     */
+    private static String missingTemplateMessage(Context context) {
+        StringBuilder builder = new StringBuilder();
+        builder.append("找不到可用的打包模板（内置 assets/template.apk 不可用）。\n");
+        builder.append(TemplateSelfCheck.checkBundled(() -> {
+            try {
+                return context == null ? null : context.getAssets().open(TEMPLATE_APK_PATH);
+            } catch (IOException error) {
+                return null;
+            }
+        }).userMessage());
+        builder.append("说明：打包**不需要**安装任何插件；插件模板只是内置模板损坏时的最后手段。");
+        return builder.toString();
     }
 
     private static PackageInfo packageInfoOf(Context context, String packageName) {
