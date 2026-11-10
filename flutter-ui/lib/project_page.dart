@@ -1474,13 +1474,19 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
               items: [0, 1, 2, 3]
                   .map((level) => DropdownMenuItem<int>(
                       value: level,
-                      // task-81：SJBC 容器（.sjbc 自带 AES-256-GCM + HKDF）下推荐「不加密」；
-                      // 其余等级保留为「可选再套一层」；Snapshot(3) 被引擎 clamp 到 2（见说明行）。
+                      // task-128：口径同步到 **v2 = AES-256-GCM**（W1 task-126 已定稿）：真 256 位密钥
+                      // （SHA-256(...) 的 hex 再解码成 32 字节）、每个文件随机 12 字节 GCM IV、AAD = 头部前 12 字节、
+                      // 16 字节 tag（篡改必失败）；密钥材料含签名证书指纹 ⇒ 绑定签名证书。
+                      // UI **只给一句算法口径**（GCM + 绑定证书）：不暴露 native/JVM 走哪条路、不写死字节数 ✓。
+                      // 历史口径（task-124 落过的 CBC，以及更早的「离线加密」）已作废：
+                      // 密钥/IV 由「包名 + 随机盐 + 签名证书指纹」派生 ⇒ **绑定签名证书**（换证书重签解不开）。
+                      // level 3(Snapshot) 仍被 ScriptProtection.normalize 的 min(level, MAX_LEVEL=2) 夹到 2，
+                      // 所以文案保留该项但**写清为什么**（不做「看似可选其实等价」的静默）。
                       child: Text(const [
-                        '不加密（推荐：SJBC 容器自带加密）',
-                        '离线加密（可选再套一层）',
-                        '离线加密 · Dex（可选再套一层）',
-                        '离线加密 · Snapshot（等同 Dex：引擎最高等级为 2）'
+                        '不加密（用 SJBC 容器时推荐：容器自带加密）',
+                        '加密（AES-256-GCM，绑定签名证书）',
+                        '编译并加密（AES-256-GCM，绑定签名证书）',
+                        'Snapshot（引擎当前最高等级为 2：按「编译并加密」处理）'
                       ][level])))
                   .toList(),
               validator: (level) => level == null ? '请选择 0 到 3 的加密等级' : null,
@@ -1502,6 +1508,10 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
               '由本机打包引擎处理所选等级，结果以实际日志和生成文件为准。'
               '用 SJBC 容器时建议选「不加密」：.sjbc 自带 AES-256-GCM + HKDF 双层加密，再套一层不会更安全，只会多一层开销；'
               '其余等级仍可选，表示在容器之外再套一层。',
+              style: TextStyle(fontSize: 12)),
+          // task-124：旧方案（无随机盐/未绑定证书）运行端已不支持 —— 只读短提示，不弹窗
+          const Text('旧产物（无随机盐、未绑定签名证书）无法在本版运行，需用本版重新打包。',
+              key: ValueKey('project-encryptLevel-legacy-note'),
               style: TextStyle(fontSize: 12)),
           const SizedBox(height: 14),
           textField('icon', '应用图标',

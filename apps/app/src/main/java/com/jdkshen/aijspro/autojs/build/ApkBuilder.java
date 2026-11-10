@@ -28,7 +28,6 @@ import com.stardust.app.GlobalAppContext;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
 import com.stardust.util.AdvancedEncryptionStandard;
-import com.stardust.util.MD5;
 
 import com.jdkshen.aijspro.R;
 
@@ -114,8 +113,10 @@ public class ApkBuilder {
     private AppConfig mAppConfig;
     private String mArscPackageName;
     // Derived in syncProjectJsonAndDeriveKeys() from assets/project/project.json:
-    // key = MD5(packageName + versionName + mainScriptFile),
-    // vector = MD5(buildId + name).substring(0, 16)
+    // task-123：脚本密钥**只**由新方案派生 ——
+    // key = ScriptKeyDerivation.deriveKey(packageName, scriptSalt, 证书指纹)
+    // vector = ScriptKeyDerivation.deriveVector(scriptSalt, 证书指纹)
+    //（旧的 MD5 方案已从打包端删除：运行端不再支持，降级产物必然解不开）
     // The inrt runtime derives the same values from the same project.json.
     private String mKey;
     private String mInitVector;
@@ -1748,14 +1749,13 @@ public class ApkBuilder {
             newBuild.put("build_id", buildInfo.getBuildId());
             json.put("build", newBuild);
 
-            mKey = MD5.md5(json.getString("packageName") + json.getString("versionName") + mMainScriptFile);
-            mInitVector = MD5.md5(buildInfo.getBuildId() + json.getString("name")).substring(0, 16);
-
-            // 密钥硬化（新方案）：随机盐 + 签名证书指纹参与派生，替换上面的旧算法。
-            // 拿不到签名指纹时（例如身份还没准备好）保持旧算法，产物仍然可用。
+            // task-123：**只用新方案**派生脚本密钥（salt + 签名证书指纹）。
+            // 旧的 MD5 方案已从打包端删除：运行端不再支持它，任何「降级产物」都必然解不开
+            // ⇒ 宁可在这里明确失败，也不产出打不开的 APK（见下面的 else-if）。
             // 注意：这两个字段必须在写文件之前塞进 json，否则运行端读到的 project.json
-            // 里没有盐/指纹，就会回退旧算法，而包装时用的是新密钥 → 解密失败。
+            // 里没有盐/指纹，就会（在新方案下）直接点名报错。
             String fingerprint = resolveSigningCertificateFingerprint();
+            boolean needsScriptKey = mEncryptLevel > 0;
             if (ScriptKeyDerivation.hasCertificateFingerprint(fingerprint)) {
                 String salt = json.optString("scriptSalt", null);
                 if (salt == null || salt.isEmpty()) {
@@ -1763,10 +1763,19 @@ public class ApkBuilder {
                 }
                 mKey = ScriptKeyDerivation.deriveKey(json.optString("packageName"), salt, fingerprint);
                 mInitVector = ScriptKeyDerivation.deriveVector(salt, fingerprint);
+                // 必然写进产物：运行端就是靠这两个字段派生同一把密钥。
                 json.put("scriptSalt", salt);
                 json.put("signatureFingerprint", fingerprint);
+            } else if (needsScriptKey) {
+                // 明确失败而不是降级：降级产物在运行端必然解不开（旧方案已不支持），
+                // 静默产出等于给用户一个能装不能跑的 APK。
+                throw new IOException("打包需要脚本加密密钥，但拿不到签名证书指纹："
+                        + "新方案（scriptSalt + 证书指纹派生）是唯一路径，运行端已不支持旧的 MD5 方案，"
+                        + "因此不会静默降级。请确认签名身份可用（重新生成/选择密钥库）后重试。");
             } else {
-                // 没有签名指纹就不写这两个字段：运行端看到字段缺失会走旧算法。
+                // 未产生受保护载荷（encryptLevel=0）：不派生、也不写 salt/指纹（既有语义不变）。
+                mKey = null;
+                mInitVector = null;
                 json.remove("scriptSalt");
                 json.remove("signatureFingerprint");
             }

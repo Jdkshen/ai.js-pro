@@ -29,7 +29,6 @@ import com.stardust.autojs.script.ScriptSource
 import com.stardust.autojs.script.StringScriptSource
 import com.stardust.pio.PFiles
 import com.stardust.pio.UncheckedIOException
-import com.stardust.util.MD5
 
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -381,10 +380,9 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             EncryptedScripts.setHardenedParams(projectConfig.packageName, salt, fingerprint)
         } else {
             // 老产物：沿用旧的推导方式，保证升级运行端后仍能打开。
-            key = ScriptKeyDerivation.legacyKey(projectConfig.packageName,
-                    projectConfig.versionName, projectConfig.mainScriptFile)
-            vector = ScriptKeyDerivation.legacyVector(
-                    projectConfig.buildInfo.buildId, projectConfig.name)
+            throw IllegalStateException(
+                    "产物缺少 scriptSalt / signatureFingerprint：旧加密方案已下线（不再回退 MD5 派生）。" +
+                            "请用新版打包器重新打包该工程。")
         }
         try {
             val fieldKey = ScriptEncryption::class.java.getDeclaredField("mKey")

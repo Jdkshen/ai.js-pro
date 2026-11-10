@@ -1,7 +1,5 @@
 package com.stardust.autojs.project;
 
-import com.stardust.util.MD5;
-
 import java.io.UnsupportedEncodingException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -10,14 +8,11 @@ import java.security.SecureRandom;
 /**
  * 打包脚本的密钥派生。
  *
- * <p><b>新方案（推荐）</b>：密钥不再由包名/版本号这类公开字段直接推导，而是
+ * <p><b>唯一方案</b>（旧 MD5 方案已下线）：密钥不再由包名/版本号这类公开字段直接推导，而是
  * {@code SHA-256(前缀 + 包名 + 随机盐 + 签名证书指纹)}。随机盐每个包都不同、
  * 且写进产物自带的 project.json；签名证书指纹把密钥**绑定到打包用的签名身份**——
  * 用别的证书重签（典型的重打包/二次修改）就再也解不开脚本。
  *
- * <p><b>旧方案（兼容）</b>：{@code MD5(packageName + versionName + mainScriptFile)} /
- * {@code MD5(buildId + name)}。老产物里没有盐字段，运行端继续走这条路，保证已发布的
- * 打包应用不会因为升级运行时而打不开。
  */
 public final class ScriptKeyDerivation {
 
@@ -51,16 +46,6 @@ public final class ScriptKeyDerivation {
     public static String deriveVector(String saltHex, String certificateFingerprint) {
         String material = VECTOR_PREFIX + nullToEmpty(saltHex) + "|" + nullToEmpty(certificateFingerprint);
         return sha256Hex(material).substring(0, 16);
-    }
-
-    /** 旧方案密钥（无盐的老产物）。 */
-    public static String legacyKey(String packageName, String versionName, String mainScriptFile) {
-        return MD5.md5(nullToEmpty(packageName) + nullToEmpty(versionName) + nullToEmpty(mainScriptFile));
-    }
-
-    /** 旧方案向量（无盐的老产物）。 */
-    public static String legacyVector(String buildId, String name) {
-        return MD5.md5(nullToEmpty(buildId) + nullToEmpty(name)).substring(0, 16);
     }
 
     /** 证书指纹是否可用于派生（非空且不是占位值）。 */

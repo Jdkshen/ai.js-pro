@@ -29,7 +29,6 @@ import com.stardust.autojs.script.CompiledScriptPayload;
 import com.stardust.autojs.script.EmbeddedScriptFooter;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.autojs.script.NativeScriptCrypto;
-import com.stardust.util.MD5;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -1349,23 +1348,19 @@ public class ApkBuilderEncryptionTest {
     }
 
     /**
-     * 按运行端的方式解密打包脚本：有随机盐 + 签名指纹就走新派生（密钥绑定签名身份），
-     * 老产物（无盐）回退到旧算法。
+     * 按运行端的方式解密打包脚本（task-123：**只有新派生**）。
+     *
+     * <p>打包端已删除旧的 MD5 方案（运行端也不再支持）⇒ 产物**必须**带
+     * scriptSalt + signatureFingerprint；缺任何一个就直接失败，不再"回退旧算法"。
+     * 这与真机验收里「手工删掉 scriptSalt ⇒ 打包版给点名错误」是同一件事的两面。</p>
      */
     private static byte[] decryptPackagedScript(JSONObject json, byte[] packaged) throws Exception {
         String salt = json.optString("scriptSalt", null);
         String fingerprint = json.optString("signatureFingerprint", null);
-        String key;
-        String vector;
-        if (salt != null && !salt.isEmpty() && fingerprint != null && !fingerprint.isEmpty()) {
-            key = ScriptKeyDerivation.deriveKey(json.getString("packageName"), salt, fingerprint);
-            vector = ScriptKeyDerivation.deriveVector(salt, fingerprint);
-        } else {
-            key = ScriptKeyDerivation.legacyKey(json.getString("packageName"),
-                    json.getString("versionName"), json.getString("main"));
-            vector = ScriptKeyDerivation.legacyVector(
-                    json.getJSONObject("build").getString("build_id"), json.getString("name"));
-        }
+        assertTrue("产物必须带 scriptSalt（task-123：新方案是唯一路径）", salt != null && !salt.isEmpty());
+        assertTrue("产物必须带 signatureFingerprint", fingerprint != null && !fingerprint.isEmpty());
+        String key = ScriptKeyDerivation.deriveKey(json.getString("packageName"), salt, fingerprint);
+        String vector = ScriptKeyDerivation.deriveVector(salt, fingerprint);
         Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
         keyField.setAccessible(true);
         keyField.set(null, key);
