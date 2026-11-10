@@ -9,6 +9,9 @@ object ScriptEncryption {
     /** task-126：v2（AES-256-GCM）密钥（真 32 字节）。由运行端用 ScriptPayloadV2.deriveKeyV2 注入，**同一份派生**。 */
     private var mKeyV2: ByteArray = ByteArray(0)
 
+    /** 读 v2 密钥（未注入返回 null）。 */
+    fun keyV2OrNull(): ByteArray? = if (mKeyV2.size == ScriptPayloadV2.KEY_LENGTH) mKeyV2 else null
+
     /** 注入 v2 密钥（32 字节）。v2 载荷只走 JVM 路径（原生库不含 GCM）。 */
     fun setKeyV2(key: ByteArray) {
         require(key.size == ScriptPayloadV2.KEY_LENGTH) { "v2 密钥必须 32 字节（当前 ${key.size}）" }

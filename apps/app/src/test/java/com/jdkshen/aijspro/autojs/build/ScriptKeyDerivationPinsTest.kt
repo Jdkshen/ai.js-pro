@@ -50,6 +50,22 @@ class ScriptKeyDerivationPinsTest {
             Regex("运行端看到字段缺失会走旧算法").findAll(source).count())
     }
 
+    /** task-127：打包端的加密路径必须走 v2（ScriptPayloadV2），不得再用 CBC/JVM ScriptEncryption。 */
+    @Test fun builderEncryptsWithV2PayloadApiOnly() {
+        val source = read(builderPath)
+        assertTrue("必须用 ScriptPayloadV2.encrypt 产出载荷", source.contains("ScriptPayloadV2.encrypt("))
+        assertTrue("必须用 ScriptPayloadV2.deriveKeyV2 派生 32 字节密钥", source.contains("ScriptPayloadV2.deriveKeyV2("))
+        assertEquals("不得再用 AdvancedEncryptionStandard（CBC）", 0,
+            Regex("AdvancedEncryptionStandard").findAll(source).count())
+        assertEquals("不得再走 JVM 侧 ScriptEncryption 加密", 0,
+            source.split("ScriptEncryption.").size - 1)
+        assertEquals("不得再自己写 v1 头", 0,
+            source.split("writeHeader(").size - 1)
+        assertTrue("native + 加密必须明确失败并复用引擎文案",
+            source.contains("ScriptPayloadV2.NATIVE_UNSUPPORTED_MESSAGE"))
+        assertTrue("32 字节密钥字段", source.contains("byte[] mKeyV2"))
+    }
+
     @Test fun packagedTestDecryptsOnlyWithTheNewScheme() {
         val source = read(testPath)
         assertEquals("测试也不能再回退旧算法", 0, Regex("legacyKey|legacyVector").findAll(source).count())

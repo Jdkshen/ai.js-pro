@@ -27,6 +27,7 @@ import com.stardust.autojs.project.ScriptProtection;
 import com.stardust.autojs.rhino.AndroidClassLoader;
 import com.stardust.autojs.script.CompiledScriptPayload;
 import com.stardust.autojs.script.EmbeddedScriptFooter;
+import com.stardust.autojs.engine.encryption.ScriptPayloadV2;
 import com.stardust.autojs.script.EncryptedScriptFileHeader;
 import com.stardust.autojs.script.NativeScriptCrypto;
 
@@ -230,7 +231,7 @@ public class ApkBuilderEncryptionTest {
         // 3) 用运行时相同的派生方式解密，内容应与原脚本一致。
         byte[] decrypted = decryptPackagedScript(json, packaged);
         assertEquals(readText(script), new String(decrypted, "UTF-8"));
-        assertNativeDecryptionMatches(json, packaged);
+        assertV2PayloadMatchesJvmDecryption(json, packaged);
 
         // 3.1) 密钥硬化：产物必须带随机盐 + 签名指纹；指纹要与「产物自己的签名」一致，
         //      因为运行端就是拿自己的签名证书去比这个值（反重签的核心）。
@@ -245,20 +246,13 @@ public class ApkBuilderEncryptionTest {
 
         // 3.2) 反重签：把指纹改一个字符模拟“重新签名后分发”，旧密钥就解不开了。
         String tampered = tamperFingerprint(json.getString("signatureFingerprint"));
-        String tamperedKey = ScriptKeyDerivation.deriveKey(
+        byte[] tamperedKey = ScriptPayloadV2.deriveKeyV2(
                 json.getString("packageName"), salt, tampered);
-        Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
-        keyField.setAccessible(true);
-        keyField.set(null, tamperedKey);
-        Field vectorField = ScriptEncryption.class.getDeclaredField("mInitVector");
-        vectorField.setAccessible(true);
-        vectorField.set(null, ScriptKeyDerivation.deriveVector(salt, tampered));
         try {
-            ScriptEncryption.INSTANCE.decrypt(
-                    packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
+            ScriptPayloadV2.decrypt(packaged, tamperedKey);
             fail("指纹变了还能解密，说明密钥没有绑定签名");
         } catch (Exception expected) {
-            // 预期：密钥不匹配 → 解密失败。
+            // 预期：指纹不同 ⇒ key 不同 ⇒ GCM 完整性校验失败（不会解出明文）。
         }
         // 恢复成真实密钥，避免影响后面的断言。
         decryptPackagedScript(json, packaged);
@@ -859,7 +853,7 @@ public class ApkBuilderEncryptionTest {
 
         // 用运行时相同的密钥派生解密，解析出编译载荷。
         byte[] plain = decryptPackagedScript(json, packaged);
-        assertNativeDecryptionMatches(json, packaged);
+        assertV2PayloadMatchesJvmDecryption(json, packaged);
 
         CompiledScriptPayload payload = CompiledScriptPayload.read(plain);
         assertTrue("载荷里应当带类名", payload.className != null && payload.className.length() > 0);
@@ -990,7 +984,7 @@ public class ApkBuilderEncryptionTest {
 
         // 用运行时相同的派生方式解密，确认载荷确实是 QuickJS 字节码（非空且不是源码文本）。
         byte[] bytecode = decryptPackagedScript(json, packaged);
-        assertNativeDecryptionMatches(json, packaged);
+        assertV2PayloadMatchesJvmDecryption(json, packaged);
         assertTrue("字节码不能为空", bytecode.length > 0);
         assertFalse("载荷不能还是源码文本",
                 new String(bytecode, "ISO-8859-1").startsWith("// @engine"));
@@ -1139,7 +1133,7 @@ public class ApkBuilderEncryptionTest {
                 EncryptedScriptFileHeader.PAYLOAD_TYPE_SCRIPT_PACK,
                 EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(packFlags));
         byte[] archive = decryptPackagedScript(json, pack);
-        assertNativeDecryptionMatches(json, pack);
+        assertV2PayloadMatchesJvmDecryption(json, pack);
         java.util.Map<String, String> packed = unzipText(archive);
         assertEquals(2, packed.size());
         assertEquals(moduleSource, packed.get("src/mod.js"));
@@ -1261,7 +1255,7 @@ public class ApkBuilderEncryptionTest {
                 EncryptedScriptFileHeader.INSTANCE.isValidFile(payload));
         assertEquals("载荷解出来必须与源脚本一致",
                 source, new String(decryptPackagedScript(json, payload), "UTF-8"));
-        assertNativeDecryptionMatches(json, payload);
+        assertV2PayloadMatchesJvmDecryption(json, payload);
         // 明文与密文都不能出现在库文件里。
         String asText = new String(library, "ISO-8859-1");
         assertFalse("产物里不该出现源码原文", asText.contains("NATIVE_SO_RAN"));
@@ -1328,7 +1322,7 @@ public class ApkBuilderEncryptionTest {
         assertEquals("文件头必须标记载荷是 Rhino 编译产物",
                 EncryptedScriptFileHeader.PAYLOAD_TYPE_RHINO_CLASS,
                 EncryptedScriptFileHeader.INSTANCE.payloadTypeOf(flags));
-        assertNativeDecryptionMatches(json, payload);
+        assertV2PayloadMatchesJvmDecryption(json, payload);
 
         byte[] plain = decryptPackagedScript(json, payload);
         CompiledScriptPayload compiled = CompiledScriptPayload.read(plain);
@@ -1357,35 +1351,29 @@ public class ApkBuilderEncryptionTest {
     private static byte[] decryptPackagedScript(JSONObject json, byte[] packaged) throws Exception {
         String salt = json.optString("scriptSalt", null);
         String fingerprint = json.optString("signatureFingerprint", null);
-        assertTrue("产物必须带 scriptSalt（task-123：新方案是唯一路径）", salt != null && !salt.isEmpty());
+        assertTrue("产物必须带 scriptSalt（task-123/127：新方案是唯一路径）", salt != null && !salt.isEmpty());
         assertTrue("产物必须带 signatureFingerprint", fingerprint != null && !fingerprint.isEmpty());
-        String key = ScriptKeyDerivation.deriveKey(json.getString("packageName"), salt, fingerprint);
-        String vector = ScriptKeyDerivation.deriveVector(salt, fingerprint);
-        Field keyField = ScriptEncryption.class.getDeclaredField("mKey");
-        keyField.setAccessible(true);
-        keyField.set(null, key);
-        Field vectorField = ScriptEncryption.class.getDeclaredField("mInitVector");
-        vectorField.setAccessible(true);
-        vectorField.set(null, vector);
-        return ScriptEncryption.INSTANCE.decrypt(
-                packaged, EncryptedScriptFileHeader.BLOCK_SIZE, packaged.length);
+        assertTrue("载荷必须是 v2（AES-256-GCM 版本字节 0x02）", ScriptPayloadV2.isV2(packaged));
+        return ScriptPayloadV2.decrypt(packaged,
+                ScriptPayloadV2.deriveKeyV2(json.getString("packageName"), salt, fingerprint));
     }
 
     /**
      * 原生解密必须与 JVM 解密逐字节一致：产物在真机上是走原生路径的，
      * 两边哪怕差一个字节（派生、填充、字节序）都会让打包应用直接解密失败。
      */
-    private static void assertNativeDecryptionMatches(JSONObject json, byte[] packaged) throws Exception {
+    /**
+     * task-127：v2 载荷由 JVM 侧（ScriptPayloadV2）解出，内容必须与打包前一致；
+     * 原生路径对 v2 不支持（打包端 native+加密会明确失败）。
+     */
+    private static void assertV2PayloadMatchesJvmDecryption(JSONObject json, byte[] packaged) throws Exception {
         assertEquals("原生密码学自检（SHA-256 / AES-256-CBC 标准向量）必须通过",
                 "", NativeScriptCrypto.selfTest());
+        // task-127：v2 是 AES-GCM，原生只懂 v1/CBC ⇒ 这里不再比原生解密，只钉 JVM 侧内容正确
+        //（native 存储 + 加密在打包端已经用 NATIVE_UNSUPPORTED_MESSAGE 明确失败）。
+        assertTrue("载荷必须是 v2", ScriptPayloadV2.isV2(packaged));
         byte[] expected = decryptPackagedScript(json, packaged);
-        byte[] actual = NativeScriptCrypto.decrypt(
-                packaged, EncryptedScriptFileHeader.BLOCK_SIZE,
-                packaged.length - EncryptedScriptFileHeader.BLOCK_SIZE,
-                json.getString("packageName"),
-                json.getString("scriptSalt"),
-                json.getString("signatureFingerprint"));
-        assertArrayEquals("原生解密结果必须与 JVM 一致", expected, actual);
+        assertTrue("解密结果不应为空", expected.length > 0);
     }
 
     /** 两种指纹写法（带不带冒号、大小写）统一后再比。 */

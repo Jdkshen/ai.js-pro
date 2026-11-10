@@ -95,23 +95,25 @@ public class NodeScriptProtectionTest {
         assertEquals(ScriptProtection.LEVEL_COMPILE, ScriptProtection.normalize(99));
     }
 
-    /** 保护等级 1：文件头 + AES 密文必须能被运行端路径读回。 */
+    /**
+     * 保护等级 1：v2 载荷（AES-256-GCM）必须能被运行端路径读回。
+     *
+     * <p>task-127：旧的「文件头 + AES/CBC」不再产出 ⇒ 这里改成用引擎唯一实现 ScriptPayloadV2
+     * 造一个 v2 载荷（版本字节 0x02 / 随机 IV），再解回原文；同时断言 flags 的字节语义
+     * （header[6]=载荷类型=0、header[7]=执行模式=1）与 v1 布局一致。</p>
+     */
     @Test public void levelOnePayloadSurvivesTheRuntimeDecodePath() throws Exception {
         String source = "// @engine node24\n\"ui\";\nconsole.log('hi');\n";
         byte[] plain = source.getBytes(UTF8);
-        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-        com.stardust.autojs.script.EncryptedScriptFileHeader.INSTANCE.writeHeader(out, (short) 1);
-        out.write(new com.stardust.util.AdvancedEncryptionStandard(
-                "0123456789abcdef".getBytes(UTF8), "0123456789abcdef")
-                .encrypt(plain));
-        byte[] payload = out.toByteArray();
-        assertTrue(com.stardust.autojs.script.EncryptedScriptFileHeader.INSTANCE.isValidFile(payload));
-        assertEquals(0, com.stardust.autojs.script.EncryptedScriptFileHeader.INSTANCE
-                .payloadTypeOf(com.stardust.autojs.script.EncryptedScriptFileHeader.INSTANCE
-                        .readFlags(payload)));
-        byte[] decoded = new com.stardust.util.AdvancedEncryptionStandard(
-                "0123456789abcdef".getBytes(UTF8), "0123456789abcdef")
-                .decrypt(payload, 8, payload.length);
+        byte[] key = com.stardust.autojs.engine.encryption.ScriptPayloadV2
+                .deriveKeyV2("com.example.node24", "00112233445566778899aabbccddeeff",
+                        "1B:57:50:5E:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:00:11:22:33:44:55");
+        byte[] payload = com.stardust.autojs.engine.encryption.ScriptPayloadV2
+                .encrypt(plain, key, 0, 1);
+        assertTrue(com.stardust.autojs.engine.encryption.ScriptPayloadV2.isV2(payload));
+        assertEquals(0, payload[6] & 0xFF);
+        assertEquals(1, payload[7] & 0xFF);
+        byte[] decoded = com.stardust.autojs.engine.encryption.ScriptPayloadV2.decrypt(payload, key);
         assertEquals(source, new String(decoded, UTF8));
     }
 

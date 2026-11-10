@@ -147,7 +147,27 @@ public class ScriptPayloadV2Test {
 
     private static final String V2_KEY_PIN = "E85D888ACFB88B0AED5BA201EB6BF1C5F21DF9F8FE14E7FEAE33B3128FD446D3";
 
-    /** task-122/126：剥掉注释与字符串里的注释行，只留代码（避免 KDoc 文案造成误报）。 */
+
+    /**
+     * task-126 真机回归钉：v2 的判定必须发生在**拿到完整载荷的那一层**（EncryptedScripts.decryptBytes），
+     * 并且**排在原生命令之前** —— dev-1473 真机就是因为「先撞原生 + 在 post-header 切片上判 v2」而失败。
+     */
+    @Test
+    public void v2RoutingShortCircuitsBeforeNative() throws Exception {
+        String scripts = read("src/main/java/com/stardust/autojs/script/EncryptedScripts.kt");
+        int judge = scripts.indexOf("ScriptPayloadV2.isV2(bytes)");
+        int nativeCall = scripts.indexOf("NativeScriptCrypto.decrypt(bytes");
+        assertTrue("必须在 decryptBytes 里按完整载荷判 v2", judge >= 0);
+        assertTrue("v2 判定必须排在原生调用之前（否则白失败一次）", nativeCall > 0 && judge < nativeCall);
+        assertTrue("必须有可见的 v2 路由日志", scripts.contains("C-INRT: payload=v2 (AES-256-GCM) → JVM 路径（原生只认 v1）"));
+        assertTrue("v2 走 ScriptPayloadV2.decrypt", scripts.contains("return ScriptPayloadV2.decrypt(bytes, keyV2)"));
+        String encryption = read("src/main/java/com/stardust/autojs/engine/encryption/ScriptEncryption.kt");
+        assertTrue("v2 密钥有 getter（未注入返回 null）", encryption.contains("fun keyV2OrNull()"));
+        assertTrue("v1 读取窗口必须标成临时（下轮删除）", encryption.contains("下轮删除"));
+        assertTrue("未注入 v2 密钥要给点名错误", scripts.contains("v2 载荷但运行端没有注入 v2 密钥"));
+    }
+
+    /** 剥注释只看代码（与 Lead 的修法一致，避免 KDoc 文案误报）。 */
     private static String codeOnly(String source) {
         StringBuilder out = new StringBuilder();
         for (String line : source.split("\n")) {

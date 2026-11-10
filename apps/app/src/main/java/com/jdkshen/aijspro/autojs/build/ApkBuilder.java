@@ -27,7 +27,7 @@ import com.stardust.autojs.script.JavaScriptSource;
 import com.stardust.app.GlobalAppContext;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
-import com.stardust.util.AdvancedEncryptionStandard;
+import com.stardust.autojs.engine.encryption.ScriptPayloadV2;
 
 import com.jdkshen.aijspro.R;
 
@@ -118,8 +118,8 @@ public class ApkBuilder {
     // vector = ScriptKeyDerivation.deriveVector(scriptSalt, 证书指纹)
     //（旧的 MD5 方案已从打包端删除：运行端不再支持，降级产物必然解不开）
     // The inrt runtime derives the same values from the same project.json.
-    private String mKey;
-    private String mInitVector;
+    // task-127：v2 = AES-256-GCM + 真 32 字节密钥（不再有 String key / 固定 IV 这两个概念）。
+    private byte[] mKeyV2;
     private String mMainScriptFile = "main.js";
     private String mScriptFile;
     // 脚本保护等级（project.json 的 encryptLevel）：0 明文、1 AES、≥2 编译后加密。
@@ -1106,6 +1106,10 @@ public class ApkBuilder {
             payload = sourceBytes;
             flags = modeFlags;
         }
+        if (ScriptProtection.usesNativeStorage(mScriptStorage) && mEncryptLevel > 0) {
+            // task-127：原生加载器只懂 v1/CBC，v2 是 GCM ⇒ 明确失败，绝不静默降级成 v1。
+            throw new IOException(ScriptPayloadV2.NATIVE_UNSUPPORTED_MESSAGE);
+        }
         byte[] encrypted = encryptedPayload(payload, flags);
         if (ScriptProtection.usesNativeStorage(mScriptStorage)) {
             // 工作区里已经拷进来的入口脚本必须删掉：藏了就要藏干净。
@@ -1276,21 +1280,22 @@ public class ApkBuilder {
         writeBytes(target, encryptedPayload(plain, flags));
     }
 
-    /** 生成「文件头 + 密文」的完整加密载荷字节（写文件与嵌进原生库共用同一份）。 */
+    /**
+     * 生成完整 v2 加密载荷（写文件与嵌进原生库共用同一份）。
+     *
+     * <p>task-127：头与 IV 都由 {@link ScriptPayloadV2#encrypt} 内部写（IV 每文件随机）；
+     * flags 按 v1 的字节布局传：header[6]=载荷类型（高字节）、header[7]=执行模式（低字节）。</p>
+     */
     private byte[] encryptedPayload(byte[] plain, short flags) throws IOException {
-        if (mKey == null || mInitVector == null) {
+        if (mKeyV2 == null) {
             throw new IllegalStateException("Script encryption key is not initialized");
         }
         try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(plain.length + 32);
-            EncryptedScriptFileHeader.INSTANCE.writeHeader(out, flags);
-            out.write(new AdvancedEncryptionStandard(
-                    mKey.getBytes("UTF-8"), mInitVector).encrypt(plain));
-            return out.toByteArray();
-        } catch (IOException e) {
-            throw e;
+            int modeLow = flags & 0xFF;
+            int payloadTypeHigh = (flags >> 8) & 0xFF;
+            return ScriptPayloadV2.encrypt(plain, mKeyV2, payloadTypeHigh, modeLow);
         } catch (Exception e) {
-            throw new IOException("Failed to encrypt script", e);
+            throw new IOException("Failed to encrypt script (v2/AES-GCM)", e);
         }
     }
 
@@ -1627,15 +1632,13 @@ public class ApkBuilder {
     }
 
     private byte[] encryptBytes(File file) throws IOException {
-        if (mKey == null || mInitVector == null) {
+        if (mKeyV2 == null) {
             throw new IllegalStateException("Script encryption key is not initialized");
         }
         try {
             byte[] plain = PFiles.readBytes(file.getPath());
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            EncryptedScriptFileHeader.INSTANCE.writeHeader(out, (short) 0);
-            out.write(new AdvancedEncryptionStandard(mKey.getBytes("UTF-8"), mInitVector).encrypt(plain));
-            return out.toByteArray();
+            // task-127：v2（AES-256-GCM，IV 随机）；这里 flags 全 0（执行模式 0 / 载荷类型 0）。
+            return ScriptPayloadV2.encrypt(plain, mKeyV2, 0, 0);
         } catch (IOException e) {
             throw e;
         } catch (Exception e) {
@@ -1645,10 +1648,10 @@ public class ApkBuilder {
 
     /**
      * Syncs {@code assets/project/project.json} with the packaged app identity and derives
-     * the script encryption key/vector exactly like the inrt runtime launcher does:
-     * {@code key = MD5(packageName + versionName + mainScriptFile)} and
-     * {@code vector = MD5(buildId + name).substring(0, 16)}. The runtime reads the same
-     * project.json (written here) and derives the same values, so both ends must stay in sync.
+     * the script encryption key exactly like the runtime does for v2:
+     * {@code key = ScriptPayloadV2.deriveKeyV2(packageName, scriptSalt, 证书指纹)}（真 32 字节）。
+     * The runtime reads the same project.json (written here) and derives the same key, so both
+     * ends must stay in sync. task-127：旧的 MD5 方案已删除（运行端不再支持）。
      */
     private void syncProjectJsonAndDeriveKeys() throws IOException {
         File jsonFile = new File(mWorkspacePath, "assets/project/project.json");
@@ -1761,8 +1764,8 @@ public class ApkBuilder {
                 if (salt == null || salt.isEmpty()) {
                     salt = ScriptKeyDerivation.randomSaltHex();
                 }
-                mKey = ScriptKeyDerivation.deriveKey(json.optString("packageName"), salt, fingerprint);
-                mInitVector = ScriptKeyDerivation.deriveVector(salt, fingerprint);
+                // task-127：真 32 字节密钥由引擎侧唯一实现派生（打包端不再自己拼 SHA-256）。
+                mKeyV2 = ScriptPayloadV2.deriveKeyV2(json.optString("packageName"), salt, fingerprint);
                 // 必然写进产物：运行端就是靠这两个字段派生同一把密钥。
                 json.put("scriptSalt", salt);
                 json.put("signatureFingerprint", fingerprint);
@@ -1774,8 +1777,7 @@ public class ApkBuilder {
                         + "因此不会静默降级。请确认签名身份可用（重新生成/选择密钥库）后重试。");
             } else {
                 // 未产生受保护载荷（encryptLevel=0）：不派生、也不写 salt/指纹（既有语义不变）。
-                mKey = null;
-                mInitVector = null;
+                mKeyV2 = null;
                 json.remove("scriptSalt");
                 json.remove("signatureFingerprint");
             }

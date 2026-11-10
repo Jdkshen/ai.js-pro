@@ -3,6 +3,7 @@ package com.stardust.autojs.script
 import android.util.Log
 
 import com.stardust.autojs.engine.encryption.ScriptEncryption
+import com.stardust.autojs.engine.encryption.ScriptPayloadV2
 import com.stardust.pio.PFiles
 import java.io.File
 
@@ -123,6 +124,15 @@ object EncryptedScripts {
      * 都不应该让用户的打包应用直接跑不起来。
      */
     private fun decryptBytes(bytes: ByteArray): ByteArray {
+        // task-126：v2（AES-256-GCM）在**拿到完整载荷的这一层**短路 —— 不能先撞原生（原生只有 CBC，
+        // 只会白失败一次并打印误导性的「密文长度不是 16 字节的整数倍」）。判定用同一份 ScriptPayloadV2.isV2。
+        if (ScriptPayloadV2.isV2(bytes)) {
+            val keyV2 = ScriptEncryption.keyV2OrNull()
+                ?: throw IllegalStateException(
+                        "v2 载荷但运行端没有注入 v2 密钥：请确认 AssetsProjectLauncher 调了 ScriptEncryption.setKeyV2(deriveKeyV2(包名, 盐, 指纹))")
+            Log.i(TAG, "C-INRT: payload=v2 (AES-256-GCM) → JVM 路径（原生只认 v1）")
+            return ScriptPayloadV2.decrypt(bytes, keyV2)
+        }
         val packageName = hardenedPackageName
         val salt = hardenedSalt
         val fingerprint = hardenedFingerprint

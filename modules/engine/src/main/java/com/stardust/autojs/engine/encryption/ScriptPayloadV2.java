@@ -88,13 +88,19 @@ public final class ScriptPayloadV2 {
         return payload != null && payload.length > 8 && hasMagic(payload) && !isV2(payload);
     }
 
-    /** 打包：header(24) || ciphertext || tag(16)。 */
-    public static byte[] encrypt(byte[] plain, byte[] key, int flagsLow, int flagsHigh) throws Exception {
-        return encrypt(plain, key, flagsLow, flagsHigh, randomIv());
+    /**
+     * 打包：header(24) || ciphertext || tag(16)。
+     *
+     * <p><b>参数语义（Lead 2026-11-10 澄清 + 改名）</b>：第 3 个参数写 {@code header[6]}、第 4 个写 {@code header[7]}，
+     * 而 v1 起 flags 就是**大端** {@code byte6*256 + byte7} ⇒ 按 v1 语义「低字节=执行模式、高字节=载荷类型」，
+     * 调用方必须传 <b>(payloadType, executionMode)</b>（曾因参数名 {@code flagsLow/flagsHigh} 引起歧义，已改名）。</p>
+     */
+    public static byte[] encrypt(byte[] plain, byte[] key, int payloadType, int executionMode) throws Exception {
+        return encrypt(plain, key, payloadType, executionMode, randomIv());
     }
 
-    /** 打包（指定 IV，仅供测试/确定性场景）。 */
-    public static byte[] encrypt(byte[] plain, byte[] key, int flagsLow, int flagsHigh, byte[] iv)
+    /** 打包（指定 IV，仅供测试/确定性场景）。参数语义同上：{@code (payloadType, executionMode)}。 */
+    public static byte[] encrypt(byte[] plain, byte[] key, int payloadType, int executionMode, byte[] iv)
             throws Exception {
         requireKey(key);
         if (iv == null || iv.length != IV_LENGTH) {
@@ -102,8 +108,8 @@ public final class ScriptPayloadV2 {
         }
         byte[] header = new byte[HEADER_LENGTH];
         System.arraycopy(MAGIC, 0, header, 0, MAGIC.length);
-        header[6] = (byte) (flagsLow & 0xFF);
-        header[7] = (byte) (flagsHigh & 0xFF);
+        header[6] = (byte) (payloadType & 0xFF);   // 高字节 = 载荷类型
+        header[7] = (byte) (executionMode & 0xFF); // 低字节 = 执行模式
         header[8] = VERSION;
         System.arraycopy(iv, 0, header, 12, IV_LENGTH);
         byte[] aad = Arrays.copyOf(header, AAD_LENGTH);
