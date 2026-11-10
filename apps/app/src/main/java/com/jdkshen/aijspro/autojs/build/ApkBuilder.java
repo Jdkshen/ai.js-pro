@@ -724,15 +724,18 @@ public class ApkBuilder {
      * task-131：丢掉 stale 资源包时留下**极小标记**（只给运行期读），让用户看到我们的可执行文案
      * 而不是白屏。命名与同类样例一致：与被丢的那个 sidecar 同目录，固定叫 project-res.stale.json。
      *
-     * <p>内容：expected（sidecar 记录的原宿主摘要）/ actual（本次产物宿主摘要）/ message
-     *（W1 的 staleResourcePackMessage 原文，不抄第二份）。只在 DROP 分支调用。</p>
+     * <p>内容：**只有两个摘要** expected（sidecar 记录的原宿主摘要）/ actual（本次产物宿主摘要）。
+     * **不写 message**：打包期拼出来的文案里带着打包机的工作区路径（dev-1480 实测
+     * /data/user/0/com.jdkshen.aijspro/cache/glass-build/...），用户在自己设备上看到会困惑 ⇒
+     * 文案由**运行期**用运行时真实路径重新拼（仍然是 W1 的 staleResourcePackMessage 同一份函数）。
+     * 只在 DROP 分支调用。</p>
      */
     private void writeStaleResMarker(File sidecar, ProjectResSidecarPolicy.Decision decision, String message) {
         try {
             org.json.JSONObject marker = new org.json.JSONObject();
             marker.put("expected", decision.getExpectedDigest() == null ? "" : decision.getExpectedDigest());
             marker.put("actual", decision.getActualDigest() == null ? "" : decision.getActualDigest());
-            marker.put("message", message);
+            // message 不写进标记（见上面的原因）；包装期文案仍进 mPackagingWarnings + C-PKG 日志。
             byte[] bytes = marker.toString().getBytes("UTF-8");
             File target = new File(sidecar.getParentFile(), STALE_RES_MARKER);
             writeBytes(target, bytes);

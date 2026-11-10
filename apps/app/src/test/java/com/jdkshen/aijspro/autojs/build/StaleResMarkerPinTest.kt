@@ -19,8 +19,13 @@ class StaleResMarkerPinTest {
         val source = source()
         assertTrue("必须有标记常量", source.contains("String STALE_RES_MARKER = \"project-res.stale.json\""))
         assertTrue("必须有写入方法", source.contains("private void writeStaleResMarker("))
-        assertTrue("标记内容要带 expected/actual/message",
-            source.contains("marker.put(\"expected\"") && source.contains("marker.put(\"actual\"") && source.contains("marker.put(\"message\""))
+        assertTrue("标记内容要带 expected/actual",
+            source.contains("marker.put(\"expected\"") && source.contains("marker.put(\"actual\""))
+        // dev-1480 打磨：标记里**不放 message**（打包期路径会困惑用户）⇒ 运行期用真实路径重拼
+        val markerBody = source.substringAfter("private void writeStaleResMarker(").substringBefore("private static final String STALE_RES_MARKER")
+        assertTrue("标记里不得写 message：" + markerBody.take(160), !markerBody.contains("marker.put(\"message\""))
+        assertTrue("必须留下「不写 message 的原因」注释，避免以后有人又加回去",
+            source.contains("message 不写进标记"))
         assertTrue("复用 W1 的文案变量（warning 传进去，不抄第二份）", source.contains("writeStaleResMarker(sidecar, decision, warning)"))
         // 调用点必须在 DROP 守卫之后（结构断言，不做下标算术）
         val prune = source.substringAfter("private void pruneStaleProjectResPacks()").substringBefore("private void writeStaleResMarker(")

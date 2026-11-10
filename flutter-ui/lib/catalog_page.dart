@@ -116,7 +116,11 @@ class _CatalogPageState extends State<CatalogPage> {
   Future<void> loadPluginCatalog() async {
     if (!widget.plugin) return;
     try {
-      final value = await LocalBridge.call(pluginCatalogMethod, const {});
+      final value = await LocalBridge
+          .call(pluginCatalogMethod, const {})
+          // task-135：桥未响应也必须落到可见降级（否则提示永远不出现 = 静默失败）
+          .timeout(const Duration(seconds: 8),
+              onTimeout: () => throw StateError('清单读取超时（桥未响应）'));
       final raw = value is Map ? value['plugins'] : value;
       final next = <String, dynamic>{};
       if (raw is List) {
@@ -473,7 +477,10 @@ class _CatalogPageState extends State<CatalogPage> {
       reloadWhenActive = true;
     }
     if (widget.active && reloadWhenActive) load();
-    if (widget.active && widget.plugin && !pluginManifestLoaded) loadPluginCatalog();
+    // 没加载过、或上次失败（桥未落地/超时）⇒ 每次进入插件 tab 都再试一次
+    if (widget.active && widget.plugin && (!pluginManifestLoaded || pluginManifestError != null)) {
+      loadPluginCatalog();
+    }
   }
 
   @override
@@ -1251,6 +1258,29 @@ class _CatalogPageState extends State<CatalogPage> {
     final usable = all.where(scriptUsable).length;
     final disabledInList = all.where(pluginDisabled).length;
     return Column(children: [
+      // task-136：清单提示**独占整行**（上一版塞在标题 Expanded 里 ⇒ 真机上与右侧「N 个插件」重叠 ✗）
+      if (widget.plugin && pluginManifestError != null)
+        Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('插件目录不可用：' + pluginManifestError!,
+                    key: const ValueKey('plugin-manifest-error-header'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.error)))),
+      if (widget.plugin &&
+          pluginManifestError == null &&
+          !pluginManifestLoaded)
+        const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('插件目录：加载中…',
+                    key: ValueKey('plugin-manifest-loading'),
+                    style: TextStyle(fontSize: 12)))),
       ConstrainedBox(
           constraints: const BoxConstraints(minHeight: 48),
           child: Padding(

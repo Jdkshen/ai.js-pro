@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- task-131：OCR 插件最小清单：没有 Activity/Service，只作为「能力提供者」被宿主加载。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:label="OCR 插件" android:hasCode="true">
+        <!-- 宿主按这个键名去找注册类（PluginRegistry.REGISTRY_KEY = org.autojs.plugin.sdk.registry）；
+             少了它插件装了也不会出现在插件页（K40 实测：只列出 2 个插件）。 -->
+        <meta-data
+            android:name="org.autojs.plugin.sdk.registry"
+            android:value="org.autojs.autojspro.plugin.ocr.Registry" />
+    </application>
+</manifest>

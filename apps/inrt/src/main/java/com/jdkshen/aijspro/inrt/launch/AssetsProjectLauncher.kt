@@ -407,11 +407,20 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         val staleMarker = File(mProjectDir, "build/project-res.stale.json")
         if (staleMarker.isFile) {
             val marker = runCatching { org.json.JSONObject(staleMarker.readText()) }.getOrNull()
-            val message = marker?.optString("message", null)?.takeIf { it.isNotBlank() }
-                ?: CompiledProjectResources.staleResourcePackMessage(
-                        marker?.optString("expectedHostDigest", marker?.optString("expected", null)),
-                        marker?.optString("actualHostDigest", marker?.optString("actual", null)),
-                        resApk)
+            // task-141：标记里**只有两个摘要**（没有 message —— 打包期文案带的是打包机工作区路径，
+            // 用户在设备上看到会困惑）⇒ 一律用**运行时**路径 + 同一个函数现拼（不抄第二份）。
+            val expectedDigest = marker?.optString("expectedHostDigest", marker?.optString("expected", null))
+                ?.takeIf { it.isNotBlank() }
+            val actualDigest = marker?.optString("actualHostDigest", marker?.optString("actual", null))
+                ?.takeIf { it.isNotBlank() }
+            val message = if (expectedDigest != null && actualDigest != null) {
+                CompiledProjectResources.staleResourcePackMessage(expectedDigest, actualDigest, resApk)
+            } else {
+                // 摘要不全 ⇒ 不猜（沿用「判不出来就别动」的口径），但仍要点名 + 给可执行修法。
+                "工程资源包不可用：打包期已丢弃 stale 资源包，且标记里摘要不全（无法给出期望/当前宿主）。" +
+                        "已忽略该资源包（回落到无工程资源）；修法：对当前设备上的宿主重新编译 project-res.apk" +
+                        "（MCP: android_resources_compile），再重新打包。"
+            }
             Log.w(TAG, message)
             lastStagedResourceWarning = message
             Log.w(TAG, "C-INRT: stale project-res marker found (packaging-time drop), reported to console")

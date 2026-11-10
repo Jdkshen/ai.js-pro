@@ -1,0 +1,69 @@
+apply plugin: 'com.android.application'
+
+// task-131：OCR 插件（把内建 OCR 从主程序剥离）。结构与 plugins/xiangqi-plugin 同源：
+// 自包含、不 link 宿主 :engine 的类；原生库与模型由 tools/plugins/copy-ocr-plugin-payload.mjs
+// 从**现有产物**拷到 src/main/{jniLibs,assets}（不入 git 大文件）。
+//
+// 加载契约（W1 task-130，冻结）：包名 org.autojs.autojspro.plugin.ocr；
+// 入口类沿用宿主 PluginRegistry 的反射常量表 + loadDefault(host, plugin, runtime, scope)。
+def pluginSigningValues = [
+        storeFile    : System.getenv('AIJSPRO_KEYSTORE'),
+        storePassword: System.getenv('AIJSPRO_STORE_PASSWORD'),
+        keyAlias     : System.getenv('AIJSPRO_KEY_ALIAS'),
+        keyPassword  : System.getenv('AIJSPRO_KEY_PASSWORD')
+]
+def pluginSigningReady = pluginSigningValues.values().every { it != null && !it.trim().isEmpty() }
+
+android {
+    namespace 'org.autojs.autojspro.plugin.ocr'
+    compileSdkVersion versions.compile
+    buildToolsVersion versions.buildTool
+
+    defaultConfig {
+        applicationId 'org.autojs.autojspro.plugin.ocr'
+        minSdkVersion versions.mini
+        targetSdkVersion versions.target
+        versionCode versions.ocrPluginVersionCode
+        versionName versions.ocrPluginVersionName
+        // 契约：只随 arm64-v8a（与 libppocr 的既有构建一致）。
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    signingConfigs {
+        if (pluginSigningReady) {
+            release {
+                storeFile file(pluginSigningValues.storeFile)
+                storePassword pluginSigningValues.storePassword
+                keyAlias pluginSigningValues.keyAlias
+                keyPassword pluginSigningValues.keyPassword
+                enableV1Signing true
+                enableV2Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        // 插件**必须与宿主同签名**（README 约定；否则宿主装不上/发现不了）。
+        // 没配 AIJSPRO_* 时回退 **debug 签名**，便于本机真机自测；
+        // 配了就与主程序同一套发布签名（发布前必须真做，不能拿 debug 签名发）。
+        release {
+            signingConfig pluginSigningReady ? signingConfigs.release : signingConfigs.debug
+            minifyEnabled false
+        }
+        debug {
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    packagingOptions {
+        jniLibs {
+            // 插件自己带 libc++_shared.so：与宿主/node24 的副本同哈希（由打包端做同源去重）。
+            useLegacyPackaging false
+        }
+    }
+}
+
+// 载荷（jniLibs / assets/ocr/models / assets/scripts/index.js）由脚本生成，构建前先跑：
+//   node tools/plugins/copy-ocr-plugin-payload.mjs
