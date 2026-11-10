@@ -32,6 +32,8 @@ object NativeLibPolicy {
         val declaredPlugins: List<String> = emptyList(),
         /** 工程被复制进包的文本里是否出现 pikafish/xiangqi/象棋（由调用方扫描后传入）。 */
         val usesPuzzleEngine: Boolean = false,
+        /** task-101：optimization.removeOcr（默认 false）→ 不带内建 OCR 的 so 与模型。 */
+        val removeOcr: Boolean = false,
     ) {
         fun wantsPuzzleEngine(): Boolean = usesPuzzleEngine ||
             declaredPlugins.any { plugin -> PUZZLE_HINTS.any { hint -> plugin.lowercase().contains(hint) } }
@@ -56,7 +58,11 @@ object NativeLibPolicy {
                     Verdict(Decision.KEEP, "工程未声明 removeOpenCv → 保留 OpenCV/TBB（宿主形态是拆库）", "project")
                 }
             name in OCR_LIBS ->
-                Verdict(Decision.KEEP, "内建 OCR（ppocr/mlkit pipeline）覆盖 Pro 的 mlkit 插件能力", "template")
+                if (needs.removeOcr) {
+                    Verdict(Decision.DROP, "project.json optimization.removeOcr=true → 不带内建 OCR（ppocr/mlkit pipeline）", "project")
+                } else {
+                    Verdict(Decision.KEEP, "内建 OCR（ppocr/mlkit pipeline）覆盖 Pro 的 mlkit 插件能力", "template")
+                }
             name.startsWith("libv8") || name.contains("flutter") || name.contains("node") ->
                 Verdict(Decision.DROP, "宿主里其它运行时（v8/flutter/node）不属于本工程产物", "leak")
             else ->

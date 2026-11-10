@@ -515,6 +515,7 @@ public class ApkBuilder {
         copySplashIcon();
         removeDisabledFeatures();
         stageSjbcAssets();
+        pruneDisabledPackagingAssets();
         enforcePackagingPolicy();
         // 等级 × 引擎的实际载荷形态记一条：等级 2 对 Node 不是字节码，日志里必须能看出来。
         Log.i("C-PKG", "script protection level=" + mEncryptLevel
@@ -535,6 +536,85 @@ public class ApkBuilder {
         if (mAppConfig != null && !mAppConfig.includeImageModule) {
             deleteLibrariesRecursively(new File(mWorkspacePath, "lib"),
                     ApkBuilder::isImageModuleLibrary);
+        }
+    }
+
+    /**
+     * task-101：按工程开关，把**模板/宿主继承进来**的那部分资源从工作区剪掉（默认不动任何东西）：
+     * <ul>
+     *   <li>{@code optimization.removeOcr=true} ⇒ 删 {@code assets/mlkit-google-ocr-models/**} 与
+     *       {@code assets/modules/__ocr__.js}（OCR 的 .so 由 {@link NativeLibPolicy} 同开关丢弃）；</li>
+     *   <li>{@code features.nodejs=disabled} ⇒ 删 {@code assets/node24/**} 与
+     *       {@code assets/source-engine-upgrade/**}（含与 lib/ 重复的 libc++_shared.so）。</li>
+     * </ul>
+     * 只在开关明确打开时动手；否则一条日志都不加（保证默认产物逐条不变）。
+     */
+    private void pruneDisabledPackagingAssets() throws IOException {
+        File projectFile = new File(mAppConfig.sourcePath, "project.json");
+        if (!projectFile.isFile()) {
+            return;
+        }
+        JSONObject project;
+        try {
+            project = new JSONObject(new String(PFiles.readBytes(projectFile.getPath()), "UTF-8"));
+        } catch (Throwable error) {
+            Log.w("C-PKG", "读取 project.json 失败，跳过资源剪裁：" + error.getMessage());
+            return;
+        }
+        JSONObject optimization = project.optJSONObject("optimization");
+        boolean removeOcr = optimization != null && optimization.optBoolean("removeOcr", false);
+        boolean nodejsDisabled = isNodeJsDisabled(project);
+        if (removeOcr) {
+            int[] removed = new int[2];
+            deletePathRecursively(new File(mWorkspacePath, "assets/mlkit-google-ocr-models"), removed);
+            deletePathRecursively(new File(mWorkspacePath, "assets/modules/__ocr__.js"), removed);
+            Log.i("C-PKG", "ocr removed (removeOcr=true) files=" + removed[0] + " bytes=" + removed[1]);
+            report("ocrRemovedFiles", removed[0]);
+            report("ocrRemovedBytes", removed[1]);
+            mPackagingWarnings.add("optimization.removeOcr=true：产物不含内建 OCR（$ocr 会点名报错）");
+        }
+        if (nodejsDisabled) {
+            int[] removed = new int[2];
+            deletePathRecursively(new File(mWorkspacePath, "assets/node24"), removed);
+            deletePathRecursively(new File(mWorkspacePath, "assets/source-engine-upgrade"), removed);
+            Log.i("C-PKG", "node24 assets skipped (nodejs=disabled) entries=" + removed[0] + " bytes=" + removed[1]);
+            report("node24SkippedEntries", removed[0]);
+            report("node24SkippedBytes", removed[1]);
+        }
+    }
+
+    /** project.json 的 {@code features.nodejs} 是否是 {@code disabled}（task-101）。 */
+    private static boolean isNodeJsDisabled(JSONObject project) {
+        if (project == null) {
+            return false;
+        }
+        JSONObject features = project.optJSONObject("features");
+        if (features == null) {
+            return false;
+        }
+        return "disabled".equalsIgnoreCase(String.valueOf(features.opt("nodejs")));
+    }
+
+    /** 递归删除并把 [文件数, 字节数] 累加到 out（只用于日志/报告，不抛）。 */
+    private static void deletePathRecursively(File path, int[] out) {
+        if (path == null || !path.exists()) {
+            return;
+        }
+        if (path.isDirectory()) {
+            File[] children = path.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deletePathRecursively(child, out);
+                }
+            }
+            //noinspection ResultOfMethodCallIgnored
+            path.delete();
+            return;
+        }
+        long length = path.length();
+        if (path.delete()) {
+            out[0]++;
+            out[1] += (int) Math.min(Integer.MAX_VALUE, length);
         }
     }
 
@@ -687,11 +767,14 @@ public class ApkBuilder {
             }
         }
         boolean removeOpenCv = false;
+        boolean removeOcr = false;
         List<String> plugins = new ArrayList<>();
         List<String> declaredAbis = new ArrayList<>();
         if (project != null) {
             JSONObject optimization = project.optJSONObject("optimization");
             removeOpenCv = optimization != null && optimization.optBoolean("removeOpenCv", false);
+            // task-101：与 removeOpenCv 同形；未设置 = false（默认产物逐条不变）。
+            removeOcr = optimization != null && optimization.optBoolean("removeOcr", false);
             JSONObject pluginConfig = project.optJSONObject("plugins");
             if (pluginConfig != null) {
                 java.util.Iterator<String> keys = pluginConfig.keys();
@@ -703,7 +786,7 @@ public class ApkBuilder {
             }
         }
         boolean usesPuzzleEngine = projectReferencesPuzzleEngine(projectRoot);
-        NativeLibPolicy.ProjectNeeds needs = new NativeLibPolicy.ProjectNeeds(removeOpenCv, plugins, usesPuzzleEngine);
+        NativeLibPolicy.ProjectNeeds needs = new NativeLibPolicy.ProjectNeeds(removeOpenCv, plugins, usesPuzzleEngine, removeOcr);
 
         File libRoot = new File(mWorkspacePath, "lib");
         List<String> availableAbis = new ArrayList<>();
@@ -736,7 +819,7 @@ public class ApkBuilder {
         }
         if (dropped > 0) {
             Log.i("C-PKG", "packaging policy dropped native libs=" + dropped
-                    + " (removeOpenCv=" + removeOpenCv + " plugins=" + plugins + ")");
+                    + " (removeOpenCv=" + removeOpenCv + " removeOcr=" + removeOcr + " plugins=" + plugins + ")");
         }
         report("droppedNativeLibs", droppedEntries);
         try {
@@ -891,7 +974,12 @@ public class ApkBuilder {
                 mEncryptLevel, nodeEntry, isQuickJsEngine());
         JSONObject project = projectFile.isFile()
                 ? new JSONObject(new String(PFiles.readBytes(projectFile.getPath()), "UTF-8")) : null;
-        if (Node24PackagingAssets.requiresRuntime(nodeEntry, project)) {
+        if (isNodeJsDisabled(project)) {
+            // task-101：features.nodejs=disabled ⇒ 运行资产已在 pruneDisabledPackagingAssets() 里剪掉，
+            // 这里必须「跳过并说明」，既不去宿主补一份、也不把缺失当失败（否则工程直接打不出包）。
+            Log.i("C-PKG", "node24 runtime copy skipped (nodejs=disabled): assets/node24/** 与 "
+                    + "assets/source-engine-upgrade/** 不随包；node24 相关校验一并跳过");
+        } else if (Node24PackagingAssets.requiresRuntime(nodeEntry, project)) {
             File hostApk = hostApkFile(GlobalAppContext.get());
             File workspace = new File(mWorkspacePath);
             // 先记下模板自带的 Node 运行时哈希，再让宿主的运行资产覆盖它——否则漂移就看不出来了。

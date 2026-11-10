@@ -302,6 +302,15 @@ public class ProjectConfig {
                     config.mWarnings.add("scripts 不是对象，已忽略");
                 }
             }
+            // task-101：optimization.removeOcr（只读映射，transient ⇒ toJson 逐字不变）。
+            JsonElement optimization = json.get("optimization");
+            if (optimization != null && optimization.isJsonObject()
+                    && optimization.getAsJsonObject().has("removeOcr")) {
+                JsonElement flag = optimization.getAsJsonObject().get("removeOcr");
+                if (flag != null && flag.isJsonPrimitive()) {
+                    config.mRemoveOcr = flag.getAsBoolean();
+                }
+            }
             // 2/3) displaySplash 已在委托前落到 showSplash；features（Pro 是对象）见下
             JsonElement features = json.get("features");
             if (features != null) {
@@ -527,6 +536,19 @@ public class ProjectConfig {
 
     public void setLaunchConfig(LaunchConfig launchConfig) {
         mLaunchConfig = launchConfig;
+    }
+
+    /**
+     * task-101：{@code optimization.removeOcr} 的**只读**映射（与 removeOpenCv 同形）。
+     *
+     * <p>真值仍由打包侧（{@code NativeLibPolicy}/{@code ApkBuilder}）从 project.json 直接读；
+     * 这里只是给引擎/UI 一个可查询的口径，字段是 transient ⇒ **写路径逐字不变**（未设置时为 null）。</p>
+     */
+    private transient Boolean mRemoveOcr;
+
+    /** 工程是否声明 {@code optimization.removeOcr=true}（未声明 = false）。 */
+    public boolean isRemoveOcr() {
+        return Boolean.TRUE.equals(mRemoveOcr);
     }
 
     public String toJson() {

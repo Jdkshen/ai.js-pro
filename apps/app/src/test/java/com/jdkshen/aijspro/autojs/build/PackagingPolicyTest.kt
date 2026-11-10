@@ -135,6 +135,27 @@ class PackagingPolicyTest {
         println("SAMPLE | C-PKG W | abis warning: " + warning)
     }
 
+    /** task-101 ①：optimization.removeOcr 两态（默认 false 必须逐字不变）。 */
+    @Test fun removeOcrDropsBuiltinOcrOnlyWhenDeclared() {
+        val off = NativeLibPolicy.classify("lib/arm64-v8a/libppocr.so", NativeLibPolicy.ProjectNeeds())
+        assertEquals(NativeLibPolicy.Decision.KEEP, off.decision)
+        assertTrue("默认态的理由必须点名「内建 OCR」：" + off.reason, off.reason.contains("内建 OCR"))
+        val offMlkit = NativeLibPolicy.classify("lib/arm64-v8a/libmlkit_google_ocr_pipeline.so", NativeLibPolicy.ProjectNeeds())
+        assertEquals(NativeLibPolicy.Decision.KEEP, offMlkit.decision)
+
+        val on = NativeLibPolicy.ProjectNeeds(removeOcr = true)
+        val ppocr = NativeLibPolicy.classify("lib/arm64-v8a/libppocr.so", on)
+        val mlkit = NativeLibPolicy.classify("lib/arm64-v8a/libmlkit_google_ocr_pipeline.so", on)
+        assertEquals(NativeLibPolicy.Decision.DROP, ppocr.decision)
+        assertEquals(NativeLibPolicy.Decision.DROP, mlkit.decision)
+        assertTrue("丢 OCR 的理由要可抄：" + ppocr.reason, ppocr.reason.contains("removeOcr=true"))
+        // 开关只影响 OCR：OpenCV/QuickJS 等不受影响
+        assertEquals(NativeLibPolicy.Decision.KEEP,
+            NativeLibPolicy.classify("lib/arm64-v8a/libopencv_core.so", on).decision)
+        assertEquals(NativeLibPolicy.Decision.KEEP,
+            NativeLibPolicy.classify("lib/arm64-v8a/libquickjs.so", on).decision)
+    }
+
     /** task-85 ②：同一条 ABI 缺失结论只 W 一次，重复降 INFO；事实（missing）不消失。 */
     @Test fun abiWarningIsDeduplicatedPerSignatureButFactsStay() {
         val first = AbiPolicy.resolve(listOf("arm64-v8a", "armeabi-v7a"), listOf("arm64-v8a"))
