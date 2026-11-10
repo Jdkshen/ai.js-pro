@@ -14,6 +14,7 @@ import com.jdkshen.aijspro.inrt.Pref
 import com.jdkshen.aijspro.inrt.autojs.AutoJs
 import com.jdkshen.aijspro.inrt.script.InrtScriptThreadHost
 import com.stardust.autojs.engine.encryption.ScriptEncryption
+import com.stardust.autojs.engine.encryption.ScriptPayloadV2
 import com.stardust.autojs.execution.ExecutionConfig
 import com.stardust.autojs.execution.ScriptExecutionTask
 import com.stardust.autojs.execution.ScriptHostRouting
@@ -360,6 +361,18 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         }
     }
 
+    /** task-126：产物主脚本头是不是 v2（读明文头 24 字节；三级判定与 ScriptPayloadV2.isV2 同款）。 */
+    private fun isV2Payload(projectConfig: ProjectConfig): Boolean = runCatching {
+        val main = File(mProjectDir, projectConfig.mainScriptFile)
+        if (!main.isFile) return@runCatching false
+        val head = ByteArray(ScriptPayloadV2.HEADER_LENGTH)
+        val read = main.inputStream().use { it.read(head) }
+        read > 0 && ScriptPayloadV2.isV2(if (read == head.size) head else head.copyOf(read))
+    }.getOrElse { error ->
+        Log.w(TAG, "C-INRT: 读主脚本头判断 v2 失败，按 v1 处理：$error")
+        false
+    }
+
     private fun initKey(projectConfig: ProjectConfig) {
         // 新方案（有随机盐 + 签名指纹）：密钥绑定到打包时的签名身份。
         // 用别的证书重签（重打包/二次修改）时指纹对不上，直接拒绝运行，
@@ -376,8 +389,16 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             }
             key = ScriptKeyDerivation.deriveKey(projectConfig.packageName, salt, fingerprint)
             vector = ScriptKeyDerivation.deriveVector(salt, fingerprint)
-            // 告诉解密入口「这个产物是新方案的」：优先交给原生库解密（密钥不落到 Java 侧）。
-            EncryptedScripts.setHardenedParams(projectConfig.packageName, salt, fingerprint)
+            // task-126：v2（AES-256-GCM）密钥 —— 与打包端**同一份派生**（真 32 字节）。
+            ScriptEncryption.setKeyV2(
+                    ScriptPayloadV2.deriveKeyV2(projectConfig.packageName, salt, fingerprint))
+            // 产物是 v2 时**不能**交给原生：script_crypto.c 只有 SHA-256 + AES-CBC，不含 GCM。
+            if (isV2Payload(projectConfig)) {
+                Log.i(TAG, "C-INRT: payload=v2 (AES-256-GCM) → JVM 路径（原生只认 v1）")
+            } else {
+                // v1：告诉解密入口「这个产物是老方案的」，优先交给原生库解密（密钥不落到 Java 侧）。
+                EncryptedScripts.setHardenedParams(projectConfig.packageName, salt, fingerprint)
+            }
         } else {
             // 老产物：沿用旧的推导方式，保证升级运行端后仍能打开。
             throw IllegalStateException(

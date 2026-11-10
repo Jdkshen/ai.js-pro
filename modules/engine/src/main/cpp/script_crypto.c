@@ -332,6 +332,17 @@ static size_t decrypt_payload(uint8_t *buffer, size_t length,
     size_t plainLength;
     uint8_t pad;
 
+    /* task-126：v2（AES-256-GCM）不经原生解密。三级结构判定与 Java ScriptPayloadV2.isV2 同款：
+     * 魔数 + 第 9 字节 0x02 + 3 个保留字节为 0（v1 的 offset 8 是密文，1/256 会恰好是 0x02，故必须看保留字节）。 */
+    if (length > 12
+            && buffer[0] == 0x77 && buffer[1] == 0x01 && buffer[2] == 0x17
+            && buffer[3] == 0x7F && buffer[4] == 0x12 && buffer[5] == 0x12
+            && buffer[8] == 0x02 && buffer[9] == 0 && buffer[10] == 0 && buffer[11] == 0) {
+        copy_text(errorMessage, errorSize,
+                  "原生解密库不支持 v2（AES-256-GCM）：v2 载荷必须走 JVM 路径；原生只认 v1。");
+        return 0;
+    }
+
     if (length == 0 || length % 16 != 0) {
         copy_text(errorMessage, errorSize, "密文长度不是 16 字节的整数倍");
         return 0;
