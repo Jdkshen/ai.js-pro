@@ -98,6 +98,16 @@ module.exports = function (runtime, scope) {
             }
             throw error;
         }
+        // task-143: runtime.plugins.load() may return null (hard blocker on device: dev-1484).
+        // Never read .mainScriptPath off null; turn it into a named error the caller can act on.
+        if (plugin === null || plugin === undefined) {
+            throw new Error('插件加载返回空（runtime.plugins.load = null）：' + packageName
+                + '；若是打包产物，请确认插件已安装且其 assets/scripts/index.js 与注册表声明齐全。');
+        }
+        if (!plugin.mainScriptPath) {
+            throw new Error('插件没有入口脚本路径（mainScriptPath 为空）：' + packageName
+                + '；插件需在 assets/scripts/index.js 提供入口。');
+        }
         var index = require(plugin.mainScriptPath);
         return index(wrapPlugin(plugin));
     }

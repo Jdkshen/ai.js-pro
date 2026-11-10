@@ -595,11 +595,21 @@ public class ApkBuilder {
             int stubBytes = 0;
             File rhinoModule = OcrAssetDiscovery.findRhinoModule(assetsDir, providedAssets);
             if (rhinoModule != null) {
+                // task-131 修正（K40 dev-1482 集成缺口）：**保留真实 __ocr__.js**。
+                // W1 的模块版本已同时包含两条路：「插件优先 ⇒ $plugins.load(OCR 插件)」与
+                // 「无插件/能力缺失 ⇒ 点名错误」。之前我们用 796B 桩替换它 ⇒ 桩直接 throw，
+                // 插件分发永远走不到（装了插件也拿不到 OCR）。
+                // 我们只剪模型与原生库（体积大头），模块本身原样保留。
+                Log.i("C-PKG", "ocr removed: 保留真实 __ocr__.js（插件优先 + 点名错误两条路都在）；只剪模型与原生库");
+            } else {
+                // 真实模块不存在时才回退桩：否则脚本会拿到 Module "__ocr__" not found.，我们的文案不可达。
+                File stubTarget = new File(assetsDir, OcrAssetDiscovery.RHINO_OCR_MODULE);
                 byte[] stub = OcrModuleStub.content(
                         com.stardust.autojs.runtime.api.OcrAvailability.NOT_PACKAGED_MESSAGE)
                         .getBytes("UTF-8");
-                writeBytes(rhinoModule, stub);
+                writeBytes(stubTarget, stub);
                 stubBytes = stub.length;
+                Log.w("C-PKG", "ocr removed: 真实 __ocr__.js 不存在 ⇒ 写了 " + stubBytes + "B 桩（点名错误可达）");
             }
             List<File> skippedByName = new ArrayList<>(candidates);
             skippedByName.removeAll(ocrTargets);
@@ -615,7 +625,7 @@ public class ApkBuilder {
             // 它们只在运行期用 $ocr 全局（拿不到时自身有 guard + 引擎点名错误）⇒ 打包侧只剪 Rhino 的 __ocr__.js。
             Log.i("C-PKG", "ocr removed (removeOcr=true) files=" + ocrRemoved[0] + " bytes=" + ocrRemoved[1]
                     + " prefix=" + (ocrPrefix.isEmpty() ? "(none)" : ocrPrefix)
-                    + " rhinoModule=" + (stubBytes > 0 ? "stubbed(__ocr__.js " + stubBytes + "B)" : "(absent)")
+                    + " rhinoModule=" + (stubBytes > 0 ? "stubbed(__ocr__.js " + stubBytes + "B, real absent)" : "kept(real module)")
                     + " quickjs=kept(qjs-plugins.js 是共享插件门面，运行期 $ocr 缺失走点名错误)");
             if (ocrTargets.isEmpty() && stubBytes == 0) {
                 Log.w("C-PKG", "ocr removed: 工作区里没找到任何 OCR 资产（模板可能改名）——前缀发现为空");

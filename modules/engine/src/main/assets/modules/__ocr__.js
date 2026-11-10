@@ -7,7 +7,103 @@
 // **真的生效**（ML Kit 后端接受但不改变引擎）。
 module.exports = function (runtime, global) {
     var Ocr = com.stardust.autojs.runtime.api.Ocr;
-    var PPOcr = com.stardust.autojs.runtime.api.PPOcr;
+    // task-141：OCR 插件（org.autojs.autojspro.plugin.ocr）优先 —— 装了且就绪就用插件实现；
+// 否则返回 null，调用方继续走**既有链路**（无插件时那条点名错误，不新增第二份文案）。
+var OCR_PLUGIN_PACKAGE = 'org.autojs.autojspro.plugin.ocr';
+
+// task-142 (approved): lazy plugin-libs staging on first $ocr use (no plugin-page callback needed).
+var ocrPluginSyncAttempted = false;
+
+function ensurePluginLibsReady(Loader, versionCode) {
+    try {
+        if (!Loader || typeof Loader.isReady !== 'function') {
+            return true;
+        }
+        if (Loader.isReady(context, OCR_PLUGIN_PACKAGE, versionCode)) {
+            return true;
+        }
+        if (ocrPluginSyncAttempted) {
+            return false;
+        }
+        ocrPluginSyncAttempted = true;
+        if (typeof Loader.syncPluginLibs !== 'function') {
+            return false;
+        }
+        Loader.syncPluginLibs(context, OCR_PLUGIN_PACKAGE, versionCode);
+        var ready = Loader.isReady(context, OCR_PLUGIN_PACKAGE, versionCode) === true;
+        try {
+            console.info('[OCR] plugin libs lazy staging: ready=' + ready + ' pkg=' + OCR_PLUGIN_PACKAGE + ' v=' + versionCode);
+        } catch (ignore) {
+        }
+        return ready;
+    } catch (error) {
+        try { console.warn('[OCR] plugin libs staging failed (fallback to builtin chain): ' + error); } catch (ignore) {
+        }
+        return false;
+    }
+}
+
+function pluginOcrCreateOrNull(options) {
+    try {
+        if (typeof $plugins === 'undefined' || !$plugins || typeof $plugins.load !== 'function') {
+            return null;
+        }
+        var plugin = $plugins.load(OCR_PLUGIN_PACKAGE);
+        if (!plugin) {
+            return null;
+        }
+        // 就绪判定（能查才查；查不了就交给插件自己报错，不在这里猜）。
+        try {
+            if (typeof context !== 'undefined' && context && Packages && Packages.com) {
+                var Loader = Packages.com.stardust.autojs.plugin.PluginNativeLoader;
+                var info = context.getPackageManager().getPackageInfo(OCR_PLUGIN_PACKAGE, 0);
+                // Ready? If not, stage once lazily (task-142); still not ready => fall back to the builtin chain.
+                if (!ensurePluginLibsReady(Loader, info.versionCode)) {
+                    return null;
+                }
+            }
+        } catch (ignored) {
+        }
+        var create = (typeof plugin.create === 'function') ? plugin.create
+                : (plugin.ocr && typeof plugin.ocr.create === 'function' ? plugin.ocr.create : null);
+        if (create === null) {
+            return null;
+        }
+        return create.call(plugin.ocr && plugin.ocr.create === create ? plugin.ocr : plugin, options);
+    } catch (error) {
+        // 插件报错不吞：写一条日志后回落既有链路（点名的错由既有链路给）。
+        try { console.warn('OCR 插件不可用，回落到内置链路：' + error); } catch (ignored) {
+        }
+        return null;
+    }
+}
+
+// task-143 (approved): REAL loadability probe - pure file existence check (no System.load, no side effects).
+function nativeLibraryDirOrNull() {
+    try {
+        if (typeof context !== 'undefined' && context && typeof context.getApplicationInfo === 'function') {
+            var dir = context.getApplicationInfo().nativeLibraryDir;
+            return dir ? new java.io.File(dir) : null;
+        }
+    } catch (ignored) {
+    }
+    return null;
+}
+
+// true = file present, false = definitely missing, null = cannot tell (keep legacy behaviour).
+function nativeLibPresent(fileName) {
+    try {
+        var dir = nativeLibraryDirOrNull();
+        if (dir === null) {
+            return null;
+        }
+        return new java.io.File(dir, fileName).isFile();
+    } catch (ignored) {
+        return null;
+    }
+}
+
+var PPOcr = com.stardust.autojs.runtime.api.PPOcr;
 // task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致的共用文案（三引擎同源）。
 var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；如需 OCR 请把该开关关掉并重新打包。';
     var ocr = {};
@@ -86,15 +182,36 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
     // 文档：根据给定选项创建 OCR 对象（每次调用都是一个新对象）
     ocr.create = function (options) {
         options = options || {};
+        // task-141：插件优先（返回 null 则继续下面既有逻辑）。
+        var pluginSession = pluginOcrCreateOrNull(options);
+        if (pluginSession !== null && pluginSession !== undefined) {
+            return pluginSession;
+        }
         var backend = String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase();
         // task-105：ppocr 未随包时**点名**报错（不是 UnsatisfiedLinkError / 静默 undefined）。
-        if ((backend === 'ppocr' || backend === 'paddle' || backend === 'paddleocr') && !ppocrIsAvailable()) {
+        if ((backend === 'ppocr' || backend === 'paddle' || backend === 'paddleocr')
+                && (ppocrIsAvailable() === false || nativeLibPresent('libppocr.so') === false)) {
             throw new Error(OCR_NOT_PACKAGED);
         }
         var degradedFrom = null;
         var degradeReason = null;
         var session;
-        if (backend !== 'ppocr' && !Ocr.ensureMlKitInitialized()) {
+        // task-142：mlkit 可用性检查必须**安全**（库被 removeOcr 剔掉时 ensureMlKitInitialized 可能直接抛）。
+        var mlkitAvailable = false;
+        if (backend !== 'ppocr') {
+            try {
+                // ensureMlKitInitialized() only does idempotent init and never touches the .so (dev-1484),
+                // so combine it with a REAL file-existence probe for the mlkit pipeline library.
+                mlkitAvailable = Ocr.ensureMlKitInitialized() === true
+                        && nativeLibPresent('libmlkit_google_ocr_pipeline.so') !== false;
+            } catch (mlkitError) {
+                mlkitAvailable = false;
+                try { console.warn('[OCR] ML Kit 不可用（检查即失败）：' + mlkitError); } catch (ignore) {}
+            }
+        } else {
+            mlkitAvailable = true; // 非 mlkit 后端不查
+        }
+        if (backend !== 'ppocr' && !mlkitAvailable) {
             // ML Kit 在本进程起不来（拿不到 Application Context / 组件被裁剪）：
             // 以前 create() 会「成功」直到 detect() 才抛 MlKitContext has not been initialized，
             // 所以这里提前退到随包 ppocr，并如实标注降级来源。
@@ -103,8 +220,10 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
             // ppocrAvailable === null 表示「查不到」（QuickJS/Node 等没有这个 Java 桥）→ 保持旧行为。
             var ppocrAvailable = ppocrIsAvailable();
             if (ppocrAvailable === false) {
-                var failure = new Error('内置 OCR 不可用：ML Kit 初始化失败，且当前 ABI 没有 libppocr.so'
-                    + '（PP-OCR 只随包 arm64-v8a，v7a 请用 backend:"mlkit" 或装 mlkit 插件）');
+                // task-142：两个后端都不可用 ⇒ **出口必须是那条既有点名错误**（插件已优先尝试过、此处无插件）。
+                // 后面括号里保留 v7a 场景的提示（v7a 天生没有 libppocr.so，不是 removeOcr）。
+                var failure = new Error(OCR_NOT_PACKAGED
+                    + '（本 ABI 也没有 libppocr.so：v7a 场景请用 backend:"mlkit" 或安装 OCR 插件）');
                 failure.code = 'OCR_UNAVAILABLE';
                 failure.reason = 'MlKitContext has not been initialized';
                 failure.ppocrAvailable = false;

@@ -50,13 +50,22 @@ class OcrModuleStubTest {
         assertFalse("桩里不得引用 Ocr/PPOcr", content.contains("PPOcr"))
     }
 
-    @Test fun builderStubsInsteadOfDeletingTheModule() {
+    /**
+     * task-131 修正（K40 dev-1482）：removeOcr 时**不再替换真实模块**（W1 的版本内含插件分发），
+     * 只有「真实模块不存在」时才回退桩。删除动作仍然禁止。
+     */
+    @Test fun builderKeepsTheRealModuleAndOnlyStubsWhenItIsAbsent() {
         val builder = read(builderPath)
-        assertTrue("必须调用 OcrModuleStub.content 生成桩", builder.contains("OcrModuleStub.content("))
-        assertTrue("必须复用 engine 侧唯一文案", builder.contains("OcrAvailability.NOT_PACKAGED_MESSAGE"))
         assertTrue("必须用 findRhinoModule 定位模块", builder.contains("OcrAssetDiscovery.findRhinoModule("))
-        assertTrue("必须写回桩（writeBytes）", builder.contains("writeBytes(rhinoModule, stub)"))
-        assertTrue("日志要如实回显换桩大小", builder.contains("stubbed(__ocr__.js "))
+        assertTrue("保留真实模块时要有日志说明", builder.contains("保留真实 __ocr__.js（插件优先 + 点名错误两条路都在）"))
+        assertTrue("只有真实模块不存在时才写桩", builder.contains("真实 __ocr__.js 不存在 ⇒ 写了 "))
+        assertTrue("桩内容仍复用 engine 唯一文案", builder.contains("OcrAvailability.NOT_PACKAGED_MESSAGE"))
+        assertTrue("回退桩也要 writeBytes 到目标文件", builder.contains("writeBytes(stubTarget, stub)"))
+        // 关键：不能再用桩覆盖真实模块
+        val prune = builder.substringAfter("private void pruneDisabledPackagingAssets()").substringBefore("private void pruneStaleProjectResPacks")
+        assertTrue("不得再出现 writeBytes(rhinoModule, stub)（那会把真实模块覆盖掉）", !prune.contains("writeBytes(rhinoModule, stub)"))
+        assertTrue("日志要如实说明是 kept 还是 stubbed",
+            builder.contains("kept(real module)") && builder.contains("stubbed(__ocr__.js "))
         // 直删模块的路径必须不存在（避免又回去让守卫不可达）
         assertFalse("不得再出现删除 __ocr__.js 的调用",
             builder.contains("deletePathRecursively(new File(mWorkspacePath, \"assets/modules/__ocr__.js\")"))
