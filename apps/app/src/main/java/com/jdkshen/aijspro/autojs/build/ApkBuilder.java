@@ -522,7 +522,7 @@ public class ApkBuilder {
                 + " storage=" + mScriptStorage + " payload=" + mPayloadKind);
         // task-106（复查点 2）：getPackagingWarnings() 目前全仓**没有消费者**（只有 logcat 能看到），
         // 所以把 warning 也放进结构化报告，凡读 getPackagingReport() 的调用方都能拿到。
-        report("packagingWarnings", new org.json.JSONArray(mPackagingWarnings));
+        report(PackagingReportFields.PACKAGING_WARNINGS, new org.json.JSONArray(mPackagingWarnings));
         return this;
     }
 
@@ -727,6 +727,14 @@ public class ApkBuilder {
 
     /** task-63：结构化打包报告（abisDeclared/abisProduced/abisMissing/plugins/pluginCoverage/droppedNativeLibs/…）。 */
     public JSONObject getPackagingReport() {
+        // task-111：每次读取都用**实时** warnings 同步一次 —— 报告可能在 warnings 还没加完时就被读过，
+        // 或者调用方拿到的是不同时刻的快照；这样读到的永远是最新列表（消费方不必关心读取时机）。
+        try {
+            mPackagingReport.put(PackagingReportFields.PACKAGING_WARNINGS,
+                    new org.json.JSONArray(mPackagingWarnings));
+        } catch (Throwable ignored) {
+            // 只用于可观测，同步失败不影响打包
+        }
         return mPackagingReport;
     }
 

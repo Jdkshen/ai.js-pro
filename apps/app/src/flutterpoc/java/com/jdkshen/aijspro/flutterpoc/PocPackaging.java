@@ -537,17 +537,19 @@ final class PocPackaging {
                     + " size=" + outApk.length() + " sha256=" + sha256
                     + " signed=" + signed + " package=" + installedPackage
                     + " configPackage=" + config.optString("packageName", ""));
-            job.stage("success");
-            job.event("打包完成：" + outApk.getName());
-            job.success(outApk, sha256, config.optInt("versionCode", 1), config.optInt("encryptLevel", 0),
-                    config.optString("packageName", ""), abisOf(config));
-            // task-110：把打包警告搬进页面（数据源=打包器刚写的结构化报告，只读、不改打包行为）
+            // task-111：**必须先收 warnings 再置 success** —— 否则 job.success() 已经把 status=success 暴露出去，
+            // 而 warnings 要等到下一行才写，轮询 projectBuildStatus 会正好落在「success + warnings=[]」的窗口里
+            // （K40 dev-1467 实测就是这个窗口：size 已经有了、warnings 还是空数组）。
+            // 数据源优先结构化报告（task-110），报告里没有该键时**回退到打包器的实时列表**（双保险）。
             try {
+                List<String> warningList = new ArrayList<>();
                 org.json.JSONObject report = builder.getPackagingReport();
                 org.json.JSONArray warningArray = report == null ? null : report.optJSONArray("packagingWarnings");
-                List<String> warningList = new ArrayList<>();
                 if (warningArray != null) {
                     for (int i = 0; i < warningArray.length(); i++) warningList.add(warningArray.optString(i));
+                }
+                if (warningList.isEmpty()) {
+                    warningList.addAll(builder.getPackagingWarnings());
                 }
                 job.warnings(warningList);
             } catch (Throwable error) {
@@ -555,6 +557,10 @@ final class PocPackaging {
                 job.warnings(java.util.Collections.singletonList(
                         "打包提示读取失败：" + error.getClass().getSimpleName()));
             }
+            job.stage("success");
+            job.event("打包完成：" + outApk.getName());
+            job.success(outApk, sha256, config.optInt("versionCode", 1), config.optInt("encryptLevel", 0),
+                    config.optString("packageName", ""), abisOf(config));
             Log.i(TAG, "C-PKG: progress stage=success");
         } catch (Throwable error) {
             Log.w(TAG, "glass build failed", error);

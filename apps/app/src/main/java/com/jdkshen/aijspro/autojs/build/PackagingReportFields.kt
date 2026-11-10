@@ -11,6 +11,8 @@ object PackagingReportFields {
     const val OCR_REMOVED_PREFIX = "ocrRemovedPrefix"
     const val NODE24_SKIPPED_ENTRIES = "node24SkippedEntries"
     const val NODE24_SKIPPED_BYTES = "node24SkippedBytes"
+    /** task-111：warnings 数组的键名（PocPackaging 与 ApkBuilder 共用，避免第二份字面量）。 */
+    const val PACKAGING_WARNINGS = "packagingWarnings"
 
     /** 全部字段名（测试与 UI 可遍历）。 */
     @JvmStatic
