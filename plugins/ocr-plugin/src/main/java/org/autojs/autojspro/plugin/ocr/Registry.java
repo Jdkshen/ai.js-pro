@@ -79,13 +79,12 @@ public final class Registry {
         public Object create(Object options) {
             ensureLibsLoaded();
             ensureModelsExtracted();
-            // 方案 A′（W1 给的唯一入口）：优先走**宿主侧会话工厂**，把 Duck 类型会话直接返回；
-            // 插件不实现算法、也不 link engine（这里用反射调用）。
-            Object session = tryHostSessionFactory();
-            if (session != null) {
-                Log.i(TAG, "ocr plugin session from host factory ok backend=" + DEFAULT_BACKEND);
-                return session;
-            }
+            // 重要（dev-1487/1490/1492 三次真机取证）：**Java 对象的方法不会自动成为同名 JS 函数**
+            // ⇒ 插件**不能**把宿主工厂建的 Java 会话直接交给 JS（脚本会报 PPOcr.detect(ImageWrapper) /
+            // backend=undefined）。主路径已改为宿主直连工厂（libsDirOrNull/modelsDirOrNull +
+            // createOcrSession）⇒ 这里**只返回描述符**，由宿主建会话并做 JS 侧包装。
+            Log.i(TAG, "host factory class present=" + hostFactoryClassPresent()
+                    + "（描述符形态交付；会话由宿主直连工厂构建并包装）");
             // W1（宿主侧方案 B）消费的字段，**保持这几个**：
             //  libs       有序、依赖在前（宿主按序 System.load 绝对路径、幂等）
             //  backend    用户没显式传 options.backend 时的默认后端（ppocr | mlkit）
@@ -111,29 +110,18 @@ public final class Registry {
         }
 
         /**
-         * 调宿主侧会话工厂（W1 的 A′ 入口）：
-         * com.stardust.autojs.plugin.PluginNativeLoader.createOcrSession(runtime, host, pluginPackage,
-         * versionCode, libDir, modelPath, backend) ⇒ 返回 Duck 类型会话（detect/release/isReleased）。
+         * 宿主会话工厂**是否可反射到**（只 Class.forName，不 invoke）。
          *
-         * <p>用反射（插件不 link engine）。工厂不存在（老宿主）⇒ 返回 null，让调用方回退描述符（方案 B）；
-         * 工厂存在但抛错（例如 soname 不匹配）⇒ **原样抛出**（点名错误，不静默）。</p>
+         * <p>用途：老宿主（没有 PluginNativeLoader.createOcrSession）时给出可诊断的日志；**不再由插件
+         * 调用工厂** —— 会话一律由宿主直连工厂构建并在 JS 侧包装（原因见 create 里的注释）。</p>
          */
-        private Object tryHostSessionFactory() {
+        private boolean hostFactoryClassPresent() {
             try {
-                Class<?> loader = Class.forName("com.stardust.autojs.plugin.PluginNativeLoader");
-                java.lang.reflect.Method factory = loader.getMethod("createOcrSession", Object.class,
-                        Context.class, String.class, int.class, String.class, String.class, String.class);
-                return factory.invoke(null, runtime, hostContext, pluginContext.getPackageName(),
-                        pluginVersionCode(), libDir().getAbsolutePath(), modelDir().getAbsolutePath(), DEFAULT_BACKEND);
-            } catch (ClassNotFoundException | NoSuchMethodException missing) {
-                Log.i(TAG, "宿主没有会话工厂（老宿主）⇒ 回退描述符（方案 B）：" + missing.getMessage());
-                return null;
-            } catch (java.lang.reflect.InvocationTargetException failure) {
-                Throwable cause = failure.getCause() == null ? failure : failure.getCause();
-                throw unavailable("宿主会话工厂失败：" + cause.getClass().getSimpleName() + ": " + cause.getMessage());
-            } catch (Throwable error) {
-                Log.w(TAG, "调用宿主会话工厂异常：" + error);
-                return null;
+                Class.forName("com.stardust.autojs.plugin.PluginNativeLoader");
+                return true;
+            } catch (Throwable missing) {
+                Log.i(TAG, "宿主没有会话工厂类（老宿主）：" + missing.getMessage());
+                return false;
             }
         }
 

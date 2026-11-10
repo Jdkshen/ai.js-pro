@@ -49,7 +49,21 @@ public final class PluginNativeLoader {
     public static File syncPluginLibs(Context host, String pluginPackage, int versionCode) {
         File dir = pluginDir(host, pluginPackage, versionCode);
         File libs = new File(dir, "lib");
-        if (isReady(host, pluginPackage, versionCode)) { return libs; }
+        if (isReady(host, pluginPackage, versionCode)) {
+            // task-147: READY only proves the LIBS are staged. An earlier version may have staged libs
+            // without models (device dev-1487: no "models staged" line at all) => top the models up here.
+            if (modelsDirOrNull(host, pluginPackage, versionCode) == null) {
+                int lateModels = extractModelsFromApk(pluginApk(host, pluginPackage), new File(dir, "models"));
+                int expectedModels = com.stardust.autojs.runtime.api.PPOcr.MODEL_FILES.length;
+                Log.i(TAG, "plugin models staged (late) pkg=" + pluginPackage + " v=" + versionCode
+                        + " files=" + lateModels);
+                if (lateModels != expectedModels) {
+                    Log.w(TAG, "plugin models count mismatch: got=" + lateModels + " expected=" + expectedModels
+                            + " pkg=" + pluginPackage + " v=" + versionCode);
+                }
+            }
+            return libs;
+        }
         libs.mkdirs();
         String abi = primaryAbi();
         String source = "nativeLibraryDir";
@@ -59,6 +73,18 @@ public final class PluginNativeLoader {
         if (copied == 0) {
             source = "apk-zip:lib/" + abi;
             copied = extractLibsFromApk(pluginApk(host, pluginPackage), libs, abi);
+        }
+        int modelsCopied = extractModelsFromApk(pluginApk(host, pluginPackage), new File(dir, "models"));
+        int modelsExpected = com.stardust.autojs.runtime.api.PPOcr.MODEL_FILES.length;
+        if (modelsCopied > 0) {
+            Log.i(TAG, "plugin models staged pkg=" + pluginPackage + " v=" + versionCode + " files=" + modelsCopied);
+        }
+        // task-146 (W2): warn EARLY when the plugin payload does not match what PPOcr expects.
+        // Deliberately non-fatal (extraction layer copies what is there; completeness is prepareModels job).
+        if (modelsCopied != modelsExpected) {
+            Log.w(TAG, "plugin models count mismatch: got=" + modelsCopied + " expected=" + modelsExpected
+                    + " (PPOcr.MODEL_FILES) pkg=" + pluginPackage + " v=" + versionCode
+                    + " - prepareModels will name the missing file at first use");
         }
         if (copied == 0) {
             Log.w(TAG, "plugin libs staging failed (0 files): pkg=" + pluginPackage + " source=" + source);
@@ -173,6 +199,56 @@ public final class PluginNativeLoader {
     static String primaryAbi() {
         if (Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0) { return Build.SUPPORTED_ABIS[0]; }
         return "arm64-v8a";
+    }
+
+    /** task-146: extract assets/ocr/models/** from the plugin APK (same zip source as the libs). */
+    static int extractModelsFromApk(File apk, File targetDir) {
+        if (apk == null || !apk.isFile()) {
+            return 0;
+        }
+        final String prefix = "assets/ocr/models/";
+        int copied = 0;
+        try (ZipFile zip = new ZipFile(apk)) {
+            Enumeration<? extends ZipEntry> entries = zip.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String name = entry.getName();
+                if (entry.isDirectory() || !name.startsWith(prefix)) {
+                    continue;
+                }
+                String relative = name.substring(prefix.length());
+                if (relative.isEmpty() || relative.contains("..")) {
+                    continue;
+                }
+                File out = new File(targetDir, relative);
+                File parent = out.getParentFile();
+                if (parent != null) {
+                    parent.mkdirs();
+                }
+                try (InputStream in = zip.getInputStream(entry);
+                     FileOutputStream fileOut = new FileOutputStream(out)) {
+                    byte[] buffer = new byte[8192];
+                    int read;
+                    while ((read = in.read(buffer)) > 0) {
+                        fileOut.write(buffer, 0, read);
+                    }
+                }
+                copied++;
+            }
+        } catch (Exception error) {
+            Log.w(TAG, "extract plugin models failed: " + apk + " : " + error);
+        }
+        return copied;
+    }
+
+    /** task-146: staged models dir (null when the plugin ships no models or nothing was staged). */
+    public static File modelsDirOrNull(Context host, String pluginPackage, int versionCode) {
+        File models = new File(pluginDir(host, pluginPackage, versionCode), "models");
+        if (!models.isDirectory()) {
+            return null;
+        }
+        File[] files = models.listFiles();
+        return files == null || files.length == 0 ? null : models;
     }
 
     private static int copyDirectory(File source, File target) {

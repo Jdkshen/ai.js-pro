@@ -46,7 +46,7 @@ public class PPOcr implements AutoCloseable, OcrSession {
     /** 随包模型所在 assets 子目录。 */
     private static final String ASSET_DIR = "models/ppocrv6";
     /** 必须成套存在的模型文件（字典文件名是原生侧写死的，不能改）。 */
-    private static final String[] MODEL_FILES = {
+    public static final String[] MODEL_FILES = {
             "PP_OCRv6_tiny_det.ncnn.param",
             "PP_OCRv6_tiny_det.ncnn.bin",
             "PP_OCRv6_tiny_rec.ncnn.param",

@@ -43,6 +43,44 @@ function ensurePluginLibsReady(Loader, versionCode) {
     }
 }
 
+
+// task-143/145: REAL loadability probe - pure file existence check (no System.load, no side effects).
+function nativeLibraryDirOrNull() {
+    try {
+        if (typeof context !== 'undefined' && context && typeof context.getApplicationInfo === 'function') {
+            var dir = context.getApplicationInfo().nativeLibraryDir;
+            return dir ? new java.io.File(dir) : null;
+        }
+    } catch (ignored) {
+    }
+    return null;
+}
+
+// true = present, false = definitely missing, null = cannot tell (keep legacy behaviour).
+function nativeLibPresent(fileName) {
+    try {
+        var dir = nativeLibraryDirOrNull();
+        if (dir !== null && new java.io.File(dir, fileName).isFile()) {
+            return true;
+        }
+        try {
+            if (typeof context !== 'undefined' && context && Packages && Packages.com) {
+                var pkgS = OCR_PLUGIN_PACKAGE;
+                var infoS = context.getPackageManager().getPackageInfo(pkgS, 0);
+                var staged = new java.io.File(new java.io.File(new java.io.File(context.getFilesDir(), 'plugins'), pkgS),
+                        String(infoS.versionCode));
+                if (new java.io.File(new java.io.File(staged, 'lib'), fileName).isFile()) {
+                    return true;
+                }
+            }
+        } catch (ignoredStaged) {
+        }
+        return dir === null ? null : false;
+    } catch (ignored) {
+        return null;
+    }
+}
+
 function pluginOcrCreateOrNull(options) {
     var pkg = OCR_PLUGIN_PACKAGE;
     var plugin = null;
@@ -74,26 +112,94 @@ function pluginOcrCreateOrNull(options) {
         } catch (readyError) {
             console.warn('[OCR] plugin readiness check failed (continue anyway): ' + readyError);
         }
-        // 形态 1：plugin.create(options)
-        var owner = plugin;
-        var create = (typeof plugin.create === 'function') ? plugin.create : null;
-        // 形态 2：plugin.ocr.create(options)
-        if (create === null && plugin.ocr && typeof plugin.ocr.create === 'function') {
-            create = plugin.ocr.create;
-            owner = plugin.ocr;
+        // task-146 (Lead 拍板): MAIN PATH = host builds the session directly, no plugin create/unwrap needed.
+        if (typeof context !== 'undefined' && context && Packages && Packages.com) {
+            try {
+                var LoaderD = Packages.com.stardust.autojs.plugin.PluginNativeLoader;
+                var infoD = context.getPackageManager().getPackageInfo(pkg, 0);
+                var libDirD = (typeof LoaderD.libsDirOrNull === 'function')
+                        ? LoaderD.libsDirOrNull(context, pkg, infoD.versionCode) : null;
+                var modelDirD = (typeof LoaderD.modelsDirOrNull === 'function')
+                        ? LoaderD.modelsDirOrNull(context, pkg, infoD.versionCode) : null;
+                var backendD = 'ppocr';
+                try {
+                    if (modelDirD === null || modelDirD === undefined) {
+                        console.warn('[OCR] plugin staged no models; builtin model dir will be used if any');
+                    }
+                } catch (ignoredModelLog) {
+                }
+                var sessionD = LoaderD.createOcrSession(runtime, context, pkg, infoD.versionCode,
+                        libDirD === null ? null : String(libDirD),
+                        modelDirD === null ? null : String(modelDirD), backendD);
+                if (sessionD && typeof sessionD.detect === 'function') {
+                    console.info('[OCR] host-built session (direct factory) backend=' + backendD
+                            + ' libDir=' + libDirD + ' modelDir=' + modelDirD);
+                    // task-147: same wrapper as the builtin path => scripts see one shape (detect(image[, options])).
+                    return wrapSession(sessionD, backendD, backendD, null, null);
+                }
+                console.warn('[OCR] direct factory returned no detect(); fall through to plugin create');
+            } catch (directError) {
+                console.warn('[OCR] direct factory failed (try plugin create): ' + directError);
+            }
         }
-        if (create === null) {
-            console.warn('[OCR] plugin has no create(options); keys=' + Object.keys(plugin).join(','));
-            return null;
-        }
-        var session;
+        // bug 1 fix: runtime.plugins.load() returns the engine Plugin WRAPPER; the plugin's create()
+        // lives on the unwrapped instance (Plugin.unwrap(), Plugin.java:74). Java objects expose no keys,
+        // so we TRY-CALL instead of probing existence.
+        var candidates = [];
+        var instance = plugin;
         try {
-            session = create.call(owner, options);
-        } catch (createError) {
-            console.warn('[OCR] plugin create threw (fallback to builtin chain): ' + createError);
+            if (plugin && typeof plugin.unwrap === 'function') {
+                var unwrapped = plugin.unwrap();
+                if (unwrapped) {
+                    instance = unwrapped;
+                }
+            }
+        } catch (unwrapError) {
+            console.warn('[OCR] plugin.unwrap() threw (use wrapper): ' + unwrapError);
+        }
+        candidates.push({ owner: instance, name: 'instance.create' });
+        try {
+            if (instance && instance.ocr && typeof instance.ocr === 'function') {
+                var ocrHolder = instance.ocr();
+                if (ocrHolder) {
+                    candidates.push({ owner: ocrHolder, name: 'instance.ocr().create' });
+                }
+            } else if (instance && instance.ocr && instance.ocr.create) {
+                candidates.push({ owner: instance.ocr, name: 'instance.ocr.create' });
+            }
+        } catch (ocrAccessError) {
+            console.warn('[OCR] plugin.ocr() threw: ' + ocrAccessError);
+        }
+        if (instance !== plugin) {
+            candidates.push({ owner: plugin, name: 'wrapper.create' });
+        }
+        var session = null;
+        var createErrors = [];
+        for (var ci = 0; ci < candidates.length; ci++) {
+            var candidate = candidates[ci];
+            var fn = null;
+            try {
+                fn = candidate.owner ? candidate.owner.create : null;
+            } catch (accessError) {
+                createErrors.push(candidate.name + ': ' + accessError);
+                continue;
+            }
+            if (typeof fn !== 'function') {
+                createErrors.push(candidate.name + ': no create()');
+                continue;
+            }
+            try {
+                session = fn.call(candidate.owner, options);
+                console.info('[OCR] plugin create via ' + candidate.name);
+                break;
+            } catch (createError) {
+                createErrors.push(candidate.name + ' threw: ' + createError);
+            }
+        }
+        if (session === null || session === undefined) {
+            console.warn('[OCR] plugin create unavailable: ' + createErrors.join(' | '));
             return null;
         }
-        // 形态 3（W2 当前实现）：返回**描述符**而不是会话 —— 必须明确说出来，不静默。
         // 方案 A'/B（裁决）：插件返回**描述符** ⇒ 调用宿主侧的会话工厂（唯一来源，复用既有实现）。
         if (session !== null && session !== undefined && typeof session.detect !== 'function') {
             var keys = (typeof session === 'object') ? Object.keys(session).join(',') : typeof session;
@@ -111,7 +217,9 @@ function pluginOcrCreateOrNull(options) {
                     console.info('[OCR] host-built session from plugin descriptor: backend=' + backendA
                             + ' libs=' + ((session && session.libs) ? session.libs.join('+') : '?')
                             + ' keys=' + keys);
-                    return builtSession;
+                    // task-148: MUST go through the same wrapper - a raw Java session here is exactly what
+                    // produced "Can't find method PPOcr.detect(ImageWrapper)" on device.
+                    return wrapSession(builtSession, backendA, backendA, null, null);
                 }
                 console.warn('[OCR] createOcrSession returned no detect(); keys=' + keys);
                 return null;
@@ -122,7 +230,10 @@ function pluginOcrCreateOrNull(options) {
             }
         }
         console.info('[OCR] plugin session in use pkg=' + pkg + ' backend=' + (session.backend || 'plugin'));
-        return session;
+        // task-148 (Lead 决定): wrap EVERY exit - even a session handed back by the plugin itself must be
+        // indistinguishable to scripts (detect(image[, options]) + backend). Same wrapper, not a second impl.
+        var pluginOwnBackend = (session && session.backend) ? String(session.backend) : 'plugin';
+        return wrapSession(session, pluginOwnBackend, pluginOwnBackend, null, null);
     } catch (error) {
         try { console.warn('[OCR] plugin path failed (fallback to builtin chain): ' + error); } catch (ignored) {
         }
@@ -147,6 +258,42 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
      * rotationConfidence；`bounds` 附 x/y/width/height 便于直接用。原始 javaObject 不放进数据字段
      * （会把 app 对象图带进 console.log/JSON），需要时用 raw() 取。
      */
+
+    // task-147: ONE session wrapper used by BOTH the builtin backends and the plugin-provided session.
+    // Builtin sessions and the plugin session must be indistinguishable to scripts (same detect(image[, options])).
+    function wrapSession(session, backend, requestedBackend, degradedFrom, degradeReason) {
+        try {
+            console.info('[OCR] session shape: detect=' + typeof session.detect + '/'
+                    + (session.detect ? session.detect.length : 'n/a') + ' release=' + typeof session.release
+                    + ' backend=' + backend);
+        } catch (shapeLogError) {
+        }
+        return {
+            backend: backend,
+            requestedBackend: requestedBackend,
+            degraded: degradedFrom !== null && degradedFrom !== undefined,
+            degradedFrom: degradedFrom === undefined ? null : degradedFrom,
+            degradeReason: degradeReason === undefined ? null : degradeReason,
+            detect: function (image, detectOptions) {
+                detectOptions = detectOptions || {};
+                var max = detectOptions.max == undefined ? 1000 : parseInt(detectOptions.max);
+                var detectRotation = detectOptions.detectRotation === true;
+                var javaResults = session.detect(image, max, detectRotation, toIntArray(detectOptions.region));
+                var results = [];
+                for (var i = 0; i < javaResults.length; i++) {
+                    results.push(toPlainResult(javaResults[i]));
+                }
+                return results;
+            },
+            release: function () {
+                session.release();
+            },
+            isReleased: function () {
+                return session.isReleased();
+            }
+        };
+    }
+
     function toPlainResult(javaResult) {
         var text = '';
         var confidence = 0;
@@ -214,6 +361,11 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
         // task-141：插件优先（返回 null 则继续下面既有逻辑）。
         var pluginSession = pluginOcrCreateOrNull(options);
         if (pluginSession !== null && pluginSession !== undefined) {
+            try {
+                console.info('[OCR] pluginSession shape at escape: detect=' + typeof pluginSession.detect
+                        + ' backend=' + pluginSession.backend);
+            } catch (escapeLogError) {
+            }
             return pluginSession;
         }
         var backend = String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase();
@@ -296,35 +448,10 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
         } else {
             session = new Ocr(runtime);    // Java 对象上加不了属性（Rhino 限制），所以用 JS 包装暴露方法
         }
-        return {
-            backend: backend,
-            requestedBackend: String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase(),
-            degraded: degradedFrom !== null,
-            degradedFrom: degradedFrom,
-            degradeReason: degradeReason,
-            detect: function (image, detectOptions) {
-                detectOptions = detectOptions || {};
-                var max = detectOptions.max == undefined ? 1000 : parseInt(detectOptions.max);
-                var detectRotation = detectOptions.detectRotation === true;
-                // Java 侧返回 OCRResult[]。**必须逐项转成纯 JS 对象**：OCRResult 上有 android.graphics.Rect
-                // 和 javaObject（原始 ML Kit 对象），直接塞进数组时 `console.log(result)`（官方示例就是这么写的）
-                // 会去序列化 Java 对象图，一路走到宿主 Activity/RecyclerView，报
-                // `class androidx.recyclerview.widget.RecyclerView declares multiple JSON fields named
-                // mAccessibilityDelegate`（__json2__.js#234）——这就是内置谷歌 OCR 示例的第二个报错。
-                var javaResults = session.detect(image, max, detectRotation, toIntArray(detectOptions.region));
-                var results = [];
-                for (var i = 0; i < javaResults.length; i++) {
-                    results.push(toPlainResult(javaResults[i]));
-                }
-                return results;
-            },
-            release: function () {
-                session.release();
-            },
-            isReleased: function () {
-                return session.isReleased();
-            }
-        };
+        return wrapSession(session, backend,
+                String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase(),
+                degradedFrom, degradeReason);
+    };
     };
 
     return ocr;
