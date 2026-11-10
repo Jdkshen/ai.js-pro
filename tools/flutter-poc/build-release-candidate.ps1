@@ -49,6 +49,8 @@ param(
     [switch]$NoUsbDiscovery,
     # 显式重建 AOT；默认复用已锁定的 output/flutter-poc/payload。
     [switch]$RebuildAot,
+    # Lead 2026-11-10：出包前跑构件新鲜度自检（模板/AOT 是否跟得上源码）。STALE 直接失败；急用可 -SkipFreshnessCheck。
+    [switch]$SkipFreshnessCheck,
     [switch]$AotOffline,
     [string]$BaselineApk = '',
     [double]$MaxTotalMiB = -1,
@@ -163,7 +165,22 @@ Write-Host ("版本: {0} / {1}" -f $effectiveVersionCode, $effectiveVersionName)
 Write-Host ("日志: {0}" -f $logPath) -ForegroundColor DarkGray
 Push-Location $repo
 try {
-    & .\gradlew.bat @gradleArgs *> $logPath
+    # Lead 2026-11-10：出包前的构件新鲜度门禁（今天两次真机踩坑都是「构件静默过期」：
+#   模板没重建 -> 打包版跑旧引擎；AOT 没 -RebuildAot -> UI 文案看不见）。
+if (-not $SkipFreshnessCheck) {
+    $freshness = Join-Path $repo 'tools/check-artifact-freshness.ps1'
+    if (Test-Path -LiteralPath $freshness -PathType Leaf) {
+        Write-Host '[0/5] 构件新鲜度自检（tools/check-artifact-freshness.ps1 -Deep）' -ForegroundColor Cyan
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $freshness -Root $repo -Deep
+        if ($LASTEXITCODE -ne 0) {
+            throw ('构件已过期：先跑 tools/build-slim-template.ps1（模板）或加 -RebuildAot（Flutter AOT）；' +
+                   '确要强过请显式加 -SkipFreshnessCheck。')
+        }
+    } else {
+        Write-Host '[0/5] 跳过构件新鲜度自检（脚本不存在）' -ForegroundColor DarkGray
+    }
+}
+& .\gradlew.bat @gradleArgs *> $logPath
     $gradleExit = $LASTEXITCODE
 } finally {
     Pop-Location
