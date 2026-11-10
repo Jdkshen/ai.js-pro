@@ -258,11 +258,11 @@
     <string name="text_build_successfully">打包成功</string>
     <string name="text_install">安装</string>
     <string name="text_build_failed">打包失败，错误信息：</string>
-    <!-- 打包运行时模板（~43MB）随「APK 打包插件」分发，主程序不再带它。 -->
+    <!-- 打包运行时模板由主程序自带（assets/template.apk，瘦身版约 19.8MB）；templateStatus 只报告可用性与来源。 -->
     <string name="text_packaging_plugin_missing">缺少打包运行时模板</string>
-    <string name="text_packaging_plugin_missing_detail">打包需要一份约 43MB 的运行时模板，它已从主程序移到「APK 打包插件」里以缩小安装包。安装插件后即可打包；也可以手动把 template.apk 放到 /sdcard/template.apk。</string>
-    <string name="text_install_packaging_plugin">下载并安装打包插件</string>
-    <string name="text_packaging_plugin_download_failed">打包插件下载失败，请检查更新源或网络后重试。</string>
+    <string name="text_packaging_plugin_missing_detail">打包需要一份运行时模板，主程序已自带（assets/template.apk，瘦身版约 19.8MB）。若这里仍提示缺失，通常是模板副本被清理或损坏：① 重装或升级主程序；② 清掉 files/apk-builder/ 后重试；③ 也可以手动把 template.apk 放到 /sdcard/template.apk。无需任何插件。</string>
+    <string name="text_install_packaging_plugin">重新获取打包模板</string>
+    <string name="text_packaging_plugin_download_failed">打包模板获取失败：请检查更新源或网络后重试；也可以重装/升级主程序、清掉 files/apk-builder/ 后重试，或手动把 template.apk 放到 /sdcard/template.apk。</string>
     <string name="text_recheck">重新检测</string>
     <string name="format_build_successfully" formatted="true">apk文件已保存到 %s</string>
     <string name="apk_builder_prepare">准备文件</string>
@@ -336,8 +336,8 @@
     <string name="text_day6">六</string>
     <string name="text_day7">日</string>
     <string name="text_weekly_task_should_check_day_of_week">至少选择一周中的一天</string>
-    <string name="no_apk_builder_plugin">没有安装打包插件，是否立即下载？</string>
-    <string name="text_apk_builder_plugin_unavailable">打包插件不可用</string>
+    <string name="no_apk_builder_plugin">打包运行时模板不可用，是否重新获取？</string>
+    <string name="text_apk_builder_plugin_unavailable">打包模板不可用</string>
     <string name="text_detail">详情</string>
     <string name="text_open">打开</string>
     <string name="text_generated_code">生成结果</string>
@@ -368,7 +368,7 @@
     <string name="text_size_current_value" formatted="true">字体大小: %d</string>
     <string name="error_regex_find_prev">正则表达式不能向前查找</string>
     <string name="text_notification">通知</string>
-    <string name="apk_builder_plugin_version_too_low">打包插件版本过低，打包的应用可能无法正常运行。是否立即下载对应版本的打包插件？</string>
+    <string name="apk_builder_plugin_version_too_low">打包模板版本偏低，打包的应用可能无法正常运行。请重装或升级主程序后再打包（也可以手动把新的 template.apk 放到 /sdcard/template.apk）。</string>
     <string name="text_inspect_layout_bounds">布局范围分析</string>
     <string name="text_inspect_layout_hierarchy">布局层次分析</string>
     <string name="text_inspect_layout">布局分析</string>

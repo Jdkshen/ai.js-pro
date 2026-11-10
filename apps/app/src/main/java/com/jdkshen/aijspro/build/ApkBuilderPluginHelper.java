@@ -156,7 +156,7 @@ public class ApkBuilderPluginHelper {
                     .put("inspectError", error.getClass().getSimpleName() + ": " + error.getMessage())
                     .put("detail", error.getMessage() == null ? "模板不可用" : error.getMessage())
                     .put("warnings", new JSONArray().put("模板不可用，打包会失败"))
-                    .put("nextActions", new JSONArray().put(missingTemplateMessage()));
+                    .put("nextActions", new JSONArray().put(missingTemplateMessage(context)));
         }
     }
 
@@ -175,7 +175,12 @@ public class ApkBuilderPluginHelper {
     }
 
 
-    /** 打包页进入页面时问一次，用来决定要不要显示「装插件」提示。 */
+    /**
+     * 打包页进入页面时问一次：模板从哪来（source/detail 给界面展示）。
+     *
+     * <p>task-116：**不再是「要不要提示装插件」**——默认路径不依赖插件，插件只是最后手段；
+     * 界面按 source/detail 展示来源即可，不要引导用户安装插件。</p>
+     */
     public static TemplateStatus templateStatus(Context context) {
         File manual = manualTemplateFile();
         if (isUsableTemplate(manual)) {
@@ -404,6 +409,35 @@ public class ApkBuilderPluginHelper {
             Log.e(TAG, "Failed to extract the runtime template from " + PLUGIN_PACKAGE_NAME, error);
             return null;
         }
+    }
+
+    /**
+     * task-120：清掉打包模板缓存（apk-builder/versionCode/），强制下次打包重新合成。
+     *
+     * <p>用户拍板不要打包插件 ⇒「缺少模板」时给的自足动作就是这一步（配合重装/手动覆盖）。
+     * 只删应用私有缓存，不碰 /sdcard/template.apk，也不碰工程目录。</p>
+     *
+     * @return 实际删除的文件数（0 表示本来就没有缓存）
+     */
+    public static int clearCachedTemplates(Context context) {
+        File cached = cachedTemplateFile(context);
+        File dir = cached == null ? null : cached.getParentFile();
+        int removed = dir == null ? 0 : deleteTreeCounting(dir);
+        Log.i(TAG, "template cache cleared dir=" + (dir == null ? "" : dir.getPath())
+                + " files=" + removed);
+        return removed;
+    }
+
+    private static int deleteTreeCounting(File file) {
+        if (file == null || !file.exists()) return 0;
+        int count = 0;
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) count += deleteTreeCounting(child);
+            }
+        }
+        return (file.delete() ? 1 : 0) + count;
     }
 
     private static String displayVersion(PackageInfo info) {

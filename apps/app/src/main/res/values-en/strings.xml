@@ -247,10 +247,10 @@
     <string name="format_build_signer">Signature: %1$s</string>
     <string name="format_signing_recovered">The old keystore %1$s could not be opened (its password is not on this device), so it was renamed as a backup and a new identity was created; apps installed with the old identity must be uninstalled first</string>
     <string name="summary_signing_switch_hint">Note: packages signed with the old certificate can no longer be upgraded in place, uninstall them first</string>
-    <!-- The ~43MB packaging runtime template ships with the apkbuilder plugin, not with this app. -->
+    <!-- The packaging runtime template ships with this app (assets/template.apk, slim build ~19.8MB); templateStatus only reports availability and source. -->
     <string name="text_packaging_plugin_missing">Packaging runtime template missing</string>
-    <string name="text_packaging_plugin_missing_detail">Packaging needs a ~43MB runtime template. It moved out of the app into the "APK packaging plugin" to keep the install smaller. Install the plugin and packaging works again; you can also place template.apk at /sdcard/template.apk.</string>
-    <string name="text_install_packaging_plugin">Download and install the packaging plugin</string>
-    <string name="text_packaging_plugin_download_failed">Downloading the packaging plugin failed. Check the update source or your network and retry.</string>
+    <string name="text_packaging_plugin_missing_detail">Packaging needs a runtime template, which the app already ships (assets/template.apk, slim build ~19.8MB). If it is reported missing, the local copy was probably cleared or corrupted: 1) reinstall or update the app; 2) clear files/apk-builder/ and retry; 3) or place template.apk at /sdcard/template.apk manually. No plugin is needed.</string>
+    <string name="text_install_packaging_plugin">Get the packaging template again</string>
+    <string name="text_packaging_plugin_download_failed">Failed to get the packaging template. Check the update source or network and retry; you can also reinstall/update the app, clear files/apk-builder/ and retry, or place template.apk at /sdcard/template.apk manually.</string>
     <string name="text_recheck">Check again</string>
 </resources>

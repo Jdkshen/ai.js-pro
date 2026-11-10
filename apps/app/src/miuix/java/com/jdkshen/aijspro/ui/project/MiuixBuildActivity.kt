@@ -73,7 +73,6 @@ import com.jdkshen.aijspro.autojs.build.sign.SigningOptions
 import com.jdkshen.aijspro.build.ApkBuilderPluginHelper
 import com.jdkshen.aijspro.external.fileprovider.AppFileProvider
 import com.jdkshen.aijspro.network.GitHubUpdateProxy
-import com.jdkshen.aijspro.network.PluginDownloads
 import com.jdkshen.aijspro.network.download.DownloadManager
 import com.jdkshen.aijspro.theme.AijsMiuixTheme
 import com.jdkshen.aijspro.theme.MiuixBackButton
@@ -210,13 +209,11 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     private val failureShow = mutableStateOf(false)
     private var failureMessage by mutableStateOf("")
 
-    // ---- packaging template (ships with the apkbuilder plugin, not with this app) ----
-    /** 能不能现在就拿到打包模板；拿不到时页面顶部提示装插件。 */
+    // ---- packaging template（task-120：模板随主程序分发，默认路径不依赖插件） ----
+    /** 能不能现在就拿到打包模板；拿不到时页面顶部给出自足修法。 */
     private var templateReady by mutableStateOf(true)
     private var templateSource by mutableStateOf("")
     private var templateDetail by mutableStateOf("")
-    /** 正在下载/安装打包插件。 */
-    private var pluginBusy by mutableStateOf(false)
 
     // ---- picker state ----
     private val pickerShow = mutableStateOf(false)
@@ -777,7 +774,7 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     }
 
     // ------------------------------------------------------------------
-    // Packaging template (shipped by the apkbuilder plugin)
+    // Packaging template (ships with this app: assets/template.apk + host lib merge)
     // ------------------------------------------------------------------
 
     private fun refreshTemplateState() {
@@ -797,44 +794,23 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
         return false
     }
 
-    /** 从更新源取「APK 打包插件」并交给系统安装；装完 onResume 会重新检测模板。 */
-    private fun installPackagingPlugin() {
-        if (pluginBusy || busy) return
-        pluginBusy = true
-        val url = try {
-            PluginDownloads.pluginUrl(this, PluginDownloads.APK_BUILDER_PLUGIN_FILE)
+        /**
+     * task-120：**自足动作** —— 清掉打包模板缓存后重新检测（用户已拍板不要插件）。
+     *
+     * <p>原来这里是「从更新源下载并安装 APK 打包插件」。默认路径不依赖插件：模板随主程序分发
+     * （assets/template.apk），首次打包时与宿主 lib 合成到 files/apk-builder/versionCode/；
+     * 清掉这份缓存会强制下次重新合成 —— 正是提示里第 ② 条自足修法。</p>
+     */
+    private fun clearTemplateCacheAndRecheck() {
+        if (busy) return
+        val cleared = try {
+            ApkBuilderPluginHelper.clearCachedTemplates(this)
         } catch (error: Exception) {
-            pluginBusy = false
-            failureMessage = error.message ?: getString(R.string.text_packaging_plugin_download_failed)
-            failureShow.value = true
-            return
+            Log.w(TAG, "清打包模板缓存失败", error)
+            0
         }
-        val target = File(File(cacheDir, "plugins"), PluginDownloads.APK_BUILDER_PLUGIN_FILE)
-        target.parentFile?.mkdirs()
-        Log.i(TAG, "Downloading packaging plugin from $url")
-        disposables.add(
-            GitHubUpdateProxy.downloadWithFallback(url) { resolved ->
-                DownloadManager.getInstance().downloadWithProgress(this, resolved, target.path)
-            }
-                .subscribeOn(AndroidSchedulers.mainThread())
-                .subscribe({ file ->
-                    pluginBusy = false
-                    if (!PluginDownloads.isExpectedPackage(
-                            this, file, PluginDownloads.APK_BUILDER_PLUGIN_PACKAGE
-                    )) {
-                        failureMessage = getString(R.string.text_packaging_plugin_download_failed)
-                        failureShow.value = true
-                        return@subscribe
-                    }
-                    installApk(file.path)
-                }, { error ->
-                    pluginBusy = false
-                    failureMessage = getString(R.string.text_packaging_plugin_download_failed) +
-                            "\n" + (error.message.orEmpty())
-                    failureShow.value = true
-                    Log.e(TAG, "Failed to download the packaging plugin", error)
-                })
-        )
+        Log.i(TAG, "Cleared packaging template cache files=" + cleared)
+        refreshTemplateState()
     }
 
     private fun updateStage(resId: Int) {
@@ -928,8 +904,10 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
     }
 
     /**
-     * 打包模板不在位时的提示：模板（~43MB）随「APK 打包插件」分发，
-     * 这里给出下载安装入口与手动放置位置，避免用户只看到「打包失败」。
+     * 打包模板不在位时的提示（**显示条件：!templateReady**，见 BuildScreen 的 if (!templateReady)）。
+     *
+     * <p>task-120：模板随主程序分发（assets/template.apk，瘦身版约 19.8MB），**不再引导安装插件**；
+     * 这里只给自足动作：清掉模板缓存并重新检测。文案在 strings.xml，由 W4 维护。</p>
      */
     @Composable
     private fun TemplateNoticeCard() {
@@ -955,18 +933,13 @@ class MiuixBuildActivity : ComponentActivity(), ApkBuilder.ProgressCallback {
                     Modifier.fillMaxWidth().padding(top = 6.dp),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(
-                        text = getString(R.string.text_recheck),
-                        modifier = Modifier.padding(end = 8.dp),
-                        onClick = { refreshTemplateState() },
-                        colors = ButtonDefaults.textButtonColorsPrimary()
-                    )
+                    // task-120：只剩一个**自足**动作（清模板缓存 + 重新检测）；
+                    // 原来的「下载并安装打包插件」按钮与其下载链路已删除（用户不要插件）。
                     Button(
-                        onClick = { installPackagingPlugin() },
-                        enabled = !pluginBusy,
+                        onClick = { clearTemplateCacheAndRecheck() },
                         colors = ButtonDefaults.buttonColorsPrimary()
                     ) {
-                        Text(getString(R.string.text_install_packaging_plugin))
+                        Text(getString(R.string.text_recheck))
                     }
                 }
             }
