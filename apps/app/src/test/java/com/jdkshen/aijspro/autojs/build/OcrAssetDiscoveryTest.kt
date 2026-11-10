@@ -32,8 +32,11 @@ class OcrAssetDiscoveryTest {
         File(assets, "modules").mkdirs()
         File(assets, "modules/__ocr__.js").writeText("// rhino ocr")
 
+        // task-129：删除清单**只含模型目录**；__ocr__.js 不删，改由 findRhinoModule 找出来换成桩。
         val found = OcrAssetDiscovery.find(assets, templateProvided)
-        assertEquals(listOf("__ocr__.js", "mlkit-google-ocr-models"), OcrAssetDiscovery.describe(found).split(",").sorted())
+        assertEquals(listOf("mlkit-google-ocr-models"), OcrAssetDiscovery.describe(found).split(",").sorted())
+        val module = OcrAssetDiscovery.findRhinoModule(assets, templateProvided)
+        assertTrue("必须能定位 __ocr__.js（用于换桩）", module != null && module!!.name == "__ocr__.js")
     }
 
     /** task-106 反例：名字命中判据、但模板并不提供 ⇒ 属于用户内容，**不得**被删。 */
@@ -49,11 +52,13 @@ class OcrAssetDiscoveryTest {
             listOf("__ocr__.js", "mlkit-ocr", "my-ocr-models"),
             OcrAssetDiscovery.describe(OcrAssetDiscovery.candidates(assets)).split(",").sorted()
         )
-        // 但真正可删的只有模板提供的那一个
+        // 但真正可删的**一个都没有**（模板没提供任何模型目录；__ocr__.js 只在换桩清单里）
         val deletable = OcrAssetDiscovery.find(assets, templateProvided)
-        assertEquals(listOf("__ocr__.js"), deletable.map { it.name })
+        assertTrue("删除清单必须为空：" + deletable.map { it.name }, deletable.isEmpty())
         assertFalse("用户目录不得进入删除清单", deletable.any { it.name == "my-ocr-models" })
         assertFalse("模板未提供的目录不得进入删除清单", deletable.any { it.name == "mlkit-ocr" })
+        // task-129：模块文件属于「换桩」目标，不属于「删除」目标
+        assertEquals("__ocr__.js", OcrAssetDiscovery.findRhinoModule(assets, templateProvided)?.name)
     }
 
     @Test fun emptyProvidedListIsFailSafe() {
@@ -61,6 +66,8 @@ class OcrAssetDiscoveryTest {
         File(assets, "mlkit-google-ocr-models").mkdirs()
         assertTrue("拿不到模板/宿主清单时必须一个都不删", OcrAssetDiscovery.find(assets, emptyList()).isEmpty())
         assertTrue(OcrAssetDiscovery.find(assets, null).isEmpty())
+        assertTrue("拿不到清单时也不换桩", OcrAssetDiscovery.findRhinoModule(assets, emptyList()) == null)
+        assertTrue(OcrAssetDiscovery.findRhinoModule(assets, null) == null)
         assertEquals("", OcrAssetDiscovery.describe(emptyList()))
     }
 
@@ -70,10 +77,11 @@ class OcrAssetDiscoveryTest {
         File(assets, "modules/qjs-plugins.js").writeText("// quickjs plugin facade")
         File(assets, "modules/__plugins__.js").writeText("// rhino plugin facade")
         File(assets, "modules/__ocr__.js").writeText("// rhino ocr")
-        val found = OcrAssetDiscovery.find(assets, listOf(
+        val provided = listOf(
             "assets/modules/__ocr__.js", "assets/modules/qjs-plugins.js", "assets/modules/__plugins__.js"
-        ))
-        assertEquals(listOf("__ocr__.js"), found.map { it.name })
+        )
+        assertTrue("共享门面不得进入删除清单", OcrAssetDiscovery.find(assets, provided).isEmpty())
+        assertEquals("只换 __ocr__.js 的桩", "__ocr__.js", OcrAssetDiscovery.findRhinoModule(assets, provided)?.name)
         val builder = File("src/main/java/com/jdkshen/aijspro/autojs/build/ApkBuilder.java").readText()
         assertFalse("不能剪 qjs-plugins.js（共享插件门面）", builder.contains("modules/qjs-plugins.js"))
         assertFalse("不能剪 __plugins__.js（共享插件门面）", builder.contains("modules/__plugins__.js"))

@@ -35,9 +35,13 @@ object OcrAssetDiscovery {
     }
 
     /**
-     * 真正可以删的目标 = 候选 ∩ 「模板/宿主提供的 assets 条目」。
+     * 真正可以**删**的目标 = 候选（**只算目录**）∩ 「模板/宿主提供的 assets 条目」。
      *
-     * @param providedAssetPaths 形如 assets/mlkit-google-ocr-models/xx.tflite、assets/modules/__ocr__.js 的条目名集合；
+     * <p>task-129：assets/modules/__ocr__.js **不在删除清单里** —— 直删会让模块加载器先抛
+     * Module "__ocr__" not found.，我们写在文件内部的名点错误就永远不可达；它改用
+     * {@link #findRhinoModule} 找出来**换成桩**（见 OcrModuleStub）。</p>
+     *
+     * @param providedAssetPaths 形如 assets/mlkit-google-ocr-models/xx.tflite 的条目名集合；
      *                           **空集合 ⇒ 返回空**（宁可不剪，也不误删）。
      */
     @JvmStatic
@@ -45,13 +49,23 @@ object OcrAssetDiscovery {
         if (providedAssetPaths == null || providedAssetPaths.isEmpty()) return emptyList()
         val provided = providedAssetPaths.map { it.replace('\\', '/') }.toSet()
         return candidates(assetsDir).filter { candidate ->
+            if (!candidate.isDirectory) return@filter false
             val relative = relativeToAssets(assetsDir, candidate) ?: return@filter false
-            if (candidate.isDirectory) {
-                provided.any { it.startsWith(relative + "/") }
-            } else {
-                provided.contains(relative)
-            }
+            provided.any { it.startsWith(relative + "/") }
         }
+    }
+
+    /**
+     * task-129：Rhino 侧 OCR 模块文件（存在且由模板/宿主提供时返回，否则 null）。
+     * 调用方**不删它**，而是用 OcrModuleStub 覆盖成桩。
+     */
+    @JvmStatic
+    fun findRhinoModule(assetsDir: File?, providedAssetPaths: Collection<String>?): File? {
+        if (providedAssetPaths == null || providedAssetPaths.isEmpty()) return null
+        val module = File(assetsDir, RHINO_OCR_MODULE)
+        if (!module.isFile) return null
+        val provided = providedAssetPaths.map { it.replace('\\', '/') }.toSet()
+        return if (provided.contains("assets/" + RHINO_OCR_MODULE)) module else null
     }
 
     /** 命中前缀（逗号分隔、排序）用于日志/报告回显；没有命中返回空串。 */

@@ -577,12 +577,23 @@ public class ApkBuilder {
             // task-106 隐患 A：名字匹配只是候选，**必须**是宿主/模板确实提供的 asset 条目才删。
             // 拿不到清单（空集）⇒ OcrAssetDiscovery.find 返回空 ⇒ 一个都不删（fail-safe）。
             List<String> providedAssets = hostAssetEntryNames();
-            List<File> candidates = OcrAssetDiscovery.candidates(new File(mWorkspacePath, "assets"));
-            List<File> ocrTargets = OcrAssetDiscovery.find(new File(mWorkspacePath, "assets"), providedAssets);
+            File assetsDir = new File(mWorkspacePath, "assets");
+            List<File> candidates = OcrAssetDiscovery.candidates(assetsDir);
+            // task-129：只删**模型目录**；__ocr__.js 不删，改成桩（直删会让守卫不可达）。
+            List<File> ocrTargets = OcrAssetDiscovery.find(assetsDir, providedAssets);
             for (File target : ocrTargets) {
                 deletePathRecursively(target, ocrRemoved);
             }
             ocrPrefix = OcrAssetDiscovery.describe(ocrTargets);
+            int stubBytes = 0;
+            File rhinoModule = OcrAssetDiscovery.findRhinoModule(assetsDir, providedAssets);
+            if (rhinoModule != null) {
+                byte[] stub = OcrModuleStub.content(
+                        com.stardust.autojs.runtime.api.OcrAvailability.NOT_PACKAGED_MESSAGE)
+                        .getBytes("UTF-8");
+                writeBytes(rhinoModule, stub);
+                stubBytes = stub.length;
+            }
             List<File> skippedByName = new ArrayList<>(candidates);
             skippedByName.removeAll(ocrTargets);
             if (!skippedByName.isEmpty()) {
@@ -595,13 +606,11 @@ public class ApkBuilder {
             }
             // QuickJS 侧（task-104 ①）：qjs-plugins.js / __plugins__.js 是**共享插件门面**，不能剪；
             // 它们只在运行期用 $ocr 全局（拿不到时自身有 guard + 引擎点名错误）⇒ 打包侧只剪 Rhino 的 __ocr__.js。
-            boolean rhinoModuleRemoved = ocrTargets.stream().anyMatch(
-                    file -> file.getName().equals("__ocr__.js"));
             Log.i("C-PKG", "ocr removed (removeOcr=true) files=" + ocrRemoved[0] + " bytes=" + ocrRemoved[1]
                     + " prefix=" + (ocrPrefix.isEmpty() ? "(none)" : ocrPrefix)
-                    + " rhinoModule=" + (rhinoModuleRemoved ? "__ocr__.js" : "(already absent)")
+                    + " rhinoModule=" + (stubBytes > 0 ? "stubbed(__ocr__.js " + stubBytes + "B)" : "(absent)")
                     + " quickjs=kept(qjs-plugins.js 是共享插件门面，运行期 $ocr 缺失走点名错误)");
-            if (ocrTargets.isEmpty()) {
+            if (ocrTargets.isEmpty() && stubBytes == 0) {
                 Log.w("C-PKG", "ocr removed: 工作区里没找到任何 OCR 资产（模板可能改名）——前缀发现为空");
             }
             mPackagingWarnings.add("optimization.removeOcr=true：产物不含内建 OCR（$ocr 会点名报错）");
