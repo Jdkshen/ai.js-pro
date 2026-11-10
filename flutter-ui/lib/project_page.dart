@@ -1190,6 +1190,32 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
       job?['size'] is num &&
       (job!['size'] as num) > 0;
 
+  /// task-96：只读查询产物的大小构成（桥方法 apkBreakdown）；拿不到就返回 null，页面据此不显示。
+  Future<Map<String, dynamic>?> apkBreakdown(String path) async {
+    try {
+      final value = await LocalBridge.call('apkBreakdown', {'path': path});
+      return value is Map ? Map<String, dynamic>.from(value) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 桶 key → 中文标签（判据在桥侧 ApkSizeBreakdown.bucketOf，这里是纯展示映射）。
+  String breakdownLabel(String key) {
+    switch (key) {
+      case 'engine':
+        return '引擎与模板';
+      case 'ocr':
+        return '内建 OCR';
+      case 'opencv':
+        return 'OpenCV';
+      case 'project':
+        return '你的工程';
+      default:
+        return key;
+    }
+  }
+
   Future<void> artifactAction(String method) async {
     if (actionBusy || !validArtifact) return;
     final id = job!['id'];
@@ -1280,6 +1306,28 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                 child: Text('本次 APK 架构：${(current['abis'] as List).join('、')}',
                     key: const ValueKey('project-build-abis'),
                     style: const TextStyle(fontSize: 12))),
+          // task-96：只读的「大小构成」（数据来自产物本身；拿不到就不显示，绝不写死估算）
+          FutureBuilder<Map<String, dynamic>?>(
+              key: const ValueKey('project-build-breakdown'),
+              future: apkBreakdown(current['path'].toString()),
+              builder: (context, snapshot) {
+                final data = snapshot.data;
+                final buckets = data?['buckets'];
+                if (data == null || buckets is! List) return const SizedBox.shrink();
+                final parts = <String>[];
+                for (final item in buckets) {
+                  if (item is! Map) continue;
+                  final mib = item['uncompressedMiB'];
+                  if (mib is! num || mib <= 0) continue;
+                  parts.add(breakdownLabel(item['key']?.toString() ?? '') +
+                      ' ~' + mib.toString() + ' MB');
+                }
+                if (parts.isEmpty) return const SizedBox.shrink();
+                return Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text('大小构成（未压缩）：' + parts.join(' · '),
+                        style: const TextStyle(fontSize: 12)));
+              }),
           const SizedBox(height: 6),
           SelectableText('SHA-256：${current['sha256']}',
               style: const TextStyle(fontSize: 11)),

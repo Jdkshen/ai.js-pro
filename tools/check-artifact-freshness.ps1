@@ -142,8 +142,9 @@ function Get-SourceMarkersPresent {
     $pattern = ($Markers | ForEach-Object { [regex]::Escape($_) }) -join '|'
     foreach ($p in $Paths) {
         if (-not (Test-Path -LiteralPath $p)) { continue }
+        # 只认「会进 APK 的源」：排除 build/、以及 src/test/** 与 src/androidTest/**（task-98）
         $hits = Get-ChildItem -LiteralPath $p -Recurse -File -Include '*.java', '*.kt' -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/]build[\\/]' } |
+            Where-Object { $_.FullName -notmatch '[\\/](build|test|androidTest)[\\/]' } |
             Select-String -Pattern $pattern -ErrorAction SilentlyContinue
         foreach ($hit in $hits) {
             foreach ($m in $Markers) {
@@ -267,9 +268,23 @@ if (-not $SkipTemplate) {
                     Pop-Location
                 }
                 if ($changed.Count -eq 0) {
-                    $changed = @(Get-ChildItem -Path (Join-Path $Root 'modules') -Recurse -File -Include '*.java', '*.kt' -ErrorAction SilentlyContinue |
-                        Where-Object { $_.FullName -notmatch '[\\/]build[\\/]' -and $_.LastWriteTimeUtc -gt $templateTime })
-                    if ($derivedSource -eq '(skipped)') { $derivedSource = 'mtime(模板 mtime 之后改动)' }
+                    # 只看「会进模板的源」：modules/*/src/main/** 与 apps/inrt/src/main/**。
+                    # 绝不能把 src/test/** 与 src/androidTest/** 算进来（task-98 修：测试方法名永远
+                    # 不可能进模板 ⇒ 否则只要有人写单测就必然假 STALE）。
+                    $mainRoots = @()
+                    $modulesDir = Join-Path $Root 'modules'
+                    if (Test-Path -LiteralPath $modulesDir) {
+                        foreach ($module in (Get-ChildItem -LiteralPath $modulesDir -Directory -ErrorAction SilentlyContinue)) {
+                            $mainRoots += (Join-Path $module.FullName 'src/main')
+                        }
+                    }
+                    $mainRoots += (Join-Path $Root 'apps/inrt/src/main')
+                    $changed = @($mainRoots | Where-Object { Test-Path -LiteralPath $_ } | ForEach-Object {
+                            Get-ChildItem -LiteralPath $_ -Recurse -File -Include '*.java', '*.kt' -ErrorAction SilentlyContinue
+                        } | Where-Object {
+                            $_.FullName -notmatch '[\\/](build|test|androidTest)[\\/]' -and $_.LastWriteTimeUtc -gt $templateTime
+                        })
+                    if ($derivedSource -eq '(skipped)') { $derivedSource = 'mtime(模板 mtime 之后改动，只看 src/main)' }
                 }
                 # 归一成 FileInfo（git 分支给的是字符串路径）
                 $changed = @($changed | ForEach-Object {

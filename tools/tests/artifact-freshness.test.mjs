@@ -133,4 +133,45 @@ check("新符号未进模板 ⇒ STALE(marker-missing:forCurrentEngine) 且 exit
     rmSync(root, { recursive: true, force: true });
 });
 
+// task-98：derived 标记只能看「会进模板的源」（modules/*/src/main、apps/inrt/src/main）。
+// 测试源（src/test、src/androidTest）里的新方法名**永远不可能进模板**，不得导致 STALE。
+const MID = new Date("2026-03-01T00:00:00Z");
+
+function writeFakeTemplateApk(root, dexText) {
+    const stage = join(root, "apkstage-main");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "classes.dex"), dexText);
+    const apk = join(root, "apps/app/src/main/assets/template.apk");
+    try { rmSync(apk, { force: true }); } catch (error) { /* ignore */ }
+    execFileSync(SHELL, ["-NoProfile", "-Command",
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory('" + stage + "','" + apk + "')"]);
+    utimesSync(apk, MID, MID);
+    return apk;
+}
+
+check("测试源里的新方法名不得导致 STALE（derived 只看 src/main）", () => {
+    const root = makeRepo({ templateTime: MID, payloadTime: NEW, sourceTime: OLD });
+    const testFile = join(root, "modules/engine/src/test/java/com/demo/EngineTest.kt");
+    mkdirSync(dirname(testFile), { recursive: true });
+    writeFileSync(testFile, "class EngineTest {\n    @Test fun classifiesMissingAbility() {}\n}\n");
+    utimesSync(testFile, NEW, NEW);   // 比模板新，但它在 src/test 里
+    writeFakeTemplateApk(root, "dex fake payload SjbcApi");
+    const result = runChecker(root, ["-Deep"]);
+    assert.equal(result.code, 0, result.stdout);
+    assert.doesNotMatch(result.stdout, /marker-missing/);
+    rmSync(root, { recursive: true, force: true });
+});
+
+check("对照组：同一个方法名出现在 src/main 里就必须 STALE（排除不能过宽）", () => {
+    const root = makeRepo({ templateTime: MID, payloadTime: NEW, sourceTime: OLD });
+    const mainFile = join(root, "modules/engine/src/main/java/com/demo/NewFeature.kt");
+    writeFileSync(mainFile, "class NewFeature {\n    @JvmStatic public fun classifiesMissingAbility(): Boolean = true\n}\n");
+    utimesSync(mainFile, NEW, NEW);   // 比模板新，且在 src/main 里
+    writeFakeTemplateApk(root, "dex fake payload SjbcApi");
+    const result = runChecker(root, ["-Deep"]);
+    assert.equal(result.code, 1, result.stdout);
+    assert.match(result.stdout, /STALE\(kind=template, marker-missing:classifiesMissingAbility/);
+    rmSync(root, { recursive: true, force: true });
+});
+
 console.log("RESULT " + checks + " artifact-freshness checks passed");

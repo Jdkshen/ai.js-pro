@@ -234,7 +234,11 @@ android {
         // resources/new_api_database.ser，运行期 D8 不会读取它；排除后 APK 少约 2.9 MB。
         // 若将来真的要跑 R8（shrink/API modeling），删掉这条 exclude。
         resources {
-            excludes += ['resources/new_api_database.ser', 'frameworks/**']
+            // task-98：ANTLR 3 **工具**的代码生成模板（org/antlr/codegen/templates/**，十余种目标
+            // 语言的 .stg，约 0.7 MiB 未压缩）运行期零命中 —— 全仓 org.antlr.codegen / stringtemplate
+            // 无调用点，我们只用 org.antlr.runtime（Node24DirectDexGenerator 的 import）。
+            // 只排 codegen，**保留 org/antlr/runtime 类**（它们在 dex 里，由 R8 保留规则守着）。
+            excludes += ['resources/new_api_database.ser', 'frameworks/**', 'org/antlr/codegen/**']
         }
     }
 
@@ -1256,6 +1260,26 @@ tasks.register("verifySlimPackagingTemplate") {
                         + manifestBytes.length + " bytes scanned, UTF-8/UTF-16LE); "
                         + "size/entries/lib checks passed")
             }
+            // task-98：① ANTLR 工具模板必须 0 条（packagingOptions 的 resources.excludes 生效）；
+            // ② org/antlr/runtime 的类必须仍在 dex（Node24DirectDexGenerator 依赖它，别把 ANTLR 整包排掉）。
+            def antlrCodegen = names.findAll { it.startsWith("org/antlr/codegen/") }
+            if (!antlrCodegen.isEmpty()) {
+                throw new GradleException("瘦身模板仍含 ANTLR codegen 模板 " + antlrCodegen.size()
+                        + " 条（task-98 的 excludes 已加，但模板是签入的二进制 ⇒ 先重建："
+                        + ".\tools\build-slim-template.ps1）：" + antlrCodegen.take(3))
+            }
+            // Lead 修（dev-1462）：原来只扫 names.find（= classes.dex），但 ANTLR runtime 实际落在
+            // classes4.dex（实测 classes.dex/-2/-3 均 -1、classes4.dex 命中）⇒ 必须扫**所有** classes*.dex。
+            def dexBytesList = []
+            names.findAll { it.startsWith("classes") && it.endsWith(".dex") }.each { d ->
+                dexBytesList.add(zip.getInputStream(zip.getEntry(d)).getBytes())
+            }
+            def dexHasMarker = dexBytesList.any { containsBytes(it, "org/antlr/runtime".getBytes("UTF-8")) }
+            if (dexBytesList.isEmpty() || !dexHasMarker) {
+                throw new GradleException("瘦身模板 dex 里找不到 org/antlr/runtime（Node24DirectDexGenerator 依赖它）；"
+                        + "别把 ANTLR 整包排除，只排 org/antlr/codegen/**")
+            }
+            logger.lifecycle("C-PKG: antlr runtime pinned in dex, codegen templates=" + antlrCodegen.size())
             logger.lifecycle("C-PKG: slim template OK size=" + size + " entries=" + names.size()
                     + " package=" + (packageFound ? name : "unverified")
                     + " general=" + json.general.size() + " opencv=" + json.opencv.size()

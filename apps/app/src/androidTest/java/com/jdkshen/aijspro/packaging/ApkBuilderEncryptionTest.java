@@ -293,7 +293,7 @@ public class ApkBuilderEncryptionTest {
 
         // 7) 图标替换：产物里真正的 launcher icon 必须是用户选的图（旧实现写死了
         //    res/mipmap-mdpi/ic_launcher.png，在资源名被缩短的模板上根本不生效）。
-        byte[] packagedIcon = readZipEntry(outApk, "ic_launcher", ".png");
+        byte[] packagedIcon = readLauncherIcon(outApk);
         assertNotNull("packaged apk should contain a launcher icon", packagedIcon);
         assertArrayEquals("launcher icon must be the user icon",
                 readBytes(iconFile), packagedIcon);
@@ -376,7 +376,7 @@ public class ApkBuilderEncryptionTest {
         try (ZipFile apk = new ZipFile(out)) {
             assertNull(apk.getEntry("assets/project/stale-demo/nested.png"));
             assertArrayEquals(readBytes(ownArtwork), readZipEntry(out, "assets/project/auto.js", ".png"));
-            assertArrayEquals(readBytes(icon), readZipEntry(out, "ic_launcher", ".png"));
+            assertArrayEquals(readBytes(icon), readLauncherIcon(out));
             assertNotNull(apk.getEntry("assets/project/res/chosen.png"));
         }
         builder.cleanWorkspace();
@@ -1554,6 +1554,15 @@ public class ApkBuilderEncryptionTest {
     }
 
     /** First zip entry whose name contains {@code contains} and ends with {@code suffix}. */
+    /**
+     * Lead（dev-1462）：launcher icon 源已从 .png 换成 .webp（1.1MB→31KB）⇒ 两种扩展名都接受，
+     * 避免 androidTest 按 .png 硬编码而在换图后恒失败。
+     */
+    private static byte[] readLauncherIcon(File zipFile) throws Exception {
+        byte[] icon = readZipEntry(zipFile, "ic_launcher", ".webp");
+        return icon != null ? icon : readZipEntry(zipFile, "ic_launcher", ".png");
+    }
+
     private static byte[] readZipEntry(File zipFile, String contains, String suffix) throws Exception {
         ZipFile zip = new ZipFile(zipFile);
         try {

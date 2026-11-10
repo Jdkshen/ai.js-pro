@@ -23,6 +23,13 @@ android {
         disable 'MissingTranslation'
         disable 'ExtraTranslation'
     }
+    packagingOptions {
+        // task-98：瘦身打包模板（apps/app/src/main/assets/template.apk）由本模块产出；
+        // ANTLR 3 工具的 codegen 模板（.stg）运行期零命中，只排它们，**保留 org/antlr/runtime 类**。
+        resources {
+            excludes += ['org/antlr/codegen/**']
+        }
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8

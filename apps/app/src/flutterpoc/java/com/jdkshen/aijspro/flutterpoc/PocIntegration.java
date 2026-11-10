@@ -112,6 +112,9 @@ final class PocIntegration {
             case "sampleAction":
                 return sampleAction(activity, args);
             // ---- 玻璃打包页 ---------------------------------------------------
+            // task-96：只读的产物「大小构成」（数据源=产物本身；失败时页面不显示该行）
+            case "apkBreakdown":
+                return ApkBreakdownBridge.execute(activity, args);
             case "projectLoad":
             case "projectSave":
             case "projectBuild":

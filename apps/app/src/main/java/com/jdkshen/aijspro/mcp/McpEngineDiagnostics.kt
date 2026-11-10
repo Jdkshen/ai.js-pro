@@ -121,7 +121,11 @@ object McpEngineDiagnostics {
                 add("mcp:run_script engine=nodejs（嵌入式进程池，始终可用）")
                 if (runnable && input.cliLauncherPath != null) add("cli:" + input.cliLauncherPath + " <script.js>")
             },
-            "processExecPathNote" to "不要用 process.execPath 判断运行形态；以本对象为准。"
+            "processExecPathNote" to "不要用 process.execPath 判断运行形态；以本对象为准。",
+            // task-99：打包期按 features.nodejs=disabled 剔除 node24 资源时，这里降级为一行（**有资源时逐字不变**：
+            // 两个 resolver 读的是 assets 里的 pins，读不到才为 null ⇒ 只有「资源真没随包」才会出现 absent）。
+            "node24" to if (input.runtimeDirectoryPath == null && input.toolsDirectoryPath == null)
+                "absent(资源未随包)" else "present"
         )
     }
 
