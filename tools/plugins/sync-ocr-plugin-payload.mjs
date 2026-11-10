@@ -103,54 +103,126 @@ if (fs.existsSync(opencvAar)) {
   } catch (error) { failed += 1; console.error("[ocr-payload] 从 OpenCV AAR 取 libc++_shared.so 失败：" + error.message); }
 } else { failed += 1; console.error("[ocr-payload] 来源缺失：" + opencvAar); }
 
-const mlkitCoord = "com.google.mlkit:text-recognition-bundled-common:17.0.0";
-const mlkitAar = path.join(os.homedir(), ".gradle/caches/modules-2/files-2.1/com.google.mlkit/text-recognition-bundled-common/17.0.0/ad2396ea7b02feb026c821cb6aded1216509b0fd/text-recognition-bundled-common-17.0.0.aar");
-const strippedMlkit = path.join(ROOT, "apps/app/build/intermediates/stripped_native_libs/miuixCompatRelease/stripMiuixCompatReleaseDebugSymbols/out/lib/" + ABI + "/libmlkit_google_ocr_pipeline.so");
-if (fs.existsSync(mlkitAar)) {
-  try {
-    const buf = readZipEntry(mlkitAar, "jni/" + ABI + "/libmlkit_google_ocr_pipeline.so");
-    console.log("[ocr-payload] source-chain libmlkit_google_ocr_pipeline.so -> " + mlkitCoord + " AAR（Gradle 缓存）");
-    if (fs.existsSync(strippedMlkit)) {
-      const same = sha256(fs.readFileSync(strippedMlkit)) === sha256(buf);
-      console.log("[ocr-payload] AAR 未 strip 版 vs app stripped 版 same=" + same + "（不同则采用 AAR 版：它才是发布源）");
-      if (!same) warnings.push("mlkit：AAR 未 strip 版与 app stripped 版哈希不同，已采用 AAR 版");
-    }
-    writeTarget("jniLibs/" + ABI + "/libmlkit_google_ocr_pipeline.so", buf, {
-      source: mlkitCoord + " -> AAR 内 jni/" + ABI + "/libmlkit_google_ocr_pipeline.so",
-      sourceKind: "gradle-cache-aar",
-      aarCachePath: "~/.gradle/caches/modules-2/files-2.1/com.google.mlkit/text-recognition-bundled-common/17.0.0/ad2396ea7b02feb026c821cb6aded1216509b0fd/text-recognition-bundled-common-17.0.0.aar",
-      regenerate: "解压缓存 AAR 的 jni/" + ABI + "/libmlkit_google_ocr_pipeline.so（AAR 由 Gradle 依赖 " + mlkitCoord + " 拉取；仓库内无副本）"
-    });
-  } catch (error) { failed += 1; console.error("[ocr-payload] 从 mlkit AAR 取 lib 失败：" + error.message); }
-} else { failed += 1; console.error("[ocr-payload] 来源缺失（Gradle 缓存 AAR）：" + mlkitAar); }
+// mlkit 库：**本轮不带**（Lead 裁决）—— 默认后端是 ppocr，而 mlkit 分支目前仍随宿主
+// （W1：Ocr 只读宿主 assets，没有外部目录入口）⇒ 插件里这份 ≈11MB 短期没有消费者。
+// 重开条件：将来做 mlkit 外置（给 Ocr 加 models 目录入口 + 宿主不再随包 mlkit）时，把
+// libmlkit_google_ocr_pipeline.so 加回 libs 清单（并把它加回 desiredLibs）。
+console.log("[ocr-payload] skip libmlkit_google_ocr_pipeline.so（默认后端 ppocr；mlkit 仍随宿主，见文件头重开条件）");
 
-const modelCandidates = [
-  "modules/engine/src/main/assets/mlkit-google-ocr-models",
-  "apps/inrt/src/main/assets/mlkit-google-ocr-models",
-  "apps/app/src/main/assets/mlkit-google-ocr-models",
-  "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models",
-  "apps/app/build/intermediates/assets/miuixCompatRelease/mergeMiuixCompatReleaseAssets/mlkit-google-ocr-models"
+// ---- ppocr 模型（默认后端只需要这 5 个；文件名由原生侧 PPOcr.MODEL_FILES 写死，不能改）----
+const PPOCR_SOURCE = "apps/app/src/main/assets/models/ppocrv6";
+const PPOCR_MODEL_FILES = [
+  "PP_OCRv6_tiny_det.ncnn.param",
+  "PP_OCRv6_tiny_det.ncnn.bin",
+  "PP_OCRv6_tiny_rec.ncnn.param",
+  "PP_OCRv6_tiny_rec.ncnn.bin",
+  "ppocr_keys_v6_tiny.txt"
 ];
-let modelSource = null;
-for (const candidate of modelCandidates) {
-  const full = path.join(ROOT, candidate);
-  if (fs.existsSync(full)) { modelSource = { full, relative: candidate }; break; }
-}
-if (modelSource) {
-  console.log("[ocr-payload] source-chain assets/ocr/models -> " + modelSource.relative);
-  const walk = (dir, out) => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, e.name); if (e.isDirectory()) walk(f, out); else out.push(f); } return out; };
-  for (const file of walk(modelSource.full, [])) {
-    const relative = path.relative(modelSource.full, file).split(path.sep).join("/");
-    writeTarget("assets/ocr/models/" + relative, fs.readFileSync(file), {
-      source: modelSource.relative + "/" + relative,
-      sourceKind: modelSource.relative.includes("build/intermediates") ? "build-output" : "repo-asset",
-      regenerate: modelSource.relative + "（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
+const desiredModels = new Set();
+const ppocrDir = path.join(ROOT, PPOCR_SOURCE);
+if (fs.existsSync(ppocrDir)) {
+  console.log("[ocr-payload] source-chain assets/ocr/models -> " + PPOCR_SOURCE + "（ppocr 5 文件，顶层）");
+  for (const name of PPOCR_MODEL_FILES) {
+    const file = path.join(ppocrDir, name);
+    if (!fs.existsSync(file)) {
+      failed += 1;
+      console.error("[ocr-payload] 缺少 ppocr 模型文件：" + PPOCR_SOURCE + "/" + name + "（PPOcr.MODEL_FILES 写死的名字）");
+      continue;
+    }
+    desiredModels.add("assets/ocr/models/" + name);
+    writeTarget("assets/ocr/models/" + name, fs.readFileSync(file), {
+      source: PPOCR_SOURCE + "/" + name,
+      sourceKind: "repo-asset",
+      regenerate: "仓库内文件（无需重新生成）"
     });
   }
-} else { failed += 1; console.error("[ocr-payload] 来源缺失：OCR 模型目录（试过 " + modelCandidates.length + " 个路径）"); }
+} else {
+  failed += 1;
+  console.error("[ocr-payload] 来源缺失：ppocr 模型目录 " + PPOCR_SOURCE);
+}
+
+// ---- 清理：payload 目录里不再属于本次来源集合的文件（避免旧 mlkit 树等残留）----
+const desiredLibs = new Set(["jniLibs/" + ABI + "/libppocr.so", "jniLibs/" + ABI + "/libc++_shared.so"]);
+function pruneUnlisted(dirRelative, keep) {
+  const dir = path.join(OUT, dirRelative);
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const rel = dirRelative + "/" + entry.name;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) { pruneUnlisted(rel, keep); continue; }
+    if (keep.has(rel)) continue;
+    if (checkOnly) { failed += 1; console.error("[ocr-payload] EXTRA  " + rel + "（应被清理；跑一次不带 --check 的同步）"); }
+    else { fs.unlinkSync(full); console.log("[ocr-payload] PRUNE  " + rel); }
+  }
+}
+pruneUnlisted("assets/ocr/models", desiredModels);
+pruneUnlisted("jniLibs/" + ABI, desiredLibs);
+
+// 清掉 prune 之后留下的空目录（否则 payload 里会残留 aksara/gocr/taser 这类空壳）
+function pruneEmptyDirs(dirRelative) {
+  const dir = path.join(OUT, dirRelative);
+  if (!fs.existsSync(dir)) return;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const rel = dirRelative + "/" + entry.name;
+    pruneEmptyDirs(rel);
+    const child = path.join(OUT, rel);
+    if (fs.readdirSync(child).length === 0) {
+      if (checkOnly) { failed += 1; console.error("[ocr-payload] EMPTY-DIR " + rel); }
+      else { fs.rmdirSync(child); console.log("[ocr-payload] RMDIR  " + rel); }
+    }
+  }
+}
+pruneEmptyDirs("assets/ocr/models");
+
+
+// ---- DT_NEEDED 审计（readelf -d 等价；只告警不失败）----
+// 结论（dev 取证）：libppocr.so 依赖 7 个 libopencv_* + libjnigraphics（系统库）⇒ 这些由**宿主**提供
+// （宿主本来就随包 OpenCV；插件不带也不该带，否则插件再涨 ≈26MB）。真机上若 System.load 解析不到，
+// 说明宿主 soname 与插件 NEEDED 不一致 —— 那要按 W1 的适配层方案处理（见报告）。
+function elfNeeded(buf) {
+  if (buf.length < 64 || buf.readUInt32LE(0) !== 0x464c457f || buf[4] !== 2) return [];
+  const phoff = Number(buf.readBigUInt64LE(32));
+  const phentsize = buf.readUInt16LE(54), phnum = buf.readUInt16LE(56);
+  let dynOff = -1, dynSize = 0; const loads = [];
+  for (let i = 0; i < phnum; i++) {
+    const off = phoff + i * phentsize, type = buf.readUInt32LE(off);
+    const offset = Number(buf.readBigUInt64LE(off + 8));
+    const vaddr = Number(buf.readBigUInt64LE(off + 16));
+    const filesz = Number(buf.readBigUInt64LE(off + 32));
+    if (type === 1) loads.push({ vaddr, offset, filesz });
+    if (type === 2) { dynOff = offset; dynSize = filesz; }
+  }
+  const v2o = (v) => { for (const l of loads) { if (v >= l.vaddr && v < l.vaddr + l.filesz) return l.offset + (v - l.vaddr); } return -1; };
+  let strtab = 0; const need = [];
+  for (let p = dynOff; p < dynOff + dynSize; p += 16) {
+    const tag = Number(buf.readBigUInt64LE(p)), val = Number(buf.readBigUInt64LE(p + 8));
+    if (tag === 0) break;
+    if (tag === 1) need.push(val);
+    if (tag === 5) strtab = val;
+  }
+  const base = v2o(strtab);
+  return need.map((v) => { let o = base + v, e = o; while (buf[e] !== 0) e++; return buf.toString("utf8", o, e); });
+}
+
+const SYSTEM_LIB = /^lib(c|m|dl|log|z|android|jnigraphics|stdc\+\+|GLESv[0-9])\.so$/;
+const shipped = new Set(entries.filter((x) => x.target.startsWith("jniLibs/")).map((x) => x.target.split("/").pop()));
+const neededReport = {};
+for (const name of shipped) {
+  const file = path.join(OUT, "jniLibs", ABI, name);
+  if (!fs.existsSync(file)) continue;
+  const needed = elfNeeded(fs.readFileSync(file));
+  neededReport[name] = needed;
+  const hostProvided = needed.filter((n) => !SYSTEM_LIB.test(n) && !shipped.has(n));
+  console.log("[ocr-payload] NEEDED " + name + " = " + JSON.stringify(needed));
+  if (hostProvided.length > 0) {
+    warnings.push(name + " 的 NEEDED 里有插件未带的库（应由宿主提供）：" + hostProvided.join(", "));
+    console.log("[ocr-payload] WARN " + name + " 依赖宿主提供：" + hostProvided.join(", "));
+  }
+}
 
 if (!checkOnly && failed === 0) {
-  fs.writeFileSync(LOCK, JSON.stringify({ schema: 1, note: "由 tools/plugins/sync-ocr-plugin-payload.mjs 生成；每项含来源/sha256/字节/ABI 与如何重新生成。", abi: ABI, entries }, null, 2) + "\n", "utf8");
+  fs.writeFileSync(LOCK, JSON.stringify({ schema: 1, note: "由 tools/plugins/sync-ocr-plugin-payload.mjs 生成；每项含来源/sha256/字节/ABI 与如何重新生成。", abi: ABI, mlkitLibExcluded: "默认后端 ppocr；mlkit 仍随宿主 ⇒ 插件不带 libmlkit_google_ocr_pipeline.so（重开条件见脚本头）", needed: neededReport, entries }, null, 2) + "\n", "utf8");
   const lines = ["# OCR 插件载荷来源（task-131）", "", "由 tools/plugins/sync-ocr-plugin-payload.mjs 生成；复核命令：node tools/plugins/sync-ocr-plugin-payload.mjs --check", "", "| 目标 | 来源 | 字节 | sha256(前16) | ABI |", "| --- | --- | --- | --- | --- |"];
   for (const e of entries) lines.push("| " + e.target + " | " + e.source + " | " + e.bytes + " | " + e.sha256.slice(0, 16) + " | " + (e.abi || "-") + " |");
   if (warnings.length) { lines.push("", "## 警告", ""); for (const w of warnings) lines.push("- " + w); }

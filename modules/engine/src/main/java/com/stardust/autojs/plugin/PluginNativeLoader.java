@@ -95,6 +95,54 @@ public final class PluginNativeLoader {
         }
     }
 
+
+    /**
+     * task-144 (方案 A'): host-side OCR session factory for OCR plugins.
+     *
+     * <p>Plugins must not link engine classes (self-contained rule), so they can only DUCK-TYPE the returned
+     * object: it implements {@code detect(image, max, detectRotation, region)} / {@code release()} /
+     * {@code isReleased()} (engine's OcrSession), built from the existing engine implementation - no second
+     * algorithm is written here.
+     *
+     * @param runtime      the ScriptRuntime passed into the plugin's loadDefault(host, plugin, runtime, scope)
+     * @param libDir       descriptor.libDir (staged plugin lib dir; informational - libraries are loaded via
+     *                     {@link #load} which resolves the host private staging dir)
+     * @param modelPath    descriptor.modelPath (absolute); NOTE: PPOcr currently reads models from the host
+     *                     assets dir - see the caveat in the task report
+     * @param backend      descriptor.backend ("ppocr" | "mlkit")
+     */
+    public static Object createOcrSession(Object runtime, Context host, String pluginPackage, int versionCode,
+                                          String libDir, String modelPath, String backend) {
+        if (host == null || pluginPackage == null) {
+            throw new LibLoadException("createOcrSession 需要 host 与 pluginPackage");
+        }
+        // 1) 先把插件库按绝对路径加载好（依赖在前、幂等）。
+        load(host, pluginPackage, versionCode, "libc++_shared.so", "libppocr.so");
+        if (runtime == null) {
+            throw new LibLoadException("createOcrSession 需要 ScriptRuntime（插件应把 loadDefault 收到的 runtime 传进来）");
+        }
+        com.stardust.autojs.runtime.ScriptRuntime scriptRuntime =
+                (com.stardust.autojs.runtime.ScriptRuntime) runtime;
+        // 2) 再用宿主既有实现建会话（复用 detect/release/isReleased，不新写算法）。
+        if ("mlkit".equalsIgnoreCase(backend)) {
+            try {
+                com.stardust.autojs.runtime.api.Ocr.ensureMlKitInitialized();
+            } catch (Throwable error) {
+                throw new LibLoadException("mlkit 会话初始化失败：" + error, error);
+            }
+            return new com.stardust.autojs.runtime.api.Ocr(scriptRuntime);
+        }
+        // task-144 (b): plugins carry the models too. Pass descriptor.modelPath into the EXISTING
+        // external-models-dir entry (PPOcr.java:124). Empty => null => bundled assets path,
+        // i.e. today's behaviour is untouched (default artifacts stay byte-identical).
+        String modelsDir = (modelPath != null && !modelPath.trim().isEmpty()) ? modelPath.trim() : null;
+        if (modelsDir == null) {
+            return new com.stardust.autojs.runtime.api.PPOcr(scriptRuntime);
+        }
+        // Same defaults as the single-arg constructor (PPOcr.java:114-115).
+        return new com.stardust.autojs.runtime.api.PPOcr(scriptRuntime, modelsDir, 0, 4, 0.2f, 512, false, 0);
+    }
+
     static int extractLibsFromApk(File apk, File targetDir, String abi) {
         if (apk == null || !apk.isFile()) { return 0; }
         String prefix = "lib/" + abi + "/";

@@ -2,6 +2,30 @@
   "schema": 1,
   "note": "由 tools/plugins/sync-ocr-plugin-payload.mjs 生成；每项含来源/sha256/字节/ABI 与如何重新生成。",
   "abi": "arm64-v8a",
+  "mlkitLibExcluded": "默认后端 ppocr；mlkit 仍随宿主 ⇒ 插件不带 libmlkit_google_ocr_pipeline.so（重开条件见脚本头）",
+  "needed": {
+    "libppocr.so": [
+      "libopencv_java5.so",
+      "libopencv_imgproc.so",
+      "libopencv_core.so",
+      "libopencv_imgcodecs.so",
+      "libopencv_features.so",
+      "libopencv_flann.so",
+      "libopencv_geometry.so",
+      "libjnigraphics.so",
+      "libandroid.so",
+      "liblog.so",
+      "libdl.so",
+      "libz.so",
+      "libm.so",
+      "libc.so"
+    ],
+    "libc++_shared.so": [
+      "libc.so",
+      "libm.so",
+      "libdl.so"
+    ]
+  },
   "entries": [
     {
       "target": "jniLibs/arm64-v8a/libppocr.so",
@@ -22,214 +46,44 @@
       "abi": "0xb7 (AArch64)"
     },
     {
-      "target": "jniLibs/arm64-v8a/libmlkit_google_ocr_pipeline.so",
-      "sha256": "fa41d509a661e8aa8b3e3ac1a28541f8823f308414fcad733fe26d61feea2646",
-      "bytes": 11064544,
-      "source": "com.google.mlkit:text-recognition-bundled-common:17.0.0 -> AAR 内 jni/arm64-v8a/libmlkit_google_ocr_pipeline.so",
-      "sourceKind": "gradle-cache-aar",
-      "aarCachePath": "~/.gradle/caches/modules-2/files-2.1/com.google.mlkit/text-recognition-bundled-common/17.0.0/ad2396ea7b02feb026c821cb6aded1216509b0fd/text-recognition-bundled-common-17.0.0.aar",
-      "regenerate": "解压缓存 AAR 的 jni/arm64-v8a/libmlkit_google_ocr_pipeline.so（AAR 由 Gradle 依赖 com.google.mlkit:text-recognition-bundled-common:17.0.0 拉取；仓库内无副本）",
-      "abi": "0xb7 (AArch64)"
+      "target": "assets/ocr/models/PP_OCRv6_tiny_det.ncnn.param",
+      "sha256": "1e4d9fcbdddaf0efe9d9b7e290c5f7a8a4fe1f1264a868da8f490b76302d06fc",
+      "bytes": 19306,
+      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_det.ncnn.param",
+      "sourceKind": "repo-asset",
+      "regenerate": "仓库内文件（无需重新生成）"
     },
     {
-      "target": "assets/ocr/models/aksara/aksara_page_layout_analysis_rpn_gcn.binarypb",
-      "sha256": "b2963b78c7e55fdfd5ed82ca60f045aace7a7e373b5d93254e9ac979dcb5bb67",
-      "bytes": 276,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/aksara/aksara_page_layout_analysis_rpn_gcn.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
+      "target": "assets/ocr/models/PP_OCRv6_tiny_det.ncnn.bin",
+      "sha256": "7ec068ccdcb60a9997be633846a53c03b48356d5a7f328be5bbdd7354bf39933",
+      "bytes": 4929604,
+      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_det.ncnn.bin",
+      "sourceKind": "repo-asset",
+      "regenerate": "仓库内文件（无需重新生成）"
     },
     {
-      "target": "assets/ocr/models/aksara/aksara_page_layout_analysis_ti_rpn_gcn.binarypb",
-      "sha256": "d448c5de8d480d491ac128657926e6253a770baa90afb0e97a67740c93c1e9f3",
-      "bytes": 278,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/aksara/aksara_page_layout_analysis_ti_rpn_gcn.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
+      "target": "assets/ocr/models/PP_OCRv6_tiny_rec.ncnn.param",
+      "sha256": "1fecb3c24adb55ec900a4f5928090e5e960e79f12c58d87e5768541e0462f4d2",
+      "bytes": 13853,
+      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.param",
+      "sourceKind": "repo-asset",
+      "regenerate": "仓库内文件（无需重新生成）"
     },
     {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc/optical/assets.extra/LabelMap.pb",
-      "sha256": "abbec0569d93413bd94d8da69558c37692087204b1cec86ce3807aeb2f9f0deb",
-      "bytes": 70403,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc/optical/assets.extra/LabelMap.pb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
+      "target": "assets/ocr/models/PP_OCRv6_tiny_rec.ncnn.bin",
+      "sha256": "a674dd8d3bebeac8f9b5ddf40bd4502917783bef5120582d875b69d98bd0ab41",
+      "bytes": 10562152,
+      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.bin",
+      "sourceKind": "repo-asset",
+      "regenerate": "仓库内文件（无需重新生成）"
     },
     {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc/optical/conv_model.fb",
-      "sha256": "33416e07504275cfa7cb3c74cba92ae33d7c04ddc82c434e7b24627c1b98766a",
-      "bytes": 40808,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc/optical/conv_model.fb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc/optical/lstm_model.fb",
-      "sha256": "e68a3e9bc71a974db4195e0bceccc6fe4e27c1b7c5ba424b5dbc4d301e0f6c3a",
-      "bytes": 891872,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc/optical/lstm_model.fb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc_cpu.binarypb",
-      "sha256": "d2078a1b5113b3e1818b06b267bbfa56f2be66e1f3b2aaabd6f2e8af1fd9fdcd",
-      "bytes": 329,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Hani_ctc_cpu.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc/optical/assets.extra/LabelMap.pb",
-      "sha256": "c6d345043a561f9dfdb1472cfca7cdda0128b19cb6909c67032c5783077c92b3",
-      "bytes": 3809,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc/optical/assets.extra/LabelMap.pb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc/optical/conv_model.fb",
-      "sha256": "64aba719b4ed1ee5b3d4886c5aaf0b1ac051bf5879e9b08e861e0e29e20a08a7",
-      "bytes": 40848,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc/optical/conv_model.fb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc/optical/lstm_model.fb",
-      "sha256": "0ed62e4fbe0fc5c4090aec473b136e188f828590765c028382358daddb3ccb6e",
-      "bytes": 309568,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc/optical/lstm_model.fb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc_cpu.binarypb",
-      "sha256": "a1dce9a376905a597366f6c9a0b3723205486880e176869e1ad65e92d68e068b",
-      "bytes": 333,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/Latn_ctc_cpu.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/gocr_models/line_recognition_legacy_mobile/tflite_langid.tflite",
-      "sha256": "7f931f6f7c1dd0ec591ace7780df91645a450fafc83505f3ff45ce5ef7c8441b",
-      "bytes": 315520,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/gocr_models/line_recognition_legacy_mobile/tflite_langid.tflite",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/layout/line_clustering_custom_ops/model.tflite",
-      "sha256": "ecda697ed244c5762410e0497878eabcda5f8b0682fb7c3800cd88a7f45dd8e6",
-      "bytes": 129612,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/layout/line_clustering_custom_ops/model.tflite",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/gocr/layout/line_splitting_custom_ops/model.tflite",
-      "sha256": "f42197e656972c330bb9f092edbe298b4a6c2fcd808ff6d614381311f8dd22a7",
-      "bytes": 114384,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/gocr/layout/line_splitting_custom_ops/model.tflite",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser/detector/region_proposal_text_detector_tflite_vertical_mbv2_v1.bincfg",
-      "sha256": "7ac2d4c04fb2fe0cd5c33e3030d9276c40286c73f97c2daa3ab94ea8c3f314c3",
-      "bytes": 452,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser/detector/region_proposal_text_detector_tflite_vertical_mbv2_v1.bincfg",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser/detector/rpn_text_detector_mobile_space_to_depth_quantized_mbv2_v1.tflite",
-      "sha256": "eb811a1290738f131e4005d8a1d63ef21770866414b847190a932f0b56c0d18f",
-      "bytes": 340760,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser/detector/rpn_text_detector_mobile_space_to_depth_quantized_mbv2_v1.tflite",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser/rpn_text_detection_tflite_mobile_mbv2.binarypb",
-      "sha256": "86660be29934bdd123a65ea30ec09eaa66481a7ac2def8e8f376e78484f8774a",
-      "bytes": 194,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser/rpn_text_detection_tflite_mobile_mbv2.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser/segmenter/tflite_script_detector_0.3.bincfg",
-      "sha256": "d4223c23cd8ee3d3d4999d4e10bb16ec0b8119f8812e5e66e64e907c5508f21b",
-      "bytes": 1118,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser/segmenter/tflite_script_detector_0.3.bincfg",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser/segmenter/tflite_script_detector_0.3.conv_model",
-      "sha256": "16be9fc0c0c9429cc3714d5d2e8662c53bd28cf0031375e237db288dc8da8d5f",
-      "bytes": 40808,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser/segmenter/tflite_script_detector_0.3.conv_model",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser/segmenter/tflite_script_detector_0.3.lstm_model",
-      "sha256": "2281a01686f9ff9164f2a12ed743818e2b8e0af6ae7c73240924d70342d3f2cb",
-      "bytes": 161448,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser/segmenter/tflite_script_detector_0.3.lstm_model",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser/taser_script_identification_tflite_mobile.binarypb",
-      "sha256": "a3ebf2720f86e1440e42604f8bd48194111e152fa93886f987655f01a9336d32",
-      "bytes": 136,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser/taser_script_identification_tflite_mobile.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_engine.binarypb",
-      "sha256": "b193080910cdda9d378f1dbdbe51c24dde5d19c10995511c8fd3628b01b4d590",
-      "bytes": 13181,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_engine.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_engine_ti.binarypb",
-      "sha256": "0288f7364556f5298bbdb0b5eaa392bbb122a20c204739ae5ea7369423a073b8",
-      "bytes": 13186,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_engine_ti.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_recognizer.binarypb",
-      "sha256": "551f92a58336c7e5a6d7b533f0d6fc0f6dbf58697bbe0f2d6b9507992604360b",
-      "bytes": 316,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_recognizer.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_runner.binarypb",
-      "sha256": "3b7fdb16279810558f1f30a1eb46719e03588b71833157987c14bca1778658df",
-      "bytes": 334,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_runner.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
-    },
-    {
-      "target": "assets/ocr/models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_runner_ti.binarypb",
-      "sha256": "355e18877aad2b2ef945fe385c1c60609564c106ca429ab4d83c4d4e4554dfe2",
-      "bytes": 337,
-      "source": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models/taser_tflite_gocrchinese_and_latin_mbv2_aksara_layout_gcn_mobile_runner_ti.binarypb",
-      "sourceKind": "build-output",
-      "regenerate": "apps/inrt/build/intermediates/assets/release/mergeReleaseAssets/mlkit-google-ocr-models（资产合并产物；重新生成 = 跑一次 :app 资产合并，或从 mlkit AAR 的 assets 取）"
+      "target": "assets/ocr/models/ppocr_keys_v6_tiny.txt",
+      "sha256": "e07ed91571983f5ee096df61ad7cb585eb79411715553ff14f5882b6052b24e0",
+      "bytes": 74949,
+      "source": "apps/app/src/main/assets/models/ppocrv6/ppocr_keys_v6_tiny.txt",
+      "sourceKind": "repo-asset",
+      "regenerate": "仓库内文件（无需重新生成）"
     }
   ]
 }

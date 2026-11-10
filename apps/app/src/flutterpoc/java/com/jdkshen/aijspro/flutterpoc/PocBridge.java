@@ -376,6 +376,12 @@ final class PocBridge {
             // ---- 玻璃打包页（PocPackaging）-----------------------------------
             // task-100：只读大小构成（漏登记会被当「未知方法」拒掉，Dart 侧静默吞掉 ⇒ 真机看不到那一行）
             case "apkBreakdown":
+            // ---- 插件目录（task-131 batch B）----------------------------------
+            // task-100 教训：桥方法**两处登记**（这里 + PocIntegration 分发），少一处会被当未知方法拒掉
+            case "pluginCatalog":
+            case "pluginInstall":
+            case "pluginInstallStatus":
+            case "pluginUninstall":
             case "projectLoad":
             case "projectSave":
             case "projectBuild":

@@ -27,27 +27,35 @@ public final class Registry {
     private static final String TAG = "C-OCR";
     private static final String HOST_MSG_CLASS = "com.stardust.autojs.runtime.api.OcrAvailability";
     private static final String HOST_MSG_FIELD = "NOT_PACKAGED_MESSAGE";
+    /** 有序：**依赖在前**（宿主按此顺序 System.load；c++_shared 先于使用它的库）。 */
     private static final String[] PLUGIN_LIBS = {
             "libc++_shared.so", "libppocr.so", "libmlkit_google_ocr_pipeline.so"
     };
+    /** 默认后端：插件同时带 ppocr 与 mlkit；用户显式传 options.backend 时以用户为准（宿主读取 options）。 */
+    private static final String DEFAULT_BACKEND = "ppocr";
+    private static final String ABI = "arm64-v8a";
+    private static final String PLUGIN_VERSION = "1.0.0";
 
     private Registry() {
     }
 
     /** 入口：返回真实插件对象（不能是 null）。 */
     public static Object loadDefault(Context hostContext, Context pluginContext, Object runtime, Object scope) {
-        return new OcrPlugin(hostContext, pluginContext);
+        return new OcrPlugin(hostContext, pluginContext, runtime);
     }
 
     /** 插件对象：暴露 create(options)；能力真不可用时抛点名错误。 */
     public static final class OcrPlugin {
         private final Context hostContext;
         private final Context pluginContext;
+        /** loadDefault 传进来的脚本 runtime：宿主侧会话工厂要求必须传（否则报点名错误）。 */
+        private final Object runtime;
         private volatile boolean libsLoaded;
 
-        OcrPlugin(Context hostContext, Context pluginContext) {
+        OcrPlugin(Context hostContext, Context pluginContext, Object runtime) {
             this.hostContext = hostContext;
             this.pluginContext = pluginContext;
+            this.runtime = runtime;
         }
 
         /**
@@ -56,7 +64,10 @@ public final class Registry {
          * 缺方法 ⇒ Plugin.findMethods 留 null ⇒ 反射 Method.invoke 直接 NPE。
          */
         public String getAssetsScriptDir() {
-            return "assets/scripts";
+            // 必须是**相对 assets 根**的路径（xiangqi-plugin 的 ASSETS_SCRIPT_DIR = "scripts"）。
+            // 写成 "assets/scripts" 会让 PFiles.copyAssetDir 拷不到任何文件 ⇒ 运行期报
+            // Module "…/plugin-scripts/<pkg>/index.js" not found.（K40 dev-1485 实测）。
+            return "scripts";
         }
 
         /** 插件版本（与 project-versions.json 的 ocrPluginVersionName 保持一致）。 */
@@ -68,15 +79,87 @@ public final class Registry {
         public Object create(Object options) {
             ensureLibsLoaded();
             ensureModelsExtracted();
+            // 方案 A′（W1 给的唯一入口）：优先走**宿主侧会话工厂**，把 Duck 类型会话直接返回；
+            // 插件不实现算法、也不 link engine（这里用反射调用）。
+            Object session = tryHostSessionFactory();
+            if (session != null) {
+                Log.i(TAG, "ocr plugin session from host factory ok backend=" + DEFAULT_BACKEND);
+                return session;
+            }
+            // W1（宿主侧方案 B）消费的字段，**保持这几个**：
+            //  libs       有序、依赖在前（宿主按序 System.load 绝对路径、幂等）
+            //  backend    用户没显式传 options.backend 时的默认后端（ppocr | mlkit）
+            //  modelPath  绝对路径（宿主作为内置会话的 models 传入；相对路径不生效）
+            //  libDir/abi/version/assetsScriptDir 仅日志与排障用
             Map<String, Object> descriptor = new HashMap<>();
-            descriptor.put("backend", "plugin");
+            // backend 口径（Lead）：用户 options.backend 优先；默认与宿主内置默认一致（ppocr）。
+            // 同时在日志里保留「来源=插件」标记，排障时能分清是插件实现还是内置实现。
+            descriptor.put("backend", backendFrom(options));
             descriptor.put("pluginPackage", pluginContext.getPackageName());
             descriptor.put("libDir", libDir().getAbsolutePath());
             descriptor.put("modelPath", modelDir().getAbsolutePath());
             descriptor.put("libsLoaded", true);
+            descriptor.put("libs", PLUGIN_LIBS.clone());
+            descriptor.put("abi", ABI);
+            descriptor.put("version", PLUGIN_VERSION);
+            descriptor.put("assetsScriptDir", "scripts");
+            descriptor.put("source", "plugin");
+            Log.i(TAG, "descriptor=" + descriptor + " source=plugin backend=" + descriptor.get("backend"));
             Log.i(TAG, "ocr plugin create ok libDir=" + libDir().getAbsolutePath()
                     + " modelPath=" + modelDir().getAbsolutePath());
             return descriptor;
+        }
+
+        /**
+         * 调宿主侧会话工厂（W1 的 A′ 入口）：
+         * com.stardust.autojs.plugin.PluginNativeLoader.createOcrSession(runtime, host, pluginPackage,
+         * versionCode, libDir, modelPath, backend) ⇒ 返回 Duck 类型会话（detect/release/isReleased）。
+         *
+         * <p>用反射（插件不 link engine）。工厂不存在（老宿主）⇒ 返回 null，让调用方回退描述符（方案 B）；
+         * 工厂存在但抛错（例如 soname 不匹配）⇒ **原样抛出**（点名错误，不静默）。</p>
+         */
+        private Object tryHostSessionFactory() {
+            try {
+                Class<?> loader = Class.forName("com.stardust.autojs.plugin.PluginNativeLoader");
+                java.lang.reflect.Method factory = loader.getMethod("createOcrSession", Object.class,
+                        Context.class, String.class, int.class, String.class, String.class, String.class);
+                return factory.invoke(null, runtime, hostContext, pluginContext.getPackageName(),
+                        pluginVersionCode(), libDir().getAbsolutePath(), modelDir().getAbsolutePath(), DEFAULT_BACKEND);
+            } catch (ClassNotFoundException | NoSuchMethodException missing) {
+                Log.i(TAG, "宿主没有会话工厂（老宿主）⇒ 回退描述符（方案 B）：" + missing.getMessage());
+                return null;
+            } catch (java.lang.reflect.InvocationTargetException failure) {
+                Throwable cause = failure.getCause() == null ? failure : failure.getCause();
+                throw unavailable("宿主会话工厂失败：" + cause.getClass().getSimpleName() + ": " + cause.getMessage());
+            } catch (Throwable error) {
+                Log.w(TAG, "调用宿主会话工厂异常：" + error);
+                return null;
+            }
+        }
+
+        /** 用户显式 options.backend 优先（兼容 Map / JSONObject / 其它对象），否则用默认后端。 */
+        private String backendFrom(Object options) {
+            if (options instanceof Map) {
+                Object value = ((Map<?, ?>) options).get("backend");
+                if (value instanceof String && !((String) value).isEmpty()) {
+                    return (String) value;
+                }
+            } else if (options instanceof org.json.JSONObject) {
+                String value = ((org.json.JSONObject) options).optString("backend", "");
+                if (!value.isEmpty()) {
+                    return value;
+                }
+            }
+            return DEFAULT_BACKEND;
+        }
+
+        private int pluginVersionCode() {
+            try {
+                return pluginContext.getPackageManager()
+                        .getPackageInfo(pluginContext.getPackageName(), 0).versionCode;
+            } catch (Throwable error) {
+                return 0;
+            }
         }
 
         /** 契约形态二（备用）：plugin.ocr.create(options) 的等价入口。 */

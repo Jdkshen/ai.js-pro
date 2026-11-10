@@ -44,65 +44,94 @@ function ensurePluginLibsReady(Loader, versionCode) {
 }
 
 function pluginOcrCreateOrNull(options) {
+    var pkg = OCR_PLUGIN_PACKAGE;
+    var plugin = null;
     try {
         if (typeof $plugins === 'undefined' || !$plugins || typeof $plugins.load !== 'function') {
+            console.info('[OCR] plugin load skipped: $plugins 不可用');
             return null;
         }
-        var plugin = $plugins.load(OCR_PLUGIN_PACKAGE);
-        if (!plugin) {
+        try {
+            plugin = $plugins.load(pkg);
+        } catch (loadError) {
+            console.warn('[OCR] plugin loaded=false (load threw): ' + loadError);
             return null;
         }
-        // 就绪判定（能查才查；查不了就交给插件自己报错，不在这里猜）。
+        console.info('[OCR] plugin loaded=' + (plugin !== null && plugin !== undefined) + ' pkg=' + pkg);
+        if (plugin === null || plugin === undefined) {
+            return null;
+        }
+        // 就绪判定：能查就查 + 惰性落盘一次（task-142）；查不了交给插件自己报错，不在这里猜。
         try {
             if (typeof context !== 'undefined' && context && Packages && Packages.com) {
                 var Loader = Packages.com.stardust.autojs.plugin.PluginNativeLoader;
-                var info = context.getPackageManager().getPackageInfo(OCR_PLUGIN_PACKAGE, 0);
-                // Ready? If not, stage once lazily (task-142); still not ready => fall back to the builtin chain.
+                var info = context.getPackageManager().getPackageInfo(pkg, 0);
                 if (!ensurePluginLibsReady(Loader, info.versionCode)) {
+                    console.warn('[OCR] plugin libs not ready after lazy staging pkg=' + pkg + ' v=' + info.versionCode);
                     return null;
                 }
             }
-        } catch (ignored) {
+        } catch (readyError) {
+            console.warn('[OCR] plugin readiness check failed (continue anyway): ' + readyError);
         }
-        var create = (typeof plugin.create === 'function') ? plugin.create
-                : (plugin.ocr && typeof plugin.ocr.create === 'function' ? plugin.ocr.create : null);
+        // 形态 1：plugin.create(options)
+        var owner = plugin;
+        var create = (typeof plugin.create === 'function') ? plugin.create : null;
+        // 形态 2：plugin.ocr.create(options)
+        if (create === null && plugin.ocr && typeof plugin.ocr.create === 'function') {
+            create = plugin.ocr.create;
+            owner = plugin.ocr;
+        }
         if (create === null) {
+            console.warn('[OCR] plugin has no create(options); keys=' + Object.keys(plugin).join(','));
             return null;
         }
-        return create.call(plugin.ocr && plugin.ocr.create === create ? plugin.ocr : plugin, options);
+        var session;
+        try {
+            session = create.call(owner, options);
+        } catch (createError) {
+            console.warn('[OCR] plugin create threw (fallback to builtin chain): ' + createError);
+            return null;
+        }
+        // 形态 3（W2 当前实现）：返回**描述符**而不是会话 —— 必须明确说出来，不静默。
+        // 方案 A'/B（裁决）：插件返回**描述符** ⇒ 调用宿主侧的会话工厂（唯一来源，复用既有实现）。
+        if (session !== null && session !== undefined && typeof session.detect !== 'function') {
+            var keys = (typeof session === 'object') ? Object.keys(session).join(',') : typeof session;
+            if (typeof context === 'undefined' || !context || !Packages || !Packages.com) {
+                console.warn('[OCR] plugin descriptor needs host context/Packages; keys=' + keys);
+                return null;
+            }
+            var LoaderA = Packages.com.stardust.autojs.plugin.PluginNativeLoader;
+            var infoA = context.getPackageManager().getPackageInfo(pkg, 0);
+            var backendA = (session && session.backend) ? String(session.backend) : 'ppocr';
+            try {
+                var builtSession = LoaderA.createOcrSession(runtime, context, pkg, infoA.versionCode,
+                        session ? session.libDir : null, session ? session.modelPath : null, backendA);
+                if (builtSession && typeof builtSession.detect === 'function') {
+                    console.info('[OCR] host-built session from plugin descriptor: backend=' + backendA
+                            + ' libs=' + ((session && session.libs) ? session.libs.join('+') : '?')
+                            + ' keys=' + keys);
+                    return builtSession;
+                }
+                console.warn('[OCR] createOcrSession returned no detect(); keys=' + keys);
+                return null;
+            } catch (factoryError) {
+                // 不再静默：把完整 error 文本打出来，再回落到内置链路。
+                console.warn('[OCR] createOcrSession threw (fallback to builtin chain): ' + factoryError);
+                return null;
+            }
+        }
+        console.info('[OCR] plugin session in use pkg=' + pkg + ' backend=' + (session.backend || 'plugin'));
+        return session;
     } catch (error) {
-        // 插件报错不吞：写一条日志后回落既有链路（点名的错由既有链路给）。
-        try { console.warn('OCR 插件不可用，回落到内置链路：' + error); } catch (ignored) {
+        try { console.warn('[OCR] plugin path failed (fallback to builtin chain): ' + error); } catch (ignored) {
         }
         return null;
     }
 }
 
-// task-143 (approved): REAL loadability probe - pure file existence check (no System.load, no side effects).
-function nativeLibraryDirOrNull() {
-    try {
-        if (typeof context !== 'undefined' && context && typeof context.getApplicationInfo === 'function') {
-            var dir = context.getApplicationInfo().nativeLibraryDir;
-            return dir ? new java.io.File(dir) : null;
-        }
-    } catch (ignored) {
-    }
-    return null;
-}
-
-// true = file present, false = definitely missing, null = cannot tell (keep legacy behaviour).
-function nativeLibPresent(fileName) {
-    try {
-        var dir = nativeLibraryDirOrNull();
-        if (dir === null) {
-            return null;
-        }
-        return new java.io.File(dir, fileName).isFile();
-    } catch (ignored) {
-        return null;
-    }
-}
-
+var pluginLibsLoaded = false;
+var pluginDescriptor = null;
 var PPOcr = com.stardust.autojs.runtime.api.PPOcr;
 // task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致的共用文案（三引擎同源）。
 var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；如需 OCR 请把该开关关掉并重新打包。';
@@ -189,9 +218,18 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
         }
         var backend = String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase();
         // task-105：ppocr 未随包时**点名**报错（不是 UnsatisfiedLinkError / 静默 undefined）。
-        if ((backend === 'ppocr' || backend === 'paddle' || backend === 'paddleocr')
+        // 插件已把库加载进本进程（方案 B）时，不再用「宿主 lib 目录里没有」判死。
+        if (!pluginLibsLoaded && (backend === 'ppocr' || backend === 'paddle' || backend === 'paddleocr')
                 && (ppocrIsAvailable() === false || nativeLibPresent('libppocr.so') === false)) {
             throw new Error(OCR_NOT_PACKAGED);
+        }
+        if (pluginLibsLoaded && pluginDescriptor && pluginDescriptor.backend
+                && options.backend == undefined) {
+            backend = String(pluginDescriptor.backend).toLowerCase();
+        }
+        if (pluginLibsLoaded && pluginDescriptor && pluginDescriptor.modelPath
+                && (options.models == undefined || options.models === null)) {
+            options.models = String(pluginDescriptor.modelPath);
         }
         var degradedFrom = null;
         var degradeReason = null;
@@ -202,8 +240,8 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
             try {
                 // ensureMlKitInitialized() only does idempotent init and never touches the .so (dev-1484),
                 // so combine it with a REAL file-existence probe for the mlkit pipeline library.
-                mlkitAvailable = Ocr.ensureMlKitInitialized() === true
-                        && nativeLibPresent('libmlkit_google_ocr_pipeline.so') !== false;
+                mlkitAvailable = (pluginLibsLoaded || Ocr.ensureMlKitInitialized() === true)
+                        && (pluginLibsLoaded || nativeLibPresent('libmlkit_google_ocr_pipeline.so') !== false);
             } catch (mlkitError) {
                 mlkitAvailable = false;
                 try { console.warn('[OCR] ML Kit 不可用（检查即失败）：' + mlkitError); } catch (ignore) {}

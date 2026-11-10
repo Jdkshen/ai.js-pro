@@ -115,6 +115,12 @@ final class PocIntegration {
             // task-96：只读的产物「大小构成」（数据源=产物本身；失败时页面不显示该行）
             case "apkBreakdown":
                 return ApkBreakdownBridge.execute(activity, args);
+            // ---- 插件目录（task-131 batch B）：清单/下载/进度/停用 ----------------
+            case "pluginCatalog":
+            case "pluginInstall":
+            case "pluginInstallStatus":
+            case "pluginUninstall":
+                return PluginBridge.execute(activity, method, args);
             case "projectLoad":
             case "projectSave":
             case "projectBuild":

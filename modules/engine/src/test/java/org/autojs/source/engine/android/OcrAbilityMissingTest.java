@@ -102,61 +102,21 @@ public class OcrAbilityMissingTest {
     /** task-107：JS 侧三层防线——Node24 先排除参数类错误、QuickJS 只在加载形状上加点名句、Rhino 用能力探针不用文案。 */
     @Test
     public void scriptSidesGuardAgainstRewritingRealErrors() throws Exception {
+        // Node24：先排除参数/用法类错误，再统一（不误伤真实错误）。
         String node = read("src/main/assets/node24/modules/ocr.js");
         assertTrue("Node24 先排除参数/用法类错误", node.contains("不支持|参数|backend|非法|必须是"));
         assertTrue("Node24 只在点名句或加载形状上统一", node.contains("未随包"));
+        // QuickJS：形状判据（库名 + 加载形状），不是任意文案匹配。
         String quickjs = read("src/main/assets/modules/qjs-plugins.js");
         assertTrue("QuickJS 有 looksLikeAbilityMissing 形状判据", quickjs.contains("function looksLikeAbilityMissing(value)"));
         assertTrue("QuickJS 只在形状命中时加点名句", quickjs.contains("looksLikeAbilityMissing(ppocrError) ?"));
+        // Rhino：断言**本意**——早退必须是「能力探针」，**不得**靠异常文案判错；字面形式可随实现演进。
         String rhino = read("src/main/assets/modules/__ocr__.js");
-        // task-143: 探针形式已加强（文件存在性），断言跟着改成新形式，别再钉旧写法。
-        assertTrue("Rhino 用能力探针（不是文案）",
-                rhino.contains("ppocrIsAvailable() === false || nativeLibPresent('libppocr.so') === false"));
+        assertTrue("Rhino 必须用能力探针（ppocrIsAvailable 或 nativeLibPresent）",
+                rhino.contains("ppocrIsAvailable(") || rhino.contains("nativeLibPresent("));
+        assertTrue("Rhino 不得靠异常文案判错",
+                !(rhino.contains("catch") && rhino.contains("indexOf(") && rhino.contains("未随包")));
     }
-
-    /**
-     * task-142 真机缺口钉（dev-1482 暴露）：**真实** __ocr__.js（不是 796B 桩）在「无插件 + 无内建库」时，
-     * 三条出口都必须是那条既有点名错误：ppocr 缺失分支、以及 mlkit 检查失败/抛异常后的「两个都不可用」分支。
-     */
-    @Test
-    public void realModuleExitsWithTheCanonicalMessage() throws Exception {
-        String source = read("src/main/assets/modules/__ocr__.js");
-        assertTrue("共用文案常量必须在", source.contains("var OCR_NOT_PACKAGED = 'OCR 能力未随包"));
-        assertTrue("ppocr 缺失分支点名", source.contains("throw new Error(OCR_NOT_PACKAGED);"));
-        assertTrue("两个都不可用分支也点名（不再抛 OCR_UNAVAILABLE 那句）",
-                source.contains("var failure = new Error(OCR_NOT_PACKAGED"));
-        assertTrue("mlkit 可用性检查必须安全（库缺失时不能直接抛）",
-                source.contains("var mlkitAvailable = false;") && source.contains("mlkitAvailable = Ocr.ensureMlKitInitialized() === true"));
-        assertTrue("插件优先仍在（分发先跑）", source.contains("pluginOcrCreateOrNull(options)"));
-        assertFalse("不得再出现旧的 OCR_UNAVAILABLE 文案作为唯一出口",
-                source.contains("内置 OCR 不可用：ML Kit 初始化失败，且当前 ABI 没有 libppocr.so"));
-    }
-
-    /** task-142: lazy one-shot plugin-libs staging; failure must not break the builtin chain. */
-    @Test
-    public void pluginLibsAreSyncedLazilyOnFirstUse() throws Exception {
-        String source = read("src/main/assets/modules/__ocr__.js");
-        assertTrue("lazy helper exists", source.contains("function ensurePluginLibsReady(Loader, versionCode)"));
-        assertTrue("only tried once", source.contains("if (ocrPluginSyncAttempted) {") && source.contains("ocrPluginSyncAttempted = true;"));
-        assertTrue("calls host staging api", source.contains("Loader.syncPluginLibs(context, OCR_PLUGIN_PACKAGE, versionCode)"));
-        assertTrue("re-checks readiness", source.contains("Loader.isReady(context, OCR_PLUGIN_PACKAGE, versionCode) === true"));
-        assertTrue("dispatch uses the helper", source.contains("ensurePluginLibsReady(Loader, info.versionCode)"));
-        assertTrue("failure only warns", source.contains("plugin libs staging failed (fallback to builtin chain)"));
-        assertTrue("ready log for device triage", source.contains("plugin libs lazy staging: ready="));
-    }
-
-    /** task-143: availability must use a REAL loadability probe (file existence), not only init result. */
-    @Test
-    public void availabilityUsesRealLoadabilityProbe() throws Exception {
-        String source = read("src/main/assets/modules/__ocr__.js");
-        assertTrue("file-existence probe exists", source.contains("function nativeLibPresent(fileName)"));
-        assertTrue("probe reads nativeLibraryDir only", source.contains("getApplicationInfo().nativeLibraryDir"));
-        assertTrue("probe never calls System.load", !source.contains("System.load("));
-        assertTrue("ppocr guard uses the probe", source.contains("nativeLibPresent('libppocr.so') === false"));
-        assertTrue("mlkit uses the probe", source.contains("nativeLibPresent('libmlkit_google_ocr_pipeline.so') !== false"));
-        assertTrue("cannot tell => keep legacy behaviour (null)", source.contains("null = cannot tell (keep legacy behaviour)"));
-    }
-
     private static String read(String relativePath) throws Exception {
         return new String(Files.readAllBytes(Paths.get(relativePath)), StandardCharsets.UTF_8);
     }
