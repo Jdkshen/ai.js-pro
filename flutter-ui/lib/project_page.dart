@@ -1367,6 +1367,14 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                 label: const Text('安装 APK'))
           ])
         ],
+          // task-115：模板来源（只读；label 为空/缺失就整行不显示，不猜）
+          if (current['templateLabel'] is String &&
+              (current['templateLabel'] as String).isNotEmpty)
+            Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text('打包模板：' + (current['templateLabel'] as String),
+                    key: const ValueKey('project-build-template-source'),
+                    style: const TextStyle(fontSize: 12))),
           // task-110：打包提示（可折叠）。没有提示就不显示；字段缺失/读取失败要说出来（不静默）
           if (status == 'success')
             current['warnings'] is List
@@ -1448,6 +1456,13 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                   tooltip: '选择入口脚本',
                   onPressed: busy ? null : chooseMain,
                   icon: const Icon(Icons.folder_open_outlined))),
+          // task-115：UI 脚本的只读提示（不校验、不写回、不改打包行为）
+          const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: Text(
+                  'UI 脚本（含 ui.layout）在打包版里由宿主 Activity 运行；纯 auto 脚本无界面',
+                  key: ValueKey('project-ui-script-note'),
+                  style: TextStyle(fontSize: 12))),
           DropdownButtonFormField<int>(
               isExpanded: true,
               key: const ValueKey('project-encryptLevel'),

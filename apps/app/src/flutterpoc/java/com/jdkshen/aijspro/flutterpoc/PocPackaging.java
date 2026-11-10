@@ -411,6 +411,8 @@ final class PocPackaging {
                     + " source=" + templateStatus.source
                     + " detail=" + templateStatus.detail
                     + " size=" + templateBytes);
+            // task-115：把来源记进作业状态（同一份真值，不另起一套）
+            job.templateSource(templateStatus.source);
             if (!templateStatus.available) {
                 throw new IOException("打包模板未就绪：" + templateStatus.detail
                         + "（请安装「APK 打包插件」，或把 template.apk 放到 /sdcard/template.apk）");
@@ -1047,6 +1049,27 @@ final class PocPackaging {
             return "running".equals(status);
         }
 
+        /** task-115：模板来源（原文，来自 ApkTemplateInspector 的 SOURCE_*）。 */
+        String templateSource = "";
+
+        void templateSource(String value) {
+            templateSource = value == null ? "" : value;
+        }
+
+        /**
+         * 模板来源的中文标签：**只认打包侧定义的那几个常量**（bundled_assets / host_cache / sdcard_override）；
+         * 认不出就返回空串 ⇒ 页面**不显示**（拿不到就不猜）。
+         */
+        String templateLabel() {
+            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_BUNDLED.equals(templateSource))
+                return "随主程序分发（内置瘦身模板）";
+            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_HOST_CACHE.equals(templateSource))
+                return "宿主缓存";
+            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_SDCARD.equals(templateSource))
+                return "外部文件（/sdcard/template.apk）";
+            return "";
+        }
+
         void stage(String value) {
             stage = value;
         }
@@ -1100,6 +1123,9 @@ final class PocPackaging {
                     .put("startedAt", startedAt);
             // task-110：成功结果里始终带 warnings（没有就是空数组）⇒ 页面能区分「没有提示」与「桥没返回该字段」
             value.put("warnings", new JSONArray(warnings));
+            // task-115：模板来源（只读展示；label 为空 ⇒ 页面不显示该行）
+            value.put("templateSource", templateSource);
+            value.put("templateLabel", templateLabel());
             if (!error.isEmpty()) value.put("error", error);
             if (apk != null && apk.isFile()) {
                 value.put("path", apk.getPath());
