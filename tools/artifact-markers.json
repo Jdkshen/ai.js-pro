@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "note": "模板 dex 内容级判据的标记注册表（task-91）。规则：只有当某个标记**确实出现在源码里**时，才要求模板 dex 里有它（避免重命名/删除后误报）；标记不在源码里会打 WARN 提示同步本文件。since = 该符号引入的版本，便于判断「模板是否该重建」。",
+  "sourceGlobs": [
+    "modules/*/src/main/**",
+    "apps/inrt/src/main/**"
+  ],
+  "derived": {
+    "enabled": true,
+    "maxMarkers": 5,
+    "note": "对「模板构建之后改动过的源文件」自动抽公共类名/方法名去 dex 里找（比人工注册表更硬）；git 不可用时退化为按 mtime 挑文件。"
+  },
+  "groups": [
+    {
+      "id": "sjbc-core",
+      "note": "SJBC（自研 L3 VM + v5 容器）核心类",
+      "markers": [
+        { "name": "SjbcApi", "since": "dev-1456", "note": "只读入口 sjbc.run/runEntry" },
+        { "name": "SjbcVm", "since": "dev-1456", "note": "字节码 VM" },
+        { "name": "SjbcKeySource", "since": "dev-1456", "note": "主密钥 = 本包签名证书 SHA-256 → HKDF" },
+        { "name": "SjbcV5Container", "since": "dev-1456", "note": "v5 容器（HKDF + 双层 AES-GCM）" },
+        { "name": "SjbcHostFunctions", "since": "dev-1456", "note": "宿主函数表 print/len/push/slice0" }
+      ]
+    },
+    {
+      "id": "sjbc-entry",
+      "note": "SJBC 三个引擎入口与返回值包装（dev-1457/1458 新增，正是今天漏判的那批）",
+      "markers": [
+        { "name": "forCurrentEngine", "since": "dev-1458", "note": "SjbcApi.forCurrentEngine()：QuickJS 分支按 engine 取实例" },
+        { "name": "sjbcCall", "since": "dev-1457", "note": "QuickJsHostBridge.sjbcCall(op,path,entryIndex) 只读白名单" },
+        { "name": "toScriptValue", "since": "dev-1457", "note": "Rhino NativeObject/NativeArray 包装" },
+        { "name": "runJson", "since": "dev-1457", "note": "JSON 通道（QuickJS 用）" },
+        { "name": "runEntryJson", "since": "dev-1457", "note": "JSON 通道 entry 版" }
+      ]
+    },
+    {
+      "id": "host-routing",
+      "note": "activity/UI 宿主要求判据（打包版白屏那次的修复）",
+      "markers": [
+        { "name": "ScriptHostRouting", "since": "dev-1452", "note": "activity.* 也算需要 Activity 宿主" }
+      ]
+    },
+    {
+      "id": "cross-process-prefs",
+      "note": "跨进程偏好（白名单 key 双写）",
+      "markers": [
+        { "name": "MultiProcessPrefs", "since": "dev-1447", "note": "store 优先 + XML 播种 + 双写" }
+      ]
+    },
+    {
+      "id": "abi-noise",
+      "note": "ABI warning 降噪",
+      "markers": [
+        { "name": "warningLevel", "since": "dev-1457", "note": "AbiPolicy.warningLevel() 同结论只 W 一次（app 侧，不在模板里也要能在 dex 里找到同名？见 WARN 逻辑）" }
+      ]
+    },
+    {
+      "id": "script-broadcast",
+      "note": "脚本侧广播接收（三引擎绑定）",
+      "markers": [
+        { "name": "ScriptBroadcastReceivers", "since": "dev-1443", "note": "注册表胶水" },
+        { "name": "BroadcastReceiverRegistry", "since": "dev-1443", "note": "登记/注销/派发" }
+      ]
+    }
+  ]
+}

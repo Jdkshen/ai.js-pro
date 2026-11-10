@@ -101,4 +101,36 @@ check("JSON 形态：stale=true 且 checks 能定位到 aot", () => {
     rmSync(root, { recursive: true, force: true });
 });
 
+// task-91 ③：新符号未进模板 ⇒ STALE(marker-missing:…) 且 exit 1
+// （伪造一份「真 zip + classes.dex」的模板：dex 里只有旧标记 SjbcApi，没有 forCurrentEngine）
+check("新符号未进模板 ⇒ STALE(marker-missing:forCurrentEngine) 且 exit 1", () => {
+    const root = makeRepo({ templateTime: OLD, payloadTime: NEW, sourceTime: NEW });
+    // 源文件里声明新公共方法（会被「推导标记」抓到）
+    const source = join(root, "modules/engine/src/main/java/com/demo/Engine.kt");
+    writeFileSync(source, "class SjbcApi {\n    companion object {\n        @JvmStatic public fun forCurrentEngine(id: Int): Any? = null\n    }\n}\n");
+    utimesSync(source, NEW, NEW);
+    // 伪造模板：真 zip，classes.dex 里只有 SjbcApi（缺 forCurrentEngine）
+    const stage = join(root, "apkstage");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "classes.dex"), "dex fake payload SjbcApi only");
+    const apk = join(root, "apps/app/src/main/assets/template.apk");
+    try { rmSync(apk, { force: true }); } catch { /* ignore */ }
+    execFileSync(SHELL, ["-NoProfile", "-Command",
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory('" + stage + "','" + apk + "')"]);
+    utimesSync(apk, OLD, OLD);
+    const result = runChecker(root, ["-Deep"]);
+    assert.equal(result.code, 1, result.stdout);
+    assert.match(result.stdout, /STALE\(kind=template, marker-missing:forCurrentEngine/);
+    // 反向对照：dex 里补上该标记后应当 FRESH（证明 STALE 是「标记缺失」而不是别的）
+    writeFileSync(join(stage, "classes.dex"), "dex fake payload SjbcApi forCurrentEngine");
+    rmSync(apk, { force: true });
+    execFileSync(SHELL, ["-NoProfile", "-Command",
+        "Add-Type -AssemblyName System.IO.Compression.FileSystem; [System.IO.Compression.ZipFile]::CreateFromDirectory('" + stage + "','" + apk + "')"]);
+    utimesSync(apk, OLD, OLD);
+    const fixed = runChecker(root, ["-Deep"]);
+    assert.equal(fixed.code, 0, fixed.stdout);
+    assert.doesNotMatch(fixed.stdout, /marker-missing/);
+    rmSync(root, { recursive: true, force: true });
+});
+
 console.log("RESULT " + checks + " artifact-freshness checks passed");

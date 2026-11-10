@@ -127,6 +127,12 @@ final class QuickJsHostBridge implements AutoCloseable,
      * 只加 Java 方法、不需要重新编译 native。
      */
     private static final Map<Integer, QuickJsHostBridge> sActiveBridges = new ConcurrentHashMap<>();
+    /**
+     * task-90：**活着的 bridge**（不依赖引擎 id —— id 由 ScriptEngineManager 后分配，构造期可能还是 0）。
+     * 仅用于 `forCurrentEngine()` 的「恰好一个在跑」兜底与诊断计数，**不参与 forEngine(id) 的定位**。
+     */
+    private static final java.util.Set<QuickJsHostBridge> sLiveBridges =
+            java.util.Collections.newSetFromMap(new ConcurrentHashMap<QuickJsHostBridge, Boolean>());
     private final AtomicLong mNextYoloHandle = new AtomicLong(1);
     private final Map<Long, YoloSession> mYoloSessions = new ConcurrentHashMap<>();
     /** QuickJS 的 `$ocr.create()` 会话（Rhino 的 __ocr__.js 也是「每次调用一个新对象」）。 */
@@ -297,6 +303,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     QuickJsHostBridge(ScriptRuntime runtime) {
         mRuntime = runtime;
+        sLiveBridges.add(this);
         mJavaInterop = new QuickJsJavaInterop(runtime.javaResources);
         QuickJsApiExtensions.install(runtime, this);
     }
@@ -329,17 +336,38 @@ final class QuickJsHostBridge implements AutoCloseable,
      * <p>这里只在**注册表里恰好一个活动 bridge**时兜底（单脚本场景；多脚本并存时仍然要求用 id 定位，绝不猜错引擎）。
      */
     public static QuickJsHostBridge forCurrentEngine() {
-        int size = sActiveBridges.size();
-        if (size == 1) {
+        if (sActiveBridges.size() == 1) {
             return sActiveBridges.values().iterator().next();
         }
-        throw new IllegalStateException("无法定位当前脚本引擎（活动 bridge=" + size
-                + "）；请用 forEngine(engines.myEngine().id)");
+        // task-90：id 可能从未分配（构造期 getId()==0 ⇒ 没进 sActiveBridges），此时用「活着的 bridge」兜底 ——
+        // 仍然只在**恰好一个**在跑时兜底，多脚本并存一律拒绝（不猜错引擎）。
+        if (sLiveBridges.size() == 1) {
+            return sLiveBridges.iterator().next();
+        }
+        throw new IllegalStateException("无法定位当前脚本引擎（已注册=" + sActiveBridges.size()
+                + " 存活=" + sLiveBridges.size() + "）；请用 forEngine(engines.myEngine().id)");
+    }
+
+    /** task-90 诊断：当前活着的 bridge 数量（不依赖 id 分配）。 */
+    public static int liveBridgeCount() {
+        return sLiveBridges.size();
     }
 
     /** 诊断用：当前注册的活动 bridge 数量（只读，不暴露实例）。 */
     public static int activeBridgeCount() {
         return sActiveBridges.size();
+    }
+
+    /** task-90 诊断：已注册的引擎 id 快照（只读、升序；不暴露实例）。 */
+    public static java.util.List<Integer> registeredIds() {
+        java.util.List<Integer> ids = new java.util.ArrayList<>(sActiveBridges.keySet());
+        java.util.Collections.sort(ids);
+        return ids;
+    }
+
+    /** task-90 诊断：本 bridge 的原生引擎 handle（-1 表示还没 attach）。 */
+    public long engineHandle() {
+        return mEngineHandle;
     }
 
     /** 浮窗注册表 ownerTag：qjs-<native handle>（同一脚本的宿主/worker 可区分）。 */
@@ -8294,6 +8322,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         if (!mCloseStarted.compareAndSet(false, true)) return;
         if (mOwnerEngineId > 0) {
             sActiveBridges.remove(mOwnerEngineId, this);
+        sLiveBridges.remove(this);
         }
         // 最先关 overlay 窗口：异常/结束路径（engine.destroy -> bridge.close）里这一步必须在
         // 其它清理之前，保证即使后面的清理抛异常，全屏窗口也不会残留在屏幕上（残留=用户卡死）。

@@ -84,10 +84,28 @@
             } catch (error) {
                 resolveError = String(error);
             }
+            var registeredIds = null;
+            var liveCount = -1;
+            var handle = -1;
+            try {
+                var cls = g.Java && typeof g.Java.type === 'function'
+                        ? g.Java.type('com.stardust.autojs.engine.QuickJsHostBridge') : null;
+                if (cls) {
+                    registeredIds = cls.registeredIds();
+                    liveCount = cls.liveBridgeCount();
+                    if (resolved) {
+                        handle = cls.forCurrentEngine().engineHandle();
+                    }
+                }
+            } catch (ignored) {
+            }
             return {
                 engineId: id,
                 hasEngines: !!(g.engines && typeof g.engines.myEngine === 'function'),
                 activeBridgeCount: count,
+                liveBridgeCount: liveCount,
+                registeredIds: registeredIds,
+                engineHandleFromHost: handle,
                 bridgeResolved: resolved,
                 bridgeResolvedVia: via,
                 bridgeError: resolveError,

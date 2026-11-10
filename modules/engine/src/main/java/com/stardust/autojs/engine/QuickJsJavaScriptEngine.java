@@ -91,12 +91,29 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
                 throw new com.stardust.autojs.runtime.exception.ScriptInterruptedException();
             }
             hostBridge.attachEngine(handle);
+            // task-90：注册要用**有效**的引擎 id —— 构造期 getId() 可能还是 0（id 由 ScriptEngineManager 后分配），
+            // 那时 setOwnerEngineId 会跳过注册（只登记 >0），于是 JS 侧 forEngine(id)/兜底都拿不到 bridge。
+            hostBridge.setOwnerEngineId(getId());
             hostBridge.setUiHostActivity(mHostActivity);
             mNativeHandle = handle;
             for (Map.Entry<String, Object> entry : mPendingGlobals.entrySet()) {
                 QuickJsNativeBridge.setGlobal(handle, entry.getKey(), entry.getValue());
             }
             mPendingGlobals.clear();
+        }
+    }
+
+    /**
+     * task-90：引擎 id 是 `ScriptEngineManager` **后分配**的（`ScriptEngineManager.java:115 engine.setId(id)`），
+     * 而 bridge 注册需要有效 id（`QuickJsHostBridge.setOwnerEngineId` 只登记 >0）⇒ 这里在 id 落定后**补登记**。
+     */
+    @Override
+    public void setId(int id) {
+        super.setId(id);
+        QuickJsHostBridge bridge = mHostBridge;
+        if (bridge != null && id > 0) {
+            bridge.setOwnerEngineId(id);
+            android.util.Log.i("QuickJsEngine", "quickjs bridge registered for engine id=" + id);
         }
     }
 

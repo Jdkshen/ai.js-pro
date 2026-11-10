@@ -30,7 +30,14 @@ param(
     # 内容级判据（推荐；mtime 被 checkout 打乱时仍能判出来）。
     # 默认：内容级不一致只报 WARN（启发式，可能误报，不挡构建）；-DeepStrict 才把它算 STALE。
     [switch]$Deep,
+    # -DeepStrict：历史开关（task-91 起注册表/推导标记本身就按 STALE 处理，此项保留仅为兼容）
     [switch]$DeepStrict,
+    # 标记注册表路径（默认 <Root>/tools/artifact-markers.json，退回脚本目录同名文件）
+    [string]$MarkersPath = '',
+    # 跳过「从最近改动源文件推导标记」（应急开关）
+    [switch]$NoDerived,
+    # 覆盖推导标记个数上限（0 = 用注册表 derived.maxMarkers，默认 5）
+    [int]$MaxDerivedMarkers = 0,
     # 跳过某一侧
     [switch]$SkipTemplate,
     [switch]$SkipAot,
@@ -125,6 +132,28 @@ function Test-FileContainsUtf8 {
     return $found
 }
 
+# 一次性把「哪些标记出现在源码里」算出来（单趟 Select-String + 正则或）。
+# 逐个标记全树扫会慢到不可用（15 个标记 × 上万文件），这里必须单趟。
+function Get-SourceMarkersPresent {
+    param([string[]]$Paths, [string[]]$Markers)
+    $result = @{}
+    foreach ($m in $Markers) { $result[$m] = $false }
+    if ($null -eq $Markers -or $Markers.Count -eq 0) { return $result }
+    $pattern = ($Markers | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    foreach ($p in $Paths) {
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        $hits = Get-ChildItem -LiteralPath $p -Recurse -File -Include '*.java', '*.kt' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/]build[\\/]' } |
+            Select-String -Pattern $pattern -ErrorAction SilentlyContinue
+        foreach ($hit in $hits) {
+            foreach ($m in $Markers) {
+                if (-not $result[$m] -and $hit.Line -like ('*' + $m + '*')) { $result[$m] = $true }
+            }
+        }
+    }
+    return $result
+}
+
 # 只在源码里确实存在该标记时才要求构件里有它（避免重命名/删除后误报）
 function Test-SourceContains {
     param([string[]]$Paths, [string]$Marker)
@@ -170,30 +199,120 @@ if (-not $SkipTemplate) {
         }
 
         if ($Deep -and (Test-Path -LiteralPath $TemplatePath)) {
-            # 模板里的引擎类：这些是「打包版跑旧引擎」最直观的指纹（Lead dev-1456 实测用的三个）
-            $candidates = @('SjbcApi', 'ScriptHostRouting', 'MultiProcessPrefs')
-            $required = @()
             $sourceSearchRoots = @((Join-Path $Root 'modules'), (Join-Path $Root 'apps/inrt/src'))
-            foreach ($marker in $candidates) {
-                if (Test-SourceContains -Paths $sourceSearchRoots -Marker $marker) { $required += $marker }
+            $registryMarkers = @()
+            $registrySince = @{}
+            $derivedCfg = $null
+
+            # ① 标记注册表（task-91）：可维护 + 只要求「源码里确实存在」的标记 + 防漂移 WARN
+            $registryFile = if (-not [string]::IsNullOrWhiteSpace($MarkersPath)) { $MarkersPath }
+                elseif (Test-Path -LiteralPath (Join-Path $Root 'tools/artifact-markers.json')) { Join-Path $Root 'tools/artifact-markers.json' }
+                else { Join-Path $PSScriptRoot 'artifact-markers.json' }
+            if (Test-Path -LiteralPath $registryFile) {
+                try {
+                    # PS 5.1 默认按 ANSI 读无 BOM 文件 ⇒ 必须显式 UTF8（否则中文/JSON 结构都会读坏）
+                    $registry = Get-Content -LiteralPath $registryFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                    $groupNotes = @()
+                    $allNames = @($registry.groups | ForEach-Object { $_.markers | ForEach-Object { [string]$_.name } } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                    $presentMap = Get-SourceMarkersPresent -Paths $sourceSearchRoots -Markers $allNames
+                    foreach ($group in $registry.groups) {
+                        $present = @()
+                        $absent = @()
+                        foreach ($marker in $group.markers) {
+                            $name = [string]$marker.name
+                            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+                            if ($presentMap[$name]) {
+                                $present += $name
+                                $registryMarkers += $name
+                                $registrySince[$name] = [string]$marker.since
+                            } else {
+                                $absent += $name
+                            }
+                        }
+                        if ($present.Count -gt 0 -and $absent.Count -gt 0) {
+                            $results.Add([pscustomobject]@{ kind = 'markers-registry'; state = 'WARN'; reason = '组 ' + $group.id + ' 里这些标记已不在源码：' + ($absent -join ',') + '（请同步 tools/artifact-markers.json）'; newest = ''; newestPath = ''; artifact = $registryFile })
+                        }
+                        $groupNotes += ($group.id + '=>' + ($present -join '|'))
+                    }
+                    $derivedCfg = $registry.derived
+                    $deepNotes.Add('registry=' + (Get-RelativePath $registryFile) + ' groups=[' + ($groupNotes -join '; ') + ']')
+                } catch {
+                    $results.Add([pscustomobject]@{ kind = 'markers-registry'; state = 'WARN'; reason = '注册表读取/解析失败：' + $_.Exception.Message; newest = ''; newestPath = ''; artifact = $registryFile })
+                }
+            } else {
+                $deepNotes.Add('registry 不存在（' + (Get-RelativePath $registryFile) + '）：只做推导标记')
             }
+
+            # ② 推导标记（更硬的证据）：模板 mtime 之后改动过的引擎/inrt 源文件里抽公共成员名
+            $derived = @()
+            $derivedSource = '(skipped)'
+            if (-not $NoDerived) {
+                $maxDerived = if ($MaxDerivedMarkers -gt 0) { $MaxDerivedMarkers } elseif ($null -ne $derivedCfg) { [int]$derivedCfg.maxMarkers } else { 5 }
+                $templateTime = (Get-Item -LiteralPath $TemplatePath).LastWriteTimeUtc
+                $changed = @()
+                # 2a) 优先用 git（只读查询，不改仓库）；失败/不可用则退回 mtime 扫描
+                try {
+                    Push-Location $Root
+                    $since = $templateTime.ToString('yyyy-MM-ddTHH:mm:ssZ')
+                    $gitOut = & git log --name-only --pretty=format: --since=$since -- modules apps/inrt 2>$null
+                    if ($LASTEXITCODE -eq 0 -and $gitOut) {
+                        $gitFiles = @($gitOut | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object { $_.Trim().Replace('/', '\') } |
+                            Where-Object { $_ -like 'modules\*\src\main\*' -or $_ -like 'apps\inrt\src\main\*' } |
+                            ForEach-Object { Join-Path $Root $_ } | Where-Object { Test-Path -LiteralPath $_ })
+                        if ($gitFiles.Count -gt 0) { $changed = $gitFiles; $derivedSource = 'git(--since=' + $since + ')' }
+                    }
+                } catch {
+                    $derivedSource = 'mtime(git 不可用)'
+                } finally {
+                    Pop-Location
+                }
+                if ($changed.Count -eq 0) {
+                    $changed = @(Get-ChildItem -Path (Join-Path $Root 'modules') -Recurse -File -Include '*.java', '*.kt' -ErrorAction SilentlyContinue |
+                        Where-Object { $_.FullName -notmatch '[\\/]build[\\/]' -and $_.LastWriteTimeUtc -gt $templateTime })
+                    if ($derivedSource -eq '(skipped)') { $derivedSource = 'mtime(模板 mtime 之后改动)' }
+                }
+                # 归一成 FileInfo（git 分支给的是字符串路径）
+                $changed = @($changed | ForEach-Object {
+                    if ($_ -is [System.IO.FileInfo]) { $_ } elseif (Test-Path -LiteralPath $_) { Get-Item -LiteralPath $_ }
+                } | Where-Object { $_ -ne $null })
+                $stop = @('toString', 'equals', 'hashCode', 'getClass', 'main', 'invoke', 'create', 'build', 'run', 'start', 'stop', 'onCreate', 'onDestroy', 'apply', 'values', 'size', 'length', 'close', 'init', 'write', 'read', 'call', 'handle')
+                foreach ($file in @($changed | Sort-Object LastWriteTimeUtc -Descending)) {
+                    if ($derived.Count -ge $maxDerived) { break }
+                    $text = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+                    if ([string]::IsNullOrWhiteSpace($text)) { continue }
+                    foreach ($match in [regex]::Matches($text, '(?:public|protected)\s+(?:static\s+|final\s+|synchronized\s+|abstract\s+|open\s+|override\s+|suspend\s+)*[\w<>\[\],\.\?\s]{0,80}?\b(\w+)\s*\(')) {
+                        $name = $match.Groups[1].Value
+                        if ($name.Length -lt 6) { continue }
+                        if ($stop -contains $name) { continue }
+                        if ($name -match '^(get|set|is|on|to)[A-Z]') { continue }
+                        if ($derived -notcontains $name) { $derived += $name }
+                        if ($derived.Count -ge $maxDerived) { break }
+                    }
+                }
+                $deepNotes.Add('derived markers from ' + $derivedSource + ' files=' + @($changed).Count + ' required=[' + ($derived -join ',') + ']')
+            }
+
+            # ③ 一起在模板 dex 里找：注册表标记 + 推导标记，缺任何一个都 STALE（task-91 的核心）
+            $required = @(@($registryMarkers) + @($derived) | Select-Object -Unique)
             if ($required.Count -gt 0) {
                 $found = Test-ZipEntryContains -ZipPath $TemplatePath -EntryPattern 'classes*.dex' -Markers $required
                 $missing = @($required | Where-Object { -not $found[$_] })
-                $deepNotes.Add('template dex markers: required=[' + ($required -join ',') + '] missing=[' + ($missing -join ',') + ']')
-                if ($missing.Count -gt 0) {
-                    $results.Add([pscustomobject]@{ kind = 'template-deep'; state = $(if ($DeepStrict) { 'STALE' } else { 'WARN' }); reason = '模板 dex 里找不到源码已有的类：' + ($missing -join ','); newest = ''; newestPath = ''; artifact = $TemplatePath })
-                } else {
+                $deepNotes.Add('template dex: required=[' + ($required -join ',') + '] missing=[' + ($missing -join ',') + ']')
+                foreach ($name in $missing) {
+                    $since = if ($registrySince.ContainsKey($name)) { ' (since ' + $registrySince[$name] + ')' } else { ' (derived)' }
+                    $results.Add([pscustomobject]@{ kind = 'template'; state = 'STALE'; reason = 'marker-missing:' + $name + $since + ' → 模板没跟上这批源码（先跑 build-slim-template.ps1）；确属误报可加 -NoDerived 或同步注册表'; newest = ''; newestPath = ''; artifact = $TemplatePath })
+                }
+                if ($missing.Count -eq 0) {
                     # 内容级判据通过 ⇒ mtime 的 STALE 是 checkout/复制造成的假阳性（深度优先）
                     foreach ($r in $results) {
                         if ($r.kind -eq 'template' -and $r.state -eq 'STALE') {
                             $r.state = 'FRESH'
-                            $r.reason = 'mtime 说旧，但 dex 内容级判据通过（' + ($required -join ',') + ' 齐全）'
+                            $r.reason = 'mtime 说旧，但 dex 内容级判据通过（' + $required.Count + ' 个标记齐全）'
                         }
                     }
                 }
             } else {
-                $deepNotes.Add('template dex markers: 源码里没找到候选类，跳过内容级判据')
+                $deepNotes.Add('template dex: 没有可判定的标记（注册表+推导都为空）')
             }
         }
     }

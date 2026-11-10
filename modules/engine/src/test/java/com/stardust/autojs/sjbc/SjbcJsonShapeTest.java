@@ -77,7 +77,15 @@ public class SjbcJsonShapeTest {
         // task-89：forEngine 失败必须点名为可诊断错误 + 提供 debug()（真机只看到「脚本引擎已经结束」查不动）。
         assertTrue("失败要点名 forEngine(id) 与注册点", module.contains("forEngine(") && module.contains("QuickJsHostBridge.java"));
         assertTrue("task-89 兜底：id 取不到时退回唯一活动 bridge", module.contains("forCurrentEngine()"));
-        assertTrue("task-89 兜底在宿主侧存在且多 engine 不猜", bridge.contains("public static QuickJsHostBridge forCurrentEngine()") && bridge.contains("活动 bridge="));
+        assertTrue("task-89 兜底在宿主侧存在且多 engine 不猜", bridge.contains("public static QuickJsHostBridge forCurrentEngine()") && bridge.contains("已注册="));
+        // task-90：id 后分配 ⇒ 构造期 getId() 可能为 0，注册必须补在 id 落定之后；兜底改用「活着的 bridge」。
+        assertTrue("活 bridge 集合存在", bridge.contains("sLiveBridges"));
+        assertTrue("兜底用活 bridge 且只认恰好一个", bridge.contains("sLiveBridges.size() == 1"));
+        String engine = read("src/main/java/com/stardust/autojs/engine/QuickJsJavaScriptEngine.java");
+        assertTrue("id 落定后补登记（setId 覆盖）", engine.contains("public void setId(int id)") && engine.contains("bridge.setOwnerEngineId(id)"));
+        assertTrue("init 里 attach 之后也补登记", engine.contains("hostBridge.setOwnerEngineId(getId());"));
+        assertTrue("debug 有 engineHandleFromHost", module.contains("engineHandleFromHost"));
+        assertTrue("debug 有 registeredIds", module.contains("registeredIds"));
         assertTrue("提供 sjbc.debug()", module.contains("debug: function ()"));
         assertTrue("debug 回显引擎 id 与桥解析结果", module.contains("engineId") && module.contains("bridgeResolved"));
         String bridgeFile = read("src/main/java/com/stardust/autojs/engine/QuickJsHostBridge.java");
