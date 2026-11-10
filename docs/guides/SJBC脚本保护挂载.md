@@ -16,7 +16,7 @@
 | 形态 | `.sjbc` 放进 APK 的 `assets/sjbc/`，随包分发，运行期由 App 解密执行 | 放**外置目录**（免重装热加载）或由**你自己**的宿主/VM 控制；App 侧不接管 |
 | 配置 | `project.json` → `sjbc.assetsDir`（默认 `assets/sjbc`）+ `sjbc.certSha` | 无（走 `build_all.js` 顶部 `deployTo` 投放目录） |
 | 落地命令 | 打包 CLI 产 `.sjbc` → 放进 `assets/sjbc/` → `zipalign -p 4` → `apksigner sign`（**必须与 `--cert` 同一把证书**） | `adb push out/hello.sjbc /sdcard/Android/data/<宿主包名>/files/modules/` → 宿主内点「刷新」 |
-> **热加载写文件的操作注记**：MCP 的文件工具**限根 `/storage/emulated/0/脚本`** ⇒ 要往 `/sdcard/Android/data/<宿主包名>/files/modules/` 投放，**先写到该根下、再用 `shell_rish`（shell uid）`cp` 过去**（`files/` 属 shell，可写）。
+> **热加载写文件的操作注记**：MCP 的文件工具**限根 `/storage/emulated/0/脚本`**（**出处：Lead 真机实测**；2026-11-10 复查时我在 `apps/app/.../mcp/**` 里**没能定位到这条强制根常量**（只见到 `McpBaselineTest.kt:120/126` 用它当 workspace root 断言）⇒ **该「限根」本身属未核**，按实测照用） ⇒ 要往 `/sdcard/Android/data/<宿主包名>/files/modules/` 投放，**先写到该根下、再用 `shell_rish`（shell uid）`cp` 过去**（`files/` 属 shell，可写）。
 | 我们侧落点 | `ProjectConfig.SjbcConfig`（`assetsDir`/`certSha` 已有）；打包侧 = `SjbcPackaging.kt` + `ApkBuilder.stageSjbcAssets()`（**已落地**，只收 `.sjbc`+`manifest.json`；无 `.sjbc` 时零行为变化） | 工具链已入库（`tools/sjbc/build_all.js` 的 `deployTo`、`build-all.mjs --deploy-to`）；App 侧 VM = `SjbcVm`/`SjbcApi`（**已落地**，Rhino 口径） |
 | 典型用途 | 交付给用户的成品包 | 迭代期、自控宿主、第三方宿主 |
 
@@ -62,7 +62,7 @@ pwsh -File tools/check-artifact-freshness.ps1 -Deep -Json  # 内容级（dex 标
 | 输出 | 含义 | 动作 |
 |---|---|---|
 | `FRESH(kind=template)` / `FRESH(kind=aot)` | 构件不旧于源码 | 直接出包 |
-| `STALE(kind=template, marker-missing:<name>)` | 模板 **dex 里找不到**源码刚加的成员（如 `liveBridgeCount` / `registeredIds`）——正是「改了引擎但模板没重建」 | **先跑 `tools/build-slim-template.ps1`**（重建 `assets/template.apk`），再复跑本检查到 FRESH |
+| `STALE(kind=template, marker-missing:<name>@<since> → 模板没跟上这批源码（先跑 tools/build-slim-template.ps1）)` | 模板 **dex 里找不到**源码刚加的成员（如 `liveBridgeCount` / `registeredIds`）——正是「改了引擎但模板没重建」 | **先跑 `tools/build-slim-template.ps1`**（重建 `assets/template.apk`），再复跑本检查到 FRESH |
 | `STALE(kind=template, … newest=<file>@<time>)` | 模板 mtime 比「引擎/inrt 源集合」旧 | 同上；若怀疑只是 checkout 打乱 mtime，用 `-Deep` 复核内容判据 |
 | `STALE(kind=aot, …)` | `libapp.so` 比 `flutter-ui/lib/**` 旧 | 出包时**加 `-RebuildAot`**（`tools/flutter-poc/build-release-candidate.ps1`） |
 | `WARN(…)` | 注册表/启发式提示（不挡构建） | 看一眼；反复出现就更新 `tools/artifact-markers.json` |
@@ -152,6 +152,8 @@ typeof sjbc.run        // 'function'
 var r = sjbc.runEntry('assets/sjbc/hello.sjbc', 0);
 
 r.steps                // 1990                                  ← 属性直读（Rhino dev-1457+ / QuickJS dev-1460+）
+//  注：起始版本按 Lead 的发布记录（Rhino dev-1457 / QuickJS dev-1460）；
+//      仓库代码只能证实**现状**（`SjbcApi.toScriptValue` 与 `assets/modules/qjs-sjbc.js` 在位），无法反证版本归属。
 r.ok                   // true
 r.codeBytes            // 476
 r.prints[0]            // 'fib(10)=55'

@@ -74,6 +74,44 @@ public class OcrAbilityMissingTest {
         assertTrue("判据只在缺失时命中", source.contains("OcrAvailability.isAbilityMissing(failure)"));
     }
 
+    /** task-107 反例：真实错误（参数/路径/用法）即使字面带上 libppocr/libmlkit 也**不得**被判成「未随包」。 */
+    @Test
+    public void realErrorsWithLibraryNamesAreNotMisclassified() {
+        assertFalse(Node24HostBridge.isOcrAbilityMissing(
+                new IllegalArgumentException("backend 不支持：libppocr")));
+        assertFalse(Node24HostBridge.isOcrAbilityMissing(
+                new IllegalStateException("图片读取失败：libppocr.so 不存在")));
+        assertFalse(Node24HostBridge.isOcrAbilityMissing(
+                new RuntimeException("dlopen 配置错误")));
+        assertFalse(Node24HostBridge.isOcrAbilityMissing(
+                new IllegalArgumentException("ocr 不支持的操作：libmlkit")));
+        assertFalse(Node24HostBridge.isOcrAbilityMissing(
+                new IllegalStateException("参数非法：backend=ppocr libppocr 路径=/x")));
+    }
+
+    /** 真缺失形状仍要命中：加载失败文案（含库名）或缺失型异常类型。 */
+    @Test
+    public void libraryLoadShapesAreStillClassified() {
+        assertTrue(Node24HostBridge.isOcrAbilityMissing(new RuntimeException(
+                "dlopen failed: library \"libppocr.so\" not found")));
+        assertTrue(Node24HostBridge.isOcrAbilityMissing(
+                new RuntimeException("java.lang.UnsatisfiedLinkError: 无法加载 libmlkit_google_ocr_pipeline.so")));
+        assertTrue(Node24HostBridge.isOcrAbilityMissing(new NoClassDefFoundError("x")));
+    }
+
+    /** task-107：JS 侧三层防线——Node24 先排除参数类错误、QuickJS 只在加载形状上加点名句、Rhino 用能力探针不用文案。 */
+    @Test
+    public void scriptSidesGuardAgainstRewritingRealErrors() throws Exception {
+        String node = read("src/main/assets/node24/modules/ocr.js");
+        assertTrue("Node24 先排除参数/用法类错误", node.contains("不支持|参数|backend|非法|必须是"));
+        assertTrue("Node24 只在点名句或加载形状上统一", node.contains("未随包"));
+        String quickjs = read("src/main/assets/modules/qjs-plugins.js");
+        assertTrue("QuickJS 有 looksLikeAbilityMissing 形状判据", quickjs.contains("function looksLikeAbilityMissing(value)"));
+        assertTrue("QuickJS 只在形状命中时加点名句", quickjs.contains("looksLikeAbilityMissing(ppocrError) ?"));
+        String rhino = read("src/main/assets/modules/__ocr__.js");
+        assertTrue("Rhino 用能力探针（不是文案）", rhino.contains("!ppocrIsAvailable()"));
+    }
+
     private static String read(String relativePath) throws Exception {
         return new String(Files.readAllBytes(Paths.get(relativePath)), StandardCharsets.UTF_8);
     }

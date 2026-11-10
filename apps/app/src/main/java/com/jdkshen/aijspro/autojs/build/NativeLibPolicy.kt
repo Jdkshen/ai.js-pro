@@ -94,9 +94,14 @@ object NativeLibPolicy {
      * 覆盖不了的**不静默**：调用方会打 warning 并写进打包报告。
      */
     @JvmStatic
-    fun pluginCoverage(declaredPlugins: List<String>): List<PluginCoverage> = declaredPlugins.map { plugin ->
+    @JvmOverloads
+    fun pluginCoverage(declaredPlugins: List<String>, removeOcr: Boolean = false): List<PluginCoverage> = declaredPlugins.map { plugin ->
         val lower = plugin.lowercase()
         when {
+            // task-106 复查点 3：removeOcr=true 时**不能**再声称 coveredBy=builtin-ocr（库已被剔），
+            // 否则日志/报告会出现「插件声明保留但库被删」的矛盾。改成 pointed 说明 + coveredBy=null。
+            OCR_PLUGIN_HINTS.any { lower.contains(it) } && removeOcr -> PluginCoverage(plugin, null,
+                "被 optimization.removeOcr 移除：该插件的 OCR 能力不再随包（脚本调用 \$ocr 会点名报错）")
             OCR_PLUGIN_HINTS.any { lower.contains(it) } -> PluginCoverage(plugin, "builtin-ocr",
                 "内建 libppocr.so + libmlkit_google_ocr_pipeline.so + OCR 模型已覆盖该插件能力（不按 Pro 形态带插件 APK）")
             PUZZLE_HINTS.any { lower.contains(it) } -> PluginCoverage(plugin, "native-lib:libpikafish.so",

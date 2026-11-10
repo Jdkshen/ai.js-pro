@@ -541,6 +541,20 @@ final class PocPackaging {
             job.event("打包完成：" + outApk.getName());
             job.success(outApk, sha256, config.optInt("versionCode", 1), config.optInt("encryptLevel", 0),
                     config.optString("packageName", ""), abisOf(config));
+            // task-110：把打包警告搬进页面（数据源=打包器刚写的结构化报告，只读、不改打包行为）
+            try {
+                org.json.JSONObject report = builder.getPackagingReport();
+                org.json.JSONArray warningArray = report == null ? null : report.optJSONArray("packagingWarnings");
+                List<String> warningList = new ArrayList<>();
+                if (warningArray != null) {
+                    for (int i = 0; i < warningArray.length(); i++) warningList.add(warningArray.optString(i));
+                }
+                job.warnings(warningList);
+            } catch (Throwable error) {
+                // 不再静默：读取失败也要在页面上说明（而不是显示成「没有提示」）
+                job.warnings(java.util.Collections.singletonList(
+                        "打包提示读取失败：" + error.getClass().getSimpleName()));
+            }
             Log.i(TAG, "C-PKG: progress stage=success");
         } catch (Throwable error) {
             Log.w(TAG, "glass build failed", error);
@@ -1025,6 +1039,17 @@ final class PocPackaging {
             }
         }
 
+        /** task-110：打包警告（原来只有 logcat 能看到）。只读展示用，最多 50 条。 */
+        final List<String> warnings = new ArrayList<>();
+
+        void warnings(List<String> values) {
+            warnings.clear();
+            if (values == null) return;
+            for (String item : values) {
+                if (item != null && !item.trim().isEmpty() && warnings.size() < 50) warnings.add(item);
+            }
+        }
+
         void success(File artifact, String digest, int code, int level, String appPackage,
                      JSONArray architectures) {
             apk = artifact;
@@ -1055,6 +1080,8 @@ final class PocPackaging {
                     .put("stage", stage)
                     .put("events", new JSONArray(events))
                     .put("startedAt", startedAt);
+            // task-110：成功结果里始终带 warnings（没有就是空数组）⇒ 页面能区分「没有提示」与「桥没返回该字段」
+            value.put("warnings", new JSONArray(warnings));
             if (!error.isEmpty()) value.put("error", error);
             if (apk != null && apk.isFile()) {
                 value.put("path", apk.getPath());

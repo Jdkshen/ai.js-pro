@@ -25,13 +25,25 @@ public final class OcrAvailability {
      */
     public static boolean isAbilityMissing(Throwable failure) {
         for (Throwable current = failure; current != null; current = current.getCause()) {
+            // 判据 1（强）：类/库缺失的**异常类型**——不依赖任何文案。
             if (current instanceof UnsatisfiedLinkError || current instanceof NoClassDefFoundError
                     || current instanceof ClassNotFoundException) {
                 return true;
             }
+            // 判据 2（收窄，task-107）：文案必须同时具备**加载失败形状**与**我们的库名**；
+            // 参数/路径/用法类错误即使带上 libppocr/libmlkit 也**不再**命中（反例测试钉住）。
             String message = current.getMessage();
-            if (message != null && (message.contains("libppocr") || message.contains("libmlkit")
-                    || message.contains("couldn't find") && message.contains("dlopen"))) {
+            if (message == null) {
+                continue;
+            }
+            if (message.contains("dlopen") && message.contains("couldn't find")) {
+                return true;
+            }
+            boolean loadShape = message.contains("dlopen") || message.contains("couldn't find")
+                    || message.contains("not found") || message.contains("无法加载")
+                    || message.contains("loadLibrary");
+            boolean ourLibs = message.contains("libppocr") || message.contains("libmlkit");
+            if (loadShape && ourLibs) {
                 return true;
             }
         }

@@ -85,8 +85,14 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
 /** 宿主报「能力未随包」时统一成同一句点名错误（默认路径不受影响）。 */
 function canonicalOcrError(message) {
     var text = String(message == undefined ? '' : message);
-    if (text.indexOf('未随包') >= 0 || text.indexOf('libppocr') >= 0 || text.indexOf('libmlkit') >= 0
-            || text.indexOf('UnsatisfiedLinkError') >= 0) {
+    // task-107：**绝不**把参数/用法类错误改写成「未随包」（排障会被误导）。
+    if (/不支持|参数|backend|非法|必须是/.test(text)) {
+        return text;
+    }
+    // 只有「宿主自己给的点名句」或「加载失败形状 + 我们的库名」才统一。
+    if (text.indexOf('未随包') >= 0
+            || ((/dlopen|couldn't find|not found|无法加载|loadLibrary/.test(text))
+                && /libppocr|libmlkit/.test(text))) {
         return OCR_NOT_PACKAGED;
     }
     return text;

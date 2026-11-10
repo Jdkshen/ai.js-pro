@@ -156,6 +156,24 @@ class PackagingPolicyTest {
             NativeLibPolicy.classify("lib/arm64-v8a/libquickjs.so", on).decision)
     }
 
+    /** task-106 复查点 3：removeOcr=true 时不能再声称 coveredBy=builtin-ocr（库已被剔）。 */
+    @Test fun pluginCoverageDoesNotClaimBuiltinOcrAfterRemoveOcr() {
+        val plugins = listOf("org.autojs.autojspro.plugin.mlkit.ocr")
+        val normal = NativeLibPolicy.pluginCoverage(plugins)
+        assertEquals("builtin-ocr", normal.single().coveredBy)
+        assertTrue(normal.single().note.contains("内建"))
+
+        val removed = NativeLibPolicy.pluginCoverage(plugins, true)
+        assertNull("已被剔就不能再声称被内建覆盖：" + removed.single().note, removed.single().coveredBy)
+        assertTrue(removed.single().note.contains("removeOcr"))
+        // 非 OCR 插件不受影响（象棋插件两者一致）
+        val puzzle = listOf("com.jdkshen.xiangqi.plugin")
+        assertEquals(
+            NativeLibPolicy.pluginCoverage(puzzle).single().coveredBy,
+            NativeLibPolicy.pluginCoverage(puzzle, true).single().coveredBy
+        )
+    }
+
     /** task-85 ②：同一条 ABI 缺失结论只 W 一次，重复降 INFO；事实（missing）不消失。 */
     @Test fun abiWarningIsDeduplicatedPerSignatureButFactsStay() {
         val first = AbiPolicy.resolve(listOf("arm64-v8a", "armeabi-v7a"), listOf("arm64-v8a"))

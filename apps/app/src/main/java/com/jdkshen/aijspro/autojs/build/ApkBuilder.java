@@ -520,6 +520,9 @@ public class ApkBuilder {
         // 等级 × 引擎的实际载荷形态记一条：等级 2 对 Node 不是字节码，日志里必须能看出来。
         Log.i("C-PKG", "script protection level=" + mEncryptLevel
                 + " storage=" + mScriptStorage + " payload=" + mPayloadKind);
+        // task-106（复查点 2）：getPackagingWarnings() 目前全仓**没有消费者**（只有 logcat 能看到），
+        // 所以把 warning 也放进结构化报告，凡读 getPackagingReport() 的调用方都能拿到。
+        report("packagingWarnings", new org.json.JSONArray(mPackagingWarnings));
         return this;
     }
 
@@ -570,11 +573,25 @@ public class ApkBuilder {
         if (removeOcr) {
             // task-104 ②：不写死 assets/mlkit-google-ocr-models/**，扫 assets 里实际存在的 OCR 资产；
             // 命中前缀回显到日志与报告，模板改名不会再静默变成 files=0。
-            List<File> ocrTargets = OcrAssetDiscovery.find(new File(mWorkspacePath, "assets"));
+            // task-106 隐患 A：名字匹配只是候选，**必须**是宿主/模板确实提供的 asset 条目才删。
+            // 拿不到清单（空集）⇒ OcrAssetDiscovery.find 返回空 ⇒ 一个都不删（fail-safe）。
+            List<String> providedAssets = hostAssetEntryNames();
+            List<File> candidates = OcrAssetDiscovery.candidates(new File(mWorkspacePath, "assets"));
+            List<File> ocrTargets = OcrAssetDiscovery.find(new File(mWorkspacePath, "assets"), providedAssets);
             for (File target : ocrTargets) {
                 deletePathRecursively(target, ocrRemoved);
             }
             ocrPrefix = OcrAssetDiscovery.describe(ocrTargets);
+            List<File> skippedByName = new ArrayList<>(candidates);
+            skippedByName.removeAll(ocrTargets);
+            if (!skippedByName.isEmpty()) {
+                // 名字像 OCR 资产、但模板/宿主并不提供 ⇒ 视为用户内容，保留（task-106 的反例场景）
+                Log.i("C-PKG", "ocr prune: 按名字命中但模板未提供，保留不删 "
+                        + OcrAssetDiscovery.describe(skippedByName));
+            }
+            if (providedAssets.isEmpty()) {
+                Log.w("C-PKG", "ocr prune: 拿不到宿主/模板的 assets 清单 ⇒ 保守不删任何东西");
+            }
             // QuickJS 侧（task-104 ①）：qjs-plugins.js / __plugins__.js 是**共享插件门面**，不能剪；
             // 它们只在运行期用 $ocr 全局（拿不到时自身有 guard + 引擎点名错误）⇒ 打包侧只剪 Rhino 的 __ocr__.js。
             boolean rhinoModuleRemoved = ocrTargets.stream().anyMatch(
@@ -600,6 +617,33 @@ public class ApkBuilder {
         report(PackagingReportFields.OCR_REMOVED_PREFIX, ocrPrefix);
         report(PackagingReportFields.NODE24_SKIPPED_ENTRIES, node24Skipped[0]);
         report(PackagingReportFields.NODE24_SKIPPED_BYTES, node24Skipped[1]);
+    }
+
+    /**
+     * task-106：宿主 APK 里 assets/ 下的条目名（形如 assets/xxx/yyy）。
+     *
+     * <p>用途：把「OCR 资产」的删除限定为**模板/宿主确实提供**的条目，避免按名字误删用户内容。
+     * 拿不到宿主 APK 时返回空集合 ⇒ 调用方保守地不删。</p>
+     */
+    private List<String> hostAssetEntryNames() {
+        List<String> names = new ArrayList<>();
+        try {
+            File hostApk = hostApkFile(GlobalAppContext.get());
+            try (ZipFile zip = new ZipFile(hostApk)) {
+                java.util.Enumeration<? extends java.util.zip.ZipEntry> entries = zip.entries();
+                while (entries.hasMoreElements()) {
+                    java.util.zip.ZipEntry entry = entries.nextElement();
+                    String name = entry.getName();
+                    if (!entry.isDirectory() && name.startsWith("assets/")) {
+                        names.add(name);
+                    }
+                }
+            }
+        } catch (Throwable error) {
+            Log.w("C-PKG", "读取宿主 assets 清单失败（OCR 剪裁将保守跳过）：" + error.getMessage());
+            return new ArrayList<>();
+        }
+        return names;
     }
 
     /** project.json 的 {@code features.nodejs} 是否是 {@code disabled}（task-101）。 */
@@ -868,7 +912,7 @@ public class ApkBuilder {
         Log.i("C-PKG", NativeLibPolicy.pluginSummaryLine(plugins));
         report("plugins", plugins);
         org.json.JSONArray pluginCoverage = new org.json.JSONArray();
-        for (NativeLibPolicy.PluginCoverage coverage : NativeLibPolicy.pluginCoverage(plugins)) {
+        for (NativeLibPolicy.PluginCoverage coverage : NativeLibPolicy.pluginCoverage(plugins, removeOcr)) {
             JSONObject row = new JSONObject();
             try {
                 row.put("plugin", coverage.getPlugin());

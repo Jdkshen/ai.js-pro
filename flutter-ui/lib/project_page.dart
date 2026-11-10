@@ -1367,6 +1367,28 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                 label: const Text('安装 APK'))
           ])
         ],
+          // task-110：打包提示（可折叠）。没有提示就不显示；字段缺失/读取失败要说出来（不静默）
+          if (status == 'success')
+            current['warnings'] is List
+                ? ((current['warnings'] as List).isEmpty
+                    ? const SizedBox.shrink()
+                    : ExpansionTile(
+                        key: ValueKey('project-build-warnings-' + current['id'].toString()),
+                        tilePadding: EdgeInsets.zero,
+                        title: Text(
+                            '打包提示（' + (current['warnings'] as List).length.toString() + '）',
+                            style: const TextStyle(fontSize: 14)),
+                        children: (current['warnings'] as List)
+                            .map((item) => Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Text('· ' + item.toString(),
+                                    style: const TextStyle(fontSize: 12))))
+                            .toList()))
+                : const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text(
+                        '打包提示：不可用（桥上没返回 warnings 字段，请更新到带该字段的版本）',
+                        style: TextStyle(fontSize: 12))),
         ExpansionTile(
             key: ValueKey('project-events-${current['id']}'),
             tilePadding: EdgeInsets.zero,
@@ -1539,7 +1561,7 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
             'unusedResources': '移除未使用资源',
             'removeOpenCv': '移除 OpenCV',
             // task-103：与 removeOpenCv 同一套 optimization 读写路径；默认不勾（键不在 map 里 ⇒ 不写回）
-            'removeOcr': '移除内建 OCR（省约 17 MB 未压缩）',
+            'removeOcr': '移除内建 OCR（产物少约 7.8 MB）',
             'removeAccessibilityService': '移除无障碍服务',
             'obfuscateComponents': '混淆 Android 组件名'
           }.entries.map((entry) => CheckboxListTile(
@@ -1549,14 +1571,21 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
               value: optimization[entry.key] == true,
               onChanged: busy
                   ? null
-                  : (value) => setState(() => optimization = {
-                        ...optimization,
-                        entry.key: value == true
+                  : (value) => setState(() {
+                        final next = {...optimization};
+                        if (entry.key == 'removeOcr' && value != true) {
+                          // task-108：取消勾选 = **删键** ⇒ 保存后 project.json 不会留下 removeOcr（回到「没有该键」的默认态）
+                          next.remove('removeOcr');
+                        } else {
+                          next[entry.key] = value == true;
+                        }
+                        optimization = next;
                       }))),
           const Text('移除 OpenCV 后不能使用相关图像功能；移除无障碍服务后不能使用无障碍自动操作。',
               style: TextStyle(fontSize: 12)),
           const Text(
-              '「移除内建 OCR」会剔除 libppocr / libmlkit 的 OCR 库与识别模型（约 17 MB 未压缩）；'
+              '「移除内建 OCR」会剔除 libppocr / libmlkit 的 OCR 库与识别模型：'
+              '产物少约 7.8 MB（未压缩约 17 MB）；'
               '剔除后脚本里 \$ocr 的可用性会变（调用时会点名提示未随包）。',
               style: TextStyle(fontSize: 12))
         ]),
