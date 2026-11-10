@@ -262,11 +262,50 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
     // task-147: ONE session wrapper used by BOTH the builtin backends and the plugin-provided session.
     // Builtin sessions and the plugin session must be indistinguishable to scripts (same detect(image[, options])).
     function wrapSession(session, backend, requestedBackend, degradedFrom, degradeReason) {
+        // task-149: two-stage probe at the TRUE first line (a property access on a Java wrapper may throw,
+        // and a single try would swallow the whole log).
+        console.info('[OCR] session shape: typeof session=' + (typeof session));
         try {
             console.info('[OCR] session shape: detect=' + typeof session.detect + '/'
                     + (session.detect ? session.detect.length : 'n/a') + ' release=' + typeof session.release
                     + ' backend=' + backend);
         } catch (shapeLogError) {
+            console.info('[OCR] session shape: property probe threw: ' + shapeLogError);
+        }
+        // task-149 (B): Rhino resolves the 4-arg call to the more specific detect(ImageWrapper, ...) overload
+        // and then fails ("Can't find method PPOcr.detect(ImageWrapper)"). First try the direct call (keeps the
+        // builtin path byte-identical); if it throws during resolution, fall back to invoking the
+        // detect(Object, int, boolean, int[]) overload reflectively (no ambiguity in Java reflection).
+        function callDetect(image, max, detectRotation, region) {
+            try {
+                return session.detect(image, max, detectRotation, region);
+            } catch (directError) {
+                try {
+                    var methods = session.getClass().getMethods();
+                    for (var mi = 0; mi < methods.length; mi++) {
+                        var params = methods[mi].getParameterTypes();
+                        if (methods[mi].getName() === 'detect' && params.length === 4
+                                && String(params[0].getName()) === 'java.lang.Object') {
+                            console.info('[OCR] detect via reflection: ' + methods[mi]);
+                            return methods[mi].invoke(session, [image, max, detectRotation, region]);
+                        }
+                    }
+                } catch (reflectError) {
+                    console.warn('[OCR] detect reflection failed: ' + reflectError);
+                }
+                throw directError;
+            }
+        }
+        function callNoArg(name) {
+            try {
+                return session[name]();
+            } catch (directError) {
+                try {
+                    return session.getClass().getMethod(name).invoke(session, []);
+                } catch (reflectError) {
+                    throw directError;
+                }
+            }
         }
         return {
             backend: backend,
@@ -278,7 +317,7 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
                 detectOptions = detectOptions || {};
                 var max = detectOptions.max == undefined ? 1000 : parseInt(detectOptions.max);
                 var detectRotation = detectOptions.detectRotation === true;
-                var javaResults = session.detect(image, max, detectRotation, toIntArray(detectOptions.region));
+                var javaResults = callDetect(image, max, detectRotation, toIntArray(detectOptions.region));
                 var results = [];
                 for (var i = 0; i < javaResults.length; i++) {
                     results.push(toPlainResult(javaResults[i]));
@@ -286,10 +325,10 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
                 return results;
             },
             release: function () {
-                session.release();
+                callNoArg('release');
             },
             isReleased: function () {
-                return session.isReleased();
+                return callNoArg('isReleased');
             }
         };
     }
@@ -451,7 +490,6 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
         return wrapSession(session, backend,
                 String(options.backend == undefined ? 'mlkit' : options.backend).toLowerCase(),
                 degradedFrom, degradeReason);
-    };
     };
 
     return ocr;
