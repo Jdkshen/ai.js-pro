@@ -34,6 +34,16 @@ class _CatalogPageState extends State<CatalogPage> {
   String? pluginStateError;
   final togglingPlugins = <String>{};
   int pluginStateRequestId = 0;
+
+  // task-134（插件统一目录）：桥名**集中在这里**，与 W2 定稿对齐时只改这一处；URL 一律由原生侧解析。
+  static const String pluginCatalogMethod = 'pluginCatalog';
+  static const String pluginDownloadMethod = 'pluginDownloadAndInstall';
+  static const String pluginProgressMethod = 'pluginDownloadProgress';
+  Map<String, dynamic> pluginManifest = <String, dynamic>{};
+  bool pluginManifestLoaded = false;
+  String? pluginManifestError;
+  final Map<String, Map<String, dynamic>> downloading = <String, Map<String, dynamic>>{};
+  final Map<String, String> downloadError = <String, String>{};
   bool reloadWhenActive = true;
   Future<void>? pendingLoad;
   bool? pendingPlugin;
@@ -77,7 +87,11 @@ class _CatalogPageState extends State<CatalogPage> {
 
   String versionOf(Map item) =>
       text(item, 'versionName', text(item, 'version', '未知'));
-  String pluginStatus(Map item, {bool detail = false}) {
+  /// 兼容入口：三处渲染共用四态判据（task-134）。旧的三态逻辑保留在 _pluginStatusFallback 里。
+  String pluginStatus(Map item, {bool detail = false}) =>
+      pluginStateLabel(item, detail: detail);
+
+  String _pluginStatusFallback(Map item, {bool detail = false}) {
     if (pluginDisabled(item)) {
       return detail ? '已停用 · 脚本不可用' : '已停用';
     }
@@ -98,6 +112,181 @@ class _CatalogPageState extends State<CatalogPage> {
   bool scriptUsable(Map item) =>
       installed(item) == true && !pluginDisabled(item);
 
+  /// 只读拉取插件清单（W2 的 plugins.json 经原生桥）；**拿不到就显式说**，不静默、不猜。
+  Future<void> loadPluginCatalog() async {
+    if (!widget.plugin) return;
+    try {
+      final value = await LocalBridge.call(pluginCatalogMethod, const {});
+      final raw = value is Map ? value['plugins'] : value;
+      final next = <String, dynamic>{};
+      if (raw is List) {
+        for (final entry in raw) {
+          if (entry is! Map) continue;
+          final manifest = Map<String, dynamic>.from(entry);
+          final key = text(manifest, 'id').isNotEmpty
+              ? text(manifest, 'id')
+              : text(manifest, 'package');
+          if (key.isNotEmpty) next[key] = manifest;
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        pluginManifest = next;
+        pluginManifestLoaded = true;
+        pluginManifestError = next.isEmpty ? '清单为空' : null;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          pluginManifestLoaded = true;
+          pluginManifestError = readable(e);
+        });
+      }
+    }
+  }
+
+  /// 清单里对应的条目（按包名或 id 匹配）；没有清单就返回 null ⇒ 退回今天的显示。
+  Map<String, dynamic>? manifestOf(Map item) {
+    if (pluginManifest.isEmpty) return null;
+    final pkg = package(item);
+    final id = text(item, 'id');
+    for (final entry in pluginManifest.values) {
+      if (entry is! Map) continue;
+      final manifest = Map<String, dynamic>.from(entry);
+      if (pkg.isNotEmpty && text(manifest, 'package') == pkg) return manifest;
+      if (id.isNotEmpty && text(manifest, 'id') == id) return manifest;
+    }
+    return null;
+  }
+
+  String sizeLabel(Object? bytes) {
+    if (bytes is! num || bytes <= 0) return '';
+    final mib = bytes / (1024 * 1024);
+    return (mib >= 1 ? mib.toStringAsFixed(1) : (bytes / 1024).toStringAsFixed(0) + ' KB') +
+        (mib >= 1 ? ' MB' : '');
+  }
+
+  /// 四态判定（下载中 > 失败 > 可更新 > 已安装/未安装），三处渲染共用同一份判据。
+  String pluginStateLabel(Map item, {bool detail = false}) {
+    final pkg = package(item);
+    final progress = downloading[pkg];
+    if (progress != null) {
+      final total = progress['totalBytes'];
+      final received = progress['receivedBytes'];
+      if (total is num && total > 0 && received is num) {
+        final percent = (received * 100 / total).clamp(0, 100).toStringAsFixed(0);
+        return '下载中 ' + percent + '%（' + sizeLabel(received) + ' / ' + sizeLabel(total) + '）';
+      }
+      return '下载中…';
+    }
+    final failure = downloadError[pkg];
+    if (failure != null) return '下载失败：' + failure;
+    final manifest = manifestOf(item);
+    final remote = manifest == null ? '' : text(manifest, 'version');
+    final remoteCode = manifest == null ? 0 : (manifest['versionCode'] is num ? manifest['versionCode'] as num : 0);
+    final localCode = item['versionCode'] is num ? item['versionCode'] as num : 0;
+    if (manifest != null && installed(item) == true && remoteCode > localCode && remote.isNotEmpty) {
+      return '可更新到 v' + remote + '（当前 v' + versionOf(item) + '）';
+    }
+    if (manifest != null && installed(item) != true && remote.isNotEmpty) {
+      final size = sizeLabel(manifest['sizeBytes']);
+      return detail
+          ? '未安装 · 可下载 v' + remote + (size.isEmpty ? '' : '（' + size + '）')
+          : '未安装 · 可下载 v' + remote;
+    }
+    return _pluginStatusFallback(item, detail: detail);
+  }
+
+  /// 失败原因码 → 可读中文（W2 的结构化原因码；未知码不隐藏，原样带出来）。
+  String downloadReason(Map<String, dynamic> result) {
+    final code = text(result, 'reason', text(result, 'code'));
+    switch (code) {
+      case 'network':
+        return '网络不可达（下载源连不上）';
+      case 'checksum':
+        return '校验不符（sha256 与清单不一致，未安装）';
+      case 'package':
+        return '安装包与清单不一致（包名不符，未安装）';
+      case 'permission':
+        return '系统未允许安装（请在系统里允许本应用安装未知来源应用）';
+      case 'missing':
+        return '清单未收录该插件';
+      default:
+        return code.isEmpty ? readable(StateError(text(result, 'message', '未知原因'))) : code;
+    }
+  }
+
+  /// 下载安装/更新：**只传 id 与 fileName**（URL 由原生侧解析）⇒ 拿到结构化原因码；成功则重载并提示是否需重启。
+  Future<void> downloadPlugin(Map item) async {
+    if (!widget.plugin) return;
+    final manifest = manifestOf(item);
+    final pkg = package(item);
+    if (manifest == null || pkg.isEmpty) {
+      notify('清单未收录该插件，无法下载');
+      return;
+    }
+    final id = text(manifest, 'id');
+    setState(() {
+      downloading[pkg] = <String, dynamic>{};
+      downloadError.remove(pkg);
+    });
+    changed();
+    try {
+      final result = await LocalBridge.call(pluginDownloadMethod, {
+        'id': id,
+        'fileName': text(manifest, 'file'),
+      });
+      if (!mounted) return;
+      if (result is Map && result['ok'] != true) {
+        final reason = downloadReason(Map<String, dynamic>.from(result));
+        setState(() => downloadError[pkg] = reason);
+        notify('下载失败：' + reason);
+        return;
+      }
+      await load();
+      if (!mounted) return;
+      final restart = manifest['requiresRestart'] == true;
+      notify('已提交安装：' + name(item) +
+          (restart ? ' · 需重启应用生效' : ''));
+    } catch (e) {
+      if (mounted) {
+        final reason = readable(e);
+        setState(() => downloadError[pkg] = reason);
+        notify('下载失败：' + reason);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => downloading.remove(pkg));
+        changed();
+      }
+    }
+  }
+
+  /// 下载进度（只读轮询；拿不到就保持「下载中…」，不伪造百分比）。
+  Future<void> pollPluginProgress(String pkg) async {
+    try {
+      final value = await LocalBridge.call(pluginProgressMethod, {'packageName': pkg});
+      if (!mounted || value is! Map) return;
+      final next = Map<String, dynamic>.from(value);
+      if (downloading.containsKey(pkg)) setState(() => downloading[pkg] = next);
+    } catch (_) {
+      // 进度拿不到不算失败：最终结果仍由 downloadPlugin 的返回决定。
+    }
+  }
+
+  /// 当前是否可下载/更新（有清单条目 + 没有其它下载在跑）。
+  bool canDownloadPlugin(Map item) =>
+      widget.plugin &&
+      !downloading.containsKey(package(item)) &&
+      manifestOf(item) != null &&
+      text(manifestOf(item)!, 'file').isNotEmpty;
+
+  String downloadButtonLabel(Map item) {
+    final manifest = manifestOf(item);
+    final remoteCode = manifest == null ? 0 : (manifest['versionCode'] is num ? manifest['versionCode'] as num : 0);
+    final localCode = item['versionCode'] is num ? item['versionCode'] as num : 0;
+    return (installed(item) == true && remoteCode > localCode) ? '更新' : '下载安装';
+  }
   bool showPluginToggle(Map item) =>
       widget.plugin &&
       pluginStatesLoaded &&
@@ -258,6 +447,7 @@ class _CatalogPageState extends State<CatalogPage> {
   void initState() {
     super.initState();
     if (widget.active) load();
+    if (widget.plugin) loadPluginCatalog();
   }
 
   @override
@@ -283,6 +473,7 @@ class _CatalogPageState extends State<CatalogPage> {
       reloadWhenActive = true;
     }
     if (widget.active && reloadWhenActive) load();
+    if (widget.active && widget.plugin && !pluginManifestLoaded) loadPluginCatalog();
   }
 
   @override
@@ -579,6 +770,13 @@ class _CatalogPageState extends State<CatalogPage> {
                             const Padding(
                                 padding: EdgeInsets.only(bottom: 12),
                                 child: Text('目录刷新失败，显示上次记录')),
+                          // task-134：清单拿不到必须说出来（不静默、不猜状态）
+                          if (widget.plugin && pluginManifestError != null)
+                            Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: Text('插件目录不可用：' + pluginManifestError!,
+                                    key: const ValueKey('plugin-manifest-error'),
+                                    style: const TextStyle(fontSize: 12))),
                           if (summary(item).isNotEmpty)
                             Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
@@ -599,6 +797,19 @@ class _CatalogPageState extends State<CatalogPage> {
                             SelectableText('版本 ${versionOf(item)}'),
                             const SizedBox(height: 8),
                             SelectableText(package(item)),
+                            if (canDownloadPlugin(item))
+                              Row(children: [
+                                TextButton.icon(
+                                    key: const ValueKey('plugin-download-action'),
+                                    onPressed: () => downloadPlugin(item),
+                                    icon: const Icon(Icons.download_outlined,
+                                        size: 18),
+                                    label: Text(downloadButtonLabel(item))),
+                                if (installed(item) == true)
+                                  const Expanded(
+                                      child: Text('停用后仍占空间，卸载请到系统应用管理',
+                                          style: TextStyle(fontSize: 12))),
+                              ]),
                             const SizedBox(height: 8),
                             Text(
                                 installed(item) == true

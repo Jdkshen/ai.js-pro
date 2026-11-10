@@ -3,10 +3,11 @@
   "displayName": "打包插件（可选）",
   "package": "com.jdkshen.apkbuilder.plugin",
   "file": "apkbuilder-plugin.apk",
-  "minAppVersion": 1465,
+  "minAppVersion": null,
   "requiresRestart": true,
   "abis": [
     "arm64-v8a"
   ],
-  "notes": "仅在「内置打包模板损坏」时作为最后手段；默认打包路径不依赖它（内置瘦身模板 + 宿主 lib 合成）。"
+  "notes": "仅在「内置打包模板损坏」时作为最后手段；默认打包路径不依赖它（内置瘦身模板 + 宿主 lib 合成）。",
+  "minAppVersionNote": "待定：应填「第一个带 PluginNativeLoader 钩子 + $ocr 分发的宿主 versionCode」，W1 真机验后给值；未定值前不发布该插件。"
 }

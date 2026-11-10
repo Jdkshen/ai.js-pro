@@ -36,6 +36,30 @@ import java.util.zip.ZipFile;
  */
 public class CompiledProjectResources {
 
+    /**
+     * task-130(b)：资源包与**当前宿主**不匹配时的可执行文案（原生侧那句「资源包与宿主资源表不匹配」
+     * 在预编译库里、我们改不了）——这里给出我们自己的、能照着做的指引，且**不静默**。
+     *
+     * <p>判据：sidecar 里的宿主摘要 == 当前宿主摘要时**完全不进这里**（行为逐字不变）。
+     */
+    /** 取当前宿主资源表摘要；取不到返回 null（只用于日志，绝不影响判定结果）。 */
+    private static String hostResourcesSha256OrNull(String appApkPath) {
+        try {
+            return hostResourcesSha256(appApkPath);
+        } catch (Throwable error) {
+            return null;
+        }
+    }
+
+    public static String staleResourcePackMessage(String expectedHostDigest, String actualHostDigest, File apk) {
+        return "工程资源包与当前宿主不匹配，已忽略该资源包（回落到无工程资源）：" + apk
+                + "；期望宿主=" + (expectedHostDigest == null ? "(legacy-size)" : expectedHostDigest)
+                + " 当前宿主=" + (actualHostDigest == null ? "(unknown)" : actualHostDigest)
+                + "。修法：对**当前设备上的宿主**重新编译 project-res.apk"
+                + "（MCP: android_resources_compile，或宿主内资源编译入口），再重新打包；"
+                + "不要伪改 project-res.json 的摘要。";
+    }
+
     private static final String LOG_TAG = "CompiledProjectRes";
     private static final String SIDECAR_NAME = "project-res.json";
     /** 资源包在资源表里的包名（aapt2 对独立包 id 会命名成 {@code <app 包名>.feature}）。 */
@@ -112,6 +136,9 @@ public class CompiledProjectResources {
         String appApkPath = context.getApplicationInfo().sourceDir;
         Sidecar sidecar = Sidecar.read(apk);
         if (!sidecar.matchesAppApk(appApkPath)) {
+            // task-130(b)：给**我们自己的**可执行指引（原生侧还有一句难懂的，但这里先说清怎么办）。
+            Log.w(LOG_TAG, staleResourcePackMessage(sidecar.mAppResourcesSha256,
+                    hostResourcesSha256OrNull(appApkPath), apk));
             return null;
         }
         try {
@@ -159,6 +186,8 @@ public class CompiledProjectResources {
             }
             Sidecar sidecar = Sidecar.read(archive);
             if (!sidecar.matchesAppApk(host)) {
+                Log.w(LOG_TAG, staleResourcePackMessage(sidecar.mAppResourcesSha256,
+                        hostResourcesSha256OrNull(host), archive));
                 String expected = sidecar.mAppResourcesSha256 == null ? "legacy-size:" + sidecar.mAppApkSize : sidecar.mAppResourcesSha256;
                 String actual;
                 try { actual = hostResourcesSha256(host); } catch (Exception error) { actual = "unavailable:" + error.getMessage(); }

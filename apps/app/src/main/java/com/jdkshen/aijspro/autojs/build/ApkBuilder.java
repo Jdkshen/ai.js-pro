@@ -27,6 +27,7 @@ import com.stardust.autojs.script.JavaScriptSource;
 import com.stardust.app.GlobalAppContext;
 import com.stardust.pio.PFiles;
 import com.stardust.pio.UncheckedIOException;
+import com.stardust.autojs.core.ui.inflater.CompiledProjectResources;
 import com.stardust.autojs.engine.encryption.ScriptPayloadV2;
 
 import com.jdkshen.aijspro.R;
@@ -512,6 +513,10 @@ public class ApkBuilder {
         if (mArscPackageName != null) {
             buildArsc();
         }
+        // task-131 批次 A：样例工程资源包（project-res.apk+json）是按**构建期宿主**编的，
+        // 打进产物后必然与产物宿主的资源表不匹配（真机 JS hostCall 会直接抛「资源包与宿主资源表不匹配」）。
+        // 这里做**打包期**清理：只在**确定不匹配**时删（判不出来就原样保留，默认行为不变）。
+        pruneStaleProjectResPacks();
         copyProjectToWorkspace();
         copySplashIcon();
         removeDisabledFeatures();
@@ -654,6 +659,55 @@ public class ApkBuilder {
             return new ArrayList<>();
         }
         return names;
+    }
+
+    /**
+     * task-131 批次 A：丢掉与**产物宿主**资源表不匹配的样例工程资源包（project-res.apk + json）。
+     *
+     * <p>判据走 {@link ProjectResSidecarPolicy}（纯逻辑、有单测）：摘要相等 ⇒ 原样保留；
+     * 摘要确定不同 ⇒ 删这一对 + 打一条**打包提示**（复用 W1 的 staleResourcePackMessage，
+     * 不抄第二份文案）+ C-PKG 日志；判不出来（缺 sidecar/缺摘要/读不到 arsc）⇒ 什么都不做。</p>
+     *
+     * <p>必须在 {@code buildArsc()} **之后**调用：那一步会改写产物宿主的 resources.arsc，
+     * 放早了会拿旧摘要去比，误删好包。</p>
+     */
+    private void pruneStaleProjectResPacks() {
+        File hostArsc = new File(mWorkspacePath, "resources.arsc");
+        List<File> sidecars = new ArrayList<>();
+        collectNamedFiles(new File(mWorkspacePath, "assets"), ProjectResSidecarPolicy.SIDECAR_NAME, sidecars, 0);
+        for (File sidecar : sidecars) {
+            File apk = ProjectResSidecarPolicy.apkFor(sidecar);
+            ProjectResSidecarPolicy.Decision decision = ProjectResSidecarPolicy.decide(sidecar, hostArsc);
+            if (decision.getAction() != ProjectResSidecarPolicy.Action.DROP) {
+                continue;
+            }
+            String warning = CompiledProjectResources.staleResourcePackMessage(
+                    decision.getExpectedDigest(), decision.getActualDigest(), apk);
+            Log.w("C-PKG", "stale project-res dropped: " + decision.getReason() + " apk=" + apk);
+            //noinspection ResultOfMethodCallIgnored
+            apk.delete();
+            //noinspection ResultOfMethodCallIgnored
+            sidecar.delete();
+            mPackagingWarnings.add(warning);
+        }
+    }
+
+    /** 递归找指定文件名的文件（只用于工作区 assets/ 下的样例资源包，深度有界）。 */
+    private static void collectNamedFiles(File dir, String name, List<File> out, int depth) {
+        if (dir == null || !dir.isDirectory() || depth > 12) {
+            return;
+        }
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (child.isDirectory()) {
+                collectNamedFiles(child, name, out, depth + 1);
+            } else if (child.getName().equals(name)) {
+                out.add(child);
+            }
+        }
     }
 
     /** project.json 的 {@code features.nodejs} 是否是 {@code disabled}（task-101）。 */

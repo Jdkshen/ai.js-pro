@@ -1,0 +1,17 @@
+// tools/dump-app-classpath.init.gradle —— 导出 :app 的编译 classpath（给离线 kotlinc/javac 验证用）
+// 用法： gradlew -I tools/dump-app-classpath.init.gradle :app:dumpCompileClasspath
+// 产物： <repo>/output/app-classpath-miuixCompatRelease.txt（分号分隔的 jar/aar 绝对路径）
+allprojects { p ->
+  p.tasks.register('dumpCompileClasspath') {
+    doLast {
+      def variant = 'miuixCompatRelease'
+      def cfg = p.configurations.findByName(variant + 'CompileClasspath')
+      if (cfg == null) { println 'NO_CONFIG ' + variant; return }
+      def files = cfg.files.collect { it.absolutePath }.sort()
+      def f = new File(p.rootProject.projectDir, 'output/app-classpath-' + variant + '.txt')
+      f.parentFile.mkdirs()
+      f.text = files.join(';') + System.lineSeparator()
+      println 'WROTE ' + f.absolutePath + ' entries=' + files.size()
+    }
+  }
+}

@@ -73,6 +73,12 @@ function descriptorIds() {
         console.warn("[plugins-manifest] 跳过草稿插件：" + name + "（draft=true，不进发布清单）");
         return false;
       }
+      // task-131：minAppVersion 必须是**已确定**的值（「第一个带 PluginNativeLoader + $ocr 分发的宿主版本」）。
+      // 未定值（null/缺失）就不发布该插件 —— 填一个拍脑袋的下限会让老宿主装到跑不起来的插件。
+      if (descriptor.minAppVersion === null || descriptor.minAppVersion === undefined) {
+        console.warn("[plugins-manifest] 跳过未定 minAppVersion 的插件：" + name + "（等 W1 真机给值后再发布）");
+        return false;
+      }
       return true;
     });
 }

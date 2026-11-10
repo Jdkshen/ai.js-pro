@@ -3,10 +3,11 @@
   "displayName": "象棋插件",
   "package": "com.jdkshen.xiangqi.plugin",
   "file": "xiangqi-plugin.apk",
-  "minAppVersion": 1465,
+  "minAppVersion": null,
   "requiresRestart": true,
   "abis": [
     "arm64-v8a"
   ],
-  "notes": "提供 libpikafish.so 与 xiangqi.quickjs 桥；随包与否由打包页勾选（默认不带）。"
+  "notes": "提供 libpikafish.so 与 xiangqi.quickjs 桥；随包与否由打包页勾选（默认不带）。",
+  "minAppVersionNote": "待定：应填「第一个带 PluginNativeLoader 钩子 + $ocr 分发的宿主 versionCode」，W1 真机验后给值；未定值前不发布该插件。"
 }

@@ -78,11 +78,26 @@ console.log("plugins-manifest 测试");
 // 5) 缺必需字段 ⇒ 生成失败
 {
   const root = fixture(false);
-  fs.writeFileSync(path.join(root, "plugins/xiangqi/plugin.json"), JSON.stringify({ id: "xiangqi" }));
+  // 有 minAppVersion（否则会被「未定值」门禁先跳过），但缺其它必需字段 ⇒ 必须报「缺字段」
+  fs.writeFileSync(path.join(root, "plugins/xiangqi/plugin.json"), JSON.stringify({ id: "xiangqi", minAppVersion: 1500 }));
   const bad = run(["--out", path.join(root, "plugins.json")], root);
   check("缺字段必须失败", bad.status !== 0);
   check("报错点名缺的字段", /缺字段/.test(bad.stderr), bad.stderr);
 }
+// 5.5) minAppVersion 未定值 ⇒ 不发布该插件（不许填拍脑袋的下限）
+{
+  const root = fixture(false);
+  const d = JSON.parse(fs.readFileSync(path.join(root, "plugins/apkbuilder/plugin.json"), "utf8"));
+  d.minAppVersion = null;
+  fs.writeFileSync(path.join(root, "plugins/apkbuilder/plugin.json"), JSON.stringify(d));
+  const out = path.join(root, "plugins.json");
+  const result = run(["--out", out], root);
+  check("生成仍成功（跳过未定值插件）", result.status === 0, result.stderr);
+  const manifest = JSON.parse(fs.readFileSync(out, "utf8"));
+  check("未定 minAppVersion 的插件不进清单", manifest.plugins.every((p) => p.id !== "apkbuilder"), JSON.stringify(manifest.plugins.map((p) => p.id)));
+  check("并给出 WARN", /跳过未定 minAppVersion/.test(result.stderr), result.stderr);
+}
+
 // 6) project-versions.json 缺版本 ⇒ 失败（不静默出 null 版本）
 {
   const root = fixture(false);
