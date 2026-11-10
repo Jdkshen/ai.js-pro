@@ -991,7 +991,8 @@ final class PocPackaging {
         final String id;
         final String path;
         final List<String> events = Collections.synchronizedList(new ArrayList<>());
-        final long startedAt = System.currentTimeMillis();
+        // task-121：改成非 final 才能在 Job.from() 里按落盘时间还原（原来读回文件的任务 startedAt 恒为「读取时刻」）。
+        long startedAt = System.currentTimeMillis();
         volatile String status = "running";
         volatile String stage = "starting";
         volatile String error = "";
@@ -1038,6 +1039,11 @@ final class PocPackaging {
                     }
                 }
             }
+            // task-121：json() 会写的键必须在 from() 里还原，否则任务结束后走**文件**路径的轮询读回空
+            //（与 task-112 的 warnings 同一个坑：K40 dev-1470 实测 templateSource/templateLabel 都是空）。
+            // 空串保持空串（optString 的默认值就是 ""），**不造默认值**。
+            job.templateSource(json.optString("templateSource", ""));
+            job.startedAt = json.optLong("startedAt", job.startedAt);
             return job;
         }
 
@@ -1057,15 +1063,29 @@ final class PocPackaging {
         }
 
         /**
-         * 模板来源的中文标签：**只认打包侧定义的那几个常量**（bundled_assets / host_cache / sdcard_override）；
-         * 认不出就返回空串 ⇒ 页面**不显示**（拿不到就不猜）。
+         * 模板来源的中文标签。
+         *
+         * <p>接受**两种形态**（K40 dev-1470 实测踩过）：
+         * <ul>
+         *   <li>打包侧常量（bundled_assets / host_cache / sdcard_override）；</li>
+         *   <li>**路径形态** —— {@code ApkBuilderPluginHelper.templateStatus()} 的 source 字段给的其实是**路径/标签**
+         *       （{@code assets/template.apk}、{@code …/files/apk-builder/<ver>/template.apk}、{@code /sdcard/template.apk}、
+         *       插件标签），旧实现只认常量 ⇒ 真机上恒为空、页面那行不显示。</li>
+         * </ul>
+         * 两种形态都认不出就返回空串 ⇒ 页面**不显示**（拿不到就不猜）。
          */
         String templateLabel() {
-            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_BUNDLED.equals(templateSource))
+            String value = templateSource == null ? "" : templateSource.trim();
+            if (value.isEmpty()) return "";
+            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_BUNDLED.equals(value)
+                    || value.startsWith("assets/") || value.endsWith("/assets/template.apk")
+                    || value.equals("assets/template.apk"))
                 return "随主程序分发（内置瘦身模板）";
-            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_HOST_CACHE.equals(templateSource))
-                return "宿主缓存";
-            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_SDCARD.equals(templateSource))
+            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_HOST_CACHE.equals(value)
+                    || value.contains("apk-builder/"))
+                return "宿主缓存（内置模板与宿主 lib 合成）";
+            if (com.jdkshen.aijspro.build.ApkTemplateInspector.SOURCE_SDCARD.equals(value)
+                    || value.equals("/sdcard/template.apk") || value.startsWith("/sdcard/"))
                 return "外部文件（/sdcard/template.apk）";
             return "";
         }
