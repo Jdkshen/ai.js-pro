@@ -1,6 +1,8 @@
 # SJBC 脚本保护挂载（L3 自定义指令集 VM）
 
 > 来源：device4 的 **一页设计说明** `Download/DSH-Go/AIjsPro-挂载SJBC到手机打包.md`（§三「三件必须对齐的事」、§四「与打包界面的对应关系」）+ `AIjsPro-L3-SJBC/交接说明_M1-M17.md` + `pc-tools/README.md` + `m18/README.md`，并与**我们仓库里已落地的代码**逐条对齐。
+> **2026-11-10 更新（dev-1456）**：App 侧 **VM/入口/打包/UI 全部落地**并在 K40 真机端到端跑通（打包版自己解自己跑，`steps=1990`）⇒ 本文的「（待落）」已收窄到 §5 表末三行。详见 §1.5 / §2.1 / §5.1。
+>
 > ⚠️ **原文可及性边界**：device4 当前 `adb offline`，我**没能读到用户那两份 md 的原文**；本文件基于 ①仓库内 `tools/sjbc/README.md:3-4` 明示的「来源=device4 `脚本/sjbc-tools/`，对照=device4 那份挂载 md」②`output/task-79-2026-11-10/mat/`（含 `交接说明_M1-M17.md`、`pc-tools__README.md`、`m18__README.md`、`m8__native__sjbc_v5.c`、`pc-tools__ajs2sjbc.js` 等 16 份材料）③我们已合并的实现与测试。**凡我推断而非引用之处都标了「（推断）」。**
 
 ## 0. 一句话
@@ -14,10 +16,31 @@
 | 形态 | `.sjbc` 放进 APK 的 `assets/sjbc/`，随包分发，运行期由 App 解密执行 | 放**外置目录**（免重装热加载）或由**你自己**的宿主/VM 控制；App 侧不接管 |
 | 配置 | `project.json` → `sjbc.assetsDir`（默认 `assets/sjbc`）+ `sjbc.certSha` | 无（走 `build_all.js` 顶部 `deployTo` 投放目录） |
 | 落地命令 | 打包 CLI 产 `.sjbc` → 放进 `assets/sjbc/` → `zipalign -p 4` → `apksigner sign`（**必须与 `--cert` 同一把证书**） | `adb push out/hello.sjbc /sdcard/Android/data/<宿主包名>/files/modules/` → 宿主内点「刷新」 |
-| 我们侧落点 | `ProjectConfig.SjbcConfig`（`assetsDir`/`certSha` 已有）；**打包侧把 `assets/sjbc/**` 收进产物 + manifest/certSha 实算 = （待落）** | 工具链已入库（`tools/sjbc/build_all.js` 的 `deployTo`、`build-all.mjs --deploy-to`）；**App 侧 VM 执行 = （待落）** |
+| 我们侧落点 | `ProjectConfig.SjbcConfig`（`assetsDir`/`certSha` 已有）；打包侧 = `SjbcPackaging.kt` + `ApkBuilder.stageSjbcAssets()`（**已落地**，只收 `.sjbc`+`manifest.json`；无 `.sjbc` 时零行为变化） | 工具链已入库（`tools/sjbc/build_all.js` 的 `deployTo`、`build-all.mjs --deploy-to`）；App 侧 VM = `SjbcVm`/`SjbcApi`（**已落地**，Rhino 口径） |
 | 典型用途 | 交付给用户的成品包 | 迭代期、自控宿主、第三方宿主 |
 
 > `pc-tools__README.md `4` 里这两条叫「方式 A 热加载 / 方式 B 打进 assets」；本文件的 A/B 命名按任务书口径（**A=随包资源、B=完全自控**）——两者指同一组能力，只是叫法次序相反。
+
+## 1.5 在打包 UI 里怎么选（⋮ → 项目配置与打包）
+
+**操作路径（K40 真机走过，2026-11-10）**：脚本列表 **⋮ → 「项目配置与打包」** → 在**脚本加密等级**下拉里选 **「不加密（推荐：SJBC 容器自带加密）」** → 点 **「保存并打包」**。
+
+- **为什么推荐「不加密」**：`.sjbc` **自带** v5 容器加密（§3）；再套一层 App 的脚本保护只是把已经加密的东西再包一层，收益小、还多一层解析。
+- **下拉里的 4 个文案（真机实测，一个都没删）**：① `不加密（推荐：SJBC 容器自带加密）` ← **选这个**；② `离线加密（可选再套一层）`；③ `离线加密 · Dex（可选再套一层）`；④ `离线加密 · Snapshot（等同 Dex：引擎最高等级为 2）`（**Snapshot(3) 会被引擎 clamp 到 2**）。
+- **页面还会显示**：引擎/版本/保存态（例：`Rhino / v1.0.0 / 已保存`）与上一次产物（例：`APK 已生成 41286311 字节 · com.aijspro.sjbce2e · 加密等级 0 · arm64-v8a` + SHA-256）。
+
+**可核的两行 logcat**（点完「保存并打包」）：
+~~~text
+C-PKG: sjbc certSha=1b57505e… files=1 manifest=true source=sjbc        ← 收到 SJBC 资产 + 实际用的证书指纹
+C-PKG: template available=true source=…/apk-builder/1456/template.apk ← 用的是哪个模板（打包版引擎新不新看这条）
+（随后）build ok size=41286414 sha256=10d46729…  /  stage=success     ← 产物与阶段
+~~~
+
+**截图留档（只引用、不拷贝）**：`.artifacts/ui-test-2026-11-10/ui5.png`、`ui6.png`、`ui7.png`、`ui10.png`（同目录另有 `加密等级下拉（新文案）.png`）——想看 UI 直接开这几个文件。
+
+**两个操作注记**：
+1. **Dart 改动默认不进包**：`tools/flutter-poc/build-release-candidate.ps1` 默认复用锁定的 AOT payload ⇒ 要带上 UI 改动必须加 **`-RebuildAot`**（本次下拉新文案就是靠它才在真机出现）。
+2. **打包时 `abis` 会带上 v7a ⇒ 每次出 `abis warning`**（**只警告不失败**，属「打包模板重建」那条线）；产物 `lib/` 仍只有 arm64。
 
 ## 2. 三件必须对齐的事（用户 md §三）
 
@@ -26,6 +49,7 @@
 - **怎么拿**：`apksigner verify --print-certs x.apk | grep "SHA-256 digest"`；或 `keytool -printcert -jarfile x.apk | grep SHA256`；手机侧 MCP `apk_read_signature` → `certificates[].sha256`。
 - **我们侧落点**：`ProjectConfig.SjbcConfig`（`modules/engine/src/main/java/com/stardust/autojs/project/ProjectConfig.java:182-200`）——**规范化 = 去冒号 + 转小写**（`ProjectConfigSjbcTest.java:36`：`AB:CD:EF:01:23:45` → `abcdef012345`）；空值被视为「没给、不比较」（`ProjectConfig.java:335`）。容器侧 `SjbcV5Container.masterFromCertSha256Hex()`（`:127-136`）只接受 64 位 hex。
 - **CLI 侧**：`tools/sjbc/build-all.mjs --cert <apk 或 64 位 hex>`（`tools/sjbc/README.md:22-28`）。
+- **真机证据（K40，2026-11-10）——「必须用打包器那把证书」不是理论**：打包版自己的证书是 `1b57505e…`；**先用候选包证书（`38166a4b…`）加密同一个 `hello` 再装 → 打包版报 `SjbcException: SJBC 池层解密失败（AEAD 拒绝：证书指纹不对或池被篡改）`**；换回打包器证书重加密 ⇒ 同一模块 `steps=1990` 正常跑完。⇒ **`.sjbc` 必须用「最后给这个 APK 签名的证书」加密**。
 
 ### 2.2 宿主函数表 `HOST=['print','len','push','slice0']`
 - **按索引的白名单**：`0=print 1=len 2=push 3=slice0`（`交接说明_M1-M17.md:31`；`m18__README.md:43` 载明真机宿主已扩到 4 个）。
@@ -86,10 +110,27 @@ body   : ivP(12) | tagP(16) | poolLen(4, big-endian) | poolEnc | ivC(12) | tagC(
 | project.json 字段 | `ProjectConfig.SjbcConfig`（`sjbc.assetsDir` 默认 `assets/sjbc`；`sjbc.certSha` 规范化为去冒号小写；空值 warning） | ✅ |
 | 字段回归 | `apps/app/src/test/java/com/stardust/autojs/project/ProjectConfigSjbcTest.java`（含「未用 SJBC 的工程 `toJson` 逐字不变」） | ✅ |
 | 打包 CLI 参数化包装 | `tools/sjbc/build-all.mjs --src/--out/--cert/--deploy-to/--check`（只替换 `build_all.js` 顶部 4 行配置，算法未改） | ✅ |
-| **App 侧 VM 解释器**（解密后执行字节码；实现 `print/len/push/slice0` 宿主函数） | — | **（待落）**：仓库里只有**容器解密**，没有解释器/运行时 |
-| **`main.js` 加载器**（入口改成「读 `assets/sjbc/` → 解密 → VM 执行」） | — | **（待落）** |
-| **打包侧接线**：把 `assets/sjbc/**` 收进产物 + 生成 manifest + `certSha` 实算比对 | — | **（待落）**（`ProjectConfigSjbcTest.java:17` 明写「目录收集/manifest/certSha 实算归打包侧」） |
+| **App 侧 VM 解释器** | `modules/engine/src/main/java/com/stardust/autojs/sjbc/`：`SjbcVm.java`（逐行移植 `pc-tools/vm.js`：16 寄存器帧/`entries`/闭包/异常/`LOADF` 6 字节/跳转按真实长度）+ `SjbcValues.java` + `SjbcHostFunctions.java`（`print/len/push/slice0`）+ `SjbcKeySource.java`（**主密钥 = 本包签名证书 SHA-256 → HKDF**）+ `SjbcApi.java`（只读入口 `sjbc.run/runEntry`） | ✅ **已落地**（dev-1456；测试 `SjbcVmTest`/`SjbcApiTest`） |
+| **加载器/脚本全局** | `runtime.getProperty('sjbc')` 由 `__globals__.js` 挂到 `global.sjbc`（`runtime.putProperty` **不会**变全局，见 §5.1） | ✅ **已落地**（dev-1456） |
+| **打包侧接线** | `apps/app/src/main/java/com/jdkshen/aijspro/build/SjbcPackaging.kt`（`TARGET_DIR="assets/sjbc"`、只收 `.sjbc`+`manifest.json`）+ `ApkBuilder.java:517/612 stageSjbcAssets()`；`certSha` 取自**真签名证书**；logcat `C-PKG: sjbc certSha=… files=… manifest=… source=sjbc` | ✅ **已落地**（dev-1456） |
 | `sjbc` 的随包文档/MCP 面 | — | **（待落）**（本文件是仓库内第一份 SJBC 指南） |
+
+### 5.1 脚本侧用法（Rhino 口径，2026-11-10 真机实测）
+
+~~~js
+typeof sjbc            // 'object'
+typeof sjbc.run        // 'function'
+var r = sjbc.runEntry('assets/sjbc/hello.sjbc', 0);
+r.get('steps')         // 1990      ← 现在返回 Java Map ⇒ 必须用 get()
+r.get('ok')            // true
+r.get('prints')        // ['fib(10)=55','counter=1,2','sum=12','caught:boom','done']
+r.get('certShaUsed')   // '1b57505e…'   ← 实际用来解密的那把证书指纹
+~~~
+
+- **⚠️ 用法更正（重要）**：入口返回 **Java `Map`** ⇒ 脚本要写 **`r.get('steps')`**，**不能**写 `r.steps`（会得到 `undefined`）。**W1 正在改成「属性访问可用的 Rhino 友好对象」；落地后本节会改成 `r.steps` 并注明起始版本**（在那之前请用 `get()`）。
+- **真机实测**（K40 dev-1456，打包版自己解自己跑）：`runEntry(…,0) → ok=true steps=1990 codeBytes=476 certShaUsed=1b57505e…`；`entry1/2 → steps=5/6`（无打印）；`sjbc.run(path)` 等价 entry0；**与用户 `pc-tools/vm.js` 逐条一致**（比结果 + 步数）。
+- **入口目前只有 Rhino 口径**：QuickJS / Node24 未接（§5 表末）。
+- **一个踩过的坑**：`runtime.putProperty("sjbc", …)` **只是 `mProperties`、不是脚本全局**（app 版与打包版都实测 `typeof sjbc` / `runtime.sjbc` 为 undefined，而 `runtime.getProperty('sjbc')` **拿得到对象**）⇒ 现由 `__globals__.js` 用既有公共方法读出来挂 `global.sjbc`。
 
 ## 6. 语言能力边界（**别写你写不了的代码**）
 
@@ -118,6 +159,6 @@ body   : ivP(12) | tagP(16) | poolLen(4, big-endian) | poolEnc | ivC(12) | tagC(
 ## 8. 未验证 / 待核（诚实边界）
 1. **用户两份 md 原文未读到**（device4 `adb offline`）：§三/§四 的**小节号**来自 `tools/sjbc/README.md:4` 的对照说明，**内容按材料与代码重建**；若原文有出入，以原文为准（我可在设备上线后逐条核对）。
 2. **`module_v5.enc` 命名不一致**：真机 demo 自证文件当前是 `FAILED: FileNotFoundException sjbc/module_v5.enc`（Lead 实测报），而材料里的模块名形如 `数组与统计.sjbc`/`hello.sjbc` ⇒ **宿主读的路径常量与打包产出的命名需要对齐**（未核）。
-3. **App 侧 VM/加载器/打包接线三处均（待落）**：本文件只描述**契约**（`1–`4`）；在它们落地前，「挂载 SJBC 到手机打包」这条线**在真机上跑不通**（Demo 是独立宿主 `com.aijs.sjbc.demo`，不是我们的打包产物）。
+3. ~~App 侧 VM/加载器/打包接线三处均（待落）~~ → **已落地并在 K40 真机端到端跑通（dev-1456）**：打包版自己解自己跑 `steps=1990`，`C-PKG: sjbc certSha=…` 与 `C-PKG: template available=true …` 两行日志可核。**仍待落/未验**：① 入口只有 **Rhino** 口径（QuickJS/Node24 未接）；② 用户 Demo `com.aijs.sjbc.demo` 的自证文件仍是 `FAILED`（其宿主找遗留名 `sjbc/module_v5.enc`）；③ `GET_SIGNING_CERTIFICATES`/`GET_SIGNATURES` 只跑了 **API≥28** 那条分支。
 4. **__sjbc__ 的运行时安全性未评**：密钥主根是证书指纹（公开信息）+ 固定 salt/info ⇒ 属于**防呆式保护**（防直接读源码），**不防有动机的攻击者**（能从 APK 里拿到证书指纹并复现 HKDF）。这条**不是本次新发现**，但必须写进指南，避免误当成强加密。
 5. **本文件未跑任何命令**（只写文档）；`7` 的 1–2 条我**没有执行**（不跑构建/产物的约定），`3–5 条是材料里记录的既有结论。

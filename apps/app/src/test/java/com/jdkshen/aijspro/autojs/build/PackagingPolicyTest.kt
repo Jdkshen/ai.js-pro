@@ -135,6 +135,21 @@ class PackagingPolicyTest {
         println("SAMPLE | C-PKG W | abis warning: " + warning)
     }
 
+    /** task-85 ②：同一条 ABI 缺失结论只 W 一次，重复降 INFO；事实（missing）不消失。 */
+    @Test fun abiWarningIsDeduplicatedPerSignatureButFactsStay() {
+        val first = AbiPolicy.resolve(listOf("arm64-v8a", "armeabi-v7a"), listOf("arm64-v8a"))
+        assertEquals("WARN", AbiPolicy.warningLevel(null, first))
+        assertEquals("INFO", AbiPolicy.warningLevel(AbiPolicy.signature(first), first))
+        assertTrue("事实不能被降噪吃掉：" + first.missing, first.missing.contains("armeabi-v7a"))
+        assertNotNull(first.warning)
+        // 结论变了（这里：声明的 ABI 更多）→ 重新 W
+        val other = AbiPolicy.resolve(listOf("arm64-v8a", "armeabi-v7a", "x86_64"), listOf("arm64-v8a"))
+        assertEquals("WARN", AbiPolicy.warningLevel(AbiPolicy.signature(first), other))
+        // 没有缺失 → 不说话
+        val clean = AbiPolicy.resolve(listOf("arm64-v8a"), listOf("arm64-v8a"))
+        assertEquals("NONE", AbiPolicy.warningLevel(null, clean))
+    }
+
     /** 档 2：声明的一个都产不出（真不可满足）→ 硬报错，消息保留原风格。 */
     @Test fun onlyFailsWhenNoDeclaredAbiCanBeProduced() {
         val error = runCatching {

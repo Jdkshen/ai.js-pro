@@ -1013,6 +1013,62 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                       borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.5)),
                   isDense: true)));
 
+  /// task-86 修正（Lead 2026-11-10 读桥实现后抓到）：`projectLoad` 返回的是
+  /// `{path, config, revision, engine, …}`，**整份 project.json 在 `loaded['config']` 下** ⇒
+  /// 原来判 `loaded['sjbc']` 会让这一行**永远不显示**。这里统一从 `config['sjbc']` 取。
+  Map<String, dynamic>? sjbcConfig() {
+    final config = loaded?['config'];
+    if (config is! Map) return null;
+    final sjbc = config['sjbc'];
+    return sjbc is Map ? Map<String, dynamic>.from(sjbc) : null;
+  }
+
+  /// task-86：SJBC 容器配置的**只读**展示行。
+  ///
+  /// 只展示 project.json 里已有的真值（assetsDir / certSha），**不可编辑**（避免第二份真值）；
+  /// 没配 sjbc 的工程根本不显示这一行（调用点判 `sjbcConfig() != null`）。
+  Widget sjbcRow() {
+    final sjbc = sjbcConfig() ?? const <String, dynamic>{};
+    final assetsDir = sjbc['assetsDir']?.toString() ?? 'assets/sjbc';
+    final certSha = sjbc['certSha']?.toString();
+    final fingerprint = (certSha == null || certSha.isEmpty)
+        ? '未设置'
+        : certSha.substring(0, certSha.length < 12 ? certSha.length : 12) + '…';
+    return FutureBuilder<int?>(
+        future: countSjbcFiles(assetsDir),
+        builder: (context, snapshot) {
+          final count =
+              snapshot.hasData ? '（检测到 ' + snapshot.data.toString() + ' 个 .sjbc）' : '';
+          return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                  'SJBC 资源目录：' + assetsDir + count + '\n期望指纹：' + fingerprint +
+                      '（只读，真值在 project.json）',
+                  style: const TextStyle(fontSize: 13)));
+        });
+  }
+
+  /// 只读统计项目内 .sjbc 数量；拿不到就返回 null（不显示数字，也绝不抛）。
+  Future<int?> countSjbcFiles(String assetsDir) async {
+    try {
+      final base = projectPath.replaceAll(RegExp(r'/+$'), '');
+      final value = await LocalBridge.call('list', {'path': base + '/' + assetsDir});
+      final items = value is List
+          ? value
+          : (value is Map && value['items'] is List ? value['items'] as List : const []);
+      var count = 0;
+      for (final item in items) {
+        final path = item is Map
+            ? (item['path'] ?? item['name'] ?? '').toString()
+            : item.toString();
+        if (path.toLowerCase().endsWith('.sjbc')) count += 1;
+      }
+      return count;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Widget card(String title, List<Widget> children) {
     final scheme = Theme.of(context).colorScheme;
     final collapsible = configurationSections.contains(title);
@@ -1390,6 +1446,9 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
             }
             return null;
           }),
+          // task-86：SJBC 资源**只读**展示（有 sjbc 字段才显示；不可编辑，真值在 project.json）
+          // Lead 修正：sjbc 在 loaded['config']['sjbc'] 下（见 sjbcConfig()），不是 loaded['sjbc']。
+          if (sjbcConfig() != null) sjbcRow(),
           Row(children: [
             const Expanded(child: Text('打包插件')),
             TextButton.icon(

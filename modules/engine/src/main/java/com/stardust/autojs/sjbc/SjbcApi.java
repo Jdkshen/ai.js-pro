@@ -40,13 +40,71 @@ public final class SjbcApi {
         this.workingDirectory = workingDirectory;
     }
 
-    /** 脚本入口：跑 entryIndex=0。 */
-    public Map<String, Object> run(String path) {
+    /** 脚本入口：跑 entryIndex=0；返回**脚本友好对象**（Rhino 里可直接 `r.steps`/`r.prints`）。 */
+    public Object run(String path) {
         return runEntry(path, 0);
     }
 
-    /** 脚本入口：指定 entryIndex（entries[entryIndex] 是起始 PC）。 */
-    public Map<String, Object> runEntry(String path, int entryIndex) {
+    /** 脚本入口：指定 entryIndex（entries[entryIndex] 是起始 PC）；返回**脚本友好对象**。 */
+    public Object runEntry(String path, int entryIndex) {
+        return toScriptValue(runEntryMap(path, entryIndex));
+    }
+
+    /**
+     * task-83：把结果 Map 变成**脚本能按属性访问**的对象。
+     *
+     * <p>真机教训（Lead 实测）：直接返回 Java `Map` 时脚本里 `r.steps` 是 `undefined`（Rhino 会把 Map 当
+     * Java 对象，属性访问落到 `getSteps()` 上）⇒ 这里在**Rhino 上下文存在**时转成 {@code NativeObject}，
+     * 且列表字段（`prints`/`entries`）转成 {@code NativeArray}——**真 JS 数组**，可以 `forEach`。
+     *
+     * <p>没有 Rhino 上下文（QuickJS/Node24 或纯 JVM）时**原样返回 Map**，由各自宿主自己转换（不写第二份实现）。
+     */
+    public static Object toScriptValue(Map<String, Object> map) {
+        try {
+            org.mozilla.javascript.Context context = org.mozilla.javascript.Context.getCurrentContext();
+            if (context == null) {
+                return map;
+            }
+            // 必须带**标准原型**创建：无参 new NativeObject() 的原型是 null，Rhino 在字符串转换/数组方法上会报
+            // 「Cannot find default value for object」（task-52 同一类坑），所以这里用 newObject/newArray + 一个标准 scope。
+            org.mozilla.javascript.Scriptable scope = context.initStandardObjects();
+            org.mozilla.javascript.Scriptable object = context.newObject(scope);
+            for (Map.Entry<String, Object> entry : map.entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof List) {
+                    object.put(entry.getKey(), object,
+                            context.newArray(scope, ((List<?>) value).toArray()));
+                } else {
+                    object.put(entry.getKey(), object, value);
+                }
+            }
+            return object;
+        } catch (Throwable error) {
+            // Rhino 不在类路径（纯 QuickJS/Node24 进程）或转换失败 ⇒ 退回 Map，绝不因此让入口不可用。
+            Log.w(TAG, "结果转脚本对象失败，退回 Map：" + error);
+            return map;
+        }
+    }
+
+    /**
+     * QuickJS/Node24 等**没有 Rhino 对象模型**的宿主用：把结果转成 JSON 字符串（宿主侧 `JSON.parse` 即成真 JS 对象/数组）。
+     */
+    public static String toJson(Map<String, Object> map) {
+        return new org.json.JSONObject(map).toString();
+    }
+
+    /** 脚本入口（JSON 形态）：QuickJS 侧模块用 `JSON.parse(hostCall(...))` 得到 `r.steps`/`r.prints` 可直读的对象。 */
+    public String runJson(String path) {
+        return toJson(runEntryMap(path, 0));
+    }
+
+    /** 脚本入口（JSON 形态，指定 entryIndex）。 */
+    public String runEntryJson(String path, int entryIndex) {
+        return toJson(runEntryMap(path, entryIndex));
+    }
+
+    /** 内部/单测用：返回 Map（脚本请用 {@link #run}）。 */
+    public Map<String, Object> runEntryMap(String path, int entryIndex) {
         if (context == null) {
             throw new SjbcException("sjbc.run 需要 Context（宿主未注入）");
         }

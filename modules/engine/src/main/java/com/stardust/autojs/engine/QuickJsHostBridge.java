@@ -333,7 +333,7 @@ final class QuickJsHostBridge implements AutoCloseable,
 
     public String modernModulesScript() {
         StringBuilder scripts = new StringBuilder();
-        String[] assets = { "modules/qjs-console-compat.js", "modules/qjs-dialogs-compat.js", "modules/pro-modern-compat.js", "modules/pro-modern-platform.js", "modules/qjs-touch-capture.js", "modules/qjs-canvas.js", "modules/qjs-plugins.js", "modules/sift-api.js", "modules/ui-accessibility.js", "modules/common-api.js", "modules/common-device.js", "modules/common-color.js", "modules/common-lang.js", "modules/shizuku-api.js" };
+        String[] assets = { "modules/qjs-console-compat.js", "modules/qjs-sjbc.js", "modules/qjs-dialogs-compat.js", "modules/pro-modern-compat.js", "modules/pro-modern-platform.js", "modules/qjs-touch-capture.js", "modules/qjs-canvas.js", "modules/qjs-plugins.js", "modules/sift-api.js", "modules/ui-accessibility.js", "modules/common-api.js", "modules/common-device.js", "modules/common-color.js", "modules/common-lang.js", "modules/shizuku-api.js" };
         for (String path : assets) {
             try (InputStream input = mRuntime.uiHandler.getContext().getAssets().open(path);
                  ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
@@ -751,6 +751,36 @@ final class QuickJsHostBridge implements AutoCloseable,
     // ------------------------------------------------------------------
     // 内置模块：crypto / zips / 运行环境信息
     // ------------------------------------------------------------------
+
+    /**
+     * task-87：QuickJS 侧的 `sjbc` 宿主 op —— **只读白名单**（op 只允许 run / runEntry），返回 JSON 字符串；
+     * JS 侧 `modules/qjs-sjbc.js` `JSON.parse` 后按属性访问（`r.steps`/`r.prints[0]`）。
+     *
+     * <p>与 Rhino 同源：这里只做形状/参数校验，真正实现是 `com.stardust.autojs.sjbc.SjbcApi` 那一份（不复制）。
+     */
+    public String sjbcCall(String op, String path, String entryIndex) {
+        if (path == null || path.trim().isEmpty()) {
+            throw new IllegalArgumentException("sjbcCall 需要非空 path");
+        }
+        int index = 0;
+        if (entryIndex != null && !entryIndex.trim().isEmpty()) {
+            try {
+                index = Integer.parseInt(entryIndex.trim());
+            } catch (NumberFormatException error) {
+                throw new IllegalArgumentException("entryIndex 必须是整数：" + entryIndex);
+            }
+        }
+        com.stardust.autojs.sjbc.SjbcApi api =
+                new com.stardust.autojs.sjbc.SjbcApi(mRuntime.uiHandler.getContext(), null);
+        switch (op == null ? "" : op) {
+            case "run":
+                return api.runJson(path);
+            case "runEntry":
+                return api.runEntryJson(path, index);
+            default:
+                throw new IllegalArgumentException("不支持的 sjbc op：" + op + "（只允许 run / runEntry）");
+        }
+    }
 
     /** `crypto` 模块（对齐 Rhino 的 `runtime.crypto`）。 */
     public String cryptoCall(String method, String arg1, String arg2) {

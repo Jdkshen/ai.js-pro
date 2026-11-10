@@ -596,6 +596,8 @@ public class ApkBuilder {
     }
 
     private String mSjbcCertSha;
+    /** task-85 ②：上一次打过的 ABI 缺失结论签名（进程级；同一条只 W 一次）。 */
+    private static volatile String sLastAbisWarningSignature;
 
     /** task-80 ②：由调用方（知道真正用的是哪把签名证书）传入的证书 SHA-256（冒号/大小写随意，会归一）。 */
     public ApkBuilder setSjbcCertSha(String certSha) {
@@ -745,8 +747,17 @@ public class ApkBuilder {
             report("abisProduced", resolution.getProduced());
             report("abisMissing", resolution.getMissing());
             if (resolution.getWarning() != null) {
-                Log.w("C-PKG", "abis warning: " + resolution.getWarning());
-                mPackagingWarnings.add("abis: " + resolution.getWarning());
+                // task-85 ②：同一条 ABI 结论在同一进程里只 W 一次，重复时降为 INFO（事实仍写进报告，不静默）。
+                String signature = AbiPolicy.signature(resolution);
+                String level = AbiPolicy.warningLevel(sLastAbisWarningSignature, resolution);
+                if ("WARN".equals(level)) {
+                    Log.w("C-PKG", "abis warning: " + resolution.getWarning());
+                    mPackagingWarnings.add("abis: " + resolution.getWarning());
+                    sLastAbisWarningSignature = signature;
+                } else {
+                    Log.i("C-PKG", "abis missing=[" + resolution.getMissing() + "] produced=[" + resolution.getProduced()
+                            + "]（同一结论已提示过，降为 INFO；事实仍在报告里）");
+                }
             }
         } catch (IllegalArgumentException error) {
             throw new IOException(error.getMessage(), error);

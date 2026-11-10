@@ -51,6 +51,25 @@ object AbiPolicy {
         return Resolution(declared, available, produced, missing, warning, note)
     }
 
+    /** 同一条 ABI 结论的签名（declared/produced/missing）——用于「同一 warning 只打一次」的降噪判据。 */
+    @JvmStatic
+    fun signature(resolution: Resolution): String =
+        "declared=" + resolution.declared + " produced=" + resolution.produced + " missing=" + resolution.missing
+
+    /**
+     * task-85 ②（降噪）：同一条 ABI 结论在**同一进程**里重复出现时，不必每次都 W。
+     *  - 没有缺失 → NONE（没话可说）；
+     *  - 首次出现该签名 → WARN（完整 warning + 可抄修法）；
+     *  - 与上一次签名相同 → INFO（短行，说明是重复且已提示过）。
+     * 注意：**降的是日志级别/重复，不是事实** —— 打包报告里 abisDeclared/abisProduced/abisMissing 每次都写，
+     * AbiPolicy「不静默」的语义不变（缺失的 ABI 永远出现在结果里）。
+     */
+    @JvmStatic
+    fun warningLevel(previousSignature: String?, resolution: Resolution): String {
+        if (resolution.missing.isEmpty()) return "NONE"
+        return if (previousSignature != null && previousSignature == signature(resolution)) "INFO" else "WARN"
+    }
+
     /** 可抄的处置建议（同时进打包日志与打包报告）。 */
     @JvmStatic
     fun buildWarning(missing: List<String>, produced: List<String>, available: List<String>): String {
