@@ -38,8 +38,12 @@ param(
     [switch]$NoDerived,
     # 覆盖推导标记个数上限（0 = 用注册表 derived.maxMarkers，默认 5）
     [int]$MaxDerivedMarkers = 0,
+    # 插件兜底模板（plugins/apkbuilder-plugin/src/main/assets/template.apk）—— task-131：它同样是
+    # 「签入的二进制模板」，引擎/inrt 改动后不重建就会静默留旧内容（真机实证：旧 OCR 文案）。
+    [string]$PluginTemplatePath = '',
     # 跳过某一侧
     [switch]$SkipTemplate,
+    [switch]$SkipPluginTemplate,
     [switch]$SkipAot,
     # 机器可读输出
     [switch]$Json,
@@ -55,6 +59,7 @@ if ([string]::IsNullOrWhiteSpace($Root)) {
 $Root = (Resolve-Path -LiteralPath $Root).Path
 if ([string]::IsNullOrWhiteSpace($TemplatePath)) { $TemplatePath = Join-Path $Root 'apps/app/src/main/assets/template.apk' }
 if ([string]::IsNullOrWhiteSpace($PayloadDir)) { $PayloadDir = Join-Path $Root 'output/flutter-poc/payload' }
+if ([string]::IsNullOrWhiteSpace($PluginTemplatePath)) { $PluginTemplatePath = Join-Path $Root 'plugins/apkbuilder-plugin/src/main/assets/template.apk' }
 
 function Get-NewestFile {
     param([string[]]$Paths, [string[]]$Include = @('*'))
@@ -170,6 +175,35 @@ function Test-SourceContains {
 
 $results = New-Object System.Collections.Generic.List[object]
 $deepNotes = New-Object System.Collections.Generic.List[string]
+
+if (-not $SkipPluginTemplate) {
+    # 与 template 同源判据：引擎 modules/*/src/main + apps/inrt/src/main + inrt build.gradle
+    $pluginSourceDirs = @()
+    $pluginModulesDir = Join-Path $Root 'modules'
+    if (Test-Path -LiteralPath $pluginModulesDir) {
+        foreach ($module in (Get-ChildItem -LiteralPath $pluginModulesDir -Directory -ErrorAction SilentlyContinue)) {
+            $pluginSourceDirs += (Join-Path $module.FullName 'src/main')
+        }
+    }
+    $pluginSourceDirs += (Join-Path $Root 'apps/inrt/src/main')
+    $pluginNewest = Get-NewestFile -Paths $pluginSourceDirs
+    $pluginBuildFile = Get-NewestFile -Paths @($Root) -Include @('build.gradle', 'build.gradle.kts') | Where-Object { $_.FullName -like '*inrt*' }
+    if ($null -ne $pluginBuildFile -and ($null -eq $pluginNewest -or $pluginBuildFile.LastWriteTimeUtc -gt $pluginNewest.LastWriteTimeUtc)) {
+        $pluginNewest = $pluginBuildFile
+    }
+    if (-not (Test-Path -LiteralPath $PluginTemplatePath)) {
+        $results.Add([pscustomobject]@{ kind = 'plugin-template'; state = 'STALE'; reason = '插件兜底模板不存在（plugins/apkbuilder-plugin/src/main/assets/template.apk）'; newest = ''; newestPath = ''; artifact = $PluginTemplatePath })
+    } else {
+        $pluginTemplateTime = (Get-Item -LiteralPath $PluginTemplatePath).LastWriteTimeUtc
+        if ($null -eq $pluginNewest) {
+            $results.Add([pscustomobject]@{ kind = 'plugin-template'; state = 'FRESH'; reason = '无源码可比（源集合为空）'; newest = ''; newestPath = ''; artifact = $PluginTemplatePath })
+        } elseif ($pluginTemplateTime -lt $pluginNewest.LastWriteTimeUtc) {
+            $results.Add([pscustomobject]@{ kind = 'plugin-template'; state = 'STALE'; reason = '插件兜底模板比引擎/inrt 源集合旧（兜底路径会带旧文案/旧引擎，需重建或改为引用 apps/app 那份）'; newest = (Format-Stamp $pluginNewest.LastWriteTimeUtc); newestPath = (Get-RelativePath $pluginNewest.FullName); artifact = $PluginTemplatePath })
+        } else {
+            $results.Add([pscustomobject]@{ kind = 'plugin-template'; state = 'FRESH'; reason = '插件兜底模板不旧于引擎/inrt 源集合'; newest = (Format-Stamp $pluginNewest.LastWriteTimeUtc); newestPath = (Get-RelativePath $pluginNewest.FullName); artifact = $PluginTemplatePath })
+        }
+    }
+}
 
 if (-not $SkipTemplate) {
     $sourceDirs = @()

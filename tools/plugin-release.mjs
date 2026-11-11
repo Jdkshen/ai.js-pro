@@ -98,6 +98,19 @@ async function verify() {
   if (!args.has('--skip-build')) buildPlugins(); else console.log('[1/5] 跳过构建（--skip-build）');
   if (!args.has('--skip-build')) stage(); else stage();
   manifest();
+  // Lead 2026-11-12：**同步一份到 LAN 更新源目录** —— 这里曾经漏掉，导致「公网是新的、
+  // 局域网还是旧的」两个渠道漂移（真机从 LAN 源装到旧插件 ⇒ 很像「改了没生效」）。
+  // 默认 .artifacts/updates（tools/publish.ps1 也在用），可用 --lan-dir 覆盖，--no-lan 跳过。
+  if (!args.has('--no-lan')) {
+    const lanDir = getArg('lan-dir', '.artifacts/updates');
+    if (existsSync(lanDir)) {
+      console.log('[3.5/5] 同步到 LAN 源目录 ' + lanDir + ' …');
+      for (const f of files) { copyFileSync(join(staging, f), join(lanDir, f)); }
+      console.log('    已同步 ' + files.length + ' 个文件');
+    } else {
+      console.log('[3.5/5] 跳过 LAN 同步（目录不存在：' + lanDir + '）');
+    }
+  }
   if (args.has('--no-push')) console.log('[4/5] 跳过推送（--no-push）；文件在 ' + staging);
   else publish();
   if (!args.has('--no-push')) await verify();
