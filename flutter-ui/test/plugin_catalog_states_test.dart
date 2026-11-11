@@ -111,7 +111,19 @@ void main() {
     expect(source.contains("downloading[package(item)]!['receivedBytes'] is num"), isTrue);
     expect(source.contains('activeDownload'), isTrue);
     // task-147：卡片分层/单行 + 固定高度 + 底部留白 + permission 去设置
-    expect(source.contains('mainAxisExtent: 224'), isTrue, reason: '卡片等高');
+    // task-149：最坏组合（图标+名称2行+版本+包名+状态行+按钮）⇒ 264
+    expect(source.contains('mainAxisExtent: 264'), isTrue, reason: '卡片等高且不被切半');
+    expect(source.contains('bool pluginLooksInstalled(Map item)'), isTrue);
+    // task-150：读结构化 state（detail 只显示、不参与判定）
+    expect(source.contains("text(manifestOf(item) ?? const {}, 'state')"), isTrue);
+    expect(source.contains("state == 'install'"), isTrue);
+    expect(source.contains("state == 'update'"), isTrue);
+    expect(source.contains("state == 'upToDate'"), isTrue);
+    expect(source.contains("manifestOf(item)!['actionable'] == true"), isTrue);
+    expect(source.contains("detail.contains('已是最新')"), isFalse,
+        reason: 'detail 不得再参与判定（只用于显示）');
+    expect(source.contains("pluginManifestState(item) == 'install' ||"), isTrue,
+        reason: 'state=install（未安装）才给下载安装按钮；state=其他 ⇒ 不给');
     expect(source.contains('72 + 16 + MediaQuery.of(context).padding.bottom'), isTrue,
         reason: '底部要留出底栏 + 16');
     expect(source.contains("code == 'permission'"), isTrue);

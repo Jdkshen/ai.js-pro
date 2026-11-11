@@ -502,27 +502,56 @@ class _CatalogPageState extends State<CatalogPage> {
       !downloading.containsKey(package(item)) &&
       manifestOf(item) != null &&
       // task-145：已装且已是最新 ⇒ 不给「下载安装/更新」按钮（避免「都最新版还要更新」✗）
-      (installed(item) != true || pluginHasUpdate(item)) &&
+      // task-149：已装（含原生 detail 判定为已装）且无可靠更新 ⇒ 不给按钮 ✗
+      // task-150：state=install ⇒ 未安装可下载；state=update ⇒ 可更新；其它 ⇒ 不给按钮
+      (pluginManifestState(item) == 'install' ||
+          pluginManifestState(item) == 'update' ||
+          (!pluginLooksInstalled(item) && pluginHasUpdate(item)) ||
+          (!pluginLooksInstalled(item) &&
+              manifestOf(item)!['actionable'] == true) ||
+          pluginHasUpdate(item)) &&
       (text(manifestOf(item)!, 'file').isNotEmpty ||
           manifestOf(item)!['actionable'] == true);
 
   /// task-145：只有**可靠地**判定「清单比本机新」才算可更新（≥ 而非 > 的语义：
   /// 本机 code ≥ 清单 code ⇒ 已是最新，不给更新按钮）。任一侧缺 code ⇒ 不作判定（不猜）。
+  /// task-150：**读结构化字段**（`detail` 只用于显示，不参与判定 ✗）。
+  /// 清单每条带 `state`：`install` = 未安装（可下载安装）/ `update` = 已装可更新 / 其它（如 upToDate）= 已装已最新。
+  String pluginManifestState(Map item) => text(manifestOf(item) ?? const {}, 'state');
+
+  bool pluginLooksInstalled(Map item) {
+    if (installed(item) == true) return true;
+    final state = pluginManifestState(item);
+    if (state == 'install') return false; // 结构化判定：未安装
+    if (state == 'update') return true; // 已装（只是有更新）
+    if (state == 'upToDate' || state == 'uptodate') return true;
+    return false; // 没有结构信息就不猜
+  }
+
   bool pluginHasUpdate(Map item) {
     final manifest = manifestOf(item);
-    if (manifest == null || installed(item) != true) return false;
+    if (manifest == null) return false;
+    // 结构化 state 优先（原生 PluginUpdatePlanner 的判定，我们不覆盖）
+    final state = text(manifest, 'state');
+    if (state == 'update') return true;
+    if (state == 'install' || state == 'upToDate' || state == 'uptodate') {
+      return false;
+    }
+    if (installed(item) != true) return false;
     final remote = manifest['versionCode'];
     final local = item['versionCode'];
     if (remote is! num || local is! num || local <= 0) return false;
-    // 原生若已给出判定/文案，以它为准（我们不覆盖 W2 的 PluginUpdatePlanner）
-    if (text(manifest, 'detail').contains('已是最新')) return false;
-    return remote > local;
+    return remote > local; // 兜底：两侧都有 code 才比
   }
 
   /// 已装且能可靠判断「已是最新」时，给一句明确文案（≥ ⇒ 最新）。
   bool pluginUpToDate(Map item) {
     final manifest = manifestOf(item);
-    if (manifest == null || installed(item) != true) return false;
+    if (manifest == null) return false;
+    final state = text(manifest, 'state');
+    if (state == 'upToDate' || state == 'uptodate') return true;
+    if (state == 'install' || state == 'update') return false;
+    if (installed(item) != true) return false;
     final remote = manifest['versionCode'];
     final local = item['versionCode'];
     if (remote is! num || local is! num || local <= 0) return false;
@@ -1879,7 +1908,8 @@ class _CatalogPageState extends State<CatalogPage> {
                                             mainAxisSpacing: 12,
                                             crossAxisSpacing: 12,
                                             // task-147：固定卡片高度（不再用比例 ⇒ 同一行两张卡片等高、不被内容撑破 ✗）
-                                            mainAxisExtent: 224),
+                                            // task-149：按**最坏组合**（图标+名称2行+版本+包名+状态行+按钮）给足，避免底部被切 ✗
+                                            mainAxisExtent: 264),
                                     delegate: SliverChildBuilderDelegate(
                                         (_, index) => pluginCard(
                                             visible[index], 96),
