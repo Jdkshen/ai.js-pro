@@ -48,5 +48,14 @@ check('audit 默认 exit 0（分诊而非门禁）', r4.code === 0, 'code=' + r4
 const r5 = run(['--audit', '--dir', join(dir, 'lib'), '--strict']);
 check('audit --strict 非零退出', r5.code === 1, 'code=' + r5.code);
 
+
+// 6) 白名单过期检查：不再命中任何色值的豁免会被报出（防豁免只增不减）
+const allowPath = join(dir, 'allow.json');
+writeFileSync(allowPath, JSON.stringify([{ file: 'a.dart', hex: '123456', reason: 'test' }]));
+const r6 = run(['--audit', '--dir', join(dir, 'lib'), '--allow', allowPath]);
+check('audit 报出失效白名单条目', /已失效/.test(r6.out) && /123456/.test(r6.out), r6.out.trim().slice(0, 200));
+const r7 = run(['--audit', '--dir', join(dir, 'lib'), '--allow', allowPath, '--strict']);
+check('失效白名单不导致 --strict 失败（只警告）', r7.code === 1 ? /低于 3:1/.test(r7.out) : true, 'code=' + r7.code);
+
 console.log(`\nui-contrast: ${pass} passed, ${fail} failed`);
 process.exit(fail > 0 ? 1 : 0);

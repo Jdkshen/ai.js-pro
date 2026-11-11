@@ -135,6 +135,14 @@ async function runAudit() {
   const bad = allBad.filter((r) => !isAllowed(r));
   const exempt = allBad.length - bad.length;
   if (exempt > 0) console.log('（白名单豁免 ' + exempt + ' 项：见 ' + allowPath + '）');
+  // 白名单**过期检查**：某条豁免已不再命中任何色值 ⇒ 说明源码变了（修好了/移走了）⇒ 该删掉，
+  // 否则豁免会只增不减、慢慢把门禁掏空。只警告不失败（删白名单是人工判断）。
+  const staleAllow = allow.filter((a) => !allBad.some((r) => r.file === a.file &&
+      (String(a.hex) === '*' || String(a.hex).toLowerCase() === r.hex.toLowerCase())));
+  if (staleAllow.length > 0) {
+    console.log('\n=== ⚠ 白名单里有 ' + staleAllow.length + ' 条已失效（该删了） ===');
+    for (const a of staleAllow) console.log('  ' + a.file + '  hex=' + a.hex + '  （当初理由：' + String(a.reason || '').slice(0, 40) + '…）');
+  }
   const warn = rows.filter((r) => !(r.light < 3 || r.dark < 3) && (r.light < 4.5 || r.dark < 4.5));
   console.log(`已扫描 ${files.length} 个 dart 文件、${rows.length} 个不透明硬编码色`);
   console.log(`\n=== 低于 3:1（确定不达标，需处理）: ${bad.length} ===`);
