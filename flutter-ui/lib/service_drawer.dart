@@ -459,13 +459,17 @@ class _ServiceDrawerState extends State<ServiceDrawer>
               fontSize: 14,
               fontWeight: FontWeight.w500,
               color:
-                  Theme.of(context).colorScheme.onSurface.withOpacity(.55))));
+                  Theme.of(context).colorScheme.onSurface.withValues(alpha: .55))));
 
   Widget link(IconData icon, String title, VoidCallback action) => ListTile(
       dense: true,
       minVerticalPadding: 8,
       leading: Icon(icon, size: 22),
-      title: Text(title, style: const TextStyle(fontSize: 17)),
+      // task-152：标题单行 + ellipsis（避免换行不整齐 ✗）
+      title: Text(title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 17)),
       onTap: action);
 
   Widget groupTile(
@@ -478,10 +482,16 @@ class _ServiceDrawerState extends State<ServiceDrawer>
           dense: true,
           minVerticalPadding: 5,
           leading: Icon(icon, size: 22),
-          title: Text(title, style: const TextStyle(fontSize: 17)),
+          title: Text(title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 17)),
           subtitle: subtitle == null
               ? null
-              : Text(subtitle, style: const TextStyle(fontSize: 14)),
+              : Text(subtitle,
+                  maxLines: 2, // task-152：副标题最多两行，超出省略
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14)),
           trailing: Icon(expanded ? Icons.expand_less : Icons.expand_more),
           onTap: onTap);
 
@@ -516,8 +526,14 @@ class _ServiceDrawerState extends State<ServiceDrawer>
         dense: true,
         minVerticalPadding: 5,
         leading: Icon(icon, size: 22),
-        title: Text(label, style: const TextStyle(fontSize: 17)),
-        subtitle: Text(status, style: const TextStyle(fontSize: 14)),
+        title: Text(label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 17)),
+        subtitle: Text(status,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 14)),
         trailing: known
             ? Semantics(
                 label: '$label开关',
@@ -551,9 +567,9 @@ class _ServiceDrawerState extends State<ServiceDrawer>
     final client = computerClientStateLabel(debugClientKnown
         ? (debugClientState ?? ComputerClientState.unknown)
         : ComputerClientState.unknown);
-    final protocol = debugProtocol;
-    return '服务器$server · 电脑$client'
-        '${protocol == null ? '' : ' · ${computerProtocolDescription(protocol)}'}';
+    // task-152：抽屉副标题只留**短状态**（原来把协议描述也拼进来 ⇒ 真机三行 ✗）；
+    // 协议/端口这些细节在展开后的「允许远程调试」里已经显示 ✓。
+    return '服务器$server · 电脑$client';
   }
 
   @override
@@ -573,7 +589,9 @@ class _ServiceDrawerState extends State<ServiceDrawer>
             ? const Color(0xff252c2e)
             : const Color(0xfff4f8f8),
         child: SafeArea(
-            child: ListView(padding: EdgeInsets.zero, children: [
+            // task-152：底部留白（原来最后一项「设置」被抽屉下边缘切掉 ✗）
+            child: ListView(
+                padding: const EdgeInsets.only(bottom: 28), children: [
           Container(
               padding: const EdgeInsets.fromLTRB(20, 28, 20, 22),
               decoration: const BoxDecoration(
@@ -722,7 +740,7 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                           color: Theme.of(context)
                               .colorScheme
                               .onSurface
-                              .withOpacity(.55)))),
+                              .withValues(alpha: .55)))),
             ListTile(
                 dense: true,
                 minVerticalPadding: 5,

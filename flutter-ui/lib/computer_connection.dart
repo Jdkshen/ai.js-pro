@@ -352,11 +352,12 @@ String? computerConnectionDetail(Map<String, dynamic>? state) {
   if (state == null) return null;
   final parts = <String>[];
   final protocol = computerProtocolTypeOf(state);
-  if (protocol != null) parts.add('协议 $protocol');
+  // task-152：带上 label（原来「协议 X · 发现 Y」是裸小字、没有说明 ✗）
+  if (protocol != null) parts.add('协议类型 $protocol');
   final discovery = computerDiscoveryMethodsOf(state);
-  if (discovery.isNotEmpty) parts.add('发现 ${discovery.join(' / ')}');
+  if (discovery.isNotEmpty) parts.add('发现方式 ${discovery.join(' / ')}');
   final version = computerPluginVersionText(state);
-  if (version != null) parts.add('插件 $version');
+  if (version != null) parts.add('插件版本 $version');
   return parts.isEmpty ? null : parts.join(' · ');
 }
 
@@ -678,7 +679,6 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
       final result = await LocalBridge.call(
           'computerPluginSet', {'mode': 1, 'enabled': false});
       if (result is! Map) throw StateError('断开结果暂时不可用，请刷新重试');
-      final value = Map<String, dynamic>.from(result);
       if (mounted)
         setState(() {
           awaitingConnection = false;
@@ -808,7 +808,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
   Widget pluginBlock() {
     final muted = TextStyle(
         fontSize: 12,
-        color: Theme.of(context).colorScheme.onSurface.withOpacity(.6));
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .6));
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
         Icon(
@@ -818,7 +818,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
             size: 18,
             color: connected
                 ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.onSurface.withOpacity(.6)),
+                : Theme.of(context).colorScheme.onSurface.withValues(alpha: .6)),
         const SizedBox(width: 8),
         Expanded(
             child: Text(pluginStatus,
@@ -863,7 +863,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
             size: 18,
             color: success
                 ? Theme.of(context).colorScheme.primary
-                : Theme.of(context).colorScheme.onSurface.withOpacity(.6)),
+                : Theme.of(context).colorScheme.onSurface.withValues(alpha: .6)),
         const SizedBox(width: 8),
         Expanded(
             child: Text(text,
@@ -884,7 +884,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                         color: Theme.of(context)
                             .colorScheme
                             .onSurface
-                            .withOpacity(.55)))),
+                            .withValues(alpha: .55)))),
             Expanded(
                 child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -900,7 +900,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
                             color: Theme.of(context)
                                 .colorScheme
                                 .onSurface
-                                .withOpacity(.55))),
+                                .withValues(alpha: .55))),
                 ])),
           ]));
 
@@ -932,7 +932,7 @@ class _ComputerPluginSheetState extends State<ComputerPluginSheet>
         <String>[];
     final muted = TextStyle(
         fontSize: 13,
-        color: Theme.of(context).colorScheme.onSurface.withOpacity(.65));
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .65));
     final serverStatus = error != null
         ? '服务器状态暂时不可用，请刷新重试'
         : state == null

@@ -497,7 +497,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
       BuildContext context, String title, String hint, String address) {
     final muted = TextStyle(
         fontSize: 12,
-        color: Theme.of(context).colorScheme.onSurface.withOpacity(.6));
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .6));
     final available = address.isNotEmpty && !address.startsWith('<');
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(title,
@@ -545,7 +545,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
     final localConfig = configFor(localUrl);
     final muted = TextStyle(
         fontSize: 12,
-        color: Theme.of(context).colorScheme.onSurface.withOpacity(.6));
+        color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .6));
     return GlassSurface(
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
@@ -614,7 +614,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
               color:
-                  Theme.of(context).colorScheme.surfaceVariant.withOpacity(.4),
+                  Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: .4),
               borderRadius: BorderRadius.circular(8)),
           child: SelectableText(config,
               style: const TextStyle(
@@ -710,7 +710,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                         color: Theme.of(context)
                             .colorScheme
                             .onSurface
-                            .withOpacity(.6))),
+                            .withValues(alpha: .6))),
                 Padding(
                     padding: const EdgeInsets.only(top: 8, bottom: 10),
                     child: Row(
@@ -721,7 +721,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                               color: Theme.of(context)
                                   .colorScheme
                                   .onSurface
-                                  .withOpacity(.6)),
+                                  .withValues(alpha: .6)),
                           const SizedBox(width: 6),
                           Expanded(
                               child: Text('无需访问令牌。电脑使用局域网地址，USB 连接可使用本机地址。',
@@ -731,7 +731,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                                       color: Theme.of(context)
                                           .colorScheme
                                           .onSurface
-                                          .withOpacity(.6))))
+                                          .withValues(alpha: .6))))
                         ])),
                 // 两个地址分别说明用途：局域网给同一 WiFi 下的电脑，本机配合 USB 转发。
                 // 心跳过期但进程仍在时保留地址，同时由上方状态明确标注未确认。
@@ -749,7 +749,7 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                                 color: Theme.of(context)
                                     .colorScheme
                                     .onSurface
-                                    .withOpacity(.6)))),
+                                    .withValues(alpha: .6)))),
                   const SizedBox(height: 10),
                   _address(
                       context,
@@ -817,13 +817,15 @@ class _DevicePageState extends State<DevicePage> with WidgetsBindingObserver {
                         if (computerDetail != null)
                           Padding(
                               padding: const EdgeInsets.only(top: 2),
+                              // task-152：统一成副标题样式（原 11 号裸小字 ✗）：与状态行同级、最多两行省略
                               child: Text(computerDetail,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
-                                      fontSize: 11,
+                                      fontSize: 13,
                                       color: Theme.of(context)
                                           .colorScheme
-                                          .onSurface
-                                          .withOpacity(.6)))),
+                                          .onSurfaceVariant))),
                       ]),
                   trailing: computerLoading
                       ? const SizedBox(

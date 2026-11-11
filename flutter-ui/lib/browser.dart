@@ -1085,6 +1085,8 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                         leading: const Icon(Icons.android_rounded),
                         title: const Text('项目配置与打包'),
                         onTap: () => Navigator.pop(sheet, 'project')),
+                  // R3-1：项目组 / 文件组 分隔
+                  const Divider(height: 1),
                   if (!widget.readOnly) ...[
                     ListTile(
                         leading: const Icon(Icons.copy_rounded),
@@ -1104,10 +1106,6 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                             const Icon(Icons.drive_file_rename_outline_rounded),
                         title: const Text('重命名'),
                         onTap: () => Navigator.pop(sheet, 'rename')),
-                    ListTile(
-                        leading: const Icon(Icons.delete_outline_rounded),
-                        title: const Text('删除'),
-                        onTap: () => Navigator.pop(sheet, 'delete')),
                   ],
                   if (!widget.readOnly)
                     ListTile(
@@ -1163,6 +1161,8 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                           title: const Text('重置所有示例'),
                           onTap: () => Navigator.pop(sheet, 'sampleResetAll')),
                   ],
+                  // R3-1：详情组分隔
+                  const Divider(height: 1),
                   if (!widget.readOnly) ...[
                     ListTile(
                         leading: const Icon(Icons.link_rounded),
@@ -1173,6 +1173,19 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                         title: const Text('文件详情'),
                         onTap: () => Navigator.pop(sheet, 'details')),
                   ],
+                  // R3-1：危险操作单独一组、放最后、危险色（二次确认在动作处理里）
+                  if (!widget.readOnly) ...[
+                    const Divider(height: 1),
+                    ListTile(
+                        leading: Icon(Icons.delete_outline_rounded,
+                            color: Theme.of(context).colorScheme.error),
+                        title: Text('删除',
+                            style: TextStyle(
+                                color: Theme.of(context).colorScheme.error)),
+                        onTap: () => Navigator.pop(sheet, 'delete')),
+                  ],
+                  // R3-2：底部留白（长菜单不被系统栏压住）
+                  const SizedBox(height: 12),
                 ])))));
     if (!mounted || action == null) return;
     if (action == 'open') {
