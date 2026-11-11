@@ -77,6 +77,17 @@ void main() {
         reason: 'notes 必须保留换行并支持展开');
     expect(source.contains("ValueKey('plugin-detail-source')"), isTrue);
     expect(source.contains("'清单来源：' + manifestSourceLabel"), isTrue);
+    // task-142：2 列卡片网格 + 真实图标（清单 iconPath 优先，缺失走占位）
+    expect(source.contains('SliverGrid('), isTrue, reason: '插件页要是卡片网格');
+    expect(source.contains('SliverGridDelegateWithMaxCrossAxisExtent('), isTrue);
+    expect(source.contains('maxCrossAxisExtent: 190'), isTrue);
+    expect(source.contains("manifestOf(item)?['iconPath']"), isTrue,
+        reason: '必须消费清单的 iconPath');
+    expect(source.contains('Image.file(File(iconPath)'), isTrue);
+    expect(source.contains('errorBuilder: (_, __, ___) => fallback()'), isTrue,
+        reason: '图标拿不到要走占位');
+    expect(source.contains("ValueKey('plugin-card-error')"), isTrue);
+    expect(source.contains('LinearProgressIndicator('), isTrue);
     expect(source.contains('withOpacity('), isFalse,
         reason: '5 条 withOpacity 必须清成 withValues(alpha:)');
     expect(source.contains('Android 不允许静默安装'), isTrue);
@@ -85,6 +96,10 @@ void main() {
     expect(source.contains('要公网下载请在「设置 → 更新源」'), isTrue);
     expect(source.contains("LocalBridge.call('updateSource')"), isTrue,
         reason: '源必须复用既有 updateSource 桥，不另造');
+    // task-143：兜底超时 25s（原生预算 ~18–20s ⇒ 不抢先）；有原生 timeoutMs 就按它 + 5s
+    expect(source.contains('Duration(seconds: 25)'), isTrue);
+    expect(source.contains('pluginCatalogTimeout'), isTrue);
+    expect(source.contains("data['timeoutMs']"), isTrue);
     expect(source.contains("throw StateError('清单读取超时（桥未响应）')"), isTrue,
         reason: '桥不响应必须落到可见降级，不能永远停在「加载中」');
     expect(source.contains('插件目录不可用：'), isTrue);

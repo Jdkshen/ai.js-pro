@@ -1,22 +1,23 @@
 package com.jdkshen.aijspro.flutterpoc
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
 /**
- * task-131 batch B 钉子：插件桥**两处登记**（task-100 的静默失败根因）+ 失败不静默 + 原因码同源。
- *
- * 说明：本测试是源码级（不需要 Android 运行时），路径相对 apps/app 解析。
+ * task-131 batch B 钉子：插件桥两处登记 + 失败不静默 + 原因码 + 零配置回退链 + 图标字段。
+ * 纯源码级（不需要 Android 运行时），路径相对 apps/app 解析。
  */
 class PluginBridgeRoutingPinTest {
+    private val bridgePath = "src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PluginBridge.java"
+    private val methods = listOf("pluginCatalog", "pluginInstall", "pluginInstallStatus", "pluginUninstall")
+
     private fun read(relative: String): String {
         val file = File(relative)
         assertTrue("找不到 " + file.absolutePath, file.isFile)
         return file.readText()
     }
-
-    private val methods = listOf("pluginCatalog", "pluginInstall", "pluginInstallStatus", "pluginUninstall")
 
     @Test fun bothRegistrationSitesListEveryMethod() {
         val bridge = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PocBridge.java")
@@ -29,38 +30,85 @@ class PluginBridgeRoutingPinTest {
     }
 
     @Test fun failuresAreLoggedNotSwallowed() {
-        val pluginBridge = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PluginBridge.java")
+        val pluginBridge = read(bridgePath)
         assertTrue("必须 Log.w 后再抛", pluginBridge.contains("Log.w(TAG, method + \" 失败: \""))
         assertTrue("下载/校验失败也要有日志", pluginBridge.contains("pluginInstall 校验不符"))
-        assertTrue("校验不符必须不安装（先返回失败分支）",
+        assertTrue("校验不符必须不安装（失败分支在 installApk 之前）",
             pluginBridge.indexOf("finish(id, \"failed\", PluginFailureReason.CHECKSUM.getCode()") < pluginBridge.indexOf("installApk(activity, target)"))
         assertTrue("pending 不可下载", pluginBridge.contains("清单标 pending：该插件 APK 尚未构建，暂不可下载"))
         assertTrue("必须复用强制校验", pluginBridge.contains("PluginVerifier.verify("))
     }
 
     @Test fun reasonCodesMatchTheAgreedFive() {
-        val pluginBridge = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PluginBridge.java")
+        val pluginBridge = read(bridgePath)
         for (code in listOf("NETWORK", "CHECKSUM", "PACKAGE", "PERMISSION", "MISSING")) {
             assertTrue("必须用 PluginFailureReason." + code, pluginBridge.contains("PluginFailureReason." + code))
         }
+        val reasons = read("src/main/java/com/jdkshen/aijspro/network/PluginPlanReasons.kt")
+        assertTrue("要有 source 码", reasons.contains("SOURCE(") && reasons.contains("\"source\""))
+        assertTrue("要有 manifest 码", reasons.contains("MANIFEST(") && reasons.contains("\"manifest\""))
+        assertTrue("源问题抛点带 source: 标记", pluginBridge.contains("source:请求失败 HTTP ")
+            && pluginBridge.contains("source:下载失败 HTTP "))
+        assertTrue("清单问题抛点带 manifest: 标记", pluginBridge.contains("manifest:清单为空"))
     }
 
-    /** dev-1494 真机 bug：pluginCatalog 的网络读取原来跑在**调用线程（UI 主线程）** ⇒ NetworkOnMainThreadException。
-     *  这条钉住「同步桥 + 后台执行 + join 等结果」的结构，防止有人把 fetch 挪回同步路径。 */
+    /** 零配置回退链：自建源优先；内置顺序 release -> raw(加速) -> raw(直连)；失败才降级。 */
+    @Test fun builtinFallbackChainIsOrderedAndEndsAtRaw() {
+        val downloads = read("src/main/java/com/jdkshen/aijspro/network/PluginDownloads.java")
+        val custom = downloads.indexOf("\"custom\"")
+        val release = downloads.indexOf("\"builtin-release\"")
+        val raw = downloads.indexOf("\"builtin-raw\"")
+        val direct = downloads.indexOf("\"builtin-direct\"")
+        assertTrue("四个来源标签都要在", custom > 0 && release > 0 && raw > 0 && direct > 0)
+        assertTrue("自建源必须优先", custom < release)
+        assertTrue("顺序固定 release -> raw -> direct", release < raw && raw < direct)
+        assertTrue("raw 回退指向 plugin-release 分支",
+            downloads.contains("raw.githubusercontent.com/Jdkshen/ai.js-pro/plugin-release/plugin-release/"))
+        val pluginBridge = read(bridgePath)
+        assertTrue("清单走候选链", pluginBridge.contains("pluginUrlCandidates(activity, CATALOG_FILE)"))
+        assertTrue("APK 走同一条候选链", pluginBridge.contains("pluginUrlCandidates(activity, entry.getFile())"))
+        assertTrue("逐条降级留日志", pluginBridge.contains("pluginCatalog 源失败 source=")
+            && pluginBridge.contains("pluginInstall 源失败 source="))
+    }
+
+    /** 同步桥 + 后台执行 + join 等结果（防 NetworkOnMainThreadException 回归）。 */
     @Test fun catalogFetchesOffTheCallerThread() {
-        val pluginBridge = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PluginBridge.java")
+        val pluginBridge = read(bridgePath)
         val catalog = pluginBridge.substringAfter("private static JSONObject catalog(final Activity activity)")
-            .substringBefore("/** 后台线程体")
+            .substringBefore("private static JSONObject catalogOnWorker")
         assertTrue("catalog 必须在后台线程跑", catalog.contains("new Thread("))
-        assertTrue("catalog 必须同步等结果（Dart 侧是同步桥）", catalog.contains("worker.join(CATALOG_TIMEOUT_MS)"))
-        assertTrue("必须有超时兜底", pluginBridge.contains("CATALOG_TIMEOUT_MS = 6000L"))
-        assertTrue("超时要给可解释原因", catalog.contains("network:插件清单拉取后台超时"))
-        assertTrue("网络读取必须只在 catalogOnWorker 里", !catalog.contains("httpGet(") && pluginBridge.contains("private static JSONObject catalogOnWorker"))
-        assertTrue("失败要带异常类型", catalog.contains("classify(error)") && catalog.contains("error.getClass().getSimpleName()"))
+        assertTrue("catalog 必须同步等结果（Dart 是同步桥）", catalog.contains("worker.join(CATALOG_TIMEOUT_MS)"))
+        assertTrue("必须有总兜底超时（每候选各自预算，总预算放宽）",
+            pluginBridge.contains("CATALOG_TIMEOUT_MS = 20000L"))
+        assertTrue("每个候选各自约 6s 预算", pluginBridge.contains("CANDIDATE_CONNECT_TIMEOUT_MS = 3000")
+            && pluginBridge.contains("CANDIDATE_READ_TIMEOUT_MS = 3000")
+            && pluginBridge.contains("httpGet(url, source, CANDIDATE_CONNECT_TIMEOUT_MS, CANDIDATE_READ_TIMEOUT_MS)"))
+        assertTrue("失败原因要能看出试了几条/最后一条/耗时",
+            pluginBridge.contains("试了 ") && pluginBridge.contains("条源，耗时 ") && pluginBridge.contains("最后一条="))
+        assertTrue("catalog 本身不得直接 httpGet（网络必须在后台线程体里）", !catalog.contains("httpGet("))
+        assertTrue("后台线程体与单源拉取方法都要在",
+            pluginBridge.contains("private static JSONObject catalogOnWorker")
+                && pluginBridge.contains("catalogFromSource("))
+        assertTrue("失败要带异常类型", catalog.contains("classify(error)")
+            && catalog.contains("getSimpleName()")
+            && catalog.contains("prefix.isEmpty()"))
+    }
+
+    /** 图标字段（Lead：已装给本地 PNG 路径、未装留空、不联网、失败不影响清单）。 */
+    @Test fun catalogProvidesLocalIconPathsWithoutNetwork() {
+        val pluginBridge = read(bridgePath)
+        assertTrue("清单里要调图标填充", pluginBridge.contains("applyPluginIcon(activity, row, entry)"))
+        assertTrue("图标要落到 app 缓存目录", pluginBridge.contains("getCacheDir(), ICON_DIR"))
+        assertEquals("缓存目录名固定", true, pluginBridge.contains("ICON_DIR = \"plugin-icons\""))
+        assertTrue("文件名带版本 ⇒ 版本变自然重画", pluginBridge.contains("-v\" + version + \".png\""))
+        assertTrue("未安装留空", pluginBridge.contains("row.put(\"iconPath\", \"\")"))
+        assertTrue("可选内联", pluginBridge.contains("iconBase64"))
+        assertTrue("失败只记日志", pluginBridge.contains("pluginCatalog 图标失败 pkg="))
+        assertTrue("不得联网取图标", !pluginBridge.contains("httpGet(iconUrl"))
     }
 
     @Test fun uninstallIsDeliveredAsDisable() {
-        val pluginBridge = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PluginBridge.java")
+        val pluginBridge = read(bridgePath)
         assertTrue("卸载按停用交付", pluginBridge.contains("本轮没有卸载桥"))
         assertTrue("停用态要有明确字段", pluginBridge.contains("data.put(\"disabled\", true)"))
     }

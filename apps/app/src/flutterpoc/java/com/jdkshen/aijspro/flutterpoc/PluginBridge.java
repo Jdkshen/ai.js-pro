@@ -40,9 +40,16 @@ final class PluginBridge {
     private static final int CONNECT_TIMEOUT_MS = 8000;
     private static final int READ_TIMEOUT_MS = 15000;
     private static final int PROGRESS_STEP_BYTES = 64 * 1024;
+    /** 插件图标：缩到 <=96px 的 PNG 落 app 缓存（几 KB），清单里给绝对路径 + 可选内联 base64。 */
+    private static final int ICON_SIZE_PX = 96;
+    private static final String ICON_DIR = "plugin-icons";
+    private static final long ICON_INLINE_MAX_BYTES = 12 * 1024L;
     /** 清单是**同步桥**（Dart 侧等返回）⇒ 后台拉取后最多等这么久；刻意短于 Dart 的 8s 超时，
      *  好让「可解释的失败原因」（带异常类型）先于 Dart 的泛化超时出现。 */
-    private static final long CATALOG_TIMEOUT_MS = 6000L;
+    private static final long CATALOG_TIMEOUT_MS = 20000L;
+    /** 每个候选源各自的预算（connect+read ≈6s）：候选链 3 条 ⇒ 总预算 20s 足够，弱网也不再被总预算一刀切。 */
+    private static final int CANDIDATE_CONNECT_TIMEOUT_MS = 3000;
+    private static final int CANDIDATE_READ_TIMEOUT_MS = 3000;
 
     private PluginBridge() {
     }
@@ -86,13 +93,19 @@ final class PluginBridge {
         final java.util.List<PluginDownloads.Candidate> candidates =
                 PluginDownloads.pluginUrlCandidates(activity, CATALOG_FILE);
         final String url = candidates.get(0).url;
+        final long startedAt = System.currentTimeMillis();
+        final java.util.concurrent.atomic.AtomicInteger tried = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicReference<String> lastSource =
+                new java.util.concurrent.atomic.AtomicReference<>("(none)");
+        final java.util.concurrent.atomic.AtomicReference<String> lastUrl =
+                new java.util.concurrent.atomic.AtomicReference<>(url);
         final java.util.concurrent.atomic.AtomicReference<Object> holder =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Thread worker = new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    holder.set(catalogOnWorker(activity, candidates));
+                    holder.set(catalogOnWorker(activity, candidates, tried, lastSource, lastUrl));
                 } catch (Throwable error) {
                     holder.set(error);
                 }
@@ -100,8 +113,11 @@ final class PluginBridge {
         }, "plugin-catalog");
         worker.start();
         worker.join(CATALOG_TIMEOUT_MS);
+        long elapsedMs = System.currentTimeMillis() - startedAt;
         if (worker.isAlive()) {
-            throw new IllegalStateException("source:插件清单拉取后台超时（" + CATALOG_TIMEOUT_MS + "ms）url=" + url);
+            throw new IllegalStateException("source:插件清单拉取超时（试了 " + tried.get() + "/"
+                    + candidates.size() + " 条源，耗时 " + elapsedMs + "ms，最后一条="
+                    + lastSource.get() + " " + lastUrl.get() + "）");
         }
         Object value = holder.get();
         if (value instanceof JSONObject) {
@@ -122,20 +138,36 @@ final class PluginBridge {
 
     /** 后台线程体：网络读取 + 解析 + 四态（**不得触碰 UI**）。 */
     private static JSONObject catalogOnWorker(Activity activity,
-            java.util.List<PluginDownloads.Candidate> candidates) throws Exception {
+            java.util.List<PluginDownloads.Candidate> candidates,
+            java.util.concurrent.atomic.AtomicInteger tried,
+            java.util.concurrent.atomic.AtomicReference<String> lastSource,
+            java.util.concurrent.atomic.AtomicReference<String> lastUrl) throws Exception {
         Exception lastError = null;
+        long startedAt = System.currentTimeMillis();
         for (PluginDownloads.Candidate candidate : candidates) {
+            tried.incrementAndGet();
+            lastSource.set(candidate.source);
+            lastUrl.set(candidate.url);
+            long attemptStart = System.currentTimeMillis();
             try {
-                return catalogFromSource(activity, candidate.url, candidate.source);
+                JSONObject result = catalogFromSource(activity, candidate.url, candidate.source);
+                Log.i(TAG, "pluginCatalog 源命中 source=" + candidate.source
+                        + " 耗时=" + (System.currentTimeMillis() - attemptStart) + "ms");
+                return result;
             } catch (Exception error) {
                 lastError = error;
                 Log.w(TAG, "pluginCatalog 源失败 source=" + candidate.source + " url=" + candidate.url
+                        + " 耗时=" + (System.currentTimeMillis() - attemptStart) + "ms"
                         + " : " + error.getClass().getSimpleName() + ": " + error.getMessage());
             }
         }
-        throw lastError == null
-                ? new IllegalStateException("source:没有可用的插件源（候选链为空）")
-                : lastError;
+        long elapsed = System.currentTimeMillis() - startedAt;
+        if (lastError == null) {
+            throw new IllegalStateException("source:没有可用的插件源（候选链为空）");
+        }
+        throw new IllegalStateException("source:插件清单拉取失败（试了 " + tried.get() + "/" + candidates.size()
+                + " 条源，耗时 " + elapsed + "ms，最后一条=" + lastSource.get() + " " + lastUrl.get()
+                + "）：" + lastError.getClass().getSimpleName() + ": " + lastError.getMessage());
     }
 
     private static JSONObject catalogFromSource(Activity activity, String url, String source) throws Exception {
@@ -177,6 +209,9 @@ final class PluginBridge {
             row.put("state", decision.getReason().getCode());
             row.put("detail", decision.getDetail());
             row.put("actionable", decision.getActionable());
+            // task-131：图标的唯一原生缺口 —— 已装插件才有本地图标；未装留空（Flutter 用占位图），
+            // 取不到只记日志，绝不让整份清单失败。
+            applyPluginIcon(activity, row, entry);
             plugins.put(row);
         }
         JSONObject data = new JSONObject();
@@ -275,6 +310,104 @@ final class PluginBridge {
     /** 自建源优先（PluginDownloads.pluginUrl 的逻辑）；内置源前缀固定是这个加速前缀 ⇒ 据此标注来源。 */
     private static String sourceOf(String url) {
         return url != null && url.startsWith("https://gh-proxy.com/") ? "builtin" : "custom";
+    }
+
+    /**
+     * 给清单条目补 iconPath（绝对路径）与可选 iconBase64。
+     *
+     * <p>口径（Lead）：① 已装 ⇒ PackageManager.getApplicationIcon 画成 <=96px PNG 落到
+     * cache/plugin-icons/<pkg>-v<versionCode>.png（文件名带版本 ⇒ 版本变自然重画、同版幂等）；
+     * ② 未安装 ⇒ 字段空串（Flutter 用占位图，不联网）；③ 任何异常只 Log.w，清单照常返回。</p>
+     */
+    private static void applyPluginIcon(Activity activity, JSONObject row, PluginManifest.Entry entry) {
+        String packageName = entry.getPackageName();
+        try {
+            Integer version = packageVersionCode(activity, packageName);
+            if (version == null) {
+                row.put("iconPath", "");
+                return;
+            }
+            File dir = new File(activity.getCacheDir(), ICON_DIR);
+            File png = new File(dir, packageName + "-v" + version + ".png");
+            if (!png.isFile()) {
+                android.graphics.drawable.Drawable drawable =
+                        activity.getPackageManager().getApplicationIcon(packageName);
+                int width = Math.max(1, drawable.getIntrinsicWidth());
+                int height = Math.max(1, drawable.getIntrinsicHeight());
+                int side = Math.max(width, height);
+                float scale = side > ICON_SIZE_PX ? (float) ICON_SIZE_PX / (float) side : 1f;
+                int outW = Math.max(1, Math.round(width * scale));
+                int outH = Math.max(1, Math.round(height * scale));
+                android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(outW, outH,
+                        android.graphics.Bitmap.Config.ARGB_8888);
+                android.graphics.Canvas canvas = new android.graphics.Canvas(bitmap);
+                drawable.setBounds(0, 0, outW, outH);
+                drawable.draw(canvas);
+                if (!dir.isDirectory() && !dir.mkdirs()) {
+                    throw new IllegalStateException("无法创建图标缓存目录：" + dir);
+                }
+                FileOutputStream output = new FileOutputStream(png);
+                try {
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output);
+                } finally {
+                    try {
+                        output.close();
+                    } catch (Throwable ignored) {
+                    }
+                    bitmap.recycle();
+                }
+                pruneOldIcons(dir, packageName, png);
+            }
+            row.put("iconPath", png.getAbsolutePath());
+            row.put("iconBase64", png.length() > 0 && png.length() <= ICON_INLINE_MAX_BYTES
+                    ? android.util.Base64.encodeToString(readFileBytes(png), android.util.Base64.NO_WRAP)
+                    : "");
+        } catch (Throwable error) {
+            Log.w(TAG, "pluginCatalog 图标失败 pkg=" + packageName + " : " + error);
+            try {
+                row.put("iconPath", "");
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** 删掉同包旧版本图标，避免缓存里堆历史文件。 */
+    private static void pruneOldIcons(File dir, String packageName, File current) {
+        try {
+            File[] files = dir.listFiles();
+            if (files == null) {
+                return;
+            }
+            for (File file : files) {
+                if (file.equals(current)) {
+                    continue;
+                }
+                if (file.getName().startsWith(packageName + "-v") && file.getName().endsWith(".png")) {
+                    //noinspection ResultOfMethodCallIgnored
+                    file.delete();
+                }
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "pluginCatalog 清理旧图标失败 pkg=" + packageName + " : " + error);
+        }
+    }
+
+    private static byte[] readFileBytes(File file) throws Exception {
+        java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();
+        InputStream input = new java.io.FileInputStream(file);
+        try {
+            byte[] chunk = new byte[8192];
+            int read;
+            while ((read = input.read(chunk)) > 0) {
+                buffer.write(chunk, 0, read);
+            }
+        } finally {
+            try {
+                input.close();
+            } catch (Throwable ignored) {
+            }
+        }
+        return buffer.toByteArray();
     }
 
     private static JSONObject installStatus(JSONObject args) throws Exception {
@@ -456,9 +589,14 @@ final class PluginBridge {
 
     /** 回退链版本：来源标签由候选链给定（custom/builtin-release/builtin-raw/builtin-direct）。 */
     private static Fetch httpGet(String url, String source) throws Exception {
+        return httpGet(url, source, CANDIDATE_CONNECT_TIMEOUT_MS, CANDIDATE_READ_TIMEOUT_MS);
+    }
+
+    private static Fetch httpGet(String url, String source, int connectMs, int readMs) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
-        connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
-        connection.setReadTimeout(READ_TIMEOUT_MS);
+        // 每候选各自的预算（不再共用一个总预算，弱网下第一条挂住不会拖死后面的候选）。
+        connection.setConnectTimeout(connectMs);
+        connection.setReadTimeout(readMs);
         connection.setInstanceFollowRedirects(true);
         connection.setRequestProperty("Accept", "application/json");
         connection.connect();

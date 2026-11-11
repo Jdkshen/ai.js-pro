@@ -43,6 +43,10 @@ class _CatalogPageState extends State<CatalogPage> {
   // 轻量节流：源不可达时不要每次进页都等 6s（下拉刷新/重试会强制绕过）
   static const Duration pluginCatalogThrottle = Duration(seconds: 60);
   DateTime? lastPluginCatalogAt;
+  // task-143：Dart 侧**兜底**超时。原生候选链总预算 ~18–20s ⇒ 我们放到 25s，避免抢先于原生报错；
+  // 原生的可解释原因（候选数/耗时）优先 —— 它回了错我们就照原样显示。
+  // 若原生返回里带 timeoutMs，则下一轮用它 + 5s 余量。
+  Duration pluginCatalogTimeout = const Duration(seconds: 25);
   Map<String, dynamic> pluginManifest = <String, dynamic>{};
   bool pluginManifestLoaded = false;
   String? pluginManifestError;
@@ -165,7 +169,7 @@ class _CatalogPageState extends State<CatalogPage> {
       final value = await LocalBridge
           .call(pluginCatalogMethod, const {})
           // task-135：桥未响应也必须落到可见降级（否则提示永远不出现 = 静默失败）
-          .timeout(const Duration(seconds: 8),
+          .timeout(pluginCatalogTimeout,
               onTimeout: () => throw StateError('清单读取超时（桥未响应）'));
       // 真实形态：{ok:true, data:{url, plugins:[…]}}（兼容裸数组/裸 plugins）
       final envelope = value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
@@ -173,6 +177,12 @@ class _CatalogPageState extends State<CatalogPage> {
           ? Map<String, dynamic>.from(envelope['data'] as Map)
           : envelope;
       final url = data['url'];
+      // 原生若告知它的总预算，就按它 + 5s 余量，避免我们抢先（task-143）
+      final nativeTimeout = data['timeoutMs'];
+      if (nativeTimeout is num && nativeTimeout > 0) {
+        pluginCatalogTimeout =
+            Duration(milliseconds: (nativeTimeout + 5000).round());
+      }
       // task-141：清单来源标签（builtin-release / builtin-raw / custom…）——**有才显示，不猜**
       final sourceLabel = data['source'];
       final raw = data['plugins'] is List ? data['plugins'] : value;
@@ -812,6 +822,29 @@ class _CatalogPageState extends State<CatalogPage> {
             ? Icons.folder_zip_outlined
             : Icons.extension_outlined;
     Widget fallback() => Icon(symbol, color: Colors.white, size: 58);
+    // task-142：清单里的 iconPath（W2 把插件图标转 PNG 落到缓存，给绝对路径）优先
+    final iconPath = manifestOf(item)?['iconPath']?.toString() ?? '';
+    if (iconPath.isNotEmpty) {
+      return Container(
+          height: height,
+          width: double.infinity,
+          decoration: BoxDecoration(
+              gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [tint.withValues(alpha: .68), tint])),
+          child: Center(
+              child: Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(22),
+                      color: Colors.white.withValues(alpha: .91)),
+                  child: Image.file(File(iconPath),
+                      width: 58,
+                      height: 58,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => fallback()))));
+    }
     return Container(
         height: height,
         width: double.infinity,
@@ -1245,6 +1278,55 @@ class _CatalogPageState extends State<CatalogPage> {
                                       .bodySmall
                                       ?.color)),
                           const Spacer(),
+                          // task-142：下载进度（真实桥的 receivedBytes/totalBytes）
+                          if (downloading.containsKey(package(item)))
+                            Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: LinearProgressIndicator(
+                                    minHeight: 3,
+                                    value: (() {
+                                      final record = downloading[package(item)];
+                                      final total = record == null
+                                          ? null
+                                          : record['totalBytes'];
+                                      final received = record == null
+                                          ? null
+                                          : record['receivedBytes'];
+                                      if (total is! num ||
+                                          received is! num ||
+                                          total <= 0) return null;
+                                      return (received / total).clamp(0.0, 1.0);
+                                    })())),
+                          if (downloadError[package(item)] != null)
+                            Text('下载失败：' + downloadError[package(item)]!,
+                                key: const ValueKey('plugin-card-error'),
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(context).colorScheme.error)),
+                          if (canDownloadPlugin(item) || canInstallDownloaded(item))
+                            Row(children: [
+                              if (canDownloadPlugin(item))
+                                TextButton.icon(
+                                    key: const ValueKey('plugin-card-download'),
+                                    onPressed: downloading.containsKey(package(item))
+                                        ? null
+                                        : () => downloadPlugin(item),
+                                    icon: const Icon(Icons.download_outlined,
+                                        size: 16),
+                                    label: Text(downloadButtonLabel(item),
+                                        style: const TextStyle(fontSize: 12))),
+                              if (canInstallDownloaded(item))
+                                TextButton.icon(
+                                    key: const ValueKey('plugin-card-install'),
+                                    onPressed: () => installDownloaded(item),
+                                    icon: const Icon(
+                                        Icons.install_desktop_outlined,
+                                        size: 16),
+                                    label: const Text('安装',
+                                        style: TextStyle(fontSize: 12))),
+                            ]),
                           Row(children: [
                             Icon(
                                 pluginDisabled(item)
@@ -1600,13 +1682,20 @@ class _CatalogPageState extends State<CatalogPage> {
                                         ? Icons.extension_outlined
                                         : Icons.inventory_2_outlined)),
                           if (visible.isNotEmpty && widget.plugin)
-                            // 对齐 AI.js Pro MiuixPluginFragment.kt:163 —— 行式列表，
-                            // contentPadding bottom 18；原为 SliverGrid + pluginCard。
+                            // task-142：用户拍板改回 **2 列卡片网格**（窄屏 2 列、宽屏 3 列）
+                            // 对齐 Auto.js Pro 的卡片样式：圆角 + 居中图标 + 名称 + 副标题。
                             SliverPadding(
-                                padding: const EdgeInsets.only(bottom: 18),
-                                sliver: SliverList(
+                                padding: const EdgeInsets.fromLTRB(12, 4, 12, 18),
+                                sliver: SliverGrid(
+                                    gridDelegate:
+                                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                                            maxCrossAxisExtent: 190,
+                                            mainAxisSpacing: 12,
+                                            crossAxisSpacing: 12,
+                                            childAspectRatio: 0.78),
                                     delegate: SliverChildBuilderDelegate(
-                                        (_, index) => pluginRow(visible[index]),
+                                        (_, index) => pluginCard(
+                                            visible[index], 96),
                                         childCount: visible.length)))
                           else if (visible.isNotEmpty)
                             SliverPadding(
