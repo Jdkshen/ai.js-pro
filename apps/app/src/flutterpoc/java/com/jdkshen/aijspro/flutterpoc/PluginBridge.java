@@ -110,8 +110,9 @@ final class PluginBridge {
             String detail = error.getMessage() == null ? "" : (": " + error.getMessage());
             // 不用 (String, Throwable) 构造：本模块编译目标下该重载不可用（javac: Throwable 无法转换为 Exception）。
             // 把 cause 拼进消息即可满足「一眼判因」，且不改变异常类型语义。
+            String prefix = classify(error);
             throw new IllegalStateException(
-                    classify(error) + ":" + error.getClass().getSimpleName() + detail
+                    (prefix.isEmpty() ? "" : prefix + ":") + error.getClass().getSimpleName() + detail
                             + " cause=" + error.getClass().getName());
         }
         throw new IllegalStateException("network:插件清单拉取没有结果 url=" + url);
@@ -122,12 +123,12 @@ final class PluginBridge {
         Fetch fetch = httpGet(url);
         String body = fetch.body;
         if (body.trim().isEmpty()) {
-            throw new IllegalStateException("malformed:清单为空" + fetch.describe());
+            throw new IllegalStateException("manifest:清单为空" + fetch.describe());
         }
         PluginManifest.ParseResult parsed = PluginManifest.parse(body);
         if (parsed instanceof PluginManifest.ParseResult.Failure) {
             PluginManifest.ParseResult.Failure failure = (PluginManifest.ParseResult.Failure) parsed;
-            throw new IllegalStateException(failure.getReason() + ":" + failure.getMessage() + fetch.describe());
+            throw new IllegalStateException("manifest:" + failure.getReason() + "：" + failure.getMessage() + fetch.describe());
         }
         List<PluginManifest.Entry> entries = ((PluginManifest.ParseResult.Success) parsed).getEntries();
         Map<String, PluginManifest.Entry> byId = new LinkedHashMap<>();
@@ -303,7 +304,7 @@ final class PluginBridge {
         connection.connect();
         int code = connection.getResponseCode();
         if (code / 100 != 2) {
-            throw new IllegalStateException("下载失败 HTTP " + code + " url=" + url);
+            throw new IllegalStateException("source:下载失败 HTTP " + code + " url=" + url);
         }
         long total = entry.getSizeBytes() == null ? connection.getContentLength() : entry.getSizeBytes();
         InputStream input = connection.getInputStream();
@@ -369,6 +370,11 @@ final class PluginBridge {
 
     /** 失败分类（原因码就是契约里那五个）。 */
     private static String classify(Throwable error) {   // Throwable：catalog 后台线程搬回来的异常可能是 Error 子类
+        // task-131：抛点已带原因码（source:/manifest:）⇒ 这里返回空串，调用方不再重复加前缀。
+        String marked = String.valueOf(error.getMessage());
+        if (marked.startsWith("source:") || marked.startsWith("manifest:")) {
+            return "";
+        }
         if (error instanceof java.net.SocketTimeoutException || error instanceof java.net.UnknownHostException
                 || error instanceof java.net.ConnectException) {
             return PluginFailureReason.NETWORK.getCode();
@@ -411,7 +417,7 @@ final class PluginBridge {
         connection.connect();
         int code = connection.getResponseCode();
         if (code / 100 != 2) {
-            throw new IllegalStateException("拉清单失败 HTTP " + code + " url=" + url);
+            throw new IllegalStateException("source:请求失败 HTTP " + code + " url=" + url);
         }
         InputStream input = connection.getInputStream();
         java.io.ByteArrayOutputStream buffer = new java.io.ByteArrayOutputStream();

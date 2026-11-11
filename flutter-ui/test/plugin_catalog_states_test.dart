@@ -46,6 +46,23 @@ void main() {
         reason: '清单失败时不得再显示永不结束的居中转圈');
     expect(source.contains("ValueKey('plugin-manifest-retry')"), isTrue);
     expect(source.contains("ValueKey('plugin-manifest-source')"), isTrue);
+    // task-138：已下载（待安装）态 + 详情（大小/需重启/说明）+ 安装复用既有 installPlugin
+    expect(source.contains("'已下载（待安装'"), isTrue);
+    expect(source.contains("ValueKey('plugin-install-downloaded')"), isTrue);
+    expect(source.contains("LocalBridge.call('installPlugin', {"), isTrue,
+        reason: '安装必须复用既有 installPlugin 桥（交系统安装器），不新增静默安装路径');
+    // 卡片态也要有「下载/更新」与「安装已下载」入口（不只是详情里）
+    expect(source.contains("ValueKey('plugin-card-download')"), isTrue,
+        reason: '卡片上要有 下载安装/更新 按钮');
+    expect(source.contains("ValueKey('plugin-card-install')"), isTrue);
+    expect(source.contains("key: const ValueKey('plugin-card-download'),"), isTrue);
+    expect(source.contains("key: const ValueKey('plugin-card-install'),"), isTrue);
+    // 进入插件 tab 自动查清单（VS Code 式自动检查更新）
+    expect(source.contains('每次进入插件 tab 都自动查一次清单'), isTrue);
+    expect(source.contains("ValueKey('plugin-detail-size')"), isTrue);
+    expect(source.contains("ValueKey('plugin-detail-restart')"), isTrue);
+    expect(source.contains("ValueKey('plugin-detail-notes')"), isTrue);
+    expect(source.contains('Android 不允许静默安装'), isTrue);
     expect(source.contains('当前更新源：'), isTrue);
     expect(source.contains('多半是更新源不可达'), isTrue);
     expect(source.contains('要公网下载请在「设置 → 更新源」'), isTrue);

@@ -47,6 +47,8 @@ class _CatalogPageState extends State<CatalogPage> {
   bool updateSourceLoaded = false;
   final Map<String, Map<String, dynamic>> downloading = <String, Map<String, dynamic>>{};
   final Map<String, String> downloadError = <String, String>{};
+  // task-138：原生「只下载、不安装」时记录待安装产物（Android 不允许静默安装 ⇒ 安装必须交给系统安装器）
+  final Map<String, Map<String, dynamic>> downloaded = <String, Map<String, dynamic>>{};
   bool reloadWhenActive = true;
   Future<void>? pendingLoad;
   bool? pendingPlugin;
@@ -178,6 +180,41 @@ class _CatalogPageState extends State<CatalogPage> {
     }
   }
 
+  /// 是否「已下载、待安装」（原生返回下载完成但未安装时记录）。
+  bool canInstallDownloaded(Map item) {
+    final record = downloaded[package(item)];
+    final path = record == null ? '' : (record['path'] ?? '').toString();
+    return path.isNotEmpty && path.toLowerCase().endsWith('.apk');
+  }
+
+  String downloadedSizeLabel(Map item) {
+    final record = downloaded[package(item)];
+    final size = record == null ? null : record['sizeBytes'];
+    final label = sizeLabel(size);
+    return label.isEmpty ? '' : '，' + label;
+  }
+
+  /// 安装已下载的 APK：**复用既有 `installPlugin` 桥**（它本来就是「把本地 APK 交给系统安装器」）。
+  /// Android 不允许静默安装 ⇒ 这一步只能由用户确认（文案里说明白）。
+  Future<void> installDownloaded(Map item) async {
+    final record = downloaded[package(item)];
+    final path = record == null ? '' : (record['path'] ?? '').toString();
+    if (path.isEmpty || package(item).isEmpty) return;
+    try {
+      final result = await LocalBridge.call('installPlugin', {
+        'path': path,
+        'packageName': package(item),
+      });
+      if (!mounted) return;
+      if (result is Map && result['cancelled'] == true) return;
+      if (result != true) throw StateError('系统安装界面尚未确认打开');
+      await load();
+      if (mounted) notify('已打开系统安装界面（Android 不允许静默安装，需你确认）；装完可回本页刷新');
+    } catch (e) {
+      if (mounted) notify(readable(e));
+    }
+  }
+
   /// 清单里对应的条目（按包名或 id 匹配）；没有清单就返回 null ⇒ 退回今天的显示。
   Map<String, dynamic>? manifestOf(Map item) {
     if (pluginManifest.isEmpty) return null;
@@ -214,6 +251,9 @@ class _CatalogPageState extends State<CatalogPage> {
     }
     final failure = downloadError[pkg];
     if (failure != null) return '下载失败：' + failure;
+    if (canInstallDownloaded(item)) {
+      return '已下载（待安装' + downloadedSizeLabel(item) + '）';
+    }
     final manifest = manifestOf(item);
     final remote = manifest == null ? '' : text(manifest, 'version');
     final remoteCode = manifest == null ? 0 : (manifest['versionCode'] is num ? manifest['versionCode'] as num : 0);
@@ -274,6 +314,18 @@ class _CatalogPageState extends State<CatalogPage> {
         final reason = downloadReason(Map<String, dynamic>.from(result));
         setState(() => downloadError[pkg] = reason);
         notify('下载失败：' + reason);
+        return;
+      }
+      final downloadedOnly = result is Map &&
+          (result['downloaded'] == true || result['installRequired'] == true);
+      if (downloadedOnly) {
+        final record = Map<String, dynamic>.from(result);
+        if (!record.containsKey('sizeBytes') && manifest['sizeBytes'] != null) {
+          record['sizeBytes'] = manifest['sizeBytes'];
+        }
+        setState(() => downloaded[pkg] = record);
+        notify('已下载（待安装）：' + name(item) +
+            ' · 点「安装」交给系统安装器（Android 不允许静默安装）');
         return;
       }
       await load();
@@ -507,9 +559,10 @@ class _CatalogPageState extends State<CatalogPage> {
       reloadWhenActive = true;
     }
     if (widget.active && reloadWhenActive) load();
-    // 没加载过、或上次失败（桥未落地/超时）⇒ 每次进入插件 tab 都再试一次
-    if (widget.active && widget.plugin && (!pluginManifestLoaded || pluginManifestError != null)) {
+    // task-138：**每次进入插件 tab 都自动查一次清单**（VS Code 式自动检查更新）；失败也照样重试
+    if (widget.active && widget.plugin) {
       loadPluginCatalog();
+      loadUpdateSource();
     }
   }
 
@@ -832,6 +885,27 @@ class _CatalogPageState extends State<CatalogPage> {
                               ]),
                             const SizedBox(height: 8),
                             SelectableText('版本 ${versionOf(item)}'),
+                            if (manifestOf(item) != null) ...[
+                              if (sizeLabel(manifestOf(item)!['sizeBytes']).isNotEmpty)
+                                SelectableText(
+                                    '大小 ' + sizeLabel(manifestOf(item)!['sizeBytes']),
+                                    key: const ValueKey('plugin-detail-size')),
+                              SelectableText(
+                                  '安装后需重启应用：' +
+                                      (manifestOf(item)!['requiresRestart'] == true ? '是' : '否'),
+                                  key: const ValueKey('plugin-detail-restart')),
+                              if (text(manifestOf(item)!, 'notes').isNotEmpty)
+                                SelectableText(
+                                    '更新说明：' + text(manifestOf(item)!, 'notes'),
+                                    key: const ValueKey('plugin-detail-notes')),
+                            ],
+                            if (canInstallDownloaded(item))
+                              TextButton.icon(
+                                  key: const ValueKey('plugin-install-downloaded'),
+                                  onPressed: () => installDownloaded(item),
+                                  icon: const Icon(Icons.install_desktop_outlined,
+                                      size: 18),
+                                  label: const Text('安装已下载（交给系统安装器）')),
                             const SizedBox(height: 8),
                             SelectableText(package(item)),
                             if (canDownloadPlugin(item))
@@ -1001,6 +1075,28 @@ class _CatalogPageState extends State<CatalogPage> {
                                       .bodySmall
                                       ?.color)),
                         ])),
+                    // task-138：卡片上直接给「下载安装 / 更新 / 安装已下载」（对齐 VS Code 扩展页）
+                    if (canDownloadPlugin(item) && !canInstallDownloaded(item))
+                      IconButton(
+                          key: const ValueKey('plugin-card-download'),
+                          tooltip: downloadButtonLabel(item) + '：' + name(item),
+                          padding: const EdgeInsets.all(6),
+                          constraints:
+                              const BoxConstraints(minWidth: 36, minHeight: 36),
+                          icon: const Icon(Icons.download_outlined, size: 20),
+                          onPressed: downloading.containsKey(package(item))
+                              ? null
+                              : () => downloadPlugin(item)),
+                    if (canInstallDownloaded(item))
+                      IconButton(
+                          key: const ValueKey('plugin-card-install'),
+                          tooltip: '安装已下载：' + name(item),
+                          padding: const EdgeInsets.all(6),
+                          constraints:
+                              const BoxConstraints(minWidth: 36, minHeight: 36),
+                          icon: const Icon(Icons.install_desktop_outlined,
+                              size: 20),
+                          onPressed: () => installDownloaded(item)),
                     if (canRetryPlugin(item))
                       IconButton(
                           tooltip: '重新安装：${name(item)}',
