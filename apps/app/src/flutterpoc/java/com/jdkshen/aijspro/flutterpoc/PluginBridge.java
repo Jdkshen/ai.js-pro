@@ -181,6 +181,9 @@ final class PluginBridge {
         }
         JSONObject data = new JSONObject();
         data.put("url", url);
+        // task-131：把「这条清单最终是从哪个源拿到的」放进 data（custom/builtin-release/builtin-raw/builtin-direct）
+        // ⇒ 插件页零改动就能显示「清单来源：…」，排障也不必翻日志。
+        data.put("source", source);
         data.put("generatedAt", ((PluginManifest.ParseResult.Success) parsed).getGeneratedAt());
         data.put("plugins", plugins);
         Log.i(TAG, "pluginCatalog ok source=" + fetch.source + " http=" + fetch.status

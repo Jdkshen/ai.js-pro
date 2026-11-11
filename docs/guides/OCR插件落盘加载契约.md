@@ -58,6 +58,13 @@ $ocr 分发（宿主脚本层）：$plugins.load(org.autojs.autojspro.plugin.ocr
 | 加载 | 绝对路径 System.load（§3） | 宿主既有随包加载路径 nativeLibraryDir |
 | 关系 | **同一进程不要同时走两条**：产物已内建 OCR ⇒ 直接可用 | 产物没内建 OCR ⇒ 只能走运行期插件 |
 
+## 6.5 mlkit 为什么**不可**插件化（task-151 取证结论，2026-11-11）
+
+- **原因（读码事实）**：`Ocr`（mlkit 后端）走 ML Kit 的 **bundled** 管线 —— `TextRecognition` + `ChineseTextRecognizerOptions`（`Ocr.java:8-10`、`:198`），初始化靠 `MlKitContext.getInstance()` / `MlKit.initialize(context)`（`:64-83`）。**整条链没有任何 modelsDir/模型目录参数** ⇒ 模型由 SDK 自己从**宿主 App 的 assets**（`assets/mlkit-google-ocr-models/**`，42 个文件，由 Gradle 从 ML Kit **AAR** 合入；排除开关见 `apps/app/build.gradle:253`、`apps/inrt/build.gradle:38` 的 `ignoreAssetsPattern`）里找 ⇒ **无法指向插件落盘目录**（运行期 assets 只读、也没有公开入口）。
+- **与 ppocr 的差异**：`PPOcr` 自己读文件、且**已经有** `PPOcr(ScriptRuntime, String modelsDir, …)`（`PPOcr.java:124`）⇒ 传外部目录即可 ✓；mlkit 没有等价入口 ✗。
+- **当前口径**：`optimization.removeOcr=true`（剥离后）时，`backend="mlkit"` 与 `backend="ppocr"` 都走**既有点名错误**（`OcrAvailability.NOT_PACKAGED_MESSAGE` 那套）；装了 OCR 插件时只有 **ppocr** 可用 ✓。
+- **升级路径（需单独立项）**：走到「mlkit 也外置」只能换识别管线（ML Kit 自定义模型 / 换引擎）；这不是本契约的一行改动，且**可行性尚未证实**（见 task-151 的选项评估）⇒ **不要在契约里承诺 mlkit 可插件化** ✗。
+
 ## 7. 未核 / 待确认（照实）
 
 1. 宿主 PluginRegistry 反射的**入口类字面查找规则**（类名是否固定 Registry、是否读插件 Manifest）——本契约要求 W2 与宿主用**同一份常量**，请以宿主现实现为准（我未逐行核实）。

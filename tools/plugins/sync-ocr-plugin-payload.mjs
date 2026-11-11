@@ -65,6 +65,27 @@ function readZipEntry(zipPath, entryName) {
   throw new Error("AAR 内找不到 " + entryName);
 }
 
+/** 列出 zip 内所有非目录条目名（mlkit 模型整棵映射用）。 */
+function listZipEntries(zipPath) {
+  const buf = fs.readFileSync(zipPath);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0 && i > buf.length - 70000; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("不是有效 zip：" + zipPath);
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  const names = [];
+  for (let n = 0; n < count; n++) {
+    const nameLen = buf.readUInt16LE(off + 28);
+    const extraLen = buf.readUInt16LE(off + 30);
+    const commentLen = buf.readUInt16LE(off + 32);
+    names.push(buf.toString("utf8", off + 46, off + 46 + nameLen));
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  return names;
+}
+
 function writeTarget(relTarget, buf, info) {
   const target = path.join(OUT, relTarget);
   const digest = sha256(buf);
@@ -116,12 +137,11 @@ if (fs.existsSync(opencvAar)) {
   } catch (error) { failed += 1; console.error("[ocr-payload] 从 OpenCV AAR 取 libc++_shared.so 失败：" + error.message); }
 } else { failed += 1; console.error("[ocr-payload] 来源缺失：" + opencvAar); }
 
-// mlkit 库：**本轮不带**（Lead 裁决）—— 默认后端是 ppocr，而 mlkit 分支目前仍随宿主
-// （W1：Ocr 只读宿主 assets，没有外部目录入口）⇒ 插件里这份 ≈11MB 短期没有消费者。
-// 重开条件：将来做 mlkit 外置（给 Ocr 加 models 目录入口 + 宿主不再随包 mlkit）时，把
-// libmlkit_google_ocr_pipeline.so 加回 libs 清单（并把它加回 desiredLibs）。
-console.log("[ocr-payload] skip libmlkit_google_ocr_pipeline.so（默认后端 ppocr；mlkit 仍随宿主，见文件头重开条件）");
-
+// mlkit 库与模型：**不带**（W1 取证否掉：Ocr 走 ML Kit bundled 管线，模型由 SDK 从宿主 assets 找，
+// 没有任何 modelsDir 入口 ⇒ 插件里放 mlkit 库/模型是**无效载荷**）。
+// 重开条件：只有当宿主走「ML Kit 自定义模型」管线（单独立项）时，才把 libmlkit + assets/mlkit-google-ocr-models/**
+// 加回这里（脚本历史上做过一次，映射逻辑见 git 历史；锁文件记「AAR 坐标 + 包内路径 + 映射命令」）。
+console.log("[ocr-payload] skip mlkit lib+models（Ocr 走 bundled 管线，无法指向插件目录；见文件头重开条件）");
 // ---- ppocr 模型（默认后端只需要这 5 个；文件名由原生侧 PPOcr.MODEL_FILES 写死，不能改）----
 const PPOCR_SOURCE = fs.existsSync(path.join(ROOT, "plugins/ocr-plugin/payload/models"))
   ? "plugins/ocr-plugin/payload/models"
@@ -190,6 +210,10 @@ function pruneEmptyDirs(dirRelative) {
   }
 }
 pruneEmptyDirs("assets/ocr/models");
+// mlkit 模型：**整目录清空**（W1 取证否掉外置：Ocr 走 bundled 管线，插件里放它是无效载荷）。
+// 重开条件：宿主改走 ML Kit 自定义模型管线时，改成保留本次映射集合即可。
+pruneUnlisted("assets/mlkit-google-ocr-models", new Set());
+pruneEmptyDirs("assets/mlkit-google-ocr-models");
 
 
 // ---- DT_NEEDED 审计（readelf -d 等价；只告警不失败）----

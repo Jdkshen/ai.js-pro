@@ -71,6 +71,14 @@ void main() {
     expect(source.contains("ValueKey('plugin-detail-size')"), isTrue);
     expect(source.contains("ValueKey('plugin-detail-restart')"), isTrue);
     expect(source.contains("ValueKey('plugin-detail-notes')"), isTrue);
+    // task-141：notes 多行 + 展开/收起；来源行；无 withOpacity
+    expect(source.contains("ValueKey('plugin-detail-notes-toggle')"), isTrue);
+    expect(source.contains('maxLines: expandedNotes.contains(package(item))'), isTrue,
+        reason: 'notes 必须保留换行并支持展开');
+    expect(source.contains("ValueKey('plugin-detail-source')"), isTrue);
+    expect(source.contains("'清单来源：' + manifestSourceLabel"), isTrue);
+    expect(source.contains('withOpacity('), isFalse,
+        reason: '5 条 withOpacity 必须清成 withValues(alpha:)');
     expect(source.contains('Android 不允许静默安装'), isTrue);
     expect(source.contains('当前更新源：'), isTrue);
     expect(source.contains('多半是更新源不可达'), isTrue);

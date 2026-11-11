@@ -48,6 +48,10 @@ class _CatalogPageState extends State<CatalogPage> {
   String? pluginManifestError;
   // task-137：失败时要显示「当前更新源」+ 一句怎么办（值来自既有 updateSource 桥）
   String updateSourceValue = '';
+  /// 清单来源标签（来自 pluginCatalog 的 data.source；空 ⇒ 页面不显示该行）
+  String manifestSourceLabel = '';
+  /// notes 展开状态（长 changelog 折叠）
+  final Set<String> expandedNotes = <String>{};
   bool updateSourceLoaded = false;
   final Map<String, Map<String, dynamic>> downloading = <String, Map<String, dynamic>>{};
   final Map<String, String> downloadError = <String, String>{};
@@ -169,6 +173,8 @@ class _CatalogPageState extends State<CatalogPage> {
           ? Map<String, dynamic>.from(envelope['data'] as Map)
           : envelope;
       final url = data['url'];
+      // task-141：清单来源标签（builtin-release / builtin-raw / custom…）——**有才显示，不猜**
+      final sourceLabel = data['source'];
       final raw = data['plugins'] is List ? data['plugins'] : value;
       final next = <String, dynamic>{};
       if (raw is List) {
@@ -190,6 +196,7 @@ class _CatalogPageState extends State<CatalogPage> {
           updateSourceValue = url;
           updateSourceLoaded = true;
         }
+        manifestSourceLabel = sourceLabel is String ? sourceLabel : '';
       });
     } catch (e) {
       if (mounted) {
@@ -812,13 +819,13 @@ class _CatalogPageState extends State<CatalogPage> {
             gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [tint.withOpacity(.68), tint])),
+                colors: [tint.withValues(alpha: .68), tint])),
         child: Stack(children: [
           Positioned(
               right: -28,
               top: -24,
               child: Icon(symbol,
-                  size: 148, color: Colors.white.withOpacity(.10))),
+                  size: 148, color: Colors.white.withValues(alpha: .10))),
           Positioned(
               left: -12,
               bottom: -20,
@@ -828,7 +835,7 @@ class _CatalogPageState extends State<CatalogPage> {
                   decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: Border.all(
-                          width: 2, color: Colors.white.withOpacity(.18))))),
+                          width: 2, color: Colors.white.withValues(alpha: .18))))),
           Center(
               child: FutureBuilder<String?>(
                   future: installed(item) == true
@@ -841,7 +848,7 @@ class _CatalogPageState extends State<CatalogPage> {
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(22),
-                              color: Colors.white.withOpacity(.91)),
+                              color: Colors.white.withValues(alpha: .91)),
                           child: Image.memory(base64Decode(snapshot.data!),
                               width: 58,
                               height: 58,
@@ -926,10 +933,33 @@ class _CatalogPageState extends State<CatalogPage> {
                                   '安装后需重启应用：' +
                                       (manifestOf(item)!['requiresRestart'] == true ? '是' : '否'),
                                   key: const ValueKey('plugin-detail-restart')),
-                              if (text(manifestOf(item)!, 'notes').isNotEmpty)
+                              if (text(manifestOf(item)!, 'notes').isNotEmpty) ...[
                                 SelectableText(
                                     '更新说明：' + text(manifestOf(item)!, 'notes'),
-                                    key: const ValueKey('plugin-detail-notes')),
+                                    key: const ValueKey('plugin-detail-notes'),
+                                    // task-141：保留换行（changelog 多行）；长文默认折叠 3 行
+                                    maxLines: expandedNotes.contains(package(item))
+                                        ? null
+                                        : 3),
+                                if (text(manifestOf(item)!, 'notes').length > 120)
+                                  TextButton(
+                                      key: const ValueKey('plugin-detail-notes-toggle'),
+                                      onPressed: () => setState(() {
+                                            if (!expandedNotes.add(package(item))) {
+                                              expandedNotes.remove(package(item));
+                                            }
+                                          }),
+                                      child: Text(
+                                          expandedNotes.contains(package(item))
+                                              ? '收起说明'
+                                              : '展开说明')),
+                              ],
+                              // task-141：清单来源（data.source 有才显示；没有则整行不出现，不猜）
+                              if (manifestSourceLabel.isNotEmpty)
+                                SelectableText(
+                                    '清单来源：' + manifestSourceLabel,
+                                    key: const ValueKey('plugin-detail-source'),
+                                    style: const TextStyle(fontSize: 12)),
                             ],
                             if (canInstallDownloaded(item))
                               TextButton.icon(
@@ -1095,7 +1125,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                           : Theme.of(context)
                                               .colorScheme
                                               .onSurface
-                                              .withOpacity(.65))),
+                                              .withValues(alpha: .65))),
                           // 包名 12.sp（.kt:467）
                           Text(package(item),
                               maxLines: 1,
