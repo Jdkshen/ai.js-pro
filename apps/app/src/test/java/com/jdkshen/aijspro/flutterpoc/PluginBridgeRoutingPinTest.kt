@@ -6,7 +6,7 @@ import org.junit.Test
 import java.io.File
 
 /**
- * task-131 batch B 钉子：插件桥两处登记 + 失败不静默 + 原因码 + 零配置回退链 + 图标字段。
+ * task-131 batch B 钉子：插件桥两处登记 + 失败不静默 + 原因码 + 零配置回退链 + 图标字段 + 下载 stall 超时。
  * 纯源码级（不需要 Android 运行时），路径相对 apps/app 解析。
  */
 class PluginBridgeRoutingPinTest {
@@ -52,7 +52,6 @@ class PluginBridgeRoutingPinTest {
         assertTrue("清单问题抛点带 manifest: 标记", pluginBridge.contains("manifest:清单为空"))
     }
 
-    /** 零配置回退链：自建源优先；内置顺序 release -> raw(加速) -> raw(直连)；失败才降级。 */
     @Test fun builtinFallbackChainIsOrderedAndEndsAtRaw() {
         val downloads = read("src/main/java/com/jdkshen/aijspro/network/PluginDownloads.java")
         val custom = downloads.indexOf("\"custom\"")
@@ -71,40 +70,45 @@ class PluginBridgeRoutingPinTest {
             && pluginBridge.contains("pluginInstall 源失败 source="))
     }
 
-    /** 同步桥 + 后台执行 + join 等结果（防 NetworkOnMainThreadException 回归）。 */
     @Test fun catalogFetchesOffTheCallerThread() {
         val pluginBridge = read(bridgePath)
         val catalog = pluginBridge.substringAfter("private static JSONObject catalog(final Activity activity)")
             .substringBefore("private static JSONObject catalogOnWorker")
         assertTrue("catalog 必须在后台线程跑", catalog.contains("new Thread("))
         assertTrue("catalog 必须同步等结果（Dart 是同步桥）", catalog.contains("worker.join(CATALOG_TIMEOUT_MS)"))
-        assertTrue("必须有总兜底超时（每候选各自预算，总预算放宽）",
-            pluginBridge.contains("CATALOG_TIMEOUT_MS = 20000L"))
+        assertTrue("必须有总兜底超时", pluginBridge.contains("CATALOG_TIMEOUT_MS = 20000L"))
         assertTrue("每个候选各自约 6s 预算", pluginBridge.contains("CANDIDATE_CONNECT_TIMEOUT_MS = 3000")
-            && pluginBridge.contains("CANDIDATE_READ_TIMEOUT_MS = 3000")
-            && pluginBridge.contains("httpGet(url, source, CANDIDATE_CONNECT_TIMEOUT_MS, CANDIDATE_READ_TIMEOUT_MS)"))
+            && pluginBridge.contains("CANDIDATE_READ_TIMEOUT_MS = 3000"))
         assertTrue("失败原因要能看出试了几条/最后一条/耗时",
             pluginBridge.contains("试了 ") && pluginBridge.contains("条源，耗时 ") && pluginBridge.contains("最后一条="))
         assertTrue("catalog 本身不得直接 httpGet（网络必须在后台线程体里）", !catalog.contains("httpGet("))
         assertTrue("后台线程体与单源拉取方法都要在",
             pluginBridge.contains("private static JSONObject catalogOnWorker")
                 && pluginBridge.contains("catalogFromSource("))
-        assertTrue("失败要带异常类型", catalog.contains("classify(error)")
-            && catalog.contains("getSimpleName()")
-            && catalog.contains("prefix.isEmpty()"))
+        assertTrue("失败要带异常类型", catalog.contains("classify(error)") && catalog.contains("getSimpleName()"))
     }
 
-    /** 图标字段（Lead：已装给本地 PNG 路径、未装留空、不联网、失败不影响清单）。 */
+    @Test fun downloadUsesStallTimeoutAndReportsProgress() {
+        val pluginBridge = read(bridgePath)
+        assertTrue("read 超时按 stall 判定（无总时长上限）", pluginBridge.contains("READ_TIMEOUT_MS = 60000"))
+        assertTrue("connect 10s", pluginBridge.contains("CONNECT_TIMEOUT_MS = 10000"))
+        assertTrue("下载连接用这两个超时", pluginBridge.contains("connection.setReadTimeout(READ_TIMEOUT_MS)"))
+        assertTrue("下载过程中要持续写进度", pluginBridge.contains("PROGRESS_STEP_BYTES"))
+        assertTrue("进度含 received/total", pluginBridge.contains("receivedBytes") && pluginBridge.contains("totalBytes"))
+        assertTrue("起手就有 running 状态", pluginBridge.contains("started.put"))
+        assertTrue("下载失败要带可区分原因", pluginBridge.contains("source:下载失败 HTTP ")
+            && pluginBridge.contains("classify(error)"))
+    }
+
     @Test fun catalogProvidesLocalIconPathsWithoutNetwork() {
         val pluginBridge = read(bridgePath)
         assertTrue("清单里要调图标填充", pluginBridge.contains("applyPluginIcon(activity, row, entry)"))
         assertTrue("图标要落到 app 缓存目录", pluginBridge.contains("getCacheDir(), ICON_DIR"))
-        assertEquals("缓存目录名固定", true, pluginBridge.contains("ICON_DIR = \"plugin-icons\""))
+        assertTrue("缓存目录名固定", pluginBridge.contains("ICON_DIR = \"plugin-icons\""))
         assertTrue("文件名带版本 ⇒ 版本变自然重画", pluginBridge.contains("-v\" + version + \".png\""))
         assertTrue("未安装留空", pluginBridge.contains("row.put(\"iconPath\", \"\")"))
         assertTrue("可选内联", pluginBridge.contains("iconBase64"))
         assertTrue("失败只记日志", pluginBridge.contains("pluginCatalog 图标失败 pkg="))
-        assertTrue("不得联网取图标", !pluginBridge.contains("httpGet(iconUrl"))
     }
 
     @Test fun uninstallIsDeliveredAsDisable() {

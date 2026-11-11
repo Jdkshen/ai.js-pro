@@ -352,33 +352,57 @@ class _CatalogPageState extends State<CatalogPage> {
       if (started is Map && mounted) {
         setState(() => downloading[pkg] = Map<String, dynamic>.from(started));
       }
-      // 轮询到终态：最多 ~60s（2s 一次）；单次读失败不算失败。
-      for (var attempt = 0; attempt < 30; attempt++) {
-        await Future<void>.delayed(const Duration(seconds: 2));
+      // task-144：**只要有进展就一直轮询**（大包慢网必然超过固定窗口）——
+      // 每 2s 一次；只有在「120s 内 receivedBytes 没有任何增长」时才判超时，**总时长不设硬上限**。
+      const pollInterval = Duration(seconds: 2);
+      const stallLimit = Duration(seconds: 120);
+      var stalled = Duration.zero;
+      num? lastReceived;
+      while (mounted) {
+        await Future<void>.delayed(pollInterval);
         if (!mounted) return;
         final status = await pollPluginProgress(pkg, id);
-        if (status == null) continue;
-        final state = text(status, 'state');
-        if (state == 'success') {
-          await load();
-          if (!mounted) return;
-          final message = text(status, 'message');
-          final restart = status['requiresRestart'] == true ||
-              manifest['requiresRestart'] == true;
-          notify('安装已完成' +
-              (message.isEmpty ? '' : '：' + message) +
-              (restart ? ' · 需重启应用生效' : ''));
-          return;
+        if (status == null) {
+          stalled += pollInterval; // 单次读失败不算失败，但要计入「无进展」
+        } else {
+          final state = text(status, 'state');
+          final received = status['receivedBytes'];
+          final progressed = received is num &&
+              (lastReceived == null || received > lastReceived);
+          if (progressed) {
+            lastReceived = received;
+            stalled = Duration.zero; // 有进展 ⇒ 重新计时（也不显示失败）
+          } else {
+            stalled += pollInterval;
+          }
+          if (state == 'success') {
+            await load();
+            if (!mounted) return;
+            final message = text(status, 'message');
+            final restart = status['requiresRestart'] == true ||
+                manifest['requiresRestart'] == true;
+            notify('安装已完成' +
+                (message.isEmpty ? '' : '：' + message) +
+                (restart ? ' · 需重启应用生效' : ''));
+            return;
+          }
+          if ((state == 'failed' || state == 'error') && !progressed) {
+            // task-144：区分「下载中断（网络）」与「长时间无进展」
+            final code = text(status, 'reasonCode');
+            final reason = code == 'network'
+                ? '下载中断（网络，可换网络或换源后重试）'
+                : downloadReason(status);
+            setState(() => downloadError[pkg] = reason);
+            notify('下载失败：' + reason);
+            return;
+          }
         }
-        if (state == 'failed' || state == 'error') {
-          final reason = downloadReason(status);
-          setState(() => downloadError[pkg] = reason);
-          notify('下载失败：' + reason);
+        if (stalled >= stallLimit) {
+          setState(() => downloadError[pkg] = '安装状态轮询超时（长时间无进展，可重试）');
+          notify('下载失败：安装状态轮询超时（长时间无进展，可点「重试」）');
           return;
         }
       }
-      setState(() => downloadError[pkg] = '安装状态轮询超时（可重试）');
-      notify('下载失败：安装状态轮询超时（可点「重试」）');
     } catch (e) {
       if (mounted) {
         final reason = readable(e);
@@ -958,6 +982,29 @@ class _CatalogPageState extends State<CatalogPage> {
                             const SizedBox(height: 8),
                             SelectableText('版本 ${versionOf(item)}'),
                             if (manifestOf(item) != null) ...[
+                              // task-144：详情里也显示真实进度（只要在走就不显示失败）
+                              if (downloading.containsKey(package(item)))
+                                SelectableText(
+                                    '下载中 ' +
+                                        (() {
+                                          final record = downloading[package(item)];
+                                          final total = record?['totalBytes'];
+                                          final received = record?['receivedBytes'];
+                                          if (total is! num || received is! num || total <= 0) {
+                                            return '（等待进度…）';
+                                          }
+                                          final percent = (received * 100 / total)
+                                              .clamp(0, 100)
+                                              .toStringAsFixed(0);
+                                          return percent +
+                                              '%（' +
+                                              sizeLabel(received) +
+                                              ' / ' +
+                                              sizeLabel(total) +
+                                              '）';
+                                        })(),
+                                    key: const ValueKey('plugin-detail-progress'),
+                                    style: const TextStyle(fontSize: 12)),
                               if (sizeLabel(manifestOf(item)!['sizeBytes']).isNotEmpty)
                                 SelectableText(
                                     '大小 ' + sizeLabel(manifestOf(item)!['sizeBytes']),

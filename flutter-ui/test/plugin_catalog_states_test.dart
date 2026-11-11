@@ -88,6 +88,15 @@ void main() {
         reason: '图标拿不到要走占位');
     expect(source.contains("ValueKey('plugin-card-error')"), isTrue);
     expect(source.contains('LinearProgressIndicator('), isTrue);
+    // task-144：有进展就继续；两种失败文案区分；详情也有进度
+    expect(source.contains('const stallLimit = Duration(seconds: 120)'), isTrue);
+    expect(source.contains('const pollInterval = Duration(seconds: 2)'), isTrue);
+    expect(source.contains('stalled = Duration.zero'), isTrue,
+        reason: '有进展必须重新计时（不判失败）');
+    expect(source.contains('下载中断（网络，可换网络或换源后重试）'), isTrue);
+    expect(source.contains('安装状态轮询超时（长时间无进展，可重试）'), isTrue);
+    expect(source.contains("ValueKey('plugin-detail-progress')"), isTrue);
+    expect(source.contains("'下载中 ' +"), isTrue);
     expect(source.contains('withOpacity('), isFalse,
         reason: '5 条 withOpacity 必须清成 withValues(alpha:)');
     expect(source.contains('Android 不允许静默安装'), isTrue);

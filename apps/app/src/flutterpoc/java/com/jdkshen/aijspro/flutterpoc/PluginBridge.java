@@ -37,8 +37,10 @@ final class PluginBridge {
 
     private static final String TAG = "GlassFlutterPoc";
     private static final String CATALOG_FILE = "plugins.json";
-    private static final int CONNECT_TIMEOUT_MS = 8000;
-    private static final int READ_TIMEOUT_MS = 15000;
+    /** APK 下载：connect 10s；read 用「**无进展(stall)**」判定 —— Java 的 read timeout 是「两次读到数据之间的最大间隔」，
+     *  每次 read 成功都会重新计时 ⇒ 60s 无字节才算失败，**总时长不设上限**（60.5MB 的象棋插件在慢网/加速代理下也不会被腰斩）。 */
+    private static final int CONNECT_TIMEOUT_MS = 10000;
+    private static final int READ_TIMEOUT_MS = 60000;
     private static final int PROGRESS_STEP_BYTES = 64 * 1024;
     /** 插件图标：缩到 <=96px 的 PNG 落 app 缓存（几 KB），清单里给绝对路径 + 可选内联 base64。 */
     private static final int ICON_SIZE_PX = 96;
