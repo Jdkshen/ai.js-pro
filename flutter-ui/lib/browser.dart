@@ -1686,7 +1686,8 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
                             key: ValueKey('directory-$path'),
                             controller: scroll,
                             physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.only(bottom: 88),
+                            // task-151：底部要留出 FAB + 16（原 88 会让最后一行被 FAB 压住 ✗）
+                  padding: const EdgeInsets.only(bottom: 120),
                             itemCount: visible.isEmpty ? 1 : visible.length,
                             itemBuilder: (_, index) => visible.isEmpty
                                 ? Padding(
@@ -1705,7 +1706,7 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
             child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => setState(() => createExpanded = false),
-                child: Container(color: Colors.black.withOpacity(.04)))),
+                child: Container(color: Colors.black.withValues(alpha: .04)))),
       if (createExpanded)
         Positioned(
             right: 16,
@@ -1846,7 +1847,10 @@ class _WorkspaceNameDialogState extends State<_WorkspaceNameDialog> {
                       style: TextStyle(fontSize: 12))),
             if (widget.chooseEngine)
               DropdownButtonFormField<String>(
-                  value: engine,
+                  // task-151：`value:` 已废弃；用 initialValue + 按引擎换 key ⇒ 引擎变化时重建，
+                  // 行为与原来的受控 value 等价（analyze 归零）。
+                  key: ValueKey('script-engine-$engine'),
+                  initialValue: engine,
                   decoration: const InputDecoration(labelText: '脚本引擎'),
                   items: const [
                     DropdownMenuItem(value: 'rhino', child: Text('Rhino')),

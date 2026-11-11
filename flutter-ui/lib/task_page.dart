@@ -307,7 +307,7 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
                           color: Theme.of(context)
                               .colorScheme
                               .onSurface
-                              .withOpacity(.65)))))));
+                              .withValues(alpha: .65)))))));
 
   Widget row(RuntimeTask task) => Column(children: [
         InkWell(
@@ -340,7 +340,7 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
                                 color: Theme.of(context)
                                     .colorScheme
                                     .onSurface
-                                    .withOpacity(.65))),
+                                    .withValues(alpha: .65))),
                         if (task.path.isNotEmpty)
                           Text(task.path,
                               maxLines: 1,
@@ -352,7 +352,7 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
                                   color: Theme.of(context)
                                       .colorScheme
                                       .onSurface
-                                      .withOpacity(.55)))
+                                      .withValues(alpha: .55)))
                       ])),
                   if (task.kind == 'running')
                     ActionIcon(
@@ -375,7 +375,7 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
             padding: const EdgeInsets.only(left: 82),
             child: Divider(
                 height: 1,
-                color: Theme.of(context).dividerColor.withOpacity(.12)))
+                color: Theme.of(context).dividerColor.withValues(alpha: .12)))
       ]);
 
   @override
@@ -438,6 +438,23 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: const EdgeInsets.only(bottom: 90),
                           children: [
+                            // task-151：整页空态（两段都空时给一句说明 + 去哪看；不用展开也知道 ✗）
+                            if (loaded && active.isEmpty && pending.isEmpty)
+                              const Padding(
+                                  key: ValueKey('task-empty-all'),
+                                  padding: EdgeInsets.fromLTRB(18, 24, 18, 8),
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text('暂无运行中的任务',
+                                            style: TextStyle(fontSize: 15)),
+                                        SizedBox(height: 6),
+                                        Text(
+                                            '运行脚本后会出现在这里；定时任务与意图任务也会列在下面。',
+                                            style: TextStyle(
+                                                fontSize: 12, height: 1.5)),
+                                      ])),
                             heading(
                                 '运行中任务',
                                 Icons.play_arrow,
@@ -464,7 +481,9 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
                             ]
                           ])))
             ]),
-            floatingActionButton: Semantics(
+            // task-151：没有任务可停时不显示「停止全部」FAB（空页上那个 X 含义不明 ✗）
+            floatingActionButton:
+                (loaded && active.isEmpty && pending.isEmpty) ? null : Semantics(
                 label: '停止全部脚本',
                 button: true,
                 enabled: loaded && error == null && !changing,

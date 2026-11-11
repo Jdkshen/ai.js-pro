@@ -1034,6 +1034,22 @@ class _CatalogPageState extends State<CatalogPage> {
         ]));
   }
 
+  /// task-151：示例/资源卡片图标按引擎或语言区分（减少视觉噪音；认不出就退回 <>）。
+  IconData resourceIcon(Map item) {
+    final hint = ('${text(item, 'engine')} ${text(item, 'language')} '
+            '${text(item, 'category')} ${name(item)} ${summary(item)}')
+        .toLowerCase();
+    if (hint.contains('node')) return Icons.terminal_rounded;
+    if (hint.contains('quickjs')) return Icons.flash_on_rounded;
+    if (hint.contains('rhino')) return Icons.settings_input_component_rounded;
+    if (hint.contains('java')) return Icons.coffee_rounded;
+    if (hint.contains('python')) return Icons.terminal;
+    if (hint.contains('html') || hint.contains('vue') || hint.contains('react')) {
+      return Icons.web_rounded;
+    }
+    return Icons.code;
+  }
+
   String importedTime(Map item) {
     final timestamp = item['importedAt'];
     if (timestamp is! num || timestamp <= 0) return '';
@@ -1591,9 +1607,9 @@ class _CatalogPageState extends State<CatalogPage> {
                 // 对齐 MiuixResourceFragment.kt:742 —— 图标位 38（原为 36）
                 SizedBox(
                     width: 38,
-                    child:
-                        Icon(Icons.code, size: 25,
-                            color: Theme.of(context).colorScheme.primary)),
+                    child: Icon(resourceIcon(item),
+                        size: 20, // task-151：与其它图标一致（原 25 偏大且千篇一律 ✗）
+                        color: Theme.of(context).colorScheme.primary)),
                 const SizedBox(width: 10),
                 Expanded(
                     child: Column(
@@ -1916,7 +1932,8 @@ class _CatalogPageState extends State<CatalogPage> {
                                         childCount: visible.length)))
                           else if (visible.isNotEmpty)
                             SliverPadding(
-                                padding: const EdgeInsets.fromLTRB(6, 0, 6, 8),
+                                // task-151：底部留出 FAB + 16（否则最后一行被压住 ✗）
+                                padding: const EdgeInsets.fromLTRB(6, 0, 6, 120),
                                 sliver: SliverList(
                                     delegate: SliverChildBuilderDelegate(
                                         (_, index) => Padding(
