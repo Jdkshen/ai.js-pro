@@ -1719,7 +1719,11 @@ class _FileBrowserState extends State<FileBrowser> with WidgetsBindingObserver {
             child: GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => setState(() => createExpanded = false),
-                child: Container(color: Colors.black.withValues(alpha: .04)))),
+                child: Container(
+                    // C2（task-154）：深色主题下「黑 4% 叠在深色上」≈ 看不见 ✗ ⇒ 按主题取色
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white.withValues(alpha: .08)
+                        : Colors.black.withValues(alpha: .04)))),
       if (createExpanded)
         Positioned(
             right: 16,

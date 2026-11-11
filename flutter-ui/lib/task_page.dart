@@ -320,9 +320,11 @@ class _TaskPageState extends State<TaskPage> with WidgetsBindingObserver {
                       backgroundColor: task.engine == 'Rhino'
                           ? const Color(0xfffd999a)
                           : const Color(0xff99cc99),
+                      // C1（task-154）：白字在 #fd999a / #99cc99 上只有 2.06:1 / 1.83:1 ✗
+                      // ⇒ 用方案 A：深色文字（black87 与底色合成后 ≥ 4.5:1，见 test/contrast_test.dart）
                       child: Text(task.engine == 'Rhino' ? 'R' : 'N',
                           style: const TextStyle(
-                              fontSize: 22, color: Colors.white))),
+                              fontSize: 22, color: Colors.black87))),
                   const SizedBox(width: 14),
                   Expanded(
                       child: Column(

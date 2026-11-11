@@ -598,7 +598,8 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                   gradient: LinearGradient(
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
-                      colors: [Color(0xff56b9b1), Color(0xff008f91)])),
+                      // task-154：白字要 ≥4.5:1 ⇒ 渐变整体加深（#2e6f6a 上白字 ≈6:1，见 contrast_test）
+                      colors: [Color(0xff2e6f6a), Color(0xff12514c)])),
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: const [
@@ -611,7 +612,8 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                             fontWeight: FontWeight.w500)),
                     SizedBox(height: 5),
                     Text('脚本工作区',
-                        style: TextStyle(color: Colors.white70, fontSize: 14)),
+                        // task-154：white70 在青绿底上 ≈2:1 ✗ ⇒ 改用不透明白（渐变已加深）
+                    style: const TextStyle(color: Colors.white, fontSize: 14)),
                   ])),
           heading('服务'),
           service('无障碍服务', 'accessibilityEnabled', 'accessibilitySettings',
