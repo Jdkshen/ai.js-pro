@@ -123,7 +123,18 @@ async function runAudit() {
     });
   }
   console.log('（已跳过 ' + skippedThemed + ' 个带主题分支的色值：它们各自只服务一种主题）');
-  const bad = rows.filter((r) => r.light < 3 || r.dark < 3);
+  // 白名单：按「文件 + 色值」豁免**已人工确认**的误报（不用行号——它太容易漂）。
+  // 文件：tools/ui-contrast-allow.json  [{ file, hex, reason }]
+  let allow = [];
+  const allowPath = (() => { const k = args.indexOf('--allow'); return k >= 0 ? args[k + 1] : 'tools/ui-contrast-allow.json'; })();
+  try { if (fsmod.existsSync(allowPath)) allow = JSON.parse(fsmod.readFileSync(allowPath, 'utf8')); } catch (e) { console.error('白名单读取失败（按空处理）：' + e.message); }
+  // hex 支持 "*"：整文件豁免（用于「该文件的颜色本就是主题内成对定义/彩色底上的色」这类整体情形）
+  const isAllowed = (r) => allow.some((a) => a.file === r.file &&
+      (String(a.hex) === '*' || String(a.hex).toLowerCase() === r.hex.toLowerCase()));
+  const allBad = rows.filter((r) => r.light < 3 || r.dark < 3);
+  const bad = allBad.filter((r) => !isAllowed(r));
+  const exempt = allBad.length - bad.length;
+  if (exempt > 0) console.log('（白名单豁免 ' + exempt + ' 项：见 ' + allowPath + '）');
   const warn = rows.filter((r) => !(r.light < 3 || r.dark < 3) && (r.light < 4.5 || r.dark < 4.5));
   console.log(`已扫描 ${files.length} 个 dart 文件、${rows.length} 个不透明硬编码色`);
   console.log(`\n=== 低于 3:1（确定不达标，需处理）: ${bad.length} ===`);

@@ -51,6 +51,8 @@ param(
     [switch]$RebuildAot,
     # Lead 2026-11-10：出包前跑构件新鲜度自检（模板/AOT 是否跟得上源码）。STALE 直接失败；急用可 -SkipFreshnessCheck。
     [switch]$SkipFreshnessCheck,
+# Lead 2026-11-12：UI 颜色对比度门禁（ui-contrast --audit --strict）。急用可跳过。
+[switch]$SkipUiContrast,
     [switch]$AotOffline,
     [string]$BaselineApk = '',
     [double]$MaxTotalMiB = -1,
@@ -185,6 +187,28 @@ if (-not $SkipFreshnessCheck) {
         }
     } else {
         Write-Host '[0/5] 跳过构件新鲜度自检（脚本不存在）' -ForegroundColor DarkGray
+    }
+}
+
+# Lead 2026-11-12：UI 颜色对比度门禁（WCAG）。
+#  · 只查**硬编码字面量**（scheme.* 派生色算不了）⇒ 判据用非文本门槛 3:1；
+#  · 已知误报类走白名单 tools/ui-contrast-allow.json（每条带理由，人工确认过）；
+#  · 精确门禁仍是 flutter-ui/test/contrast_test.dart 的数值断言（随 flutter test 跑）。
+#  急用可 -SkipUiContrast。
+if (-not $SkipUiContrast) {
+    $contrast = Join-Path $repo 'tools/ui-contrast.mjs'
+    $contrastTest = Join-Path $repo 'tools/tests/ui-contrast.test.mjs'
+    if ((Test-Path -LiteralPath $contrast -PathType Leaf) -and (Test-Path -LiteralPath $contrastTest -PathType Leaf)) {
+        Write-Host '[0.5/5] UI 颜色对比度检查（ui-contrast --audit --strict）' -ForegroundColor Cyan
+        & node $contrastTest 2>&1 | Select-Object -Last 2
+        if ($LASTEXITCODE -ne 0) { throw 'UI 对比度工具自测失败：node tools/tests/ui-contrast.test.mjs' }
+        Push-Location $repo
+        try { & node $contrast --audit --strict 2>&1 | Select-Object -Last 6; $contrastExit = $LASTEXITCODE }
+        finally { Pop-Location }
+        if ($contrastExit -ne 0) {
+            throw ('UI 颜色对比度不达标：node tools/ui-contrast.mjs --audit --strict（确认是误报就加进 ' +
+                   'tools/ui-contrast-allow.json 并写理由；急用 -SkipUiContrast）')
+        }
     }
 }
 & .\gradlew.bat @gradleArgs *> $logPath

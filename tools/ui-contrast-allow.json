@@ -1,0 +1,27 @@
+[
+  {
+    "file": "utility_pages.dart",
+    "hex": "*",
+    "reason": "console 调色板：dark 一套 / light 一套由更高层整体切换，单看单个色值两边都不达标（W4 task-154 已核 12.5:1 / 7.1:1）"
+  },
+  {
+    "file": "code_editing.dart",
+    "hex": "*",
+    "reason": "语法高亮 dark ? {...} : {...} 集合；else 分支的开括号行不含主题词，启发式判不出"
+  },
+  {
+    "file": "glass_navigation.dart",
+    "hex": "*",
+    "reason": "透镜渐变 dark ? [...] : [...] ；同上（else 分支行无主题词）"
+  },
+  {
+    "file": "service_drawer.dart",
+    "hex": "*",
+    "reason": "抽屉头部青绿渐变端点 + 头部明暗底：比较对象是那块彩色底，不是主题表面（白字已核 5.84/9.10:1）"
+  },
+  {
+    "file": "task_page.dart",
+    "hex": "*",
+    "reason": "引擎头像底色：其上文字色已按对比度修正（黑字 8.68/9.57:1），底色本身不承载文字对比"
+  }
+]
