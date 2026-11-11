@@ -2,6 +2,7 @@ package com.jdkshen.aijspro.autojs.build
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import java.io.File
 import org.junit.Test
 
 /** task-131/132：OCR 载荷处置策略（默认行为逐字不变是第一条硬约束）。 */
@@ -41,7 +42,27 @@ class PluginPresencePolicyTest {
         assertEquals("装了空壳插件也不能声称有 OCR", PluginPresencePolicy.OcrDisposition.DROP_AND_STUB, emptyShell.disposition)
     }
 
-    @Test fun withAppChoicePrefersHostThenPluginThenGivesUp() {
+    /**
+     * task-131 第 1 步的四条真相表（removeOcr=true 这条路上）：
+     * 未装 / 装了但空壳 ⇒ DROP_AND_STUB（产物无 OCR + 点名错误）；装了且带载荷 ⇒ COPY_FROM_PLUGIN；
+     * 默认（removeOcr=false）⇒ KEEP（逐字不变）。
+     */
+    @Test fun removeOcrPathTakesOcrFromTheInstalledPluginWhenItHasPayload() {
+        assertEquals("未装插件 ⇒ 保持现状（无 OCR）",
+            PluginPresencePolicy.OcrDisposition.DROP_AND_STUB,
+            decide(removeOcr = true, pluginInstalled = false).disposition)
+        assertEquals("装了但空壳 ⇒ 不能声称有 OCR",
+            PluginPresencePolicy.OcrDisposition.DROP_AND_STUB,
+            decide(removeOcr = true, pluginInstalled = true, pluginHasOcr = false).disposition)
+        val fromPlugin = decide(removeOcr = true, pluginInstalled = true, pluginHasOcr = true)
+        assertEquals("装了且带载荷 ⇒ 从插件取回产物",
+            PluginPresencePolicy.OcrDisposition.COPY_FROM_PLUGIN, fromPlugin.disposition)
+        assertTrue(fromPlugin.reason, fromPlugin.reason.contains("从插件 APK 取"))
+        assertEquals("默认（不剪）⇒ KEEP，逐字不变",
+            PluginPresencePolicy.OcrDisposition.KEEP, decide(removeOcr = false).disposition)
+    }
+
+        @Test fun withAppChoicePrefersHostThenPluginThenGivesUp() {
         val fromHost = decide(hostHasOcr = true, choice = PluginPresencePolicy.BundleOcrChoice.WITH_APP)
         assertEquals(PluginPresencePolicy.OcrDisposition.KEEP, fromHost.disposition)
         val fromPlugin = decide(pluginInstalled = true, hostHasOcr = false, pluginHasOcr = true,

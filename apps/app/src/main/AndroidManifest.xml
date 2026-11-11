@@ -562,4 +562,11 @@
             android:process=":inspector" android:exported="false" />
     </application>
 
+
+    <!-- 插件包可见性：显式声明我们自己的插件（冗余但更稳，避免将来去掉过宽的 QUERY_ALL_PACKAGES 后失效） -->
+    <queries>
+        <package android:name="org.autojs.autojspro.plugin.ocr" />
+        <package android:name="com.jdkshen.xiangqi.plugin" />
+        <package android:name="com.jdkshen.apkbuilder.plugin" />
+    </queries>
 </manifest>

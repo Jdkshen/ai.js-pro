@@ -525,6 +525,10 @@ public class ApkBuilder {
         // 只在**确定不匹配**时删（判不出来一律原样保留，默认行为不变）。
         pruneStaleProjectResPacks();
         enforcePackagingPolicy();
+        // task-131 第 1 步修正（dev-1498 真机）：插件取回必须放在 enforcePackagingPolicy() **之后** ——
+        // enforce 只保留「模板必需 / 工程策略 / 内建 OCR」能解释的 lib，removeOcr=true 时 OCR 库正属此列，
+        // 之前放在 prune 里 ⇒ 刚拷进来的 libppocr.so 立刻被剪掉，产物 OCR 条目 = 0。
+        copyOcrFromPluginIfNeeded();
         // 等级 × 引擎的实际载荷形态记一条：等级 2 对 Node 不是字节码，日志里必须能看出来。
         Log.i("C-PKG", "script protection level=" + mEncryptLevel
                 + " storage=" + mScriptStorage + " payload=" + mPayloadKind);
@@ -532,6 +536,69 @@ public class ApkBuilder {
         // 所以把 warning 也放进结构化报告，凡读 getPackagingReport() 的调用方都能拿到。
         report(PackagingReportFields.PACKAGING_WARNINGS, new org.json.JSONArray(mPackagingWarnings));
         return this;
+    }
+
+    /**
+     * task-131 第 1 步：只在「OCR 不随包」这条路上，判断「已装 OCR 插件 ⇒ 从插件 APK 取回产物」。
+     *
+     * <p>必须在 enforcePackagingPolicy() 之后调用（原因见调用点注释与 dev-1498 真机证据）；
+     * 默认（removeOcr=false）直接 return ⇒ 默认行为逐字不变。</p>
+     */
+    private void copyOcrFromPluginIfNeeded() throws IOException {
+        // mAppConfig 是 **AppConfig**（不是 ProjectConfig）⇒ 它没有 removeOcr 访问器；
+        // 与 pruneDisabledPackagingAssets() 同口径：直接从工程 project.json 读 optimization.removeOcr。
+        if (mAppConfig == null || mAppConfig.sourcePath == null) {
+            return;
+        }
+        File projectFile = new File(mAppConfig.sourcePath, "project.json");
+        if (!projectFile.isFile()) {
+            return;
+        }
+        boolean removeOcr;
+        try {
+            JSONObject project = new JSONObject(new String(PFiles.readBytes(projectFile.getPath()), "UTF-8"));
+            JSONObject optimization = project.optJSONObject("optimization");
+            removeOcr = optimization != null && optimization.optBoolean("removeOcr", false);
+        } catch (Throwable error) {
+            Log.w("C-PKG", "copyOcrFromPlugin: 读取 project.json 失败，跳过：" + error.getMessage());
+            return;
+        }
+        if (!removeOcr) {
+            return;
+        }
+        File ocrPluginApk = ocrPluginApkFile();
+        boolean ocrPluginInstalled = ocrPluginApk != null;
+        boolean ocrPluginHasPayload = ocrPluginInstalled
+                && PluginOcrSource.hasOcrPayload(ocrPluginApk, OCR_ABI);
+        PluginPresencePolicy.Decision disposition = PluginPresencePolicy.decide(
+                true, ocrPluginInstalled, true, ocrPluginHasPayload);
+        if (disposition.getDisposition() == PluginPresencePolicy.OcrDisposition.COPY_FROM_PLUGIN) {
+            PluginOcrSource.Result copied = PluginOcrSource.copyIntoWorkspace(
+                    ocrPluginApk, new File(mWorkspacePath), OCR_ABI);
+            int libs = 0;
+            int models = 0;
+            for (String entry : copied.getEntries()) {
+                if (entry.startsWith("lib/")) {
+                    libs++;
+                } else {
+                    models++;
+                }
+            }
+            Log.i("C-PKG", "ocr from plugin pkg=" + OCR_PLUGIN_PACKAGE + " path=" + ocrPluginApk.getPath()
+                    + " libs=" + libs + " models=" + models + " files=" + copied.getFiles()
+                    + " bytes=" + copied.getBytes() + " source=plugin-apk after=enforcePackagingPolicy");
+            mPackagingWarnings.add("optimization.removeOcr=true，但已安装 OCR 插件（" + OCR_PLUGIN_PACKAGE
+                    + "）⇒ 产物从插件取回 OCR（libs=" + libs + " models=" + models + "）；卸载插件后重打将不再带 OCR");
+        } else {
+            // 让「为什么没取插件」可 grep（dev-1497/1498 教训：原因必须写在日志里）。
+            Log.i("C-PKG", "ocr kept (in-app removed): pluginInstalled=" + ocrPluginInstalled
+                    + " hasOcrPayload=" + ocrPluginHasPayload
+                    + " decide=" + disposition.getDisposition()
+                    + " apk=" + (ocrPluginApk == null ? "(null)" : ocrPluginApk.getPath())
+                    + " ⇒ 产物无 OCR，运行期点名错误");
+            mPackagingWarnings.add("optimization.removeOcr=true 且未安装可用的 OCR 插件 ⇒ 产物不含 OCR"
+                    + "（脚本调用 $ocr 会得到点名错误；装上 OCR 插件后重打即可带上）");
+        }
     }
 
     /**
@@ -753,6 +820,35 @@ public class ApkBuilder {
         } catch (Throwable error) {
             // 标记写不出来不该让打包失败：打包提示与 C-PKG 日志已经记录过这件事。
             Log.w("C-PKG", "写 project-res stale 标记失败（不影响打包）：" + error.getMessage());
+        }
+    }
+
+    /** OCR 插件包名（加载契约里冻结的那个）。 */
+    private static final String OCR_PLUGIN_PACKAGE = "org.autojs.autojspro.plugin.ocr";
+    /** 插件载荷只随 arm64-v8a（与 libppocr 的既有构建一致）。 */
+    private static final String OCR_ABI = "arm64-v8a";
+
+    /** 已安装的 OCR 插件 APK 文件；未安装返回 null（**只读查询**，不安装/不启动）。 */
+    private File ocrPluginApkFile() {
+        try {
+            android.content.Context context = GlobalAppContext.get();
+            if (context == null) {
+                return null;
+            }
+            android.content.pm.PackageInfo info = context.getPackageManager()
+                    .getPackageInfo(OCR_PLUGIN_PACKAGE, 0);
+            if (info == null || info.applicationInfo == null || info.applicationInfo.sourceDir == null) {
+                return null;
+            }
+            File apk = new File(info.applicationInfo.sourceDir);
+            return apk.isFile() ? apk : null;
+        } catch (Throwable missing) {
+            // NameNotFoundException 既可能是「真没装」，也可能是「Android 11+ 包可见性没声明 <queries>」
+            // （见 apps/app/src/main/AndroidManifest.xml 里的 queries：我们只列出自己的三个插件包）。
+            Log.i("C-PKG", "ocr plugin lookup failed pkg=" + OCR_PLUGIN_PACKAGE
+                    + " error=" + missing.getClass().getSimpleName()
+                    + "（若是 NameNotFoundException 且确实已装，检查 manifest 的 <queries>）");
+            return null;
         }
     }
 

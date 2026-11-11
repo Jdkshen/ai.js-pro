@@ -59,10 +59,21 @@ object PluginPresencePolicy {
         choice: BundleOcrChoice = BundleOcrChoice.AUTO
     ): Decision {
         if (removeOcr || choice == BundleOcrChoice.PLUGIN_ONLY) {
+            // task-131 第 1 步（Lead 口径）：**只在「OCR 不随包」这条路上**，若已装 OCR 插件且它确实带
+            // 载荷 ⇒ 从插件 APK 取 libs+模型+真模块进产物（这样「不随包」的产物在装了插件的机器上仍有 OCR）；
+            // 未装/空壳 ⇒ 保持现状：产物无 OCR + 运行期点名错误。
+            if (pluginInstalled && pluginHasOcr) {
+                return Decision(
+                    OcrDisposition.COPY_FROM_PLUGIN,
+                    (if (removeOcr) "optimization.removeOcr=true" else "打包页选择「不随包」")
+                            + " + 已装 OCR 插件且插件带载荷 ⇒ 从插件 APK 取 libs/模型/真模块进产物"
+                )
+            }
             return Decision(
                 OcrDisposition.DROP_AND_STUB,
-                if (removeOcr) "optimization.removeOcr=true：不带内建 OCR（脚本调用 \$ocr 会得到桩的点名错误）"
-                else "打包页选择「不随包」：不带内建 OCR（脚本调用 \$ocr 会得到桩的点名错误）"
+                (if (removeOcr) "optimization.removeOcr=true：不带内建 OCR"
+                else "打包页选择「不随包」：不带内建 OCR")
+                        + "，且未装 OCR 插件（或插件为空壳）⇒ 产物无 OCR（脚本调用 \$ocr 会得到点名错误）"
             )
         }
         if (choice == BundleOcrChoice.WITH_APP) {
