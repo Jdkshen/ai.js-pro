@@ -73,6 +73,8 @@ final class PluginBridge {
                     return installStatus(args);
                 case "pluginUninstall":
                     return uninstall(args);
+                case "openInstallPermissionSettings":
+                    return openInstallPermissionSettings(activity);
                 default:
                     throw new UnsupportedOperationException("插件桥未实现的方法：" + method);
             }
@@ -267,6 +269,21 @@ final class PluginBridge {
                         finish(id, "failed", PluginFailureReason.CHECKSUM.getCode(), reason, target.length());
                         return;
                     }
+                    // 安装未知来源预检（Android 8+）：false ⇒ 不起安装器，写 permission 码 + 可执行文案 +
+                    // 给 UI 一个「去设置」动作（用户点击才会跳，检查本身不跳）。
+                    if (!canInstallPackages(activity)) {
+                        String message = "系统未允许安装未知来源应用：请在 设置 → 应用 → AI.js Pro → 安装未知应用 里允许后重试";
+                        Log.w(TAG, "pluginInstall 无安装未知来源权限 id=" + id);
+                        finish(id, "failed", PluginFailureReason.PERMISSION.getCode(), message, target.length());
+                        try {
+                            JSONObject value = state(id);
+                            value.put("action", "openInstallPermissionSettings");
+                            value.put("actionLabel", "去设置");
+                            sInstallState.put(id, value);
+                        } catch (Throwable ignored) {
+                        }
+                        return;
+                    }
                     installApk(activity, target);
                     JSONObject done = state(id);
                     done.put("state", "success");
@@ -426,6 +443,72 @@ final class PluginBridge {
     }
 
     /** 卸载桥暂缺 ⇒ 按「停用」交付（W4 文案）。 */
+    /** 能否安装未知来源应用（API<26 恒 true；26+ 用 canRequestPackageInstalls）。 */
+    private static boolean canInstallPackages(Activity activity) {
+        try {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
+                return true;
+            }
+            return activity.getPackageManager().canRequestPackageInstalls();
+        } catch (Throwable error) {
+            Log.w(TAG, "canRequestPackageInstalls 查询失败（按不可用处理）：" + error);
+            return false;
+        }
+    }
+
+    /**
+     * 打开「安装未知来源应用」设置页（**用户主动点击才调**，检查路径不会自动跳）。
+     * 优先带 package: 的精确定位页，失败退到通用页/应用详情页。
+     */
+    private static JSONObject openInstallPermissionSettings(Activity activity) throws Exception {
+        boolean opened = false;
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            try {
+                android.content.Intent intent = new android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        android.net.Uri.parse("package:" + activity.getPackageName()));
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                activity.startActivity(intent);
+                opened = true;
+            } catch (Throwable error) {
+                Log.w(TAG, "精确定位安装未知来源页失败，退通用页：" + error);
+            }
+        }
+        if (!opened) {
+            try {
+                android.content.Intent intent = new android.content.Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES);
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                activity.startActivity(intent);
+                opened = true;
+            } catch (Throwable error) {
+                Log.w(TAG, "通用安装未知来源页也失败，退应用详情页：" + error);
+            }
+        }
+        if (!opened) {
+            try {
+                android.content.Intent intent = new android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.parse("package:" + activity.getPackageName()));
+                intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                activity.startActivity(intent);
+                opened = true;
+            } catch (Throwable error) {
+                Log.w(TAG, "应用详情页也失败：" + error);
+            }
+        }
+        JSONObject data = new JSONObject();
+        data.put("opened", opened);
+        data.put("canInstall", canInstallPackages(activity));
+        JSONObject result = new JSONObject();
+        result.put("ok", opened);
+        result.put("data", data);
+        if (!opened) {
+            result.put("error", "打不开安装权限设置页（设备可能没有该页面）");
+        }
+        return result;
+    }
+
     private static JSONObject uninstall(JSONObject args) throws Exception {
         String id = args == null ? "" : args.optString("id", "");
         JSONObject data = new JSONObject();

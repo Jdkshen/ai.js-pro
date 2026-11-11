@@ -132,6 +132,7 @@ final class PocIntegration {
             case "pluginInstall":
             case "pluginInstallStatus":
             case "pluginUninstall":
+            case "openInstallPermissionSettings":
                 return PluginBridge.execute(activity, method, args);
             case "projectLoad":
             case "projectSave":

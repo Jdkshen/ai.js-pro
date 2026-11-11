@@ -1,12 +1,11 @@
 package com.jdkshen.aijspro.flutterpoc
 
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
 /**
- * task-131 batch B 钉子：插件桥两处登记 + 失败不静默 + 原因码 + 零配置回退链 + 图标字段 + 下载 stall 超时。
+ * task-131 batch B 钉子：两处登记 + 失败不静默 + 原因码 + 回退链 + 图标 + 下载 stall 超时 + 安装权限预检。
  * 纯源码级（不需要 Android 运行时），路径相对 apps/app 解析。
  */
 class PluginBridgeRoutingPinTest {
@@ -75,13 +74,13 @@ class PluginBridgeRoutingPinTest {
         val catalog = pluginBridge.substringAfter("private static JSONObject catalog(final Activity activity)")
             .substringBefore("private static JSONObject catalogOnWorker")
         assertTrue("catalog 必须在后台线程跑", catalog.contains("new Thread("))
-        assertTrue("catalog 必须同步等结果（Dart 是同步桥）", catalog.contains("worker.join(CATALOG_TIMEOUT_MS)"))
+        assertTrue("catalog 必须同步等结果", catalog.contains("worker.join(CATALOG_TIMEOUT_MS)"))
         assertTrue("必须有总兜底超时", pluginBridge.contains("CATALOG_TIMEOUT_MS = 20000L"))
         assertTrue("每个候选各自约 6s 预算", pluginBridge.contains("CANDIDATE_CONNECT_TIMEOUT_MS = 3000")
             && pluginBridge.contains("CANDIDATE_READ_TIMEOUT_MS = 3000"))
         assertTrue("失败原因要能看出试了几条/最后一条/耗时",
             pluginBridge.contains("试了 ") && pluginBridge.contains("条源，耗时 ") && pluginBridge.contains("最后一条="))
-        assertTrue("catalog 本身不得直接 httpGet（网络必须在后台线程体里）", !catalog.contains("httpGet("))
+        assertTrue("catalog 本身不得直接 httpGet", !catalog.contains("httpGet("))
         assertTrue("后台线程体与单源拉取方法都要在",
             pluginBridge.contains("private static JSONObject catalogOnWorker")
                 && pluginBridge.contains("catalogFromSource("))
@@ -98,6 +97,26 @@ class PluginBridgeRoutingPinTest {
         assertTrue("起手就有 running 状态", pluginBridge.contains("started.put"))
         assertTrue("下载失败要带可区分原因", pluginBridge.contains("source:下载失败 HTTP ")
             && pluginBridge.contains("classify(error)"))
+    }
+
+    /** 安装未知来源预检 + 「去设置」入口（用户点击才跳）。 */
+    @Test fun installChecksUnknownSourcesPermissionFirst() {
+        val pluginBridge = read(bridgePath)
+        val integration = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PocIntegration.java")
+        val route = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PocBridge.java")
+        assertTrue("安装前必须预检", pluginBridge.contains("canRequestPackageInstalls()"))
+        assertTrue("预检失败写 permission 码", pluginBridge.contains("PluginFailureReason.PERMISSION.getCode()"))
+        assertTrue("要给出可执行文案", pluginBridge.contains("系统未允许安装未知来源应用"))
+        assertTrue("预检必须在 installApk 之前（失败不起安装器）",
+            pluginBridge.indexOf("canInstallPackages(activity)") < pluginBridge.indexOf("installApk(activity, target)"))
+        assertTrue("要给 UI 一个去设置动作", pluginBridge.contains("openInstallPermissionSettings")
+            && pluginBridge.contains("actionLabel"))
+        assertTrue("设置页要带 package: 精确定位",
+            pluginBridge.contains("ACTION_MANAGE_UNKNOWN_APP_SOURCES")
+                && pluginBridge.contains("package:\" + activity.getPackageName()"))
+        assertTrue("检查路径不得自动跳设置", pluginBridge.contains("用户主动点击才调"))
+        assertTrue("两处登记都要有该桥方法",
+            route.contains("openInstallPermissionSettings") && integration.contains("openInstallPermissionSettings"))
     }
 
     @Test fun catalogProvidesLocalIconPathsWithoutNetwork() {

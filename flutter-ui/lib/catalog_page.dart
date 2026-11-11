@@ -56,6 +56,10 @@ class _CatalogPageState extends State<CatalogPage> {
   String manifestSourceLabel = '';
   /// notes 展开状态（长 changelog 折叠）
   final Set<String> expandedNotes = <String>{};
+  /// task-147：被系统「未知来源」权限挡住的插件（失败原因码 permission）⇒ 卡片上给「去设置」
+  final Set<String> permissionBlocked = <String>{};
+  /// 原生给的按钮文案（actionLabel；默认「去设置」）
+  final Map<String, String> permissionActionLabel = <String, String>{};
   bool updateSourceLoaded = false;
   final Map<String, Map<String, dynamic>> downloading = <String, Map<String, dynamic>>{};
   final Map<String, String> downloadError = <String, String>{};
@@ -243,6 +247,34 @@ class _CatalogPageState extends State<CatalogPage> {
 
   /// 安装已下载的 APK：**复用既有 `installPlugin` 桥**（它本来就是「把本地 APK 交给系统安装器」）。
   /// Android 不允许静默安装 ⇒ 这一步只能由用户确认（文案里说明白）。
+  /// task-147/148：只有**用户点击**才跳系统设置（W2 的 openInstallPermissionSettings，无参）。
+  /// 返回 {ok, data:{opened, canInstall}}：ok=false ⇒ 明确提示「打不开设置页」（不静默 ✓）；
+  /// 若返回 canInstall=true ⇒ 说明权限已开，清掉本项目上的 permission 提示并提示可重试。
+  Future<void> openInstallPermissionSettings(Map item) async {
+    final pkg = package(item);
+    try {
+      final reply =
+          await LocalBridge.call('openInstallPermissionSettings', const {});
+      final ok = reply is Map && reply['ok'] == true;
+      final data = reply is Map && reply['data'] is Map
+          ? Map<String, dynamic>.from(reply['data'] as Map)
+          : <String, dynamic>{};
+      if (!mounted) return;
+      if (!ok) {
+        notify('打不开设置页（可手动到：设置 → 应用 → AI.js Pro → 安装未知应用）');
+        return;
+      }
+      if (data['canInstall'] == true) {
+        setState(() => permissionBlocked.remove(pkg));
+        notify('权限已开启，可重试「下载安装」');
+      } else {
+        notify('已打开设置页：请允许「安装未知应用」后返回重试');
+      }
+    } catch (e) {
+      if (mounted) notify('打不开设置页：' + readable(e));
+    }
+  }
+
   Future<void> installDownloaded(Map item) async {
     final record = downloaded[package(item)];
     final path = record == null ? '' : (record['path'] ?? '').toString();
@@ -406,9 +438,25 @@ class _CatalogPageState extends State<CatalogPage> {
           if ((state == 'failed' || state == 'error') && !progressed) {
             // task-144：区分「下载中断（网络）」与「长时间无进展」
             final code = text(status, 'reasonCode');
-            final reason = code == 'network'
-                ? '下载中断（网络，可换网络或换源后重试）'
-                : downloadReason(status);
+            final action = text(status, 'action');
+            final message = text(status, 'message');
+            // task-147/148：原生预检挡住安装 ⇒ code=permission 且带 action/actionLabel（用它的 message 最准）
+            final needsSettings =
+                code == 'permission' || action == 'openInstallPermissionSettings';
+            final reason = needsSettings
+                ? (message.isNotEmpty
+                    ? message
+                    : '系统未允许安装未知来源应用：请在 设置 → 应用 → AI.js Pro → 安装未知应用 里允许后重试')
+                : code == 'network'
+                    ? '下载中断（网络，可换网络或换源后重试）'
+                    : downloadReason(status);
+            if (needsSettings && mounted) {
+              setState(() {
+                permissionBlocked.add(pkg);
+                permissionActionLabel[pkg] =
+                    text(status, 'actionLabel', '去设置');
+              });
+            }
             setState(() => downloadError[pkg] = reason);
             notify('下载失败：' + reason);
             return;
@@ -1355,15 +1403,10 @@ class _CatalogPageState extends State<CatalogPage> {
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 12)),
                           const SizedBox(height: 4),
-                          if (summary(item).isNotEmpty) ...[
-                            Text(summary(item),
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 12)),
-                            const SizedBox(height: 4),
-                          ],
+                          // task-147：卡片按「整体统一」分层——名称/版本/包名/状态行/按钮，逐块单行 + ellipsis
+                          // （说明文字只在详情里显示 ⇒ 卡片高度可预测、不会被内容撑破 ✗）
                           Text(package(item),
-                              maxLines: 2,
+                              maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                   fontSize: 11,
@@ -1399,6 +1442,14 @@ class _CatalogPageState extends State<CatalogPage> {
                                 style: TextStyle(
                                     fontSize: 11,
                                     color: Theme.of(context).colorScheme.error)),
+                          if (permissionBlocked.contains(package(item)))
+                            TextButton(
+                                key: const ValueKey('plugin-open-install-settings'),
+                                onPressed: () => openInstallPermissionSettings(item),
+                                child: Text(
+                                    permissionActionLabel[package(item)] ??
+                                        '去设置',
+                                    style: const TextStyle(fontSize: 12))),
                           if (canDownloadPlugin(item) || canInstallDownloaded(item))
                             Row(children: [
                               if (canDownloadPlugin(item))
@@ -1439,7 +1490,7 @@ class _CatalogPageState extends State<CatalogPage> {
                             const SizedBox(width: 4),
                             Expanded(
                                 child: Text(pluginStatus(item),
-                                    maxLines: 2,
+                                    maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                         fontSize: 11,
@@ -1815,14 +1866,20 @@ class _CatalogPageState extends State<CatalogPage> {
                             // task-142：用户拍板改回 **2 列卡片网格**（窄屏 2 列、宽屏 3 列）
                             // 对齐 Auto.js Pro 的卡片样式：圆角 + 居中图标 + 名称 + 副标题。
                             SliverPadding(
-                                padding: const EdgeInsets.fromLTRB(12, 4, 12, 18),
+                                // task-147：底部要留出「安装本地插件 APK」底栏 + 16（否则最后一行被切 ✗）
+                                padding: EdgeInsets.fromLTRB(
+                                    12,
+                                    4,
+                                    12,
+                                    72 + 16 + MediaQuery.of(context).padding.bottom),
                                 sliver: SliverGrid(
                                     gridDelegate:
                                         const SliverGridDelegateWithMaxCrossAxisExtent(
                                             maxCrossAxisExtent: 190,
                                             mainAxisSpacing: 12,
                                             crossAxisSpacing: 12,
-                                            childAspectRatio: 0.78),
+                                            // task-147：固定卡片高度（不再用比例 ⇒ 同一行两张卡片等高、不被内容撑破 ✗）
+                                            mainAxisExtent: 224),
                                     delegate: SliverChildBuilderDelegate(
                                         (_, index) => pluginCard(
                                             visible[index], 96),

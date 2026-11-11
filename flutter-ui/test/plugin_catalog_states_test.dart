@@ -110,6 +110,22 @@ void main() {
     expect(source.contains('overflow: TextOverflow.fade,'), isTrue);
     expect(source.contains("downloading[package(item)]!['receivedBytes'] is num"), isTrue);
     expect(source.contains('activeDownload'), isTrue);
+    // task-147：卡片分层/单行 + 固定高度 + 底部留白 + permission 去设置
+    expect(source.contains('mainAxisExtent: 224'), isTrue, reason: '卡片等高');
+    expect(source.contains('72 + 16 + MediaQuery.of(context).padding.bottom'), isTrue,
+        reason: '底部要留出底栏 + 16');
+    expect(source.contains("code == 'permission'"), isTrue);
+    expect(source.contains('系统未允许安装未知来源应用'), isTrue);
+    expect(source.contains("ValueKey('plugin-open-install-settings')"), isTrue);
+    expect(source.contains("LocalBridge.call('openInstallPermissionSettings'"), isTrue);
+    expect(source.contains("'去设置'"), isTrue);
+    // task-148：用原生 message/actionLabel；action 也能触发；ok=false 要提示
+    expect(source.contains("text(status, 'action')"), isTrue);
+    expect(source.contains("action == 'openInstallPermissionSettings'"), isTrue);
+    expect(source.contains("text(status, 'actionLabel', '去设置')"), isTrue);
+    expect(source.contains('permissionActionLabel[package(item)] ??'), isTrue);
+    expect(source.contains('打不开设置页'), isTrue);
+    expect(source.contains("data['canInstall'] == true"), isTrue);
     expect(source.contains('else if (manifestOf(item) == null)'), isTrue);
     expect(source.contains('downloadError.clear();'), isTrue,
         reason: '重新拉清单要清掉旧失败态');

@@ -382,6 +382,8 @@ final class PocBridge {
             case "pluginInstall":
             case "pluginInstallStatus":
             case "pluginUninstall":
+            // task-131：「去设置」入口（用户主动点击才调；检查路径不会自动跳）
+            case "openInstallPermissionSettings":
             case "projectLoad":
             case "projectSave":
             case "projectBuild":
