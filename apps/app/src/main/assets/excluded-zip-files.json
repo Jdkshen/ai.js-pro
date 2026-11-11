@@ -2,9 +2,7 @@
   "general": [
     "lib/arm64-v8a/libaijscrypto.so",
     "lib/arm64-v8a/libc++_shared.so",
-    "lib/arm64-v8a/libmlkit_google_ocr_pipeline.so",
     "lib/arm64-v8a/libpikafish.so",
-    "lib/arm64-v8a/libppocr.so",
     "lib/arm64-v8a/libquickjs.so",
     "lib/arm64-v8a/libquickjs_jni.so",
     "lib/armeabi-v7a/libaijscrypto.so",

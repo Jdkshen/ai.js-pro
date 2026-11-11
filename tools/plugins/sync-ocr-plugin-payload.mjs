@@ -84,10 +84,23 @@ function writeTarget(relTarget, buf, info) {
   console.log("[ocr-payload] COPY   " + relTarget + " sha256=" + digest.slice(0, 16) + " bytes=" + buf.length + (record.abi ? " abi=" + record.abi : ""));
 }
 
-const ppocrPath = path.join(ROOT, "modules/engine/src/main/jniLibs/" + ABI + "/libppocr.so");
+// 第 2 步「搬家」：载荷源已从宿主移到插件自身的 payload 目录（git 跟踪、字节不变）；
+// 旧路径保留为回退，便于过渡期（会打日志说明走了哪条）。
+const ppocrPayload = "plugins/ocr-plugin/payload/lib/" + ABI + "/libppocr.so";
+const ppocrLegacy = "modules/engine/src/main/jniLibs/" + ABI + "/libppocr.so";
+const ppocrFromPayload = fs.existsSync(path.join(ROOT, ppocrPayload));
+const ppocrSource = ppocrFromPayload ? ppocrPayload : ppocrLegacy;
+const ppocrPath = path.join(ROOT, ppocrSource);
+console.log("[ocr-payload] source-mode libppocr.so -> " + (ppocrFromPayload ? "payload(new)" : "legacy(host)"));
 if (fs.existsSync(ppocrPath)) {
-  console.log("[ocr-payload] source-chain libppocr.so -> modules/engine/src/main/jniLibs/" + ABI + "/libppocr.so");
-  writeTarget("jniLibs/" + ABI + "/libppocr.so", fs.readFileSync(ppocrPath), { source: "modules/engine/src/main/jniLibs/" + ABI + "/libppocr.so", sourceKind: "repo", regenerate: "仓库内文件（无需重新生成）" });
+  console.log("[ocr-payload] source-chain libppocr.so -> " + ppocrSource);
+  writeTarget("jniLibs/" + ABI + "/libppocr.so", fs.readFileSync(ppocrPath), {
+    source: ppocrSource,
+    sourceKind: ppocrFromPayload ? "plugin-payload" : "repo",
+    regenerate: ppocrFromPayload
+      ? "插件自带 payload（git 跟踪；第 2 步从宿主搬家而来，字节不变）"
+      : "仓库内文件（无需重新生成）"
+  });
 } else { failed += 1; console.error("[ocr-payload] 来源缺失：modules/engine/src/main/jniLibs/" + ABI + "/libppocr.so"); }
 
 const opencvAar = path.join(ROOT, "modules/engine/libs/opencv-5.0.0-16kb-page-fix.aar");
@@ -110,7 +123,10 @@ if (fs.existsSync(opencvAar)) {
 console.log("[ocr-payload] skip libmlkit_google_ocr_pipeline.so（默认后端 ppocr；mlkit 仍随宿主，见文件头重开条件）");
 
 // ---- ppocr 模型（默认后端只需要这 5 个；文件名由原生侧 PPOcr.MODEL_FILES 写死，不能改）----
-const PPOCR_SOURCE = "apps/app/src/main/assets/models/ppocrv6";
+const PPOCR_SOURCE = fs.existsSync(path.join(ROOT, "plugins/ocr-plugin/payload/models"))
+  ? "plugins/ocr-plugin/payload/models"
+  : "apps/app/src/main/assets/models/ppocrv6";
+console.log("[ocr-payload] source-mode models -> " + (PPOCR_SOURCE.indexOf("payload") >= 0 ? "payload(新)" : "legacy(宿主)"));
 const PPOCR_MODEL_FILES = [
   "PP_OCRv6_tiny_det.ncnn.param",
   "PP_OCRv6_tiny_det.ncnn.bin",

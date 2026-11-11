@@ -31,9 +31,9 @@
       "target": "jniLibs/arm64-v8a/libppocr.so",
       "sha256": "f49908886443a1409459d3c8aef52419ef15217c126a7e60dc63083203b91a22",
       "bytes": 3959048,
-      "source": "modules/engine/src/main/jniLibs/arm64-v8a/libppocr.so",
-      "sourceKind": "repo",
-      "regenerate": "仓库内文件（无需重新生成）",
+      "source": "plugins/ocr-plugin/payload/lib/arm64-v8a/libppocr.so",
+      "sourceKind": "plugin-payload",
+      "regenerate": "插件自带 payload（git 跟踪；第 2 步从宿主搬家而来，字节不变）",
       "abi": "0xb7 (AArch64)"
     },
     {
@@ -49,7 +49,7 @@
       "target": "assets/ocr/models/PP_OCRv6_tiny_det.ncnn.param",
       "sha256": "1e4d9fcbdddaf0efe9d9b7e290c5f7a8a4fe1f1264a868da8f490b76302d06fc",
       "bytes": 19306,
-      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_det.ncnn.param",
+      "source": "plugins/ocr-plugin/payload/models/PP_OCRv6_tiny_det.ncnn.param",
       "sourceKind": "repo-asset",
       "regenerate": "仓库内文件（无需重新生成）"
     },
@@ -57,7 +57,7 @@
       "target": "assets/ocr/models/PP_OCRv6_tiny_det.ncnn.bin",
       "sha256": "7ec068ccdcb60a9997be633846a53c03b48356d5a7f328be5bbdd7354bf39933",
       "bytes": 4929604,
-      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_det.ncnn.bin",
+      "source": "plugins/ocr-plugin/payload/models/PP_OCRv6_tiny_det.ncnn.bin",
       "sourceKind": "repo-asset",
       "regenerate": "仓库内文件（无需重新生成）"
     },
@@ -65,7 +65,7 @@
       "target": "assets/ocr/models/PP_OCRv6_tiny_rec.ncnn.param",
       "sha256": "1fecb3c24adb55ec900a4f5928090e5e960e79f12c58d87e5768541e0462f4d2",
       "bytes": 13853,
-      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.param",
+      "source": "plugins/ocr-plugin/payload/models/PP_OCRv6_tiny_rec.ncnn.param",
       "sourceKind": "repo-asset",
       "regenerate": "仓库内文件（无需重新生成）"
     },
@@ -73,7 +73,7 @@
       "target": "assets/ocr/models/PP_OCRv6_tiny_rec.ncnn.bin",
       "sha256": "a674dd8d3bebeac8f9b5ddf40bd4502917783bef5120582d875b69d98bd0ab41",
       "bytes": 10562152,
-      "source": "apps/app/src/main/assets/models/ppocrv6/PP_OCRv6_tiny_rec.ncnn.bin",
+      "source": "plugins/ocr-plugin/payload/models/PP_OCRv6_tiny_rec.ncnn.bin",
       "sourceKind": "repo-asset",
       "regenerate": "仓库内文件（无需重新生成）"
     },
@@ -81,7 +81,7 @@
       "target": "assets/ocr/models/ppocr_keys_v6_tiny.txt",
       "sha256": "e07ed91571983f5ee096df61ad7cb585eb79411715553ff14f5882b6052b24e0",
       "bytes": 74949,
-      "source": "apps/app/src/main/assets/models/ppocrv6/ppocr_keys_v6_tiny.txt",
+      "source": "plugins/ocr-plugin/payload/models/ppocr_keys_v6_tiny.txt",
       "sourceKind": "repo-asset",
       "regenerate": "仓库内文件（无需重新生成）"
     }

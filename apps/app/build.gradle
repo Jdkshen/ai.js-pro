@@ -240,6 +240,17 @@ android {
             // 只排 codegen，**保留 org/antlr/runtime 类**（它们在 dex 里，由 R8 保留规则守着）。
             excludes += ['resources/new_api_database.ser', 'frameworks/**', 'org/antlr/codegen/**']
         }
+        // task-131 第 2 步：主程序不再内建 OCR（用户口径「OCR 彻底剥离成插件」）。
+        // mlkit 的库/模型由 Gradle 依赖（modules/engine 的 text-recognition-chinese AAR）带入，
+        // 仓库里没有可搬的源 ⇒ 这里**只从打包里排除**（代码仍可编译；backend=mlkit 走既有点名错误）。
+        // ppocr 的 lib 与 5 个模型已从宿主「搬家」到 plugins/ocr-plugin/payload/**（见该目录与锁文件）。
+        jniLibs {
+            excludes += ['**/libmlkit_google_ocr_pipeline.so', '**/libppocr.so']
+        }
+    }
+    androidResources {
+        // 同上：mlkit 的 42 个模型目录不再随主程序分发（aapt 按**文件/目录名**匹配）。
+        ignoreAssetsPattern = '!mlkit-google-ocr-models'
     }
 
     configurations.all {
@@ -981,10 +992,10 @@ def quickJsNativeSources = [
 ].collect { new File(quickJsNativeSourceDir, it) }
 def quickJsNativeLibraries = ['armeabi-v7a', 'arm64-v8a', 'x86'].collectMany { abi ->
     def names = ['libquickjs_jni.so', 'libaijscrypto.so']
-    if (abi == 'arm64-v8a') {
-        // PP-OCR（ncnn）只随包 arm64-v8a，其余 ABI 由 Java 侧回退到 ML Kit。
-        names += 'libppocr.so'
-    }
+    // task-131 第 2 步：libppocr.so 已从宿主「搬家」到 plugins/ocr-plugin/payload/lib/arm64-v8a/
+    // （由 OCR 插件提供；主程序/模板不再内建 OCR ⇒ 不再要求宿主 jniLibs 里存在它）。
+    // native 源仍在 modules/engine/src/main/cpp/ppocr/**，供插件载荷重建使用。
+    // 未装插件时 $ocr 走既有点名错误（不是崩溃）。
     names.collect { rootProject.file("modules/engine/src/main/jniLibs/${abi}/${it}") }
 }
 

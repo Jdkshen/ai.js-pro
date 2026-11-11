@@ -563,15 +563,17 @@ public class ApkBuilder {
             Log.w("C-PKG", "copyOcrFromPlugin: 读取 project.json 失败，跳过：" + error.getMessage());
             return;
         }
-        if (!removeOcr) {
-            return;
+        // 第 2 步：不仅 removeOcr 走这条路 —— 主程序已不内建 OCR 时也必须判定（否则产物会「以为有 OCR」）。
+        boolean hostBundlesOcr = HOST_BUNDLES_OCR;
+        if (!removeOcr && hostBundlesOcr) {
+            return;   // 旧形态 + 显式随包 ⇒ 与今天逐字一致
         }
         File ocrPluginApk = ocrPluginApkFile();
         boolean ocrPluginInstalled = ocrPluginApk != null;
         boolean ocrPluginHasPayload = ocrPluginInstalled
                 && PluginOcrSource.hasOcrPayload(ocrPluginApk, OCR_ABI);
         PluginPresencePolicy.Decision disposition = PluginPresencePolicy.decide(
-                true, ocrPluginInstalled, true, ocrPluginHasPayload);
+                removeOcr, ocrPluginInstalled, hostBundlesOcr, ocrPluginHasPayload);
         if (disposition.getDisposition() == PluginPresencePolicy.OcrDisposition.COPY_FROM_PLUGIN) {
             PluginOcrSource.Result copied = PluginOcrSource.copyIntoWorkspace(
                     ocrPluginApk, new File(mWorkspacePath), OCR_ABI);
@@ -587,7 +589,8 @@ public class ApkBuilder {
             Log.i("C-PKG", "ocr from plugin pkg=" + OCR_PLUGIN_PACKAGE + " path=" + ocrPluginApk.getPath()
                     + " libs=" + libs + " models=" + models + " files=" + copied.getFiles()
                     + " bytes=" + copied.getBytes() + " source=plugin-apk after=enforcePackagingPolicy");
-            mPackagingWarnings.add("optimization.removeOcr=true，但已安装 OCR 插件（" + OCR_PLUGIN_PACKAGE
+            mPackagingWarnings.add((removeOcr ? "optimization.removeOcr=true"
+                    : "主程序已不内建 OCR（第 2 步）") + "，但已安装 OCR 插件（" + OCR_PLUGIN_PACKAGE
                     + "）⇒ 产物从插件取回 OCR（libs=" + libs + " models=" + models + "）；卸载插件后重打将不再带 OCR");
         } else {
             // 让「为什么没取插件」可 grep（dev-1497/1498 教训：原因必须写在日志里）。
@@ -596,8 +599,10 @@ public class ApkBuilder {
                     + " decide=" + disposition.getDisposition()
                     + " apk=" + (ocrPluginApk == null ? "(null)" : ocrPluginApk.getPath())
                     + " ⇒ 产物无 OCR，运行期点名错误");
-            mPackagingWarnings.add("optimization.removeOcr=true 且未安装可用的 OCR 插件 ⇒ 产物不含 OCR"
-                    + "（脚本调用 $ocr 会得到点名错误；装上 OCR 插件后重打即可带上）");
+            mPackagingWarnings.add((removeOcr ? "optimization.removeOcr=true"
+                    : "主程序已不内建 OCR（第 2 步：OCR 只由插件提供）")
+                    + " 且未安装可用的 OCR 插件 ⇒ 产物不含 OCR（脚本调用 $ocr 会得到点名错误；"
+                    + "装上 OCR 插件后重打即可带上）");
         }
     }
 
@@ -827,6 +832,14 @@ public class ApkBuilder {
     private static final String OCR_PLUGIN_PACKAGE = "org.autojs.autojspro.plugin.ocr";
     /** 插件载荷只随 arm64-v8a（与 libppocr 的既有构建一致）。 */
     private static final String OCR_ABI = "arm64-v8a";
+    /**
+     * task-131 第 2 步（用户目标：主程序彻底不带 OCR）：主程序/内置模板**不再内建** OCR libs+模型。
+     *
+     * <p>⇒ 新默认形态 = 「主程序不带 OCR」：没装插件 ⇒ 产物无 OCR（`$ocr` 给点名错误，来自模板里保留的
+     * 真 __ocr__.js 模块，不崩）；装了插件 ⇒ COPY_FROM_PLUGIN 从插件取回。要把形态回滚成「主程序内建」
+     * 只需把这里改回 true（其余逻辑自动回到旧行为）。</p>
+     */
+    private static final boolean HOST_BUNDLES_OCR = false;
 
     /** 已安装的 OCR 插件 APK 文件；未安装返回 null（**只读查询**，不安装/不启动）。 */
     private File ocrPluginApkFile() {

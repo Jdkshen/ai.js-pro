@@ -29,6 +29,13 @@ android {
         resources {
             excludes += ['org/antlr/codegen/**']
         }
+        // task-131 第 2 步：打包模板（= 产物的宿主）也不再带 OCR 的库/模型。
+        jniLibs {
+            excludes += ['**/libmlkit_google_ocr_pipeline.so', '**/libppocr.so']
+        }
+    }
+    androidResources {
+        ignoreAssetsPattern = '!mlkit-google-ocr-models'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
