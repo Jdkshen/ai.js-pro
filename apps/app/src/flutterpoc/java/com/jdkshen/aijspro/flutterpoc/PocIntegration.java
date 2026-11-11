@@ -115,6 +115,18 @@ final class PocIntegration {
             // task-96：只读的产物「大小构成」（数据源=产物本身；失败时页面不显示该行）
             case "apkBreakdown":
                 return ApkBreakdownBridge.execute(activity, args);
+            // ---- 应用信息（更新源 / 检查更新 / 关于…，PocAppInfo）------------------
+            // ⚠️ MCP 反射走的是这一份（PocBridge 那份只服务 Flutter 路由）⇒ 漏登记就 UnsupportedOperationException：
+            // dev-1500 真机抓到的 updateSource 就是漏在这里（PocBridge:433-440 有、这里没有）。
+            // 一次补全整组，避免同类缺口再来一次。
+            case "checkUpdate":
+            case "updateSource":
+            case "openIssueReport":
+            case "openAbout":
+            case "openLicenses":
+            case "editorSettings":
+            case "aboutInfo":
+                return PocAppInfo.execute(activity, method, args);
             // ---- 插件目录（task-131 batch B）：清单/下载/进度/停用 ----------------
             case "pluginCatalog":
             case "pluginInstall":
