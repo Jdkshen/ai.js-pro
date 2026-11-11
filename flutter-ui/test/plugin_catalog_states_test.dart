@@ -41,6 +41,16 @@ void main() {
     // task-135：必须**首屏可见**（列表头），否则真机看不到
     expect(source.contains("ValueKey('plugin-manifest-error-header')"), isTrue);
     expect(source.contains("ValueKey('plugin-manifest-loading')"), isTrue);
+    // task-137：失败态 = 无转圈 + 源 + 怎么办 + 重试
+    expect(source.contains('pluginManifestError == null &&'), isTrue,
+        reason: '清单失败时不得再显示永不结束的居中转圈');
+    expect(source.contains("ValueKey('plugin-manifest-retry')"), isTrue);
+    expect(source.contains("ValueKey('plugin-manifest-source')"), isTrue);
+    expect(source.contains('当前更新源：'), isTrue);
+    expect(source.contains('多半是更新源不可达'), isTrue);
+    expect(source.contains('要公网下载请在「设置 → 更新源」'), isTrue);
+    expect(source.contains("LocalBridge.call('updateSource')"), isTrue,
+        reason: '源必须复用既有 updateSource 桥，不另造');
     expect(source.contains("throw StateError('清单读取超时（桥未响应）')"), isTrue,
         reason: '桥不响应必须落到可见降级，不能永远停在「加载中」');
     expect(source.contains('插件目录不可用：'), isTrue);

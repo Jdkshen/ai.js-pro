@@ -42,6 +42,9 @@ class _CatalogPageState extends State<CatalogPage> {
   Map<String, dynamic> pluginManifest = <String, dynamic>{};
   bool pluginManifestLoaded = false;
   String? pluginManifestError;
+  // task-137：失败时要显示「当前更新源」+ 一句怎么办（值来自既有 updateSource 桥）
+  String updateSourceValue = '';
+  bool updateSourceLoaded = false;
   final Map<String, Map<String, dynamic>> downloading = <String, Map<String, dynamic>>{};
   final Map<String, String> downloadError = <String, String>{};
   bool reloadWhenActive = true;
@@ -113,6 +116,32 @@ class _CatalogPageState extends State<CatalogPage> {
       installed(item) == true && !pluginDisabled(item);
 
   /// 只读拉取插件清单（W2 的 plugins.json 经原生桥）；**拿不到就显式说**，不静默、不猜。
+  /// 只读取「当前更新源」（与设置页同一个桥 updateSource）；拿不到也要说，不静默。
+  Future<void> loadUpdateSource() async {
+    try {
+      final value = await LocalBridge.call('updateSource');
+      if (!mounted) return;
+      setState(() {
+        updateSourceValue = value is String ? value : '';
+        updateSourceLoaded = true;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          updateSourceValue = '（更新源读取失败）';
+          updateSourceLoaded = true;
+        });
+      }
+    }
+  }
+
+  /// 一键重试：源 + 清单 + 本地目录各再拉一次（失败态的唯一出口）。
+  Future<void> retryPluginCatalog() async {
+    await loadUpdateSource();
+    await loadPluginCatalog();
+    if (mounted && widget.plugin) load();
+  }
+
   Future<void> loadPluginCatalog() async {
     if (!widget.plugin) return;
     try {
@@ -452,6 +481,7 @@ class _CatalogPageState extends State<CatalogPage> {
     super.initState();
     if (widget.active) load();
     if (widget.plugin) loadPluginCatalog();
+    if (widget.plugin) loadUpdateSource();
   }
 
   @override
@@ -1258,19 +1288,41 @@ class _CatalogPageState extends State<CatalogPage> {
     final usable = all.where(scriptUsable).length;
     final disabledInList = all.where(pluginDisabled).length;
     return Column(children: [
-      // task-136：清单提示**独占整行**（上一版塞在标题 Expanded 里 ⇒ 真机上与右侧「N 个插件」重叠 ✗）
+      // task-136/137：清单提示**独占整行**；失败态 = 原因 + 「多半是源不可达」+ 当前更新源 + 怎么办 + **重试**按钮
       if (widget.plugin && pluginManifestError != null)
         Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text('插件目录不可用：' + pluginManifestError!,
-                    key: const ValueKey('plugin-manifest-error-header'),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.error)))),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                    child: Text(
+                        '插件目录不可用：' +
+                            pluginManifestError! +
+                            '（多半是更新源不可达 —— 换网络或换源后重试）',
+                        key: const ValueKey('plugin-manifest-error-header'),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.error))),
+                TextButton(
+                    key: const ValueKey('plugin-manifest-retry'),
+                    onPressed: retryPluginCatalog,
+                    child: const Text('重试')),
+              ]),
+              Text(
+                  '当前更新源：' +
+                      (updateSourceValue.isEmpty ? '内置源（未设置）' : updateSourceValue) +
+                      (updateSourceLoaded ? '' : '（读取中…）'),
+                  key: const ValueKey('plugin-manifest-source'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12)),
+              const Text(
+                  '要公网下载请在「设置 → 更新源」填公网地址（或留空用内置源）；局域网地址仅在手机与电脑同一 Wi-Fi 时可达。',
+                  key: ValueKey('plugin-manifest-source-hint'),
+                  style: TextStyle(fontSize: 12)),
+            ])),
       if (widget.plugin &&
           pluginManifestError == null &&
           !pluginManifestLoaded)
@@ -1352,7 +1404,11 @@ class _CatalogPageState extends State<CatalogPage> {
         const SizedBox(height: 2),
       if (currentError != null) failure(currentError, hasData: source != null),
       Expanded(
-          child: source == null && currentError == null
+          // task-137：清单失败时**不再留一个永不结束的转圈**（用户会当成卡死）⇒ 失败 = 明确失败态 + 重试
+          child: source == null &&
+                  currentError == null &&
+                  pluginManifestError == null &&
+                  !pluginManifestLoaded
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
                   onRefresh: load,
