@@ -55,7 +55,9 @@ public class OcrAbilityMissingTest {
         assertTrue("handleOcr 用共享常量",
                 read("src/main/java/org/autojs/source/engine/android/Node24HostBridge.java")
                         .contains("com.stardust.autojs.runtime.api.OcrAvailability.NOT_PACKAGED_MESSAGE"));
-        String prefix = "OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；";
+        // Lead 2026-11-12：主程序把 OCR 剥离成插件后，这句话的**首选解法改成「装插件」**
+        // （旧文案让人「关掉开关重新打包」，在新默认下已不成立）。三份 JS 副本必须逐字一致。
+        String prefix = "OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，";
         for (String path : new String[] { "src/main/assets/modules/__ocr__.js",
                 "src/main/assets/modules/qjs-plugins.js", "src/main/assets/node24/modules/ocr.js" }) {
             String source = read(path);

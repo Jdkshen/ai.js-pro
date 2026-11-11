@@ -96,7 +96,7 @@
     }
 
     // task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致（三引擎同源）。
-    var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；如需 OCR 请把该开关关掉并重新打包。';
+    var OCR_NOT_PACKAGED = 'OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，或主程序已把 OCR 剥离成插件）；如需 OCR 请安装「OCR 插件」后重试。';
 
     // task-107：只有「加载失败形状 + 我们的库名」才配得上那句点名文案；其它失败保留原文（别误导排障）。
     function looksLikeAbilityMissing(value) {

@@ -75,6 +75,8 @@ final class PluginBridge {
                     return uninstall(args);
                 case "openInstallPermissionSettings":
                     return openInstallPermissionSettings(activity);
+                case "createLauncherShortcut":
+                    return createLauncherShortcut(activity, args);
                 default:
                     throw new UnsupportedOperationException("插件桥未实现的方法：" + method);
             }
@@ -443,6 +445,99 @@ final class PluginBridge {
     }
 
     /** 卸载桥暂缺 ⇒ 按「停用」交付（W4 文案）。 */
+    /**
+     * 创建「插件页」桌面快捷方式（**可选、用户主动点击**；插件本身无界面、不该有图标，这是直达入口）。
+     *
+     * <p>API≥26：ShortcutManager.requestPinShortcut（系统弹确认）；API 25：INSTALL_SHORTCUT 广播；
+     * API&lt;25 或失败：返回 ok=false + reason（**不静默**）。`pin` 是「已请求」不是「已创建」⇒ 文案要如实。</p>
+     */
+    private static JSONObject createLauncherShortcut(Activity activity, JSONObject args) throws Exception {
+        String label = args == null ? null : args.optString("label", null);
+        if (label == null || label.trim().isEmpty()) {
+            label = "插件";
+        }
+        JSONObject data = new JSONObject();
+        int sdk = android.os.Build.VERSION.SDK_INT;
+        // 点快捷方式 ⇒ 启动主 Activity，并带上 route=plugins 让 UI 落到插件页（UI 侧读 route / pending_action）。
+        android.content.Intent launch = activity.getPackageManager()
+                .getLaunchIntentForPackage(activity.getPackageName());
+        if (launch == null) {
+            JSONObject result = new JSONObject();
+            result.put("ok", false);
+            result.put("reason", "找不到启动入口（getLaunchIntentForPackage 返回 null）");
+            result.put("data", data.put("supported", false).put("requested", false));
+            Log.w(TAG, "createLauncherShortcut 失败：无启动 Intent");
+            return result;
+        }
+        launch.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+        launch.putExtra("route", "plugins");
+        launch.putExtra("openPluginTab", true);
+
+        if (sdk >= android.os.Build.VERSION_CODES.O) {
+            try {
+                android.content.pm.ShortcutManager manager = activity.getSystemService(android.content.pm.ShortcutManager.class);
+                if (manager == null) {
+                    throw new IllegalStateException("ShortcutManager 不可用");
+                }
+                android.content.pm.ShortcutInfo shortcut = new android.content.pm.ShortcutInfo.Builder(
+                        activity, "ai_js_pro_plugins")
+                        .setShortLabel(label)
+                        .setIcon(android.graphics.drawable.Icon.createWithResource(
+                                activity, activity.getApplicationInfo().icon))
+                        .setIntent(launch)
+                        .build();
+                boolean requested = manager.requestPinShortcut(shortcut, null);
+                data.put("supported", true);
+                data.put("requested", requested);
+                data.put("mode", "pin");
+                JSONObject result = new JSONObject();
+                result.put("ok", requested);
+                result.put("data", data);
+                if (!requested) {
+                    result.put("reason", "设备/启动器不支持固定快捷方式（requestPinShortcut 返回 false）");
+                    Log.w(TAG, "createLauncherShortcut 不被支持（pin 返回 false）");
+                } else {
+                    Log.i(TAG, "createLauncherShortcut 已请求（pin）label=" + label);
+                }
+                return result;
+            } catch (Throwable error) {
+                Log.w(TAG, "createLauncherShortcut pin 失败，尝试旧广播：" + error);
+            }
+        }
+        if (sdk >= 25) {
+            try {
+                android.content.Intent shortcut = new android.content.Intent(
+                        "com.android.launcher.action.INSTALL_SHORTCUT");
+                shortcut.putExtra(android.content.Intent.EXTRA_SHORTCUT_INTENT, launch);
+                shortcut.putExtra(android.content.Intent.EXTRA_SHORTCUT_NAME, label);
+                shortcut.putExtra(android.content.Intent.EXTRA_SHORTCUT_ICON_RESOURCE,
+                        android.content.Intent.ShortcutIconResource.fromContext(
+                                activity, activity.getApplicationInfo().icon));
+                shortcut.putExtra("duplicate", false);
+                activity.sendBroadcast(shortcut);
+                data.put("supported", true);
+                data.put("requested", true);
+                data.put("mode", "broadcast");
+                JSONObject result = new JSONObject();
+                result.put("ok", true);
+                result.put("data", data);
+                result.put("reason", "已发送创建广播（旧接口无法确认结果，启动器可能忽略）");
+                Log.i(TAG, "createLauncherShortcut 已发广播（API25 旧接口）label=" + label);
+                return result;
+            } catch (Throwable error) {
+                Log.w(TAG, "createLauncherShortcut 广播也失败：" + error);
+            }
+        }
+        data.put("supported", false);
+        data.put("requested", false);
+        JSONObject result = new JSONObject();
+        result.put("ok", false);
+        result.put("reason", sdk < 25 ? "系统版本过低（创建快捷方式需 Android 7.1+）" : "创建快捷方式失败（pin 与广播都不可用）");
+        result.put("data", data);
+        Log.w(TAG, "createLauncherShortcut 不可用 sdk=" + sdk);
+        return result;
+    }
+
     /** 能否安装未知来源应用（API<26 恒 true；26+ 用 canRequestPackageInstalls）。 */
     private static boolean canInstallPackages(Activity activity) {
         try {

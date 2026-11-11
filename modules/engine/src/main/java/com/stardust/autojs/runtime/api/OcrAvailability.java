@@ -13,8 +13,10 @@ public final class OcrAvailability {
 
     /** 三引擎共用的点名文案（脚本侧 JS 常量与本串逐字一致，测试钉住）。 */
     public static final String NOT_PACKAGED_MESSAGE =
-            "OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；"
-                    + "如需 OCR 请把该开关关掉并重新打包。";
+            // Lead 2026-11-12：主程序已把 OCR 剥离成插件（第 2 步的新默认）⇒ 首选解法是**装插件**，
+            // 不再是「关掉开关重新打包」（那句只在「显式开启 removeOcr」时才成立）。JS 三份副本逐字一致。
+            "OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，"
+                    + "或主程序已把 OCR 剥离成插件）；如需 OCR 请安装「OCR 插件」后重试。";
 
     private OcrAvailability() {
     }

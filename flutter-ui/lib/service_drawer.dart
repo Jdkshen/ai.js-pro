@@ -440,6 +440,35 @@ class _ServiceDrawerState extends State<ServiceDrawer>
 
   void page(Widget value) => navigate(() => widget.openPage(value));
 
+  /// task-155：创建桌面快捷方式。**如实**：返回的 `requested` 只表示「已请求」（系统弹窗还得用户确认 ✓），
+  /// 不代表已创建；不支持/失败/异常都给可读提示（不静默 ✓）。
+  Future<void> createShortcut() async {
+    try {
+      final reply = await LocalBridge.call('createLauncherShortcut', const {});
+      if (!mounted) return;
+      final map = reply is Map ? Map<String, dynamic>.from(reply) : <String, dynamic>{};
+      final data = map['data'] is Map
+          ? Map<String, dynamic>.from(map['data'] as Map)
+          : <String, dynamic>{};
+      if (map['ok'] != true) {
+        final reason = (map['error'] ?? map['message'] ?? '').toString().trim();
+        message(context, reason.isEmpty ? '创建桌面快捷方式失败（原因未提供）' : reason);
+        return;
+      }
+      if (data['supported'] == false) {
+        message(context, '当前系统/桌面不支持快捷方式');
+        return;
+      }
+      if (data['requested'] == true) {
+        message(context, '已请求添加到主屏幕：请在系统弹窗中确认');
+        return;
+      }
+      message(context, '已请求创建快捷方式（结果以系统桌面为准）');
+    } catch (error) {
+      if (mounted) message(context, '创建桌面快捷方式失败：$error');
+    }
+  }
+
   Future<void> terminal() async {
     Navigator.of(context).pop();
     try {
@@ -461,7 +490,9 @@ class _ServiceDrawerState extends State<ServiceDrawer>
               color:
                   Theme.of(context).colorScheme.onSurface.withValues(alpha: .55))));
 
-  Widget link(IconData icon, String title, VoidCallback action) => ListTile(
+  Widget link(IconData icon, String title, VoidCallback action, {Key? key}) =>
+      ListTile(
+      key: key,
       dense: true,
       minVerticalPadding: 8,
       leading: Icon(icon, size: 22),
@@ -793,6 +824,10 @@ class _ServiceDrawerState extends State<ServiceDrawer>
                         message(context, e.toString());
                       }
                     }),
+          // task-155：桌面快捷方式入口（W2 的 createLauncherShortcut 桥；pin 只是**请求** ✓）
+          link(Icons.add_to_home_screen_outlined, '创建桌面快捷方式',
+              createShortcut,
+              key: const ValueKey('drawer-create-shortcut')),
           link(
               Icons.settings_outlined,
               '设置',

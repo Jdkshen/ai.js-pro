@@ -384,6 +384,8 @@ final class PocBridge {
             case "pluginUninstall":
             // task-131：「去设置」入口（用户主动点击才调；检查路径不会自动跳）
             case "openInstallPermissionSettings":
+            // task-131：桌面快捷方式（可选入口，用户主动点击）
+            case "createLauncherShortcut":
             case "projectLoad":
             case "projectSave":
             case "projectBuild":

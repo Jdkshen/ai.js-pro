@@ -245,7 +245,7 @@ var pluginLibsLoaded = false;
 var pluginDescriptor = null;
 var PPOcr = com.stardust.autojs.runtime.api.PPOcr;
 // task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致的共用文案（三引擎同源）。
-var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：libppocr.so / libmlkit* 不在包内；如需 OCR 请把该开关关掉并重新打包。';
+var OCR_NOT_PACKAGED = 'OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，或主程序已把 OCR 剥离成插件）；如需 OCR 请安装「OCR 插件」后重试。';
     var ocr = {};
 
     // 探针用：当前进程内未释放的 OCR 会话数（脚本忘 release() 时应该在下个脚本里看到 0）
@@ -452,7 +452,7 @@ var OCR_NOT_PACKAGED = 'OCR 能力未随包（optimization.removeOcr=true）：l
                 // task-142：两个后端都不可用 ⇒ **出口必须是那条既有点名错误**（插件已优先尝试过、此处无插件）。
                 // 后面括号里保留 v7a 场景的提示（v7a 天生没有 libppocr.so，不是 removeOcr）。
                 var failure = new Error(OCR_NOT_PACKAGED
-                    + '（本 ABI 也没有 libppocr.so：v7a 场景请用 backend:"mlkit" 或安装 OCR 插件）');
+                    + '（本 ABI 也没有 libppocr.so：请安装「OCR 插件」；v7a 需插件提供对应 ABI 的库）');
                 failure.code = 'OCR_UNAVAILABLE';
                 failure.reason = 'MlKitContext has not been initialized';
                 failure.ppocrAvailable = false;

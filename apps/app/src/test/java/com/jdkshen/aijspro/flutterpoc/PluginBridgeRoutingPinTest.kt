@@ -135,4 +135,20 @@ class PluginBridgeRoutingPinTest {
         assertTrue("卸载按停用交付", pluginBridge.contains("本轮没有卸载桥"))
         assertTrue("停用态要有明确字段", pluginBridge.contains("data.put(\"disabled\", true)"))
     }
+/** 桌面快捷方式入口（可选）：pin 分支 + 旧广播分支 + 不支持时明确原因（不静默）。 */
+    @Test fun launcherShortcutBridgeHasPinAndLegacyFallback() {
+        val pluginBridge = read(bridgePath)
+        val route = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PocBridge.java")
+        val integration = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PocIntegration.java")
+        assertTrue("pin 分支（API>=26）", pluginBridge.contains("requestPinShortcut("))
+        assertTrue("旧广播分支（API25）", pluginBridge.contains("com.android.launcher.action.INSTALL_SHORTCUT"))
+        assertTrue("低版本要给明确原因", pluginBridge.contains("系统版本过低（创建快捷方式需 Android 7.1+）"))
+        assertTrue("失败不静默", pluginBridge.contains("createLauncherShortcut 不可用 sdk=")
+            && pluginBridge.contains("createLauncherShortcut 不被支持"))
+        assertTrue("返回要区分 supported/requested", pluginBridge.contains("supported")
+            && pluginBridge.contains("requested"))
+        assertTrue("Intent 要带插件页路由", pluginBridge.contains("route") && pluginBridge.contains("openPluginTab"))
+        assertTrue("两处登记都要有", route.contains("createLauncherShortcut")
+            && integration.contains("createLauncherShortcut"))
+    }
 }

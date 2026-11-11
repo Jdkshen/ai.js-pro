@@ -629,7 +629,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
         } catch (Throwable failure) {
             // task-99：OCR 库被按 optimization.removeOcr 剔除时，给**点名**错误（而不是 UnsatisfiedLinkError/NoClassDefFoundError）。
             if (isOcrAbilityMissing(failure)) {
-                Log.w(TAG, "ocr " + action + " unavailable: OCR 能力未随包（optimization.removeOcr=true）");
+                Log.w(TAG, "ocr " + action + " unavailable: OCR 能力未随包（未内建 OCR / 未装 OCR 插件）");
                 return error(com.stardust.autojs.runtime.api.OcrAvailability.NOT_PACKAGED_MESSAGE);
             }
             Log.w(TAG, "ocr " + action + " failed: " + request, failure);
@@ -652,8 +652,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
         if ("ppocr".equals(backend) || "paddle".equals(backend) || "paddleocr".equals(backend)) {
             backend = "ppocr";
             if (!PPOcr.isAvailable()) {
+                // Lead 2026-11-12：mlkit 已不随主程序打包（第 2 步）⇒ 不能再把用户指向它。
                 throw new IllegalStateException("默认 PP-OCR 后端在当前 ABI 不可用（只随包 arm64-v8a）；"
-                        + "请使用 createOCR({backend:'mlkit'}) 走内置 ML Kit");
+                        + "请安装「OCR 插件」后重试");
             }
             // PPOcr 默认模型目录走 ScriptRuntime.getApplicationContext()；
             // :node24 进程没有 ScriptEngineService 去设置它，这里补一次（只保存弱引用）。
