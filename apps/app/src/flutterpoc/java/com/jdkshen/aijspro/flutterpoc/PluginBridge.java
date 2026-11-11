@@ -83,14 +83,16 @@ final class PluginBridge {
      * 便于真机一眼判因。</p>
      */
     private static JSONObject catalog(final Activity activity) throws Exception {
-        final String url = PluginDownloads.pluginUrl(activity, CATALOG_FILE);
+        final java.util.List<PluginDownloads.Candidate> candidates =
+                PluginDownloads.pluginUrlCandidates(activity, CATALOG_FILE);
+        final String url = candidates.get(0).url;
         final java.util.concurrent.atomic.AtomicReference<Object> holder =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Thread worker = new Thread(new Runnable() {
             @Override
             public void run() {
                 try {
-                    holder.set(catalogOnWorker(activity, url));
+                    holder.set(catalogOnWorker(activity, candidates));
                 } catch (Throwable error) {
                     holder.set(error);
                 }
@@ -99,7 +101,7 @@ final class PluginBridge {
         worker.start();
         worker.join(CATALOG_TIMEOUT_MS);
         if (worker.isAlive()) {
-            throw new IllegalStateException("network:插件清单拉取后台超时（" + CATALOG_TIMEOUT_MS + "ms）url=" + url);
+            throw new IllegalStateException("source:插件清单拉取后台超时（" + CATALOG_TIMEOUT_MS + "ms）url=" + url);
         }
         Object value = holder.get();
         if (value instanceof JSONObject) {
@@ -119,8 +121,25 @@ final class PluginBridge {
     }
 
     /** 后台线程体：网络读取 + 解析 + 四态（**不得触碰 UI**）。 */
-    private static JSONObject catalogOnWorker(Activity activity, String url) throws Exception {
-        Fetch fetch = httpGet(url);
+    private static JSONObject catalogOnWorker(Activity activity,
+            java.util.List<PluginDownloads.Candidate> candidates) throws Exception {
+        Exception lastError = null;
+        for (PluginDownloads.Candidate candidate : candidates) {
+            try {
+                return catalogFromSource(activity, candidate.url, candidate.source);
+            } catch (Exception error) {
+                lastError = error;
+                Log.w(TAG, "pluginCatalog 源失败 source=" + candidate.source + " url=" + candidate.url
+                        + " : " + error.getClass().getSimpleName() + ": " + error.getMessage());
+            }
+        }
+        throw lastError == null
+                ? new IllegalStateException("source:没有可用的插件源（候选链为空）")
+                : lastError;
+    }
+
+    private static JSONObject catalogFromSource(Activity activity, String url, String source) throws Exception {
+        Fetch fetch = httpGet(url, source);
         String body = fetch.body;
         if (body.trim().isEmpty()) {
             throw new IllegalStateException("manifest:清单为空" + fetch.describe());
@@ -292,11 +311,32 @@ final class PluginBridge {
     }
 
     private static void download(Activity activity, PluginManifest.Entry entry, File target) throws Exception {
+        java.util.List<PluginDownloads.Candidate> candidates =
+                PluginDownloads.pluginUrlCandidates(activity, entry.getFile());
+        Exception lastError = null;
+        for (PluginDownloads.Candidate candidate : candidates) {
+            try {
+                downloadOnce(activity, candidate.url, entry, target);
+                Log.i(TAG, "pluginInstall apk source=" + candidate.source + " url=" + candidate.url);
+                return;
+            } catch (Exception error) {
+                lastError = error;
+                Log.w(TAG, "pluginInstall 源失败 source=" + candidate.source + " url=" + candidate.url
+                        + " : " + error.getClass().getSimpleName() + ": " + error.getMessage());
+            }
+        }
+        throw lastError == null
+                ? new IllegalStateException("source:没有可用的插件源（候选链为空）")
+                : lastError;
+    }
+
+    private static void downloadOnce(Activity activity, String url, PluginManifest.Entry entry, File target)
+            throws Exception {
         File parent = target.getParentFile();
         if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
             throw new IllegalStateException("无法创建下载目录：" + parent);
         }
-        String url = PluginDownloads.pluginUrl(activity, entry.getFile());
+        // url 由调用方按候选链给定（见 download 的降级循环）
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
@@ -408,7 +448,11 @@ final class PluginBridge {
     }
 
     private static Fetch httpGet(String url) throws Exception {
-        String source = sourceOf(url);
+        return httpGet(url, sourceOf(url));
+    }
+
+    /** 回退链版本：来源标签由候选链给定（custom/builtin-release/builtin-raw/builtin-direct）。 */
+    private static Fetch httpGet(String url, String source) throws Exception {
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);

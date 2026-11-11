@@ -11,13 +11,22 @@ void main() {
 
     // 桥名集中（与 W2 定稿对齐时只改这一处）
     expect(source.contains("pluginCatalogMethod = 'pluginCatalog'"), isTrue);
-    expect(source.contains("pluginDownloadMethod = 'pluginDownloadAndInstall'"), isTrue);
-    expect(source.contains("pluginProgressMethod = 'pluginDownloadProgress'"), isTrue);
+    // 真实桥名（Lead dev-1501 真机验过）：pluginInstall / pluginInstallStatus
+    expect(source.contains("pluginInstallMethod = 'pluginInstall'"), isTrue);
+    expect(source.contains("pluginInstallStatusMethod = 'pluginInstallStatus'"), isTrue);
+    // 轻量节流：60s 内不重复拉；下拉/重试强制
+    expect(source.contains('Duration(seconds: 60)'), isTrue);
+    expect(source.contains('loadPluginCatalog(force: true)'), isTrue);
+    expect(source.contains('lastPluginCatalogAt'), isTrue);
+    // 状态驱动：success/failed + reasonCode + message
+    expect(source.contains("state == 'success'"), isTrue);
+    expect(source.contains("state == 'failed' || state == 'error'"), isTrue);
+    expect(source.contains("text(result, 'reasonCode'"), isTrue);
     // 只传 id / fileName（URL 由原生解析）
     expect(source.contains("'id': id,"), isTrue);
-    expect(source.contains("'fileName': text(manifest, 'file'),"), isTrue);
+    expect(source.contains("'id': id});"), isTrue, reason: '安装只传 id');
     // 只查**下载调用这一段**不得出现 url（页面上别处可能有 url 字段，那是既有逻辑）
-    final callStart = source.indexOf('LocalBridge.call(pluginDownloadMethod');
+    final callStart = source.indexOf('LocalBridge.call(pluginInstallMethod');
     expect(callStart > 0, isTrue);
     final callEnd = source.indexOf('});', callStart);
     final callBlock = source.substring(callStart, callEnd);

@@ -28,14 +28,48 @@ public final class PluginDownloads {
     private PluginDownloads() {
     }
 
-    /** 解析插件 APK 的下载地址（自建源与内置源都能用）。 */
-    public static String pluginUrl(Context context, String fileName) throws IOException {
+    /** 内置回退链里的 raw 分支（只含插件资产的发布分支；走加速前缀与直连两条）。 */
+    static final String RAW_PROXIED_SOURCE =
+            "https://gh-proxy.com/https://raw.githubusercontent.com/Jdkshen/ai.js-pro/plugin-release/plugin-release/";
+    static final String RAW_DIRECT_SOURCE =
+            "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/plugin-release/plugin-release/";
+
+    /** 一个候选下载地址 + 它的来源标签（标签会进日志与失败原因，排障要看得出最终用了哪条）。 */
+    public static final class Candidate {
+        public final String url;
+        public final String source;
+
+        Candidate(String url, String source) {
+            this.url = url;
+            this.source = source;
+        }
+    }
+
+    /**
+     * 解析插件文件的**候选地址链**（顺序固定，失败才降级，不并发乱试）。
+     *
+     * <ul>
+     *   <li>配了自建源（且不是内置代理）⇒ 只用它（<b>custom</b>），不打扰用户的显式选择；</li>
+     *   <li>否则内置零配置回退链：<b>builtin-release</b>（加速前缀 + releases/latest/download）⇒
+     *       <b>builtin-raw</b>（加速前缀 + plugin-release 分支）⇒ <b>builtin-direct</b>（直连 raw）。</li>
+     * </ul>
+     */
+    public static java.util.List<Candidate> pluginUrlCandidates(Context context, String fileName) throws IOException {
+        java.util.List<Candidate> candidates = new java.util.ArrayList<>();
         String source = VersionService.updateSourceUrl(context);
         if (!TextUtils.isEmpty(source) && !GitHubUpdateProxy.isDefaultProxySource(source)) {
-            return VersionService.resolveUrl(source, fileName);
+            candidates.add(new Candidate(VersionService.resolveUrl(source, fileName), "custom"));
+            return candidates;
         }
-        // 内置源是「加速前缀 + releases/latest/download/<文件名>」：同一个前缀换文件名即可。
-        return defaultSourceUrl(fileName);
+        candidates.add(new Candidate(defaultSourceUrl(fileName), "builtin-release"));
+        candidates.add(new Candidate(RAW_PROXIED_SOURCE + fileName, "builtin-raw"));
+        candidates.add(new Candidate(RAW_DIRECT_SOURCE + fileName, "builtin-direct"));
+        return candidates;
+    }
+
+    /** 解析插件 APK 的下载地址（自建源与内置源都能用）—— 取候选链的第一条，保持既有调用方行为不变。 */
+    public static String pluginUrl(Context context, String fileName) throws IOException {
+        return pluginUrlCandidates(context, fileName).get(0).url;
     }
 
     /** 内置（GitHub 加速）源里某个文件的地址；与 {@link GitHubUpdateProxy#UPDATE_SOURCE} 同目录。 */

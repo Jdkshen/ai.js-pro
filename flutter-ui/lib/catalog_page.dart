@@ -37,8 +37,12 @@ class _CatalogPageState extends State<CatalogPage> {
 
   // task-134（插件统一目录）：桥名**集中在这里**，与 W2 定稿对齐时只改这一处；URL 一律由原生侧解析。
   static const String pluginCatalogMethod = 'pluginCatalog';
-  static const String pluginDownloadMethod = 'pluginDownloadAndInstall';
-  static const String pluginProgressMethod = 'pluginDownloadProgress';
+  // 真实桥名（Lead 在 dev-1501 真机验过）：pluginInstall / pluginInstallStatus
+  static const String pluginInstallMethod = 'pluginInstall';
+  static const String pluginInstallStatusMethod = 'pluginInstallStatus';
+  // 轻量节流：源不可达时不要每次进页都等 6s（下拉刷新/重试会强制绕过）
+  static const Duration pluginCatalogThrottle = Duration(seconds: 60);
+  DateTime? lastPluginCatalogAt;
   Map<String, dynamic> pluginManifest = <String, dynamic>{};
   bool pluginManifestLoaded = false;
   String? pluginManifestError;
@@ -140,19 +144,32 @@ class _CatalogPageState extends State<CatalogPage> {
   /// 一键重试：源 + 清单 + 本地目录各再拉一次（失败态的唯一出口）。
   Future<void> retryPluginCatalog() async {
     await loadUpdateSource();
-    await loadPluginCatalog();
+    await loadPluginCatalog(force: true);
     if (mounted && widget.plugin) load();
   }
 
-  Future<void> loadPluginCatalog() async {
+  Future<void> loadPluginCatalog({bool force = false}) async {
     if (!widget.plugin) return;
+    final now = DateTime.now();
+    final last = lastPluginCatalogAt;
+    if (!force && last != null && now.difference(last) < pluginCatalogThrottle) {
+      // 节流命中：不重复拉（避免源不可达时每次进页都等 6s）
+      return;
+    }
+    lastPluginCatalogAt = now;
     try {
       final value = await LocalBridge
           .call(pluginCatalogMethod, const {})
           // task-135：桥未响应也必须落到可见降级（否则提示永远不出现 = 静默失败）
           .timeout(const Duration(seconds: 8),
               onTimeout: () => throw StateError('清单读取超时（桥未响应）'));
-      final raw = value is Map ? value['plugins'] : value;
+      // 真实形态：{ok:true, data:{url, plugins:[…]}}（兼容裸数组/裸 plugins）
+      final envelope = value is Map ? Map<String, dynamic>.from(value) : <String, dynamic>{};
+      final data = envelope['data'] is Map
+          ? Map<String, dynamic>.from(envelope['data'] as Map)
+          : envelope;
+      final url = data['url'];
+      final raw = data['plugins'] is List ? data['plugins'] : value;
       final next = <String, dynamic>{};
       if (raw is List) {
         for (final entry in raw) {
@@ -169,6 +186,10 @@ class _CatalogPageState extends State<CatalogPage> {
         pluginManifest = next;
         pluginManifestLoaded = true;
         pluginManifestError = next.isEmpty ? '清单为空' : null;
+        if (url is String && url.isNotEmpty) {
+          updateSourceValue = url;
+          updateSourceLoaded = true;
+        }
       });
     } catch (e) {
       if (mounted) {
@@ -255,6 +276,9 @@ class _CatalogPageState extends State<CatalogPage> {
       return '已下载（待安装' + downloadedSizeLabel(item) + '）';
     }
     final manifest = manifestOf(item);
+    // 原生清单自带权威文案（例如「未安装：可安装 1.0.0」）⇒ 有就直接用，不自己拼
+    final nativeDetail = manifest == null ? '' : text(manifest, 'detail');
+    if (nativeDetail.isNotEmpty) return nativeDetail;
     final remote = manifest == null ? '' : text(manifest, 'version');
     final remoteCode = manifest == null ? 0 : (manifest['versionCode'] is num ? manifest['versionCode'] as num : 0);
     final localCode = item['versionCode'] is num ? item['versionCode'] as num : 0;
@@ -272,7 +296,8 @@ class _CatalogPageState extends State<CatalogPage> {
 
   /// 失败原因码 → 可读中文（W2 的结构化原因码；未知码不隐藏，原样带出来）。
   String downloadReason(Map<String, dynamic> result) {
-    final code = text(result, 'reason', text(result, 'code'));
+    // 真实字段是 reasonCode（空串=成功/无原因）
+    final code = text(result, 'reasonCode', text(result, 'reason', text(result, 'code')));
     switch (code) {
       case 'network':
         return '网络不可达（下载源连不上）';
@@ -289,7 +314,8 @@ class _CatalogPageState extends State<CatalogPage> {
     }
   }
 
-  /// 下载安装/更新：**只传 id 与 fileName**（URL 由原生侧解析）⇒ 拿到结构化原因码；成功则重载并提示是否需重启。
+  /// 下载安装/更新：真实契约 = `pluginInstall(id)` → `pluginInstallStatus(id)` 轮询到终态。
+  /// URL 由原生侧解析（Dart 只传 id）；失败用 `reasonCode` 映射可读原因；成功按 `requiresRestart` 提示重启。
   Future<void> downloadPlugin(Map item) async {
     if (!widget.plugin) return;
     final manifest = manifestOf(item);
@@ -305,34 +331,37 @@ class _CatalogPageState extends State<CatalogPage> {
     });
     changed();
     try {
-      final result = await LocalBridge.call(pluginDownloadMethod, {
-        'id': id,
-        'fileName': text(manifest, 'file'),
-      });
-      if (!mounted) return;
-      if (result is Map && result['ok'] != true) {
-        final reason = downloadReason(Map<String, dynamic>.from(result));
-        setState(() => downloadError[pkg] = reason);
-        notify('下载失败：' + reason);
-        return;
+      final started = await LocalBridge.call(pluginInstallMethod, {'id': id});
+      if (started is Map && mounted) {
+        setState(() => downloading[pkg] = Map<String, dynamic>.from(started));
       }
-      final downloadedOnly = result is Map &&
-          (result['downloaded'] == true || result['installRequired'] == true);
-      if (downloadedOnly) {
-        final record = Map<String, dynamic>.from(result);
-        if (!record.containsKey('sizeBytes') && manifest['sizeBytes'] != null) {
-          record['sizeBytes'] = manifest['sizeBytes'];
+      // 轮询到终态：最多 ~60s（2s 一次）；单次读失败不算失败。
+      for (var attempt = 0; attempt < 30; attempt++) {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        if (!mounted) return;
+        final status = await pollPluginProgress(pkg, id);
+        if (status == null) continue;
+        final state = text(status, 'state');
+        if (state == 'success') {
+          await load();
+          if (!mounted) return;
+          final message = text(status, 'message');
+          final restart = status['requiresRestart'] == true ||
+              manifest['requiresRestart'] == true;
+          notify('安装已完成' +
+              (message.isEmpty ? '' : '：' + message) +
+              (restart ? ' · 需重启应用生效' : ''));
+          return;
         }
-        setState(() => downloaded[pkg] = record);
-        notify('已下载（待安装）：' + name(item) +
-            ' · 点「安装」交给系统安装器（Android 不允许静默安装）');
-        return;
+        if (state == 'failed' || state == 'error') {
+          final reason = downloadReason(status);
+          setState(() => downloadError[pkg] = reason);
+          notify('下载失败：' + reason);
+          return;
+        }
       }
-      await load();
-      if (!mounted) return;
-      final restart = manifest['requiresRestart'] == true;
-      notify('已提交安装：' + name(item) +
-          (restart ? ' · 需重启应用生效' : ''));
+      setState(() => downloadError[pkg] = '安装状态轮询超时（可重试）');
+      notify('下载失败：安装状态轮询超时（可点「重试」）');
     } catch (e) {
       if (mounted) {
         final reason = readable(e);
@@ -347,15 +376,17 @@ class _CatalogPageState extends State<CatalogPage> {
     }
   }
 
-  /// 下载进度（只读轮询；拿不到就保持「下载中…」，不伪造百分比）。
-  Future<void> pollPluginProgress(String pkg) async {
+  /// 读一次安装状态（只读轮询；单次失败返回 null，交给调用方继续等）。
+  Future<Map<String, dynamic>?> pollPluginProgress(String pkg, String id) async {
     try {
-      final value = await LocalBridge.call(pluginProgressMethod, {'packageName': pkg});
-      if (!mounted || value is! Map) return;
+      final value = await LocalBridge.call(
+          pluginInstallStatusMethod, {'id': id, 'packageName': pkg});
+      if (!mounted || value is! Map) return null;
       final next = Map<String, dynamic>.from(value);
       if (downloading.containsKey(pkg)) setState(() => downloading[pkg] = next);
+      return next;
     } catch (_) {
-      // 进度拿不到不算失败：最终结果仍由 downloadPlugin 的返回决定。
+      return null;
     }
   }
 
@@ -364,7 +395,8 @@ class _CatalogPageState extends State<CatalogPage> {
       widget.plugin &&
       !downloading.containsKey(package(item)) &&
       manifestOf(item) != null &&
-      text(manifestOf(item)!, 'file').isNotEmpty;
+      (text(manifestOf(item)!, 'file').isNotEmpty ||
+          manifestOf(item)!['actionable'] == true);
 
   String downloadButtonLabel(Map item) {
     final manifest = manifestOf(item);
@@ -1507,7 +1539,11 @@ class _CatalogPageState extends State<CatalogPage> {
                   !pluginManifestLoaded
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
-                  onRefresh: load,
+                  // 下拉刷新 = 强制绕过清单节流
+                  onRefresh: () async {
+                    await load();
+                    await loadPluginCatalog(force: true);
+                  },
                   child: LayoutBuilder(builder: (_, bounds) {
                     // 插件页已改为行式列表（对齐 MiuixPluginFragment），
                     // 不再需要原来的网格列数/封面高度计算。
