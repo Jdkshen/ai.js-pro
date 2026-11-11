@@ -45,6 +45,20 @@ class PluginBridgeRoutingPinTest {
         }
     }
 
+    /** dev-1494 真机 bug：pluginCatalog 的网络读取原来跑在**调用线程（UI 主线程）** ⇒ NetworkOnMainThreadException。
+     *  这条钉住「同步桥 + 后台执行 + join 等结果」的结构，防止有人把 fetch 挪回同步路径。 */
+    @Test fun catalogFetchesOffTheCallerThread() {
+        val pluginBridge = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PluginBridge.java")
+        val catalog = pluginBridge.substringAfter("private static JSONObject catalog(final Activity activity)")
+            .substringBefore("/** 后台线程体")
+        assertTrue("catalog 必须在后台线程跑", catalog.contains("new Thread("))
+        assertTrue("catalog 必须同步等结果（Dart 侧是同步桥）", catalog.contains("worker.join(CATALOG_TIMEOUT_MS)"))
+        assertTrue("必须有超时兜底", pluginBridge.contains("CATALOG_TIMEOUT_MS = 6000L"))
+        assertTrue("超时要给可解释原因", catalog.contains("network:插件清单拉取后台超时"))
+        assertTrue("网络读取必须只在 catalogOnWorker 里", !catalog.contains("httpGet(") && pluginBridge.contains("private static JSONObject catalogOnWorker"))
+        assertTrue("失败要带异常类型", catalog.contains("classify(error)") && catalog.contains("error.getClass().getSimpleName()"))
+    }
+
     @Test fun uninstallIsDeliveredAsDisable() {
         val pluginBridge = read("src/flutterpoc/java/com/jdkshen/aijspro/flutterpoc/PluginBridge.java")
         assertTrue("卸载按停用交付", pluginBridge.contains("本轮没有卸载桥"))

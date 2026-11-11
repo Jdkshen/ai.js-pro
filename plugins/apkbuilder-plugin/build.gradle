@@ -49,9 +49,9 @@ android {
 
     buildTypes {
         release {
-            if (pluginSigningReady) {
-                signingConfig signingConfigs.release
-            }
+            // 与 plugins/ocr-plugin 一致：有 AIJSPRO_* 用发布签名；没有则回退 debug 签名
+            //（公网发布必须用真签名，且重签后重算 sha256）。
+            signingConfig pluginSigningReady ? signingConfigs.release : signingConfigs.debug
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

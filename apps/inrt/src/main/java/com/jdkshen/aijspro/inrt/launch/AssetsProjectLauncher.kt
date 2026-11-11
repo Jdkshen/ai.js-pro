@@ -52,6 +52,10 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         var lastStagedResourceWarning: String? = null
             private set
 
+        /** task-150: 悬浮窗未授权时的可执行提示（打印后清空；已授权/普通脚本恒为 null）。 */
+        var overlayPermissionWarning: String? = null
+            private set
+
     private val mProjectDir: String = File(mActivity.filesDir, "project/").path
     private val mProjectConfig: ProjectConfig = ProjectConfig.fromAssets(mActivity, ProjectConfig.configFileOfDir(mAssetsProjectDir))
     private val mMainScriptFile: File = File(mProjectDir, mProjectConfig.mainScriptFile)
@@ -125,6 +129,7 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             val config = ExecutionConfig(
                 workingDirectory = mProjectDir,
                 scriptConfig = mProjectConfig.getScriptConfig(normalized))
+            reportOverlayPermissionIfNeeded(source)
             mScriptExecution = executeSource(source, config)
         } catch (error: Throwable) {
             AutoJs.instance?.globalConsole?.error(error)
@@ -179,15 +184,17 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
             mScriptExecution = executeSource(source, config)
             // task-133/140：把「资源包被丢弃/不匹配」写进**用户能看到的控制台**（LogActivity），
             // 而不只是 logcat —— 否则用户只看到白屏，比原来那句难懂报错更难排查（K40 dev-1479 实测）。
-            lastStagedResourceWarning?.let { warning ->
+            // task-150：启动期要给用户看的可执行提示（资源包 stale / 悬浮窗未授权），逐条进控制台。
+            for (startupWarning in listOfNotNull(lastStagedResourceWarning, overlayPermissionWarning)) {
                 runCatching {
                     // inrt 的包装只有 `instance`（companion 里的 lateinit var），没有 getInstance()；
                     // 与同文件既有写法（AutoJs.instance?.globalConsole?.error(...)）保持一致。
                     com.jdkshen.aijspro.inrt.autojs.AutoJs.instance.globalConsole
-                            ?.println(android.util.Log.WARN, warning)
+                            ?.println(android.util.Log.WARN, startupWarning)
                 }
-                lastStagedResourceWarning = null
             }
+            lastStagedResourceWarning = null
+            overlayPermissionWarning = null
             // task-115：ui.layout 项目改由 :script 内的 ScriptExecuteActivity 承载，透明 trampoline
             // 退场（否则脚本结束/失败后露出空白底）。headless 的 ImGui/浮窗项目保持 trampoline 存活。
             if (InrtScriptThreadHost.isScriptThread() && wantsScriptExecuteActivity(source)) {
@@ -449,6 +456,42 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         val removedApk = resApk.delete()
         val removedJson = resJson.delete()
         Log.w(TAG, "C-INRT: dropped stale project-res pack (apk=" + removedApk + " json=" + removedJson + ")")
+    }
+
+    /**
+     * task-150：**只在确实需要悬浮窗时**检查一次 `Settings.canDrawOverlays`；未授权就把我们的可执行文案
+     * 放进待打印列表（控制台）。判据走 engine 的纯函数 ScriptHostRouting（有单测）。
+     * 不跳系统设置页、不伪造权限、已授权或普通脚本 **零行为变化**。
+     */
+    private fun reportOverlayPermissionIfNeeded(source: JavaScriptSource) {
+        val needed = runCatching {
+            val text = readScriptText(source)
+            val isUiMode = (source.executionMode and JavaScriptSource.EXECUTION_MODE_UI) != 0
+            // Node UI 产物：主脚本名形如 *.node.js（样例证据 main.node.js / dist/main.node.js）。
+            val isNodeUiProject = mProjectConfig.mainScriptFile.lowercase().contains(".node.js")
+            ScriptHostRouting.needsOverlayPermission(isUiMode,
+                    ScriptHostRouting.textUsesOverlayApi(text),
+                    ScriptHostRouting.textUsesImGui(text),
+                    isNodeUiProject)
+        }.getOrElse { error ->
+            Log.w(TAG, "C-INRT: overlay 判据失败（忽略）：$error")
+            false
+        }
+        if (!needed) {
+            return
+        }
+        val granted = runCatching {
+            android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M ||
+                    android.provider.Settings.canDrawOverlays(mActivity)
+        }.getOrDefault(true)
+        if (granted) {
+            return
+        }
+        val message = "本产物需要「显示在其他应用上层」权限：请在 系统设置 → 应用 → " +
+                mActivity.applicationInfo.loadLabel(mActivity.packageManager) +
+                " → 显示在其他应用上层 打开后重试；脚本里也可用 floaty.checkPermission() 引导用户授权。"
+        Log.w(TAG, "C-INRT: overlay permission missing => " + message)
+        overlayPermissionWarning = message
     }
 
     private fun initKey(projectConfig: ProjectConfig) {

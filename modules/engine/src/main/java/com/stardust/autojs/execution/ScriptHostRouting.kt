@@ -51,6 +51,43 @@ object ScriptHostRouting {
         return UI_LAYOUT_PATTERN.containsMatchIn(text)
     }
 
+
+    /**
+     * 「是否需要「显示在其他应用上层」权限」的纯判据（task-150）。
+     *
+     * <p>**只有确定会用 overlay 窗口时才为真**：UI 模式 且（用了 `floaty.*` 或 ImGui/浮窗项目；
+     * 或 Node 引擎的 UI 项目 —— 真机证据：Node UI 产物 inflate 时 `BadTokenException … window type 2038`）。
+     * 纯 `ui.layout` 走的是 ScriptExecuteActivity 普通窗口，**不需要**该权限 ⇒ 不为真（避免对所有 UI 工程误弹）。
+     */
+    @JvmStatic
+    fun needsOverlayPermission(isUiMode: Boolean,
+                              hasOverlayApi: Boolean,
+                              hasImGuiMarker: Boolean,
+                              isNodeUiProject: Boolean): Boolean {
+        if (!isUiMode) {
+            return false
+        }
+        return hasOverlayApi || hasImGuiMarker || isNodeUiProject
+    }
+
+    /** 正文是否用了浮窗/overlay 类 API（`floaty.*` 或 `$floaty`）。 */
+    @JvmStatic
+    fun textUsesOverlayApi(text: String?): Boolean {
+        if (text == null) {
+            return false
+        }
+        return text.contains("floaty.") || text.contains("\$floaty") || text.contains("rawWindow(")
+    }
+
+    /** 正文是否含 ImGui 标记（与 inrt 既有口径同义：`libImGuiBridge` / `ImGuiBridge` / `imgui`）。 */
+    @JvmStatic
+    fun textUsesImGui(text: String?): Boolean {
+        if (text == null) {
+            return false
+        }
+        val lower = text.lowercase()
+        return lower.contains("imgui") || text.contains("libImGuiBridge") || text.contains("ImGuiBridge")
+    }
     private val ACTIVITY_API_PATTERN = Regex("""\bactivity\s*\.""")
     private val UI_LAYOUT_PATTERN = Regex("""\bui\s*\.\s*(layout|layoutFile|inflate)\s*\(""")
 }

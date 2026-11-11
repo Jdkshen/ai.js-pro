@@ -40,6 +40,9 @@ final class PluginBridge {
     private static final int CONNECT_TIMEOUT_MS = 8000;
     private static final int READ_TIMEOUT_MS = 15000;
     private static final int PROGRESS_STEP_BYTES = 64 * 1024;
+    /** 清单是**同步桥**（Dart 侧等返回）⇒ 后台拉取后最多等这么久；刻意短于 Dart 的 8s 超时，
+     *  好让「可解释的失败原因」（带异常类型）先于 Dart 的泛化超时出现。 */
+    private static final long CATALOG_TIMEOUT_MS = 6000L;
 
     private PluginBridge() {
     }
@@ -71,14 +74,60 @@ final class PluginBridge {
         }
     }
 
-    /** 只读：拉清单 + 算四态。 */
-    private static JSONObject catalog(Activity activity) throws Exception {
-        String url = PluginDownloads.pluginUrl(activity, CATALOG_FILE);
-        String body = httpGet(url);
+    /**
+     * 只读：拉清单 + 算四态（**同步桥**：Dart 侧等返回）。
+     *
+     * <p>真机 bug（dev-1494 用户截图）：原来 URL + 读取 + 解析跑在**调用线程（UI 主线程）** ⇒ Android
+     * 直接抛 NetworkOnMainThreadException，目录永远拉不到。修法：整段放到后台线程，主调用线程
+     * **join 等结果**（带超时），失败时把**异常类型**带进原因（形如 network:UnknownHostException: …）
+     * 便于真机一眼判因。</p>
+     */
+    private static JSONObject catalog(final Activity activity) throws Exception {
+        final String url = PluginDownloads.pluginUrl(activity, CATALOG_FILE);
+        final java.util.concurrent.atomic.AtomicReference<Object> holder =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Thread worker = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    holder.set(catalogOnWorker(activity, url));
+                } catch (Throwable error) {
+                    holder.set(error);
+                }
+            }
+        }, "plugin-catalog");
+        worker.start();
+        worker.join(CATALOG_TIMEOUT_MS);
+        if (worker.isAlive()) {
+            throw new IllegalStateException("network:插件清单拉取后台超时（" + CATALOG_TIMEOUT_MS + "ms）url=" + url);
+        }
+        Object value = holder.get();
+        if (value instanceof JSONObject) {
+            return (JSONObject) value;
+        }
+        if (value instanceof Throwable) {
+            Throwable error = (Throwable) value;
+            String detail = error.getMessage() == null ? "" : (": " + error.getMessage());
+            // 不用 (String, Throwable) 构造：本模块编译目标下该重载不可用（javac: Throwable 无法转换为 Exception）。
+            // 把 cause 拼进消息即可满足「一眼判因」，且不改变异常类型语义。
+            throw new IllegalStateException(
+                    classify(error) + ":" + error.getClass().getSimpleName() + detail
+                            + " cause=" + error.getClass().getName());
+        }
+        throw new IllegalStateException("network:插件清单拉取没有结果 url=" + url);
+    }
+
+    /** 后台线程体：网络读取 + 解析 + 四态（**不得触碰 UI**）。 */
+    private static JSONObject catalogOnWorker(Activity activity, String url) throws Exception {
+        Fetch fetch = httpGet(url);
+        String body = fetch.body;
+        if (body.trim().isEmpty()) {
+            throw new IllegalStateException("malformed:清单为空" + fetch.describe());
+        }
         PluginManifest.ParseResult parsed = PluginManifest.parse(body);
         if (parsed instanceof PluginManifest.ParseResult.Failure) {
             PluginManifest.ParseResult.Failure failure = (PluginManifest.ParseResult.Failure) parsed;
-            throw new IllegalStateException("插件清单不可用（" + failure.getReason() + "）：" + failure.getMessage());
+            throw new IllegalStateException(failure.getReason() + ":" + failure.getMessage() + fetch.describe());
         }
         List<PluginManifest.Entry> entries = ((PluginManifest.ParseResult.Success) parsed).getEntries();
         Map<String, PluginManifest.Entry> byId = new LinkedHashMap<>();
@@ -114,6 +163,8 @@ final class PluginBridge {
         data.put("url", url);
         data.put("generatedAt", ((PluginManifest.ParseResult.Success) parsed).getGeneratedAt());
         data.put("plugins", plugins);
+        Log.i(TAG, "pluginCatalog ok source=" + fetch.source + " http=" + fetch.status
+                + " bytes=" + body.length() + " plugins=" + entries.size() + " url=" + fetch.url);
         JSONObject result = new JSONObject();
         result.put("ok", true);
         result.put("data", data);
@@ -175,6 +226,32 @@ final class PluginBridge {
         result.put("ok", true);
         result.put("data", started);
         return result;
+    }
+
+    /** 一次清单请求的结果（用于把「源 / 状态码 / 长度 / 头部」带进失败原因与成功日志）。 */
+    private static final class Fetch {
+        final String url;
+        final String source;
+        final int status;
+        final String body;
+
+        Fetch(String url, String source, int status, String body) {
+            this.url = url;
+            this.source = source;
+            this.status = status;
+            this.body = body == null ? "" : body;
+        }
+
+        String describe() {
+            String head = body.length() > 80 ? body.substring(0, 80) : body;
+            return " url=" + url + " http=" + status + " bytes=" + body.length()
+                    + " source=" + source + " head=" + head.replace('\n', ' ').replace('\r', ' ');
+        }
+    }
+
+    /** 自建源优先（PluginDownloads.pluginUrl 的逻辑）；内置源前缀固定是这个加速前缀 ⇒ 据此标注来源。 */
+    private static String sourceOf(String url) {
+        return url != null && url.startsWith("https://gh-proxy.com/") ? "builtin" : "custom";
     }
 
     private static JSONObject installStatus(JSONObject args) throws Exception {
@@ -291,7 +368,7 @@ final class PluginBridge {
     }
 
     /** 失败分类（原因码就是契约里那五个）。 */
-    private static String classify(Exception error) {
+    private static String classify(Throwable error) {   // Throwable：catalog 后台线程搬回来的异常可能是 Error 子类
         if (error instanceof java.net.SocketTimeoutException || error instanceof java.net.UnknownHostException
                 || error instanceof java.net.ConnectException) {
             return PluginFailureReason.NETWORK.getCode();
@@ -324,7 +401,8 @@ final class PluginBridge {
         return "校验未通过";
     }
 
-    private static String httpGet(String url) throws Exception {
+    private static Fetch httpGet(String url) throws Exception {
+        String source = sourceOf(url);
         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
@@ -350,7 +428,7 @@ final class PluginBridge {
             }
             connection.disconnect();
         }
-        return new String(buffer.toByteArray(), "UTF-8");
+        return new Fetch(url, source, code, new String(buffer.toByteArray(), "UTF-8"));
     }
 
     private static int appVersionCode(Activity activity) {

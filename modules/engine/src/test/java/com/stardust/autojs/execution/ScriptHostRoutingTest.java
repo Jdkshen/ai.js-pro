@@ -60,4 +60,49 @@ public class ScriptHostRoutingTest {
         assertTrue("inrt 必须用 textUsesActivityApi", launcher.contains("ScriptHostRouting.textUsesActivityApi("));
         assertTrue("headless 无 Activity 时必须有明确提示（不伪造）", launcher.contains("headless 执行没有宿主 Activity"));
     }
+
+    /** task-150: overlay permission is only needed for REAL overlay scripts (not every ui.layout project). */
+    @Test
+    public void overlayPermissionIsOnlyNeededForRealOverlayScripts() {
+        assertFalse("pure ui.layout goes to a normal window",
+                ScriptHostRouting.needsOverlayPermission(true, false, false, false));
+        assertTrue("floaty", ScriptHostRouting.needsOverlayPermission(true, true, false, false));
+        assertTrue("imgui", ScriptHostRouting.needsOverlayPermission(true, false, true, false));
+        assertTrue("node ui project (device evidence: window type 2038)",
+                ScriptHostRouting.needsOverlayPermission(true, false, false, true));
+        assertFalse("non-ui mode never needs it", ScriptHostRouting.needsOverlayPermission(false, true, true, true));
+    }
+
+    /** text judges: floaty/$floaty/rawWindow and imgui markers. */
+    @Test
+    public void overlayTextJudges() {
+        assertTrue(ScriptHostRouting.textUsesOverlayApi("floaty.checkPermission()"));
+        assertTrue(ScriptHostRouting.textUsesOverlayApi("$floaty.rawWindow(xml)"));
+        assertFalse(ScriptHostRouting.textUsesOverlayApi("ui.layout(xml)"));
+        assertFalse(ScriptHostRouting.textUsesOverlayApi(null));
+        assertTrue(ScriptHostRouting.textUsesImGui("var x = libImGuiBridge;"));
+        assertTrue(ScriptHostRouting.textUsesImGui("IMGUI frame"));
+        assertFalse(ScriptHostRouting.textUsesImGui("ui.layout(xml)"));
+    }
+    /** task-150: inrt must (a) check only when needed, (b) go through the script console, (c) never auto-jump. */
+    @Test
+    public void inrtOnlyGuidesOverlayWhenNeededAndViaConsole() throws Exception {
+        String launcher = new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(
+                "../../apps/inrt/src/main/java/com/jdkshen/aijspro/inrt/launch/AssetsProjectLauncher.kt")),
+                java.nio.charset.StandardCharsets.UTF_8);
+        assertTrue("inrt must use the shared overlay predicate",
+                launcher.contains("ScriptHostRouting.needsOverlayPermission("));
+        assertTrue("inrt must check Settings.canDrawOverlays", launcher.contains("Settings.canDrawOverlays("));
+        assertTrue("warning carries the actionable text",
+                launcher.contains("本产物需要「显示在其他应用上层」权限"));
+        assertTrue("warning mentions the script-side escape hatch", launcher.contains("floaty.checkPermission()"));
+        assertTrue("warning goes through the script console", launcher.contains("globalConsole"));
+        int fnStart = launcher.indexOf("private fun reportOverlayPermissionIfNeeded");
+        int fnEnd = launcher.indexOf("\n    }", fnStart);
+        assertTrue("overlay helper exists", fnStart > 0 && fnEnd > fnStart);
+        String helper = launcher.substring(fnStart, fnEnd);
+        assertFalse("must NOT auto-jump to system settings", helper.contains("startActivity"));
+        assertFalse("must NOT fake permissions", helper.contains("ACTION_MANAGE_OVERLAY_PERMISSION"));
+        assertTrue("already granted => no message", helper.contains("if (granted) {"));
+    }
 }

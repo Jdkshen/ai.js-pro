@@ -3,11 +3,11 @@
   "displayName": "OCR 插件",
   "package": "org.autojs.autojspro.plugin.ocr",
   "file": "ocr-plugin.apk",
-  "minAppVersion": null,
-  "minAppVersionNote": "待定：应填「第一个带 PluginNativeLoader 落盘钩子 + $ocr 分发的宿主 versionCode」，W1 真机验后给值；未定值前生成器不发布该插件。",
+  "minAppVersion": 465,
+  "minAppVersionNote": "= project-versions.json 的 appVersionCode（应用版本号；与 dev-14xx 那套不是一回事）。语义：第一个带 PluginNativeLoader.createOcrSession + $ocr 直连工厂的宿主版本。边界：历史上 appVersionCode=465 但早于该功能的构建也会被判「可装」——不致命，JS 会安全回落到内置/点名错误。",
   "requiresRestart": true,
   "abis": [
     "arm64-v8a"
   ],
-  "notes": "把内建 OCR（PP-OCR 模型 + libppocr/libmlkit + $ocr 桥）从主程序剥离；加载契约以 W1 task-130 为准（包名 org.autojs.autojspro.plugin.ocr）。"
+  "notes": "把内建 OCR（PP-OCR 模型 + libppocr + $ocr 桥）从主程序剥离；加载契约 org.autojs.plugin.sdk.registry -> org.autojs.autojspro.plugin.ocr.Registry；主路径 = 宿主直连工厂（PluginNativeLoader.createOcrSession）。"
 }

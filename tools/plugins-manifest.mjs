@@ -105,7 +105,19 @@ function buildManifest() {
     const versionName = descriptor.version || versionFor(versions, descriptor.id, "VersionName");
     const versionCode = descriptor.versionCode || versionFor(versions, descriptor.id, "VersionCode");
     if (!versionName) fail(file + " 无法确定版本号（project-versions.json 里缺 " + descriptor.id + "PluginVersionName）");
-    const apkPath = path.join(PLUGINS_DIR, dir, "build/outputs/apk/release", descriptor.file);
+    // 构建产物名常带 -release / -release-unsigned 后缀，而发布资产名是 descriptor.file（客户端按它下载）
+    // ⇒ 按顺序找：正式名 -> -release -> -release-unsigned，并回显实际用的文件（上传时要改名成 descriptor.file）。
+    const releaseDir = path.join(PLUGINS_DIR, dir, "build/outputs/apk/release");
+    const base = descriptor.file.replace(/\.apk$/, "");
+    let apkPath = path.join(releaseDir, descriptor.file);
+    for (const candidate of [descriptor.file, base + "-release.apk", base + "-release-unsigned.apk"]) {
+      const full = path.join(releaseDir, candidate);
+      if (fs.existsSync(full)) { apkPath = full; break; }
+    }
+    if (fs.existsSync(apkPath) && path.basename(apkPath) !== descriptor.file) {
+      console.warn("[plugins-manifest] " + descriptor.id + "：用构建产物 " + path.basename(apkPath)
+        + " 计算 sha256/大小；上传时必须改名为 " + descriptor.file + "（客户端按 file 字段下载）");
+    }
     const entry = {
       id: descriptor.id,
       displayName: descriptor.displayName,
