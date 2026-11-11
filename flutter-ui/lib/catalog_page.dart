@@ -151,6 +151,12 @@ class _CatalogPageState extends State<CatalogPage> {
 
   /// 一键重试：源 + 清单 + 本地目录各再拉一次（失败态的唯一出口）。
   Future<void> retryPluginCatalog() async {
+    if (mounted) {
+      setState(() {
+        downloadError.clear();
+        downloading.clear();
+      });
+    }
     await loadUpdateSource();
     await loadPluginCatalog(force: true);
     if (mounted && widget.plugin) load();
@@ -202,6 +208,9 @@ class _CatalogPageState extends State<CatalogPage> {
         pluginManifest = next;
         pluginManifestLoaded = true;
         pluginManifestError = next.isEmpty ? '清单为空' : null;
+        // task-145：重新拉到清单 ⇒ 清掉旧失败态（否则旧版本留下的「下载失败」会一直挂着误导 ✗）
+        downloadError.clear();
+        downloading.clear();
         if (url is String && url.isNotEmpty) {
           updateSourceValue = url;
           updateSourceLoaded = true;
@@ -278,7 +287,10 @@ class _CatalogPageState extends State<CatalogPage> {
   String pluginStateLabel(Map item, {bool detail = false}) {
     final pkg = package(item);
     final progress = downloading[pkg];
-    if (progress != null) {
+    // task-146：只有「运行中/有进度数字」才算下载中；空记录（陈旧）不显示 ✗
+    final activeDownload = progress != null &&
+        (progress['state'] == 'running' || progress['receivedBytes'] is num);
+    if (activeDownload) {
       final total = progress['totalBytes'];
       final received = progress['receivedBytes'];
       if (total is num && total > 0 && received is num) {
@@ -296,6 +308,11 @@ class _CatalogPageState extends State<CatalogPage> {
     // 原生清单自带权威文案（例如「未安装：可安装 1.0.0」）⇒ 有就直接用，不自己拼
     final nativeDetail = manifest == null ? '' : text(manifest, 'detail');
     if (nativeDetail.isNotEmpty) return nativeDetail;
+    // task-145：本机 code ≥ 清单 code ⇒ 「已安装 · 已是最新（清单 vX）」（≥ 而非 >）
+    if (pluginUpToDate(item)) {
+      final remote = manifest == null ? '' : text(manifest, 'version');
+      return '已安装 · 已是最新' + (remote.isEmpty ? '' : '（清单 v' + remote + '）');
+    }
     final remote = manifest == null ? '' : text(manifest, 'version');
     final remoteCode = manifest == null ? 0 : (manifest['versionCode'] is num ? manifest['versionCode'] as num : 0);
     final localCode = item['versionCode'] is num ? item['versionCode'] as num : 0;
@@ -436,14 +453,36 @@ class _CatalogPageState extends State<CatalogPage> {
       widget.plugin &&
       !downloading.containsKey(package(item)) &&
       manifestOf(item) != null &&
+      // task-145：已装且已是最新 ⇒ 不给「下载安装/更新」按钮（避免「都最新版还要更新」✗）
+      (installed(item) != true || pluginHasUpdate(item)) &&
       (text(manifestOf(item)!, 'file').isNotEmpty ||
           manifestOf(item)!['actionable'] == true);
 
-  String downloadButtonLabel(Map item) {
+  /// task-145：只有**可靠地**判定「清单比本机新」才算可更新（≥ 而非 > 的语义：
+  /// 本机 code ≥ 清单 code ⇒ 已是最新，不给更新按钮）。任一侧缺 code ⇒ 不作判定（不猜）。
+  bool pluginHasUpdate(Map item) {
     final manifest = manifestOf(item);
-    final remoteCode = manifest == null ? 0 : (manifest['versionCode'] is num ? manifest['versionCode'] as num : 0);
-    final localCode = item['versionCode'] is num ? item['versionCode'] as num : 0;
-    return (installed(item) == true && remoteCode > localCode) ? '更新' : '下载安装';
+    if (manifest == null || installed(item) != true) return false;
+    final remote = manifest['versionCode'];
+    final local = item['versionCode'];
+    if (remote is! num || local is! num || local <= 0) return false;
+    // 原生若已给出判定/文案，以它为准（我们不覆盖 W2 的 PluginUpdatePlanner）
+    if (text(manifest, 'detail').contains('已是最新')) return false;
+    return remote > local;
+  }
+
+  /// 已装且能可靠判断「已是最新」时，给一句明确文案（≥ ⇒ 最新）。
+  bool pluginUpToDate(Map item) {
+    final manifest = manifestOf(item);
+    if (manifest == null || installed(item) != true) return false;
+    final remote = manifest['versionCode'];
+    final local = item['versionCode'];
+    if (remote is! num || local is! num || local <= 0) return false;
+    return local >= remote;
+  }
+
+  String downloadButtonLabel(Map item) {
+    return pluginHasUpdate(item) ? '更新' : '下载安装';
   }
   bool showPluginToggle(Map item) =>
       widget.plugin &&
@@ -983,16 +1022,17 @@ class _CatalogPageState extends State<CatalogPage> {
                             SelectableText('版本 ${versionOf(item)}'),
                             if (manifestOf(item) != null) ...[
                               // task-144：详情里也显示真实进度（只要在走就不显示失败）
-                              if (downloading.containsKey(package(item)))
+                              // task-146：只在**真的有进度数字**时显示（未安装且没在下载 ⇒ 什么都不显示 ✗）
+                              if (downloading.containsKey(package(item)) &&
+                                  downloading[package(item)]!['receivedBytes'] is num &&
+                                  downloading[package(item)]!['totalBytes'] is num &&
+                                  (downloading[package(item)]!['totalBytes'] as num) > 0)
                                 SelectableText(
                                     '下载中 ' +
                                         (() {
-                                          final record = downloading[package(item)];
-                                          final total = record?['totalBytes'];
-                                          final received = record?['receivedBytes'];
-                                          if (total is! num || received is! num || total <= 0) {
-                                            return '（等待进度…）';
-                                          }
+                                          final record = downloading[package(item)]!;
+                                          final total = record['totalBytes'] as num;
+                                          final received = record['receivedBytes'] as num;
                                           final percent = (received * 100 / total)
                                               .clamp(0, 100)
                                               .toStringAsFixed(0);
@@ -1014,13 +1054,18 @@ class _CatalogPageState extends State<CatalogPage> {
                                       (manifestOf(item)!['requiresRestart'] == true ? '是' : '否'),
                                   key: const ValueKey('plugin-detail-restart')),
                               if (text(manifestOf(item)!, 'notes').isNotEmpty) ...[
-                                SelectableText(
-                                    '更新说明：' + text(manifestOf(item)!, 'notes'),
-                                    key: const ValueKey('plugin-detail-notes'),
-                                    // task-141：保留换行（changelog 多行）；长文默认折叠 3 行
-                                    maxLines: expandedNotes.contains(package(item))
-                                        ? null
-                                        : 3),
+                                Padding(
+                                    // task-146：折叠时**必须**有 overflow，且上下留白（上一版没约束 ⇒ 真机与标题重叠 ✗）
+                                    padding: const EdgeInsets.only(top: 4, bottom: 2),
+                                    // SelectableText 不支持 overflow ✗ ⇒ 用 Text（折叠裁剪可靠，代价是不可选中）
+                                    child: Text(
+                                        '更新说明：' + text(manifestOf(item)!, 'notes'),
+                                        key: const ValueKey('plugin-detail-notes'),
+                                        maxLines: expandedNotes.contains(package(item))
+                                            ? null
+                                            : 3,
+                                        overflow: TextOverflow.fade,
+                                        style: const TextStyle(fontSize: 12))),
                                 if (text(manifestOf(item)!, 'notes').length > 120)
                                   TextButton(
                                       key: const ValueKey('plugin-detail-notes-toggle'),
@@ -1064,11 +1109,13 @@ class _CatalogPageState extends State<CatalogPage> {
                                           style: TextStyle(fontSize: 12))),
                               ]),
                             const SizedBox(height: 8),
-                            Text(
-                                installed(item) == true
-                                    ? '本机插件随宿主 APK 内置；系统应用详情请在系统设置中查看'
-                                    : '该条目没有可用的本地安装包；请用底部「安装本地插件 APK」导入',
-                                style: const TextStyle(fontSize: 12)),
+                            if (installed(item) == true)
+                              const Text('本机插件随宿主 APK 内置；系统应用详情请在系统设置中查看',
+                                  style: TextStyle(fontSize: 12))
+                            else if (manifestOf(item) == null)
+                              // task-146：清单里有（可下载）⇒ 不再说「没有本地安装包」（自相矛盾 ✗）
+                              const Text('该条目没有可用的本地安装包；请用底部「安装本地插件 APK」导入',
+                                  style: TextStyle(fontSize: 12)),
                           ] else ...[
                             Text(
                                 '${text(item, 'category', '内置示例')} · ${formatSize(size(item))}'),
@@ -1563,6 +1610,42 @@ class _CatalogPageState extends State<CatalogPage> {
       return (category.isEmpty || mine || item['category'] == category) &&
           haystack.contains(query.trim().toLowerCase());
     }).toList();
+    // task-145：插件 tab 的列表 = **清单里的全部插件**（已装 + **未装**）
+    // —— 只显示本机已装的会把「未安装/可下载」整个吞掉（用户最早的要求就是这个）✗
+    if (widget.plugin && pluginManifest.isNotEmpty) {
+      final known = <String>{
+        ...visible.map(package),
+        ...visible.map((x) => text(x, 'id')),
+      }..removeWhere((x) => x.isEmpty);
+      final keyword = query.trim().toLowerCase();
+      for (final entry in pluginManifest.values) {
+        if (entry is! Map) continue;
+        final manifest = Map<String, dynamic>.from(entry);
+        final id = text(manifest, 'id');
+        final pkg = text(manifest, 'package');
+        if ((id.isNotEmpty && known.contains(id)) ||
+            (pkg.isNotEmpty && known.contains(pkg))) {
+          continue; // 本机已有这条 ⇒ 用本机那条（状态更准）
+        }
+        final title = text(manifest, 'displayName', text(manifest, 'name'));
+        if (keyword.isNotEmpty &&
+            !(title + ' ' + pkg + ' ' + id).toLowerCase().contains(keyword)) {
+          continue;
+        }
+        visible.add(<String, dynamic>{
+          'id': id,
+          'name': title.isEmpty ? id : title,
+          'package': pkg,
+          'packageName': pkg,
+          'package_name': pkg,
+          'installed': false, // 清单里有、本机没有 ⇒ 未安装
+          'version': text(manifest, 'version'),
+          'versionName': text(manifest, 'version'),
+          'versionCode': manifest['versionCode'],
+          'summary': text(manifest, 'notes'),
+        });
+      }
+    }
     final categories = (items ?? <Map<String, dynamic>>[])
         .map((x) => text(x, 'category'))
         .where((x) => x.isNotEmpty)

@@ -96,6 +96,23 @@ void main() {
     expect(source.contains('下载中断（网络，可换网络或换源后重试）'), isTrue);
     expect(source.contains('安装状态轮询超时（长时间无进展，可重试）'), isTrue);
     expect(source.contains("ValueKey('plugin-detail-progress')"), isTrue);
+    // task-145：列表 = 清单全部（含未安装）；≥ 判最新；清旧失败态
+    expect(source.contains("final known = <String>{"), isTrue,
+        reason: '必须把清单里未安装的也并进列表');
+    expect(source.contains("          'installed': false, // 清单里有、本机没有 ⇒ 未安装"), isTrue);
+    expect(source.contains('bool pluginHasUpdate(Map item)'), isTrue);
+    expect(source.contains('return remote > local;'), isTrue,
+        reason: '只有清单 code > 本机 code 才算可更新');
+    expect(source.contains('return local >= remote;'), isTrue,
+        reason: '本机 code ≥ 清单 code ⇒ 已是最新（≥ 而非 >）');
+    expect(source.contains("'已安装 · 已是最新'"), isTrue);
+    // task-146：notes 折叠必须有 overflow；未安装不显示「下载中/没有本地安装包」
+    expect(source.contains('overflow: TextOverflow.fade,'), isTrue);
+    expect(source.contains("downloading[package(item)]!['receivedBytes'] is num"), isTrue);
+    expect(source.contains('activeDownload'), isTrue);
+    expect(source.contains('else if (manifestOf(item) == null)'), isTrue);
+    expect(source.contains('downloadError.clear();'), isTrue,
+        reason: '重新拉清单要清掉旧失败态');
     expect(source.contains("'下载中 ' +"), isTrue);
     expect(source.contains('withOpacity('), isFalse,
         reason: '5 条 withOpacity 必须清成 withValues(alpha:)');
