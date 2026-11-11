@@ -1,4 +1,4 @@
-# AI.js Pro MCP 冒烟/回归：一条命令跑完不变量检查。
+﻿# AI.js Pro MCP 冒烟/回归：一条命令跑完不变量检查。
 #
 #   .\tools\mcp-smoke\run.ps1                       # K40（USB）：自动 adb forward 后跑
 #   .\tools\mcp-smoke\run.ps1 -DeviceId ce4d2bdb     # 换设备

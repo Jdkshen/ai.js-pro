@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Runs a JS file inside an installed Auto.js-family app (e.g. Auto.js Pro) on the attached
 device and collects a result file written by the script.

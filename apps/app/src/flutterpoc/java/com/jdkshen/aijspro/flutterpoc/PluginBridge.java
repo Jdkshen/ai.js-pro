@@ -37,6 +37,10 @@ final class PluginBridge {
 
     private static final String TAG = "GlassFlutterPoc";
     private static final String CATALOG_FILE = "plugins.json";
+    /** 安装状态落盘目录（files/flutter-plugin-installs/）。 */
+    private static final String INSTALL_STATE_DIR = "flutter-plugin-installs";
+    /** 下载目录（cache/plugins/）—— 清单成功后会清理非当前版本的 APK。 */
+    private static final String DOWNLOAD_DIR = "plugins";
     /** APK 下载：connect 10s；read 用「**无进展(stall)**」判定 —— Java 的 read timeout 是「两次读到数据之间的最大间隔」，
      *  每次 read 成功都会重新计时 ⇒ 60s 无字节才算失败，**总时长不设上限**（60.5MB 的象棋插件在慢网/加速代理下也不会被腰斩）。 */
     private static final int CONNECT_TIMEOUT_MS = 10000;
@@ -227,6 +231,21 @@ final class PluginBridge {
         data.put("source", source);
         data.put("generatedAt", ((PluginManifest.ParseResult.Success) parsed).getGeneratedAt());
         data.put("plugins", plugins);
+        // 下载件清理（源码复查 ③）：下一次 pluginCatalog 时删掉「不再被本清单引用」的 .apk，
+        // 避免 60–86MB 级的旧安装包长期堆积（不在交给安装器后立刻删：安装器是异步读文件的）。
+        try {
+            java.util.Set<String> keep = new java.util.HashSet<>();
+            for (PluginManifest.Entry entry : entries) {
+                keep.add(entry.getFile());
+            }
+            java.util.List<String> removed = PluginInstallStateFiles.pruneDownloadedApks(
+                    new File(activity.getCacheDir(), DOWNLOAD_DIR), keep);
+            if (!removed.isEmpty()) {
+                Log.i(TAG, "pluginCatalog 清理旧下载件 files=" + removed.size() + " : " + removed);
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "pluginCatalog 清理旧下载件失败：" + error);
+        }
         Log.i(TAG, "pluginCatalog ok source=" + fetch.source + " http=" + fetch.status
                 + " bytes=" + body.length() + " plugins=" + entries.size() + " url=" + fetch.url);
         JSONObject result = new JSONObject();
@@ -854,26 +873,41 @@ final class PluginBridge {
         return new File(new File(activity.getFilesDir(), "flutter-plugin-installs"), id + ".json");
     }
 
-    private static void persist(Activity activity, String id, JSONObject state) {
+    /** 安装状态落盘目录（GlobalAppContext 拿 filesDir ⇒ 读路径不必传 Activity）。 */
+    private static File installStateDir() {
         try {
-            File file = stateFile(activity, id);
-            File parent = file.getParentFile();
-            if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
-                return;
-            }
-            FileOutputStream output = new FileOutputStream(file);
-            try {
-                output.write(state.toString().getBytes("UTF-8"));
-            } finally {
-                output.close();
-            }
+            android.content.Context context = com.stardust.app.GlobalAppContext.get();
+            return context == null ? null : new File(context.getFilesDir(), INSTALL_STATE_DIR);
         } catch (Throwable error) {
-            Log.w(TAG, "落盘安装状态失败 id=" + id + "：" + error.getMessage());
+            return null;
         }
     }
 
+    private static void persist(Activity activity, String id, JSONObject state) {
+        File dir = installStateDir();
+        if (dir == null) {
+            dir = new File(activity.getFilesDir(), INSTALL_STATE_DIR);
+        }
+        if (!PluginInstallStateFiles.writeText(PluginInstallStateFiles.stateFileIn(dir, id), state.toString())) {
+            Log.w(TAG, "落盘安装状态失败 id=" + id);
+        }
+    }
+
+    /** 落盘源：**真读**（源码复查修正 —— 原来是「只写不读」的半成品 ⇒ 重启后复盘不了上次状态）。 */
     private static JSONObject readPersisted(String id) {
-        // 落盘源需要 Activity 才能取目录；调用方没传时返回 null（内存源为主，落盘用于进程重启后的可读性）
-        return null;
+        File dir = installStateDir();
+        if (dir == null) {
+            return null;
+        }
+        String text = PluginInstallStateFiles.readText(PluginInstallStateFiles.stateFileIn(dir, id));
+        if (text == null) {
+            return null;
+        }
+        try {
+            return new JSONObject(text);
+        } catch (Throwable error) {
+            Log.w(TAG, "落盘安装状态解析失败 id=" + id + "：" + error.getMessage());
+            return null;
+        }
     }
 }

@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     javac self-test for the Auto.js Pro ws-rpc protocol core (no Gradle, no device).
 

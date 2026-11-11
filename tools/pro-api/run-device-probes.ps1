@@ -1,4 +1,4 @@
-# One-shot Pro API device probe runner: 4 member-enumeration variants + 3 path variants,
+﻿# One-shot Pro API device probe runner: 4 member-enumeration variants + 3 path variants,
 # then parse everything and recompute the compatibility rollup.
 #
 # ASCII only: PowerShell 5.1 mis-decodes BOM-less UTF-8 .ps1 files.

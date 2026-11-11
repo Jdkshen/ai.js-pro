@@ -453,9 +453,15 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         val message = CompiledProjectResources.staleResourcePackMessage(expected, actual, resApk)
         Log.w(TAG, message)
         lastStagedResourceWarning = message
-        val removedApk = resApk.delete()
-        val removedJson = resJson.delete()
-        Log.w(TAG, "C-INRT: dropped stale project-res pack (apk=" + removedApk + " json=" + removedJson + ")")
+        val droppedApk = quarantine(resApk)
+        val droppedJson = quarantine(resJson)
+        val dropped = droppedApk && droppedJson
+        Log.w(TAG, "C-INRT: stale project-res pack quarantine apk=" + droppedApk + " json=" + droppedJson)
+        if (!dropped) {
+            // 如实：没移走就不能说「已丢弃」——否则提示与事实自相矛盾（用户看到提示仍白屏）。
+            val warningSuffix = "（注意：资源包未能移走，可能仍会被脚本读到；请手动清理 " + resApk + "）"
+            lastStagedResourceWarning = (message + warningSuffix)
+        }
     }
 
     /**
@@ -492,6 +498,21 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
                 " → 显示在其他应用上层 打开后重试；脚本里也可用 floaty.checkPermission() 引导用户授权。"
         Log.w(TAG, "C-INRT: overlay permission missing => " + message)
         overlayPermissionWarning = message
+    }
+
+    /**
+     * task-152 (B级【6】): 丢弃 stale 资源包 = 先 delete，失败则**改名**到同目录 .stale-<ts>；
+     * 只有「文件确实不在原路径了」才算丢弃成功（否则提示必须如实说清）。
+     */
+    private fun quarantine(file: File): Boolean {
+        if (!file.exists()) {
+            return true
+        }
+        if (file.delete()) {
+            return true
+        }
+        val renamed = File(file.parentFile, file.name + ".stale-" + System.currentTimeMillis())
+        return runCatching { file.renameTo(renamed) }.getOrDefault(false)
     }
 
     private fun initKey(projectConfig: ProjectConfig) {

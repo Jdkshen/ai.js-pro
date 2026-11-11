@@ -60,6 +60,10 @@ public final class PluginNativeLoader {
                 if (lateModels != expectedModels) {
                     Log.w(TAG, "plugin models count mismatch: got=" + lateModels + " expected=" + expectedModels
                             + " pkg=" + pluginPackage + " v=" + versionCode);
+                    File staleReady = new File(dir, READY);
+                    if (staleReady.isFile() && !staleReady.delete()) {
+                        Log.w(TAG, "stale READY could not be removed: " + staleReady);
+                    }
                 }
             }
             return libs;
@@ -89,6 +93,11 @@ public final class PluginNativeLoader {
         if (copied == 0) {
             Log.w(TAG, "plugin libs staging failed (0 files): pkg=" + pluginPackage + " source=" + source);
             return null;
+        }
+        if (!shouldWriteReady(copied, modelsCopied, modelsExpected)) {
+            Log.w(TAG, "READY not written: libs=" + copied + " models=" + modelsCopied + "/" + modelsExpected
+                    + " pkg=" + pluginPackage + " v=" + versionCode);
+            return libs;
         }
         try (FileOutputStream out = new FileOutputStream(new File(dir, READY))) {
             out.write((versionCode + "|" + abi + "|" + copied + "|" + source).getBytes("UTF-8"));
@@ -239,6 +248,13 @@ public final class PluginNativeLoader {
             Log.w(TAG, "extract plugin models failed: " + apk + " : " + error);
         }
         return copied;
+    }
+
+    /**
+     * task-152 (B级【5】): READY 只有在 libs 落了 且 模型齐 时才写（否则「就绪但模型不全」会让第一次 detect 才炸）。
+     */
+    static boolean shouldWriteReady(int libsCopied, int modelsCopied, int modelsExpected) {
+        return libsCopied > 0 && modelsCopied == modelsExpected;
     }
 
     /** task-146: staged models dir (null when the plugin ships no models or nothing was staged). */

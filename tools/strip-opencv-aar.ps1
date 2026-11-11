@@ -1,4 +1,4 @@
-# Strip debug symbols from native libraries inside an Android AAR (OpenCV).
+﻿# Strip debug symbols from native libraries inside an Android AAR (OpenCV).
 #
 # Why: AGP only strips native libs for release variants; debug builds ship whatever
 # the AAR contains. The OpenCV 5.0.0 16kb-page-fix AAR carries full DWARF + .symtab

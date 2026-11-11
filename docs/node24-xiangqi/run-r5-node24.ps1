@@ -1,4 +1,4 @@
-# run-r5-node24.ps1
+﻿# run-r5-node24.ps1
 # R5.4: run Node24 recognition probe on device (test package com.jdkshen.aijspro.nodebench),
 # pull its result JSON, compare against QuickJS baseline, write r5-recognition-parity.md/.json.
 # Only writes output/three-engine-bench/; pushes probe+chess bundle to device; no source edits/installs.

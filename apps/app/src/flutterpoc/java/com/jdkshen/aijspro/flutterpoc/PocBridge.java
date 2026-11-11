@@ -462,6 +462,8 @@ final class PocBridge {
             case "importRecords":
                 return PocImportRecords.list(activity);
             default:
+                // 源码复查 ①(1a)：先留一条日志再抛 —— 否则「方法没登记」在真机上只有 Dart 侧那层，难以定位。
+                android.util.Log.w("GlassFlutterPoc", "PocBridge 未登记的方法（Flutter 路由名单缺）：" + method);
                 throw new UnsupportedOperationException("POC 尚未实现桥方法：" + method);
         }
     }

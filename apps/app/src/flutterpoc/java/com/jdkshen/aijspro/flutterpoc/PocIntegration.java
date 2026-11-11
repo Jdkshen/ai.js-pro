@@ -148,6 +148,8 @@ final class PocIntegration {
             case "nativePackagingRequest":
                 return PocPackaging.execute(activity, method, args);
             default:
+                // 源码复查 ①(1a)：MCP 反射路径也要留日志（原来只有异常，被上层吞掉后就查不到）。
+                android.util.Log.w("GlassFlutterPoc", "PocIntegration 未登记的方法（MCP 分发名单缺）：" + method);
                 throw new UnsupportedOperationException("POC 尚未实现集成桥方法：" + method);
         }
     }

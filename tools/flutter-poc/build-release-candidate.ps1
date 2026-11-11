@@ -53,6 +53,10 @@ param(
     [switch]$SkipFreshnessCheck,
 # Lead 2026-11-12：UI 颜色对比度门禁（ui-contrast --audit --strict）。急用可跳过。
 [switch]$SkipUiContrast,
+# Lead 2026-11-12：Flutter↔原生本地桥契约门禁（tools/flutter-bridge-contract.mjs --strict）。急用可跳过。
+[switch]$SkipBridgeContract,
+# Lead 2026-11-12：PowerShell 编码门禁（.ps1 必须带 UTF-8 BOM）。急用可跳过。
+[switch]$SkipPs1Encoding,
     [switch]$AotOffline,
     [string]$BaselineApk = '',
     [double]$MaxTotalMiB = -1,
@@ -208,6 +212,44 @@ if (-not $SkipUiContrast) {
         if ($contrastExit -ne 0) {
             throw ('UI 颜色对比度不达标：node tools/ui-contrast.mjs --audit --strict（确认是误报就加进 ' +
                    'tools/ui-contrast-allow.json 并写理由；急用 -SkipUiContrast）')
+        }
+    }
+}
+
+# Lead 2026-11-12：Flutter↔原生本地桥契约门禁。
+#  背景：本会话新增的 7 个桥方法（pluginCatalog/pluginInstall/pluginInstallStatus/pluginUninstall/
+#  openInstallPermissionSettings/createLauncherShortcut/apkBreakdown）**都没进成文契约** ✗；
+#  而「桥名三处同步」（PocBridge 路由 / PocIntegration 分发 / docs/guides/Flutter本地桥API.md）
+#  漂移一次就是静默失效 —— 本会话已栽过两次（updateSource、apkBreakdown）。急用 -SkipBridgeContract。
+if (-not $SkipBridgeContract) {
+    $bridgeContract = Join-Path $repo 'tools/flutter-bridge-contract.mjs'
+    if (Test-Path -LiteralPath $bridgeContract -PathType Leaf) {
+        Write-Host '[0.6/5] Flutter 桥契约检查（flutter-bridge-contract --strict）' -ForegroundColor Cyan
+        Push-Location $repo
+        try { & node $bridgeContract --strict 2>&1 | Select-Object -Last 4; $bridgeExit = $LASTEXITCODE }
+        finally { Pop-Location }
+        if ($bridgeExit -ne 0) {
+            throw ('Flutter 桥契约缺口：node tools/flutter-bridge-contract.mjs --strict ' +
+                   '（补 docs/guides/Flutter本地桥API.md 的方法总表；急用 -SkipBridgeContract）')
+        }
+    }
+}
+
+# Lead 2026-11-12：PowerShell 编码门禁（每个 .ps1 必须带 UTF-8 BOM）。
+#  血泪教训（三次）：本仓库 .ps1 里全是中文，缺 BOM 时 PS 5.1 按 GBK 解析 ⇒ 中文变乱码 ⇒
+#  Parser::ParseFile 报 26–32 个「意外的标记」错，而 git diff 里只看到几行改动、根本看不出来。
+#  触发方式极隐蔽：**用编辑工具改写 .ps1 会静默丢 BOM**。本轮实测 37 个 .ps1 里 16 个缺 BOM
+#  （5 个含中文 = 真危险），已全部补齐并确认 34 个 .ps1 全部 0 语法错。
+if (-not $SkipPs1Encoding) {
+    $ps1Gate = Join-Path $repo 'tools/check-ps1-encoding.mjs'
+    if (Test-Path -LiteralPath $ps1Gate -PathType Leaf) {
+        Write-Host '[0.7/5] PowerShell 编码门禁（check-ps1-encoding）' -ForegroundColor Cyan
+        Push-Location $repo
+        try { & node $ps1Gate --quiet 2>&1 | Select-Object -Last 6; $ps1Exit = $LASTEXITCODE }
+        finally { Pop-Location }
+        if ($ps1Exit -ne 0) {
+            throw ('有 .ps1 缺 UTF-8 BOM：node tools/check-ps1-encoding.mjs ' +
+                   '（缺 BOM 会被 PS 5.1 按 GBK 解析中文 ⇒ 语法错；急用 -SkipPs1Encoding）')
         }
     }
 }

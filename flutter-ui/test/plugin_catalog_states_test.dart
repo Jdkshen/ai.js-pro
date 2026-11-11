@@ -105,7 +105,7 @@ void main() {
         reason: '只有清单 code > 本机 code 才算可更新');
     expect(source.contains('return local >= remote;'), isTrue,
         reason: '本机 code ≥ 清单 code ⇒ 已是最新（≥ 而非 >）');
-    expect(source.contains("'已安装 · 已是最新'"), isTrue);
+    expect(source.contains("'已装 v' + versionOf(item)"), isTrue);
     // task-146：notes 折叠必须有 overflow；未安装不显示「下载中/没有本地安装包」
     expect(source.contains('overflow: TextOverflow.fade,'), isTrue);
     expect(source.contains("downloading[package(item)]!['receivedBytes'] is num"), isTrue);

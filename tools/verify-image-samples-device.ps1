@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Package = 'com.jdkshen.aijspro',
     [int]$WaitMs = 60000
 )

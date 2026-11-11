@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Device = 'cccc62c7',
     [string]$Adb = 'C:\Android\platform-tools-2\adb.exe',
     [int]$Swipes = 12,

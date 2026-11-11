@@ -1,4 +1,4 @@
-# Offline compile/run checks for the Android-side editor clipboard policy.
+﻿# Offline compile/run checks for the Android-side editor clipboard policy.
 # This does not start Gradle, a browser, an emulator, or a device.
 $ErrorActionPreference = 'Stop'
 $scriptPath = $MyInvocation.MyCommand.Path

@@ -66,8 +66,14 @@ function Get-NewestFile {
     $newest = $null
     foreach ($p in $Paths) {
         if (-not (Test-Path -LiteralPath $p)) { continue }
+        # Lead 2026-11-12：mtime 判据要**排除不进模板的文件类型**，否则「改了构建脚本/文档」会假 STALE。
+        # 实测两次：给 modules/engine/src/main/cpp/*.ps1 补 BOM ⇒ 模板被判 STALE，而模板内容其实没问题
+        # （:inrt 产物没变 ⇒ Gradle UP-TO-DATE ⇒ 模板 mtime 不刷新 ⇒ mtime 判据永远追不上）。
+        # 只排 .ps1 / .md（都不进模板）；.json/.xml/.gradle 等**保留**（它们可能真进包）。
+        $notPackaged = @('.ps1', '.md')
+        $skipDir = '[\\/](build|\.gradle|\.git|node_modules|\.dart_tool|test|integration_test)[\\/]'
         $items = @(Get-ChildItem -LiteralPath $p -Recurse -File -Include $Include -ErrorAction SilentlyContinue |
-                   Where-Object { $_.FullName -notmatch '[\\/](build|\.gradle|\.git|node_modules|\.dart_tool|test|integration_test)[\\/]' })
+                   Where-Object { ($_.FullName -notmatch $skipDir) -and ($notPackaged -notcontains $_.Extension.ToLowerInvariant()) })
         foreach ($item in $items) {
             if ($null -eq $newest -or $item.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc) { $newest = $item }
         }
@@ -441,7 +447,7 @@ if ($Json) {
         if ($r.state -eq 'WARN') {
             Write-Host ("WARN(kind=" + $r.kind + ", " + $r.reason + ") → 内容级判据不一致（不挡构建；要当门禁用 -DeepStrict）")
         } elseif ($r.state -eq 'STALE') {
-            $extra = if ($r.kind -eq 'template' -or $r.kind -eq 'template-deep') { ' → 先跑 .\tools\build-slim-template.ps1' } else { ' → 加 -RebuildAot（或先跑 tools/flutter-poc/build-aot.ps1）' }
+            $extra = if ($r.kind -eq 'plugin-template') { ' → 先跑 .\gradlew.bat :inrt:assembleRelease（buildApkPlugin 会顺带重建插件兜底模板 + manifest）' } elseif ($r.kind -eq 'template' -or $r.kind -eq 'template-deep') { ' → 先跑 .\tools\build-slim-template.ps1' } elseif ($r.kind -eq 'aot' -or $r.kind -eq 'aot-deep') { ' → 加 -RebuildAot（或先跑 tools/flutter-poc/build-aot.ps1）' }
             $where = if ($r.newestPath) { ' newest=' + $r.newestPath + '@' + $r.newest } else { '' }
             Write-Host ("STALE(kind=" + $r.kind + ", " + $r.reason + ")" + $where + $extra)
         } else {

@@ -1,4 +1,4 @@
-#requires -version 5.1
+﻿#requires -version 5.1
 # Build a minimal signed arm64 APK containing libdtprobe.so (dev-1415 P1-4 device test).
 param([string]$SoPath = 'native\libdtprobe.so')
 $ErrorActionPreference = 'Stop'

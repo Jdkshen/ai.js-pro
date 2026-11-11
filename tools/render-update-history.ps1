@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Render the complete local update history as a standalone HTML page.
 #>

@@ -337,13 +337,12 @@ class _CatalogPageState extends State<CatalogPage> {
       return '已下载（待安装' + downloadedSizeLabel(item) + '）';
     }
     final manifest = manifestOf(item);
-    // 原生清单自带权威文案（例如「未安装：可安装 1.0.0」）⇒ 有就直接用，不自己拼
+    // V4（task-156）：原生 detail 太长会被卡片截成「已装 versionCod…」（切掉最有用的版本号 ✗）
+    // ⇒ 短文案（≤16 字）才用原生；否则用含版本号的短句。
     final nativeDetail = manifest == null ? '' : text(manifest, 'detail');
-    if (nativeDetail.isNotEmpty) return nativeDetail;
-    // task-145：本机 code ≥ 清单 code ⇒ 「已安装 · 已是最新（清单 vX）」（≥ 而非 >）
-    if (pluginUpToDate(item)) {
-      final remote = manifest == null ? '' : text(manifest, 'version');
-      return '已安装 · 已是最新' + (remote.isEmpty ? '' : '（清单 v' + remote + '）');
+    if (nativeDetail.isNotEmpty && nativeDetail.length <= 16) return nativeDetail;
+    if (pluginLooksInstalled(item) && !pluginHasUpdate(item)) {
+      return '已装 v' + versionOf(item) + (pluginUpToDate(item) ? ' · 最新' : '');
     }
     final remote = manifest == null ? '' : text(manifest, 'version');
     final remoteCode = manifest == null ? 0 : (manifest['versionCode'] is num ? manifest['versionCode'] as num : 0);
@@ -1034,6 +1033,32 @@ class _CatalogPageState extends State<CatalogPage> {
         ]));
   }
 
+  /// V3 补刀（task-157）：`category` 是**宿主运行时给的**层级路径
+  /// （如「Node 引擎/Node.js/Node.js中使用UI」✗ —— 源码里没有字面量，静态 grep 找不到 ✓）
+  /// ⇒ 只显示**最后一段**（没有 `/` 时原样），让元信息行回到单行。
+  String categoryTail(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return '';
+    final index = trimmed.lastIndexOf('/');
+    if (index < 0) return trimmed;
+    final tail = trimmed.substring(index + 1).trim();
+    return tail.isEmpty ? trimmed : tail;
+  }
+
+  /// V2（task-156）：卡片次级信息 = 引擎/语言（信息量 > 与区块标题重复的「本地示例工程」✓）。
+  /// 结构化字段优先；没有就用名称/分类的文字提示；都认不出就返回空（不留空行 ✓）。
+  String resourceEngineLabel(Map item) {
+    for (final key in ['engine', 'language', 'runtime']) {
+      final value = text(item, key);
+      if (value.isNotEmpty) return value;
+    }
+    final hint = ('${text(item, 'category')} ${name(item)}').toLowerCase();
+    if (hint.contains('node')) return 'Node.js';
+    if (hint.contains('quickjs')) return 'QuickJS';
+    if (hint.contains('rhino')) return 'Rhino';
+    return '';
+  }
+
   /// task-151：示例/资源卡片图标按引擎或语言区分（减少视觉噪音；认不出就退回 <>）。
   IconData resourceIcon(Map item) {
     final hint = ('${text(item, 'engine')} ${text(item, 'language')} '
@@ -1603,7 +1628,10 @@ class _CatalogPageState extends State<CatalogPage> {
           onTap: () => details(item),
           child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-              child: Row(children: [
+              // V1（task-156）：图标与标题**首行对齐**（原来垂直居中 ⇒ 右侧一片空白 ✗）
+              child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                 // 对齐 MiuixResourceFragment.kt:742 —— 图标位 38（原为 36）
                 SizedBox(
                     width: 38,
@@ -1620,11 +1648,11 @@ class _CatalogPageState extends State<CatalogPage> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 18)),
-                      if (summary(item).isNotEmpty) ...[
+                      // V2（task-156）：删掉与区块标题重复的副标题（每张卡白撑一行 ✗）⇒ 改显示引擎/语言（没有就不显示）
+                      if (resourceEngineLabel(item).isNotEmpty) ...[
                         const SizedBox(height: 3),
-                        // 对齐 MiuixResourceFragment.kt:755 —— 次级 14sp（原为 12）
-                        Text(summary(item),
-                            maxLines: 2,
+                        Text(resourceEngineLabel(item),
+                            maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 14)),
                       ],
@@ -1641,11 +1669,17 @@ class _CatalogPageState extends State<CatalogPage> {
                                 color: author(item).isNotEmpty
                                     ? const Color(0xff247da8)
                                     : null)),
-                        if (text(item, 'category').isNotEmpty &&
+                        // task-157：category 可能是「引擎/语言/子目录」层级路径 ⇒ 只显示末段（回单行 ✓）
+                        if (categoryTail(text(item, 'category')).isNotEmpty &&
                             text(item, 'category') != '本地导入')
-                          Text(text(item, 'category'),
+                          Text(categoryTail(text(item, 'category')),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(fontSize: 11)),
+                        // V3（task-156）：元信息单行不换行（否则同屏卡片 3 行/4 行不一致 ✗）
                         Text(formatSize(size(item)),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 11)),
                       ])
                     ])),

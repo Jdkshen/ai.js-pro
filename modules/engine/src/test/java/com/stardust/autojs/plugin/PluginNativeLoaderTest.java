@@ -138,4 +138,13 @@ public class PluginNativeLoaderTest {
         }
         return apk;
     }
+    /** task-152: READY only when libs landed AND models are complete. */
+    @Test
+    public void readyIsOnlyWrittenWhenLibsAndModelsAreComplete() {
+        assertTrue(PluginNativeLoader.shouldWriteReady(2, 5, 5));
+        assertFalse(PluginNativeLoader.shouldWriteReady(2, 4, 5));
+        assertFalse(PluginNativeLoader.shouldWriteReady(2, 0, 5));
+        assertFalse(PluginNativeLoader.shouldWriteReady(0, 5, 5));
+        assertTrue(PluginNativeLoader.shouldWriteReady(2, 0, 0));
+    }
 }

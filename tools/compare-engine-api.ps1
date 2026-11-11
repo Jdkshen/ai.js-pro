@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$Url = 'http://127.0.0.1:18790/mcp',
     [string]$Token = '',
     [string]$OutputDirectory = '.artifacts\engine-api',

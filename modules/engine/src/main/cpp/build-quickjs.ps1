@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$NdkPath = 'D:\VisualStudio\Shared\Android\AndroidNDK\android-ndk-r27c',
     [string]$CMakePath = 'D:\VisualStudio\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe',

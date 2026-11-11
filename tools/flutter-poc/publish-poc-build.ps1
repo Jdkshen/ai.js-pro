@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][int]$VersionCode,
     [Parameter(Mandatory=$true)][string]$VersionName,
     [switch]$SkipAot

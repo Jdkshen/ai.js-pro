@@ -1,4 +1,4 @@
-# Native library strip guard (OpenCV AAR / APK).
+﻿# Native library strip guard (OpenCV AAR / APK).
 # Checks that packaged native libs no longer contain ELF .symtab (unstripped debug
 # symbols) and that the R8 API database resource stays excluded from APKs.
 # Exit code: 0 = pass, 1 = fail or cannot check.

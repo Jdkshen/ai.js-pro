@@ -23,7 +23,7 @@ final data = await LocalBridge.call('方法名', {'参数': 值});   // 返回�
 - 原生侧未知方法 → `UnsupportedOperationException('POC 尚未实现集成桥方法：<method>')`，经 `PocBridge` 转成 `{ok:false,error:…}`。
 - `args` 缺省为空对象；参数一律**按名取值**（`getString/getBoolean/getInt/…`），不传就是各自默认（多数是 `null`/`false`/`0`）。
 
-## 三、方法总表（93 个）
+## 三、方法总表（100 个）
 
 args / 返回列由脚本从源码抽取（`tools/flutter-bridge-contract.mjs` 同源可复跑）；`—` 表示该方法的参数或返回未在抽取窗口内出现（多为无参或返回的是非 JSON 对象），**以「实现位置」列的行号为准**。
 
@@ -103,11 +103,18 @@ args / 返回列由脚本从源码抽取（`tools/flutter-bridge-contract.mjs` �
 | `pluginStates` | — | `disabled` | `PocIntegration.java:95` |
 | `pluginSetEnabled` | `packageName`, `enabled` | `enabled` | `PocIntegration.java:97` |
 | `pluginIcon` | `packageName` | — | `PocIntegration.java:100` |
+| `pluginCatalog` | — | `url`, `source`, `plugins[]`（每条含 `id`/`displayName`/`package`/`version`/`versionCode`/`sizeBytes`/`sha256`/`requiresRestart`/`abis`/`notes`/`state`/`detail`/`actionable`/`iconPath`/`iconBase64`） | `PocIntegration.java:131`（处理 `PluginBridge.java:72`） |
+| `pluginInstall` | `id` | `state`（`running`）, `receivedBytes`, `totalBytes`, `id` | `PocIntegration.java:132`（处理 `PluginBridge.java:74`） |
+| `pluginInstallStatus` | `id` | `state`（`running`/`success`/`failed`）, `receivedBytes`, `totalBytes`, `reasonCode`（`source`/`manifest`/`network`/`checksum`/`permission`/`missing`）, `requiresRestart`, `path`, `message`, `action`（`openInstallPermissionSettings`）, `actionLabel` | `PocIntegration.java:133`（处理 `PluginBridge.java:76`） |
+| `pluginUninstall` | `id` | — | `PocIntegration.java:134`（处理 `PluginBridge.java:78`） |
+| `openInstallPermissionSettings` | — | `opened`, `canInstall` | `PocIntegration.java:135`（处理 `PluginBridge.java:80`） |
+| `createLauncherShortcut` | `label`（可选） | `supported`, `requested`, `mode`（`pin`/`broadcast`）, `reason`（不支持/旧接口时） | `PocIntegration.java:136`（处理 `PluginBridge.java:82`） |
 | `shortcut` | `path` | — | `PocIntegration.java:106` |
 | `resetSample` | `path` | `path` | `PocIntegration.java:108` |
 | `copyExampleTree` | `path` | `path` | `PocIntegration.java:110` |
 | `sampleAction` | `action`, `path` | `path` | `PocIntegration.java:112` |
 | `openBuildPage` | `path` | — | `PocIntegration.java:102` |
+| `apkBreakdown` | `path` | `apkBytes`, `entries`, `uncompressedBytes`, `buckets[]`（每条 `key`/`uncompressedBytes`/`uncompressedMiB`/`entries`） | `PocIntegration.java:116`（见 `ApkBreakdownBridge.java`） |
 | `projectLoad` | — | — | `PocIntegration.java:115` |
 | `projectSave` | — | — | `PocIntegration.java:116` |
 | `projectBuild` | — | — | `PocIntegration.java:117` |
