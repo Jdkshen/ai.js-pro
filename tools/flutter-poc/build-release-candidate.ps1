@@ -170,8 +170,15 @@ try {
 if (-not $SkipFreshnessCheck) {
     $freshness = Join-Path $repo 'tools/check-artifact-freshness.ps1'
     if (Test-Path -LiteralPath $freshness -PathType Leaf) {
-        Write-Host '[0/5] 构件新鲜度自检（tools/check-artifact-freshness.ps1 -Deep）' -ForegroundColor Cyan
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $freshness -Root $repo -Deep
+        # Lead 2026-11-11：带 -RebuildAot 时**跳过 AOT 那项检查** —— 门禁跑在 AOT 重建**之前**，
+        # 此刻 payload 必然比 flutter-ui 源码旧（STALE(kind=aot)），是**假阳性**：加了 -RebuildAot 就是
+        # 明确表示「马上要从源码重建 AOT」⇒ 再要求先满足 AOT 新鲜度是自相矛盾（此前每次都要手动补
+        # -SkipFreshnessCheck 才能出包，且会把模板那项真检查一起关掉，风险更大）。
+        # 模板那项**照跑**（模板不会因 -RebuildAot 而重建，STALE 仍必须拦住）。
+        $freshnessArgs = @('-Root', $repo, '-Deep')
+        if ($RebuildAot) { $freshnessArgs += '-SkipAot' }
+        Write-Host ('[0/5] 构件新鲜度自检（tools/check-artifact-freshness.ps1 -Deep{0}）' -f $(if ($RebuildAot) { ' -SkipAot（本版将由 -RebuildAot 重建 AOT）' } else { '' })) -ForegroundColor Cyan
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $freshness @freshnessArgs
         if ($LASTEXITCODE -ne 0) {
             throw ('构件已过期：先跑 tools/build-slim-template.ps1（模板）或加 -RebuildAot（Flutter AOT）；' +
                    '确要强过请显式加 -SkipFreshnessCheck。')
