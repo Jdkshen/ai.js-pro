@@ -116,6 +116,14 @@ import okhttp3.ResponseBody;
 final class QuickJsHostBridge implements AutoCloseable,
         com.stardust.autojs.core.web.QuickJsWebScriptHost {
 
+    /**
+     * Lead 2026-11-12：**外层类自己的日志标签**。
+     *
+     * <p>本文件里原本只有**内层类**里那个 {@code TAG = "QuickJsOverlay"}（文件后段），外层方法引用不到它 ⇒
+     * javac 报「找不到符号」。补日志时必须先有外层可见的标签（内层那个仍按内层作用域解析，不冲突）。
+     */
+    private static final String TAG = "QuickJsHostBridge";
+
     private final ScriptRuntime mRuntime;
     private final java.util.concurrent.atomic.AtomicBoolean mCloseStarted = new java.util.concurrent.atomic.AtomicBoolean();
     /** 本引擎在进程内的 id（ScriptEngine.getId()），浮窗注册表按 owner 清理用。 */
@@ -2126,42 +2134,60 @@ final class QuickJsHostBridge implements AutoCloseable,
         try {
             String pkg = mRuntime.app.getPackageName(appName);
             return pkg != null ? pkg : "";
-        } catch (Throwable e) { return ""; }
+        } catch (Throwable e) {
+            Log.w(TAG, "appGetPackageName failed", e);
+            return "";
+        }
     }
 
     public String appGetAppName(String packageName) {
         try {
             String name = mRuntime.app.getAppName(packageName);
             return name != null ? name : "";
-        } catch (Throwable e) { return ""; }
+        } catch (Throwable e) {
+            Log.w(TAG, "appGetAppName failed", e);
+            return "";
+        }
     }
 
     public boolean appOpenAppSetting(String packageName) {
         try {
             mRuntime.app.openAppSetting(packageName);
             return true;
-        } catch (Throwable e) { return false; }
+        } catch (Throwable e) {
+            Log.w(TAG, "appOpenAppSetting failed", e);
+            return false;
+        }
     }
 
     public boolean appViewFile(String path) {
         try {
             mRuntime.app.viewFile(path);
             return true;
-        } catch (Throwable e) { return false; }
+        } catch (Throwable e) {
+            Log.w(TAG, "appViewFile failed", e);
+            return false;
+        }
     }
 
     public boolean appEditFile(String path) {
         try {
             mRuntime.app.editFile(path);
             return true;
-        } catch (Throwable e) { return false; }
+        } catch (Throwable e) {
+            Log.w(TAG, "appEditFile failed", e);
+            return false;
+        }
     }
 
     public boolean appUninstall(String packageName) {
         try {
             mRuntime.app.uninstall(packageName);
             return true;
-        } catch (Throwable e) { return false; }
+        } catch (Throwable e) {
+            Log.w(TAG, "appUninstall failed", e);
+            return false;
+        }
     }
 
     /**
@@ -2248,21 +2274,30 @@ final class QuickJsHostBridge implements AutoCloseable,
             int status = battery.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1);
             return status == android.os.BatteryManager.BATTERY_STATUS_CHARGING
                     || status == android.os.BatteryManager.BATTERY_STATUS_FULL;
-        } catch (Throwable e) { return false; }
+        } catch (Throwable e) {
+            Log.w(TAG, "deviceIsCharging failed", e);
+            return false;
+        }
     }
 
     public int deviceGetBrightness() {
         try {
             return Settings.System.getInt(mRuntime.uiHandler.getContext().getContentResolver(),
                     Settings.System.SCREEN_BRIGHTNESS);
-        } catch (Throwable e) { return -1; }
+        } catch (Throwable e) {
+            Log.w(TAG, "deviceGetBrightness failed", e);
+            return -1;
+        }
     }
 
     public int deviceGetBrightnessMode() {
         try {
             return Settings.System.getInt(mRuntime.uiHandler.getContext().getContentResolver(),
                     Settings.System.SCREEN_BRIGHTNESS_MODE);
-        } catch (Throwable e) { return -1; }
+        } catch (Throwable e) {
+            Log.w(TAG, "deviceGetBrightnessMode failed", e);
+            return -1;
+        }
     }
 
     public void deviceCancelVibration() {
@@ -2557,7 +2592,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             });
             latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
             return String.valueOf(result[0]);
-        } catch (Throwable e) { return "false"; }
+        } catch (Throwable e) {
+            Log.w(TAG, "dialogConfirm failed", e);
+            return "false";
+        }
     }
 
     public String dialogPrompt(String title, String prefill) {
@@ -2583,7 +2621,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             });
             latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
             return result[0] != null ? result[0] : "";
-        } catch (Throwable e) { return ""; }
+        } catch (Throwable e) {
+            Log.w(TAG, "dialogPrompt failed", e);
+            return "";
+        }
     }
 
     public String dialogSelect(String title, String itemsJson) {
@@ -2617,7 +2658,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             });
             latch.await(60, java.util.concurrent.TimeUnit.SECONDS);
             return String.valueOf(result[0]);
-        } catch (Throwable e) { return "-1"; }
+        } catch (Throwable e) {
+            Log.w(TAG, "dialogSingleChoice failed", e);
+            return "-1";
+        }
     }
 
     public String dialogMultiChoice(String title, String itemsJson, String indicesJson) {
@@ -2663,7 +2707,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             JSONArray arr = new JSONArray();
             for (int i : result) arr.put(i);
             return arr.toString();
-        } catch (Throwable e) { return "[]"; }
+        } catch (Throwable e) {
+            Log.w(TAG, "dialogMultiChoice failed", e);
+            return "[]";
+        }
     }
 
     /**
@@ -2879,7 +2926,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             if (execution == null || execution.getEngine() == null) return -1;
             execution.getEngine().forceStop();
             return 0;
-        } catch (Throwable e) { return -1; }
+        } catch (Throwable e) {
+            Log.w(TAG, "threadsStop failed", e);
+            return -1;
+        }
     }
 
     // ---- shared event bus (cross-engine, incl. workers) ----
@@ -3066,7 +3116,10 @@ final class QuickJsHostBridge implements AutoCloseable,
     public int enginesStopAll() {
         try {
             return mRuntime.engines.stopAll();
-        } catch (Throwable e) { return 0; }
+        } catch (Throwable e) {
+            Log.w(TAG, "enginesStopAll failed", e);
+            return 0;
+        }
     }
 
     public void enginesStopAllAndToast() {
@@ -3087,7 +3140,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             if (execution == null || execution.getEngine() == null) return false;
             execution.getEngine().forceStop();
             return true;
-        } catch (Throwable e) { return false; }
+        } catch (Throwable e) {
+            Log.w(TAG, "engineForceStop failed", e);
+            return false;
+        }
     }
 
     public boolean engineIsDestroyed(long handle) {
@@ -3102,7 +3158,10 @@ final class QuickJsHostBridge implements AutoCloseable,
             boolean destroyed = engine != null && engine.isDestroyed();
             if (destroyed) mEngineSessions.remove(handle, execution);
             return destroyed;
-        } catch (Throwable e) { return true; }
+        } catch (Throwable e) {
+            Log.w(TAG, "engineIsDestroyed failed", e);
+            return true;
+        }
     }
 
     private boolean requestsRhino(String configJson) {

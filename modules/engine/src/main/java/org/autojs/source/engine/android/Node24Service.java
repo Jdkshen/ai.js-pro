@@ -238,9 +238,9 @@ public class Node24Service extends Service {
         } catch(Throwable error){
             android.util.Log.e("SPIKE","SPIKE_FAIL",error);
         } finally {
-            try{ if(a!=null)a.close(); }catch(Throwable ignored){}
-            try{ if(b!=null)b.close(); }catch(Throwable ignored){}
-            try{ if(c!=null)c.close(); }catch(Throwable ignored){}
+            try{ if(a!=null)a.close(); }catch(Throwable ignored){ android.util.Log.w("SPIKE","stream a close failed",ignored); }
+            try{ if(b!=null)b.close(); }catch(Throwable ignored){ android.util.Log.w("SPIKE","stream b close failed",ignored); }
+            try{ if(c!=null)c.close(); }catch(Throwable ignored){ android.util.Log.w("SPIKE","stream c close failed",ignored); }
             android.util.Log.i("SPIKE","SPIKE_END");
         }
     }
@@ -692,7 +692,10 @@ public class Node24Service extends Service {
                         +" scriptLen="+source.length(),error);
                 try { result.put("status","ENGINE_ERROR").put("success",false)
                         .put("stage",stage).put("message",error.toString()); }
-                catch(Exception ignored) {}
+                catch(Exception ignored) {
+                    // 真错误已在上一行用 Log.e 记录；这里只是「把错误写进 result API 载荷」失败，
+                    // 取消状态本身由 Job.cancelled 驱动 ⇒ 可吞（Lead 2026-11-12 按 W1 审计结论加注）。
+                }
             } finally {
                 // 覆盖 runtime-load/Node24Engine 构造失败等未进入内层 finally 的路径。
                 if(bridge!=null) startCleanup(bridge);
@@ -719,9 +722,13 @@ public class Node24Service extends Service {
             // 统一以 Job.cancelled 为准，取消绝不回报 success。
             if(cancelled) {
                 try { result.put("status","CANCELLED").put("success",false).put("cancelled",true); }
-                catch(Exception ignored) {}
+                catch(Exception ignored) {
+                    // 同上：只影响返回载荷字段，取消状态由 Job.cancelled 驱动 ⇒ 可吞。
+                }
             }
-            try {result.put("elapsedMillis",SystemClock.elapsedRealtime()-start);}catch(Exception ignored){}
+            try {result.put("elapsedMillis",SystemClock.elapsedRealtime()-start);}catch(Exception ignored){
+                // 只是补一个统计字段失败，不影响结果正确性 ⇒ 可吞（同上）。
+            }
             if(!replied) reply(result);
             finishAndHaltIfCancelled();
         }

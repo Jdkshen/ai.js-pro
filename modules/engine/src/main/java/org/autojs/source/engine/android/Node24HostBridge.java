@@ -3275,7 +3275,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
                     player.prepare();
                     player.start();
                 } catch (Throwable error) {
-                    try { player.release(); } catch (Throwable ignored) { }
+                    try { player.release(); } catch (Throwable ignored) {
+                        android.util.Log.w(TAG, "创建 MediaPlayer 失败后的释放也失败", ignored);
+                    }
                     throw new IllegalStateException("创建 MediaPlayer 失败（" + mediaPath + "）："
                             + (error.getMessage() == null ? error.toString() : error.getMessage()), error);
                 }
@@ -3307,8 +3309,12 @@ public final class Node24HostBridge implements Node24Engine.Host {
         mMusicPlayer = null;
         mMusicPath = null;
         if (player != null) {
-            try { player.stop(); } catch (Throwable ignored) { }
-            try { player.release(); } catch (Throwable ignored) { }
+            try { player.stop(); } catch (Throwable ignored) {
+                android.util.Log.w(TAG, "audio stop failed", ignored);
+            }
+            try { player.release(); } catch (Throwable ignored) {
+                android.util.Log.w(TAG, "audio release failed", ignored);
+            }
         }
     }
 
@@ -3367,7 +3373,9 @@ public final class Node24HostBridge implements Node24Engine.Host {
         mMediaThread = null;
         mMediaHandler = null;
         if (thread != null) {
-            try { thread.quitSafely(); } catch (Throwable ignored) { }
+            try { thread.quitSafely(); } catch (Throwable ignored) {
+                android.util.Log.w(TAG, "media thread quitSafely failed", ignored);
+            }
         }
     }
 
