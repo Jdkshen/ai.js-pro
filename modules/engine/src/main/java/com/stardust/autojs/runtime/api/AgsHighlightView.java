@@ -54,11 +54,12 @@ public class AgsHighlightView extends View {
             + "  float2 p = c - hs;\n"
             + "  float sd = sdRoundBox(p, hs, cornerRadius);\n"
             + "  float dist = -sd;\n"
-            + "  float band = 1.0 - clamp(dist / thickness, 0.0, 1.0);\n"
+            + "  float band = 0.0;\n"
+            + "  if (sd < 0.0) { float t = clamp(dist / thickness, 0.0, 1.0); band = 1.0 - t * t; }\n"
             + "  if (band <= 0.001) { return half4(0.0, 0.0, 0.0, 0.0); }\n"
             + "  float2 n = grad(p, hs, cornerRadius);\n"
             + "  float lit = abs(dot(n, normalize(lightDir)));\n"
-            + "  return half4(1.0, 1.0, 1.0, band * pow(lit, falloff) * 0.45);\n"
+            + "  return half4(1.0, 1.0, 1.0, band * pow(lit, falloff) * 0.12);\n"
             + "}\n";
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -127,7 +128,8 @@ public class AgsHighlightView extends View {
             runtime.setFloatUniform("size", w, h);
             // 光带宽度：取栏高的 1/24，夹在 2..6px（太宽糊成一片、太窄看不见）。
             runtime.setFloatUniform("cornerRadius", Math.max(1f, radius));
-            runtime.setFloatUniform("thickness", Math.max(2f, Math.min(6f, h / 24f)));
+            // 光带宽度：h/28（≈5px @154px 高），夹在 3..8px —— 12.8px 太宽，154px 高的栏上会看成「白边」。
+            runtime.setFloatUniform("thickness", Math.max(2f, Math.min(6f, h / 60f)));
             runtime.setFloatUniform("lightDir", 0.7071f, 0.7071f);
             runtime.setFloatUniform("falloff", falloff);
         }
