@@ -353,14 +353,20 @@ public final class Node24LocalOverlay {
                     final int ny = request.optInt("y", params.y);
                     runOnMain(() -> {
                         params.x = nx; params.y = ny;
-                        try { if (root != null && root.getParent() != null) wm.updateViewLayout(root, params); } catch (Throwable ignored) { }
+                        try { if (root != null && root.getParent() != null) wm.updateViewLayout(root, params); } catch (Throwable ignored) {
+                            // task-167：移动命令会静默失败，脚本以为移了 ⇒ 必须留痕（只补日志，不改行为）。
+                            android.util.Log.w("Node24LocalOverlay", "overlay move failed (updateViewLayout ignored => overlay silently does not move)", ignored);
+                        }
                         return null;
                     }, 2000L);
                     return ok();
                 }
                 case "hide": {
                     runOnMain(() -> {
-                        try { if (root != null && root.getParent() != null) wm.removeView(root); } catch (Throwable ignored) { }
+                        try { if (root != null && root.getParent() != null) wm.removeView(root); } catch (Throwable ignored) {
+                            // task-167：隐藏失败但窗口仍在屏幕上（用户会当成 bug） ⇒ 必须留痕（只补日志，不改行为）。
+                            android.util.Log.w("Node24LocalOverlay", "overlay hide failed (removeView ignored => window stays on screen)", ignored);
+                        }
                         return null;
                     }, 2000L);
                     return ok();
@@ -390,7 +396,10 @@ public final class Node24LocalOverlay {
                     runOnMain(() -> {
                         if (newWidth > 0) params.width = newWidth;
                         if (newHeight > 0) params.height = newHeight;
-                        try { if (root != null && root.getParent() != null) wm.updateViewLayout(root, params); } catch (Throwable ignored) { }
+                        try { if (root != null && root.getParent() != null) wm.updateViewLayout(root, params); } catch (Throwable ignored) {
+                            // task-167：尺寸设置静默失败 ⇒ 必须留痕（只补日志，不改行为）。
+                            android.util.Log.w("Node24LocalOverlay", "overlay resize failed (updateViewLayout ignored => size silently unchanged)", ignored);
+                        }
                         return null;
                     }, 2000L);
                     return ok();
@@ -596,7 +605,7 @@ public final class Node24LocalOverlay {
                     if (moved) {
                         params.x += dx;
                         params.y += dy;
-                        try { wm.updateViewLayout(root, params); } catch (Throwable ignored) { }
+                        try { wm.updateViewLayout(root, params); } catch (Throwable ignored) { } // task-167：拖拽是高频路径 ⇒ 不补日志（逐帧会刷屏），有意留空。
                         long nowDrag = SystemClock.uptimeMillis();
                         if (nowDrag - lastDragForwardAt >= 16L) {
                             lastDragForwardAt = nowDrag;
@@ -663,7 +672,10 @@ public final class Node24LocalOverlay {
                     events.addLast(new JSONObject().put("type", "touch").put("overlayId", id)
                             .put("action", action).put("x", x).put("y", y).put("time", System.currentTimeMillis()));
                 }
-            } catch (Throwable ignored) { }
+            } catch (Throwable ignored) {
+                // task-167：移动事件静默丢失 ⇒ 必须留痕（只补日志，不改行为）。
+                android.util.Log.w("Node24LocalOverlay", "overlay move event forward failed (script may never see the move callback)", ignored);
+            }
         }
 
         void enqueueDrag(int x, int y) {
@@ -672,7 +684,10 @@ public final class Node24LocalOverlay {
                     events.addLast(new JSONObject().put("type", "drag").put("overlayId", id)
                             .put("x", x).put("y", y));
                 }
-            } catch (Throwable ignored) { }
+            } catch (Throwable ignored) {
+                // task-167：移动事件静默丢失 ⇒ 必须留痕（只补日志，不改行为）。
+                android.util.Log.w("Node24LocalOverlay", "overlay move event forward failed (script may never see the move callback)", ignored);
+            }
         }
 
         void enqueueClick(int viewId, int x, int y) {
