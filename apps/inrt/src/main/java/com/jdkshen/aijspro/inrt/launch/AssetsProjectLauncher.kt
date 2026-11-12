@@ -203,8 +203,13 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
                 activity?.finish()
             }
         } catch (e: Exception) {
-            android.util.Log.e("CINRT-PROBE", "runScript failed", e)
-            AutoJs.instance.globalConsole.error(e)
+            // task-159：无条件留痕（即使 console 不可用也永远有 logcat）。
+            // 注意：`?.` 保护不了 lateinit —— AutoJs.instance 未初始化时 `AutoJs.instance?.` 照样抛
+            // UninitializedPropertyAccessException，所以这里用 runCatching（与 :189-194 同口径，消灭两套写法）。
+            // logcat 会把 TAG 渲染成 `C-INRT  :`（冒号前有空格）⇒ grep 请搜正文 `CINRT runScript failed`。
+            android.util.Log.e(TAG, "CINRT runScript failed", e)
+            runCatching { AutoJs.instance.globalConsole?.error(e) }
+                    .onFailure { android.util.Log.w(TAG, "CINRT console delivery failed", it) }
         }
 
     }
