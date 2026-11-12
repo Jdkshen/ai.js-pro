@@ -672,6 +672,7 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                             try {
                                 write.close();
                             } catch (Throwable ignored) {
+                                // 可吞：截图写线程内的 Piped 流关闭失败，随线程回收，无实际后果（有意留空）。
                             }
                         }
                     }, "n24-screenshot-writer");
@@ -684,10 +685,12 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                     try {
                         write.close();
                     } catch (Throwable ignored) {
+                                // 可吞：截图写线程内的 Piped 流关闭失败，随线程回收，无实际后果（有意留空）。
                     }
                     try {
                         read.close();
                     } catch (Throwable ignored) {
+                                // 可吞：截图写线程内的 Piped 流关闭失败，随线程回收，无实际后果（有意留空）。
                     }
                     return null;
                 }
@@ -710,6 +713,8 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                 try {
                     callback.onServiceStateChanged(ready);
                 } catch (Throwable ignored) {
+                    // task-163：新注册的监听者会**静默收不到「服务状态就绪」**（脚本可能一直等不到 ready）⇒ 必须留痕。
+                    Log.w(TAG, "onServiceStateChanged failed (listener may never see service-ready) ready=" + ready, ignored);
                 }
             });
             Log.i(TAG, "event listener registered count=" + mEventCallbacks.getRegisteredCallbackCount()
@@ -889,6 +894,8 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
             AccessibilityNodeInfo root = service.getRootInActiveWindow();
             if (root != null) return root;
         } catch (Throwable ignored) {
+            // task-163：拿不到活动窗口根会回退；若两条都抛，上层会当成「没有活动窗口」（与 childCount 同类）。
+            Log.w(TAG, "getRootInActiveWindow failed (fallback: no active window root)", ignored);
         }
         try {
             List<AccessibilityWindowInfo> windows = service.getWindows();
@@ -900,6 +907,8 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                 }
             }
         } catch (Throwable ignored) {
+            // task-163：两条回退都失败 ⇒ 返回 null 会被当成「没有窗口」（不是真的没有）。
+            Log.w(TAG, "getWindows failed (activeRoot will return null = looks like no window)", ignored);
         }
         return null;
     }

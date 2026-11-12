@@ -102,8 +102,11 @@ public final class ShizukuUserService extends IShizukuUserService.Stub {
                 catch (Throwable failure) { try { error.write((failure.getMessage() + "\n").getBytes(StandardCharsets.UTF_8)); } catch (IOException ignored) { } }
                 finally {
                     OwnedProcess process = active; if (process != null) process.kill();
-                    try { cleanup(); } catch (Throwable ignored) { }
-                    close(output); close(error); try { owner.unlinkToDeath(death, 0); } catch (Throwable ignored) { }
+                    try { cleanup(); } catch (Throwable ignored) {
+                        // task-163：清理失败会留下文件/进程残留，而任务结果里看不出来 ⇒ 必须留痕。
+                        android.util.Log.w("ShizukuUserService", "cleanup failed (files/process may linger)", ignored);
+                    }
+                    close(output); close(error); try { owner.unlinkToDeath(death, 0); } catch (Throwable ignored) /* 可吞：进程即将销毁，对 owner 解除死亡通知失败无实际后果（有意留空）。 */ { }
                     exit = cancelled.get() ? 130 : code; complete.countDown(); lastUse = System.nanoTime(); jobs.remove(this);
                 }
             }, "shizuku-owned-job").start();
@@ -238,7 +241,10 @@ public final class ShizukuUserService extends IShizukuUserService.Stub {
     }
     private static Thread pump(InputStream input, OutputStream output, boolean closeOutput) {
         Thread thread = new Thread(() -> { try { byte[] buffer = new byte[16384]; int count; while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count); }
-            catch (IOException ignored) { } finally { close(input); if (closeOutput) close(output); } }, "shizuku-pipe");
+            catch (IOException ignored) {
+                // task-163：pump 失败会让下游读到**静默截断**的输出（分不清「读完」与「出错」）⇒ 留痕。
+                android.util.Log.w("ShizukuUserService", "pump failed (output may be truncated)", ignored);
+            } finally { close(input); if (closeOutput) close(output); } }, "shizuku-pipe");
         thread.setDaemon(true); thread.start(); return thread;
     }
     private static void drain(InputStream input, ByteArrayOutputStream output, int max) throws IOException {
@@ -250,5 +256,6 @@ public final class ShizukuUserService extends IShizukuUserService.Stub {
         do { try { process.exitValue(); return true; } catch (IllegalThreadStateException running) { Thread.sleep(25); } } while (System.nanoTime() < end);
         return false;
     }
+    // 可吞：通用 close 工具，关闭失败由调用方语义决定（有意留空）。
     private static void close(Closeable value) { if (value != null) try { value.close(); } catch (IOException ignored) { } }
 }

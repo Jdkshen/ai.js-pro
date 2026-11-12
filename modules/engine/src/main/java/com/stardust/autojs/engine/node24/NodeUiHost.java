@@ -3228,6 +3228,8 @@ public final class NodeUiHost {
             Object menu = view.getClass().getMethod("getMenu").invoke(view);
             return menu instanceof android.view.Menu ? (android.view.Menu) menu : null;
         } catch (ReflectiveOperationException ignored) {
+            // task-163：反射取菜单失败与「这个 View 没有菜单」在返回值上**不可区分** ⇒ 菜单命令会静默无效，必须留痕。
+            android.util.Log.w("NodeUiHost", "menuOf failed (indistinguishable from no menu): " + view.getClass().getName(), ignored);
             return null;
         }
     }
