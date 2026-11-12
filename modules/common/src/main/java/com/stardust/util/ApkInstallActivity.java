@@ -145,7 +145,7 @@ public class ApkInstallActivity extends Activity {
         try {
             IntentUtil.installApk(this, mApkPath, mFileProviderAuthority);
         } catch (ActivityNotFoundException | IllegalArgumentException | SecurityException error) {
-            Log.w("ApkInstallActivity", "ApkInstallActivity 捕获异常（原 printStackTrace；堆栈即定位）", error);
+            android.util.Log.w("ApkInstallActivity", "ApkInstallActivity 捕获异常（原 printStackTrace；堆栈即定位）", error);
             showInstallErrorAndFinish();
             return;
         }
@@ -201,7 +201,7 @@ public class ApkInstallActivity extends Activity {
             }
             return true;
         } catch (Exception | LinkageError error) {
-            Log.w("ApkInstallActivity", "ApkInstallActivity 捕获异常（原 printStackTrace；堆栈即定位）", error);
+            android.util.Log.w("ApkInstallActivity", "ApkInstallActivity 捕获异常（原 printStackTrace；堆栈即定位）", error);
             if (mSessionId >= 0) {
                 try {
                     installer.abandonSession(mSessionId);
@@ -222,7 +222,7 @@ public class ApkInstallActivity extends Activity {
                 try {
                     startActivity(confirm);
                 } catch (ActivityNotFoundException | SecurityException error) {
-                    Log.w("ApkInstallActivity", "ApkInstallActivity 捕获异常（原 printStackTrace；堆栈即定位）", error);
+                    android.util.Log.w("ApkInstallActivity", "ApkInstallActivity 捕获异常（原 printStackTrace；堆栈即定位）", error);
                     showInstallErrorAndFinish();
                     return;
                 }
