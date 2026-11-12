@@ -49,6 +49,7 @@ Pop-Location
    而且**每新增一个脚本都会再踩一次**（AGENTS.md 里已两次记录同一坑）。现在只忽略：
    `__pycache__/`、`*.pyc`、`tools/templates/`、`tools/flutter-poc/*`（保留发布脚本）、`tools/apk-audit/*`（保留唯一源文件）、
    `apktool-android/build|dist`、`r2ghidra-build`、`apk-components/.gradle`。
+   > **2026-11-12 状态**：`r2ghidra-build` **已按本忽略策略清空**（释放 **170.3 MiB / 7,061 文件**）；重建入口 = `tools/reverse-native/build-r2ghidra.py`（写死 r2ghidra 6.2.4 与各输入 sha256，前置见该文件 docstring），被删版本的哈希链留档在 `.artifacts/reverse-native-build-manifest-20261112.json`（979 B，sha256 `395d7592172945b5a713dfeaabb033c72362440c7547e6552d56b4f75d8dcd32`）。
    → **新增脚本不需要改 `.gitignore`**；如果发现又被忽略，说明策略被改回去了。
 2. **`build/` 既是产物目录也是 Java 包名**：`apps/app/src/main/java/**/build/`、`autojs/build/` 是**合法源码包**，
    `.gitignore` 里有对应的 `!` 例外。**别再用 `(^|/)build/` 这种正则去"清理产物"**——会误伤 24 个源码文件（我第一次就误判了）。

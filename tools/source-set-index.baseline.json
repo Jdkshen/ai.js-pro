@@ -1,0 +1,153 @@
+{
+  "generatedAt": "2026-11-12T04:17:08.824Z",
+  "definition": "basename collisions across apps + modules (GEN/TEST classified)",
+  "collisions": [
+    {
+      "name": "AccessibilityService.kt",
+      "kind": "SRC",
+      "files": [
+        "modules/automator/src/main/java/com/stardust/view/accessibility/AccessibilityService.kt",
+        "modules/engine/src/main/java/com/stardust/autojs/core/accessibility/AccessibilityService.kt"
+      ]
+    },
+    {
+      "name": "App.kt",
+      "kind": "SRC",
+      "files": [
+        "apps/app/src/main/java/com/jdkshen/aijspro/App.kt",
+        "apps/inrt/src/main/java/com/jdkshen/aijspro/inrt/App.kt"
+      ]
+    },
+    {
+      "name": "AutoJs.java",
+      "kind": "SRC",
+      "files": [
+        "apps/app/src/main/java/com/jdkshen/aijspro/autojs/AutoJs.java",
+        "modules/engine/src/main/java/com/stardust/autojs/AutoJs.java"
+      ]
+    },
+    {
+      "name": "BuildConfig.java",
+      "kind": "GEN",
+      "files": [
+        "apps/app/build/generated/source/buildConfig/miuixCompat/debug/com/jdkshen/aijspro/BuildConfig.java",
+        "apps/app/build/generated/source/buildConfig/miuixCompat/release/com/jdkshen/aijspro/BuildConfig.java",
+        "apps/inrt/build/generated/source/buildConfig/debug/com/jdkshen/aijspro/inrt/BuildConfig.java",
+        "apps/inrt/build/generated/source/buildConfig/release/com/jdkshen/aijspro/inrt/BuildConfig.java",
+        "modules/automator/build/generated/source/buildConfig/debug/com/stardust/automator/BuildConfig.java",
+        "modules/automator/build/generated/source/buildConfig/release/com/stardust/automator/BuildConfig.java",
+        "modules/common/build/generated/source/buildConfig/debug/com/stardust/BuildConfig.java",
+        "modules/common/build/generated/source/buildConfig/release/com/stardust/BuildConfig.java",
+        "modules/engine/build/generated/source/buildConfig/debug/com/stardust/autojs/BuildConfig.java",
+        "modules/engine/build/generated/source/buildConfig/release/com/stardust/autojs/BuildConfig.java"
+      ]
+    },
+    {
+      "name": "Colors.java",
+      "kind": "SRC",
+      "files": [
+        "modules/engine/src/main/java/com/stardust/autojs/core/image/Colors.java",
+        "modules/engine/src/main/java/com/stardust/autojs/core/ui/inflater/util/Colors.java"
+      ]
+    },
+    {
+      "name": "Config.java",
+      "kind": "SRC",
+      "files": [
+        "apps/app/src/main/java/com/jdkshen/aijspro/network/entity/config/Config.java",
+        "modules/engine/src/main/java/com/stardust/autojs/Config.java"
+      ]
+    },
+    {
+      "name": "Database.java",
+      "kind": "SRC",
+      "files": [
+        "apps/app/src/main/java/com/jdkshen/aijspro/storage/database/Database.java",
+        "modules/engine/src/main/java/com/stardust/autojs/core/database/Database.java"
+      ]
+    },
+    {
+      "name": "ExampleInstrumentedTest.java",
+      "kind": "TEST",
+      "files": [
+        "apps/inrt/src/androidTest/java/com/jdkshen/aijspro/inrt/ExampleInstrumentedTest.java",
+        "modules/common/src/androidTest/java/com/stardust/ExampleInstrumentedTest.java",
+        "modules/engine/src/androidTest/java/com/stardust/autojs/ExampleInstrumentedTest.java"
+      ]
+    },
+    {
+      "name": "ExampleUnitTest.java",
+      "kind": "TEST",
+      "files": [
+        "apps/app/src/test/java/com/jdkshen/aijspro/ExampleUnitTest.java",
+        "apps/inrt/src/test/java/com/jdkshen/aijspro/inrt/ExampleUnitTest.java",
+        "modules/common/src/test/java/com/stardust/ExampleUnitTest.java",
+        "modules/engine/src/test/java/com/stardust/autojs/ExampleUnitTest.java"
+      ]
+    },
+    {
+      "name": "IAutomationHost.java",
+      "kind": "GEN",
+      "files": [
+        "modules/engine/build/generated/aidl_source_output_dir/debug/out/com/stardust/autojs/host/IAutomationHost.java",
+        "modules/engine/build/generated/aidl_source_output_dir/release/out/com/stardust/autojs/host/IAutomationHost.java"
+      ]
+    },
+    {
+      "name": "IAutomationHostCallback.java",
+      "kind": "GEN",
+      "files": [
+        "modules/engine/build/generated/aidl_source_output_dir/debug/out/com/stardust/autojs/host/IAutomationHostCallback.java",
+        "modules/engine/build/generated/aidl_source_output_dir/release/out/com/stardust/autojs/host/IAutomationHostCallback.java"
+      ]
+    },
+    {
+      "name": "IScriptHost.java",
+      "kind": "GEN",
+      "files": [
+        "apps/app/build/generated/aidl_source_output_dir/miuixCompatDebug/out/com/stardust/autojs/host/IScriptHost.java",
+        "apps/app/build/generated/aidl_source_output_dir/miuixCompatRelease/out/com/stardust/autojs/host/IScriptHost.java"
+      ]
+    },
+    {
+      "name": "IShizukuProcess.java",
+      "kind": "GEN",
+      "files": [
+        "modules/engine/build/generated/aidl_source_output_dir/debug/out/com/stardust/autojs/runtime/api/shizuku/IShizukuProcess.java",
+        "modules/engine/build/generated/aidl_source_output_dir/release/out/com/stardust/autojs/runtime/api/shizuku/IShizukuProcess.java"
+      ]
+    },
+    {
+      "name": "IShizukuUserService.java",
+      "kind": "GEN",
+      "files": [
+        "modules/engine/build/generated/aidl_source_output_dir/debug/out/com/stardust/autojs/runtime/api/shizuku/IShizukuUserService.java",
+        "modules/engine/build/generated/aidl_source_output_dir/release/out/com/stardust/autojs/runtime/api/shizuku/IShizukuUserService.java"
+      ]
+    },
+    {
+      "name": "Pref.kt",
+      "kind": "SRC",
+      "files": [
+        "apps/inrt/src/main/java/com/jdkshen/aijspro/inrt/Pref.kt",
+        "modules/engine/src/main/java/com/stardust/autojs/core/pref/Pref.kt"
+      ]
+    },
+    {
+      "name": "VolumeKeyDeduplicator.java",
+      "kind": "SRC",
+      "files": [
+        "apps/app/src/main/java/com/jdkshen/aijspro/autojs/key/VolumeKeyDeduplicator.java",
+        "apps/inrt/src/main/java/com/jdkshen/aijspro/inrt/autojs/VolumeKeyDeduplicator.java"
+      ]
+    },
+    {
+      "name": "VolumeKeyDeduplicatorTest.java",
+      "kind": "TEST",
+      "files": [
+        "apps/app/src/test/java/com/jdkshen/aijspro/autojs/key/VolumeKeyDeduplicatorTest.java",
+        "apps/inrt/src/test/java/com/jdkshen/aijspro/inrt/autojs/VolumeKeyDeduplicatorTest.java"
+      ]
+    }
+  ]
+}
