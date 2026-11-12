@@ -521,7 +521,10 @@ public final class Node24LocalOverlay {
             if ("setChecked".equals(command)) {
                 try {
                     View.class.getMethod("setChecked", boolean.class).invoke(target, request.optBoolean("value", false));
-                } catch (Throwable ignored) { }
+                } catch (Throwable ignored) {
+                    // task-165：反射 setChecked 失败但下面**仍然返回 ok:true** ⇒ 脚本会以为设置成功（返回值说谎 ✗）⇒ 必须留痕。
+                    android.util.Log.w("Node24LocalOverlay", "setChecked failed (still returns ok:true => looks like it worked)", ignored);
+                }
                 return new JSONObject().put("ok", true).put("value", true);
             }
             if ("getChecked".equals(command)) {

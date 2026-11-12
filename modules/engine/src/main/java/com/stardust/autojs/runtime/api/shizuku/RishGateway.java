@@ -113,6 +113,7 @@ final class RishGateway {
                 if(frames==null){raw.write(buffer,0,count);raw.flush();}
                 else synchronized(frames){frames.writeByte(channel);frames.writeInt(count);frames.write(buffer,0,count);frames.flush();}
             }
+        // 可吞：流拷贝线程的 IOException（管道断开），finally 里已关闭输入/输出流，无实际后果（有意留空）。
         }catch(IOException ignored){}
         finally{try{input.close();if(raw!=null)raw.close();}catch(IOException ignored){}}},"aijs-rish-stream");
         thread.setDaemon(true);thread.start();return thread;

@@ -179,7 +179,7 @@ public final class ShizukuUserService extends IShizukuUserService.Stub {
         CommandResult command(String[] argv, InputStream input, long expected, boolean abandon) throws Exception {
             OwnedProcess process = abandon ? new OwnedProcess(argv, null, null, true) : launch(argv, null, null, true);
             ByteArrayOutputStream capture = new ByteArrayOutputStream();
-            Thread reader = new Thread(() -> { try { drain(process.stdout, capture, 65536); } catch (IOException ignored) { } }, "shizuku-pm-output"); reader.start();
+            Thread reader = new Thread(() -> { try { drain(process.stdout, capture, 65536); } catch (IOException ignored) { android.util.Log.w("ShizukuUserService", "stdout drain failed (captured output may be truncated)", ignored); } }, "shizuku-pm-output"); reader.start();
             try {
                 try (OutputStream target = process.process.getOutputStream()) {
                     if (input != null) {

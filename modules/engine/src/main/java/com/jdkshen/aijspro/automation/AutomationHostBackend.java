@@ -544,6 +544,7 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                         try {
                             output.close();
                         } catch (Throwable ignored) {
+                            // 可吞：截图 finally 里的 PNG 输出流关闭失败，随进程回收，无实际后果（有意留空）。
                         }
                     }
                     bitmap.recycle();

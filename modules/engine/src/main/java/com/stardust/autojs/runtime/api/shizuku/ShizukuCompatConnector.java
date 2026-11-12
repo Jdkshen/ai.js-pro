@@ -146,7 +146,7 @@ final class ShizukuCompatConnector {
                 while((count=input.read(bytes))!=-1) synchronized(target) {
                     if(target.length()<8192)target.append(new String(bytes,0,Math.min(count,8192-target.length()),java.nio.charset.StandardCharsets.UTF_8));
                 }
-            } catch(IOException ignored) { }
+            } catch(IOException ignored) { android.util.Log.w("ShizukuCompatConnector", "bootstrap output may be truncated", ignored); }
             finally { try { input.close(); } catch(IOException ignored) { } }
         },"shizuku-bootstrap-output");
         thread.setDaemon(true);thread.start();
