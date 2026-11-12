@@ -37,6 +37,7 @@ public class AgsHighlightView extends View {
             + "uniform float2 lightDir;\n"
             + "uniform float falloff;\n"
             + "uniform float thickness;\n"
+            + "uniform float intensity;\n"
             + "float sdRoundBox(float2 p, float2 hs, float r) {\n"
             + "  float2 q = abs(p) - hs + float2(r);\n"
             + "  return min(max(q.x, q.y), 0.0) + length(max(q, float2(0.0))) - r;\n"
@@ -59,7 +60,7 @@ public class AgsHighlightView extends View {
             + "  if (band <= 0.001) { return half4(0.0, 0.0, 0.0, 0.0); }\n"
             + "  float2 n = grad(p, hs, cornerRadius);\n"
             + "  float lit = abs(dot(n, normalize(lightDir)));\n"
-            + "  return half4(1.0, 1.0, 1.0, band * pow(lit, falloff) * 0.12);\n"
+            + "  return half4(1.0, 1.0, 1.0, band * pow(lit, falloff) * intensity);\n"
             + "}\n";
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -67,7 +68,12 @@ public class AgsHighlightView extends View {
     private float heightPx;
     private float cornerRadius;
     private float falloff;
+    /** 亮度系数（0..1，默认 0.12）。脚本可用 setIntensity() 覆盖，用于免出包调参。 */
+    private float intensity = 0.12f;
+    /** 光带厚度 px（<=0 表示按高度自适应）。脚本可用 setThicknessPx() 覆盖。 */
+    private float thicknessOverride = 0f;
     private boolean failed;
+    private boolean loggedOnce;
 
     public AgsHighlightView(Context context, float widthPx, float heightPx, float cornerRadius, float falloff) {
         super(context);
@@ -89,6 +95,22 @@ public class AgsHighlightView extends View {
         invalidate();
     }
 
+    /** 脚本可调：亮度系数（0..1）。免出包调参用。 */
+    public void setIntensity(float intensity) {
+        this.intensity = Math.max(0f, Math.min(1f, intensity));
+        this.loggedOnce = false;
+        paint.setShader(null);   // 强制重建 shader 以应用新参数
+        invalidate();
+    }
+
+    /** 脚本可调：光带厚度（px，<=0 表示按高度自适应）。 */
+    public void setThicknessPx(float thicknessPx) {
+        this.thicknessOverride = thicknessPx;
+        this.loggedOnce = false;
+        paint.setShader(null);
+        invalidate();
+    }
+
     /** shader 是否可用（false ⇒ 当前系统/画布不支持，正在降级为不画）。 */
     public boolean isSupported() {
         return Build.VERSION.SDK_INT >= 33 && !failed;
@@ -100,10 +122,18 @@ public class AgsHighlightView extends View {
         if (Build.VERSION.SDK_INT < 33) return;
         if (widthPx <= 0f || heightPx <= 0f) return;
         try {
+            float thickness = thicknessOverride > 0f ? thicknessOverride
+                    : Math.max(2f, Math.min(6f, heightPx / 60f));
             if (paint.getShader() == null) {
-                paint.setShader(Api33.createShader(SHADER_SRC, widthPx, heightPx, cornerRadius, falloff));
+                paint.setShader(Api33.createShader(SHADER_SRC, widthPx, heightPx, cornerRadius, falloff, thickness, intensity));
             } else {
-                Api33.update(paint.getShader(), widthPx, heightPx, cornerRadius, falloff);
+                Api33.update(paint.getShader(), widthPx, heightPx, cornerRadius, falloff, thickness, intensity);
+            }
+            if (!loggedOnce) {
+                loggedOnce = true;
+                android.util.Log.i("AgsHighlightView", "draw params: " + widthPx + "x" + heightPx
+                        + " radius=" + cornerRadius + " thickness=" + thickness + " intensity=" + intensity
+                        + " falloff=" + falloff);
             }
             canvas.drawRect(0f, 0f, widthPx, heightPx, paint);
         } catch (Throwable error) {
@@ -117,19 +147,22 @@ public class AgsHighlightView extends View {
     /** API 33+ 的 RuntimeShader 隔离在一个内部类里，避免低版本类校验失败。 */
     @androidx.annotation.RequiresApi(33)
     private static final class Api33 {
-        static android.graphics.Shader createShader(String src, float w, float h, float radius, float falloff) {
+        static android.graphics.Shader createShader(String src, float w, float h, float radius, float falloff,
+                                                    float thickness, float intensity) {
             android.graphics.RuntimeShader shader = new android.graphics.RuntimeShader(src);
-            update(shader, w, h, radius, falloff);
+            update(shader, w, h, radius, falloff, thickness, intensity);
             return shader;
         }
 
-        static void update(android.graphics.Shader shader, float w, float h, float radius, float falloff) {
+        static void update(android.graphics.Shader shader, float w, float h, float radius, float falloff,
+                           float thickness, float intensity) {
             android.graphics.RuntimeShader runtime = (android.graphics.RuntimeShader) shader;
             runtime.setFloatUniform("size", w, h);
             // 光带宽度：取栏高的 1/24，夹在 2..6px（太宽糊成一片、太窄看不见）。
             runtime.setFloatUniform("cornerRadius", Math.max(1f, radius));
             // 光带宽度：h/28（≈5px @154px 高），夹在 3..8px —— 12.8px 太宽，154px 高的栏上会看成「白边」。
-            runtime.setFloatUniform("thickness", Math.max(2f, Math.min(6f, h / 60f)));
+            runtime.setFloatUniform("thickness", thickness);
+            runtime.setFloatUniform("intensity", intensity);
             runtime.setFloatUniform("lightDir", 0.7071f, 0.7071f);
             runtime.setFloatUniform("falloff", falloff);
         }
