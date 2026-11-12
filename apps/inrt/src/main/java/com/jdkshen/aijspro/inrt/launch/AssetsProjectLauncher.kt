@@ -81,8 +81,10 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
     }
 
     init {
+        android.util.Log.e("CINRT-PROBE", "init enter -> calling prepare()")
         logEngineFingerprint()
         prepare()
+        android.util.Log.e("CINRT-PROBE", "init -> prepare() returned ok")
         // task-113 B：工程解压后、在脚本线程上把工程 dex/native 清单准备好（Pro 顺序 dex->so）。
         prepareProjectRuntime()
     }
@@ -201,6 +203,7 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
                 activity?.finish()
             }
         } catch (e: Exception) {
+            android.util.Log.e("CINRT-PROBE", "runScript failed", e)
             AutoJs.instance.globalConsole.error(e)
         }
 
@@ -345,7 +348,9 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         } catch (e: IOException) {
             throw UncheckedIOException(e)
         }
+        android.util.Log.e("CINRT-PROBE", "prepare -> about to extractScriptPackIfPresent()")
         extractScriptPackIfPresent()
+        android.util.Log.e("CINRT-PROBE", "prepare -> extractScriptPackIfPresent() returned ok")
     }
 
     /**
@@ -363,6 +368,7 @@ open class AssetsProjectLauncher(private val mAssetsProjectDir: String, private 
         val payload = try {
             EncryptedScripts.decryptPayload(PFiles.readBytes(pack.path))
         } catch (error: Exception) {
+            android.util.Log.e("CINRT-PROBE", "script pack decrypt failed: " + pack.path, error)
             throw IllegalStateException("脚本容器无法解密：${pack.path}", error)
         } ?: throw IllegalStateException("脚本容器不完整（不是有效的加密载荷）：${pack.path}")
         unzipInto(payload, File(mProjectDir))

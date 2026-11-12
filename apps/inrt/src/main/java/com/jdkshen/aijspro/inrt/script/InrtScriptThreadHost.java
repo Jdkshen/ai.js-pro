@@ -437,6 +437,36 @@ public final class InrtScriptThreadHost {
             task.run();
         } catch (Throwable error) {
             Log.e(TAG, "C-INRT: script task failed mode=" + mode, error);
+            // task-156 P0.5：这条失败原来只进 logcat（用户 LogActivity 列表全空）。三通道投递：
+            // ① logcat（上面这行）；② 既有「可见启动提示」通道（AutoJs console -> LogActivity）；③ 主线程 Toast。
+            // 注意：logcat 会把 TAG 渲染成 `C-INRT  :`（冒号前有空格），grep 要搜 `script task failed` 这类正文，别搜 `C-INRT:`。
+            final String failureText = "脚本无法启动：密钥初始化失败（可能是签名证书/包名/加密盐与产物不一致）。"
+                    + "请用与当前安装包一致的证书重新打包。原因：" + error;
+            try {
+                com.jdkshen.aijspro.inrt.autojs.AutoJs autoJs = com.jdkshen.aijspro.inrt.autojs.AutoJs.Companion.getInstance();
+                if (autoJs != null && autoJs.getGlobalConsole() != null) {
+                    autoJs.getGlobalConsole().println(android.util.Log.WARN, failureText);
+                }
+            } catch (Throwable consoleError) {
+                Log.w("CINRT-PROBE", "console delivery failed", consoleError);
+            }
+            try {
+                android.content.Context appContext = com.stardust.app.GlobalAppContext.get();
+                if (appContext != null) {
+                    final android.content.Context toastContext = appContext.getApplicationContext();
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
+                        @Override public void run() {
+                            try {
+                                android.widget.Toast.makeText(toastContext, failureText, android.widget.Toast.LENGTH_LONG).show();
+                            } catch (Throwable toastError) {
+                                Log.w("CINRT-PROBE", "toast failed", toastError);
+                            }
+                        }
+                    });
+                }
+            } catch (Throwable toastPostError) {
+                Log.w("CINRT-PROBE", "toast post failed", toastPostError);
+            }
         } finally {
             Log.d(TAG, "C-INRT: execute end mode=" + mode + " cost=" + (System.currentTimeMillis() - start) + "ms");
         }

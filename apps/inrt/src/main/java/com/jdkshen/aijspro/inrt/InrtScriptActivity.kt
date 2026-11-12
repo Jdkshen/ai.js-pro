@@ -30,10 +30,11 @@ class InrtScriptActivity : AppCompatActivity() {
         if (InrtScriptHostBridge.initialize(this)) {
             val posted = InrtScriptHostBridge.postOnScriptThread(Runnable {
                 try {
+                    android.util.Log.e("CINRT-PROBE", "InrtScriptActivity.kt about to call GlobalProjectLauncher.launch")
                     GlobalProjectLauncher.launch(this)
                 } catch (e: Throwable) {
                     val cause = e.cause ?: e
-                    android.util.Log.e(TAG, "C-INRT: launch failed on script thread", cause)
+                    android.util.Log.e("CINRT-PROBE", "launch failed on script thread", cause)
                     AutoJs.instance?.globalConsole?.printAllStackTrace(cause)
                 }
             })
@@ -45,10 +46,11 @@ class InrtScriptActivity : AppCompatActivity() {
         // B host 不可用：回退到本进程旧路径（仍可能在 :script），失败再回主进程。
         android.util.Log.w(TAG, "C-INRT: fallback: host not initialized, run launcher directly")
         try {
+            android.util.Log.e("CINRT-PROBE", "InrtScriptActivity.kt about to call GlobalProjectLauncher.launch")
             GlobalProjectLauncher.launch(this)
         } catch (e: Throwable) {
             val cause = e.cause ?: e
-            android.util.Log.e(TAG, "C-INRT: fallback launch failed", cause)
+            android.util.Log.e("CINRT-PROBE", "fallback launch failed", cause)
             AutoJs.instance?.globalConsole?.printAllStackTrace(cause)
         }
         finish()

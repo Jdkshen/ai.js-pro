@@ -103,6 +103,7 @@ class SplashActivity : AppCompatActivity() {
         android.util.Log.w(TAG, "C-INRT: fallback to main process script execution")
         Thread {
             try {
+                android.util.Log.e("CINRT-PROBE", "SplashActivity.kt about to call GlobalProjectLauncher.launch")
                 GlobalProjectLauncher.launch(this)
             } catch (e: Throwable) {
                 // 必须捕获 Throwable：静态初始化失败抛的是 Error（ExceptionInInitializerError），
