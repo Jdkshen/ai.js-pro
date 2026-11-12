@@ -808,6 +808,8 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                         try {
                             mEventCallbacks.getBroadcastItem(i).onAccessibilityEvent(json);
                         } catch (Throwable ignored) {
+                            // task-162：只影响第 i 个监听者，但它会**静默收不到后续事件**（不打 index 就查不出是谁）。
+                            Log.w(TAG, "event callback failed index=" + i + " (this listener silently stops receiving)", ignored);
                         }
                     }
                 } finally {
@@ -859,6 +861,7 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
             try {
                 json.put("windowChangeTypes", event.getWindowChanges());
             } catch (Throwable ignored) {
+                // task-162：可选字段（旧 API/异常事件上没有），语义允许缺失 ⇒ 有意留空，不加日志。
             }
         }
         return json.toString();
@@ -1036,6 +1039,8 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
             chars[0] += text.length() + 1;
             array.put(json);
         } catch (Throwable ignored) {
+            // task-162：dump 里这个节点会**静默消失**（用户看到的树少了节点却不知为何）⇒ 必须留痕。
+            Log.w(TAG, "nodeJson failed (node dropped from dump) path=" + path + " depth=" + depth, ignored);
         }
         if (depth >= MAX_DEPTH - 1) return;
         int childCount;
@@ -1116,9 +1121,15 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
         json.put("rowCount", collection == null ? 0 : collection.getRowCount());
         json.put("columnCount", collection == null ? 0 : collection.getColumnCount());
 
+        // task-162：drawingOrder 是可选字段（旧 API 没有）⇒ 语义允许缺失，有意留空（不加日志，release 下也不会被裁掉语义）。
         try { json.put("drawingOrder", node.getDrawingOrder()); } catch (Throwable ignored) { }
         Rect boundsInParent = new Rect();
-        try { node.getBoundsInParent(boundsInParent); } catch (Throwable ignored) { }
+        try {
+            node.getBoundsInParent(boundsInParent);
+        } catch (Throwable ignored) {
+            // task-162：异常时字段会留在 (0,0,0,0) —— 看起来像真实矩形 ⇒ 依赖坐标的脚本会静默算错。
+            Log.w(TAG, "getBoundsInParent failed (boundsInParent stays 0,0,0,0 which may look like a real rect)", ignored);
+        }
         JSONArray parentJson = new JSONArray();
         parentJson.put(boundsInParent.left);
         parentJson.put(boundsInParent.top);

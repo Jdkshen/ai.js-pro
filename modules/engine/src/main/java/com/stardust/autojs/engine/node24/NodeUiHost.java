@@ -2518,6 +2518,8 @@ public final class NodeUiHost {
         try {
             return NodeUiLocalSession.isShowing() ? NodeUiLocalSession.getContentView() : null;
         } catch (Throwable ignored) {
+            // task-162：与「当前没有会话」不可区分 ⇒ 上层会当成「没有内容视图」，UI 命令静默失败。
+            android.util.Log.w("NodeUiHost", "sessionContentView failed (looks like no active session)", ignored);
             return null;
         }
     }
@@ -3239,6 +3241,8 @@ public final class NodeUiHost {
             Object value = method.invoke(view);
             return value instanceof Boolean && (Boolean) value;
         } catch (Throwable ignored) {
+            // task-162：与「未勾选」不可区分 ⇒ 脚本读到恒 false。
+            android.util.Log.w("NodeUiHost", "isChecked failed (indistinguishable from unchecked)", ignored);
             return false;
         }
     }
@@ -3360,6 +3364,8 @@ public final class NodeUiHost {
         try {
             return Integer.parseInt(String.valueOf(value));
         } catch (Throwable ignored) {
+            // task-162：非数字入参被**静默当成 0**（可能命中 id=0 的语义）⇒ 必须留痕。
+            android.util.Log.w("NodeUiHost", "intValue failed (non-numeric input silently becomes 0): " + value, ignored);
             return 0;
         }
     }
