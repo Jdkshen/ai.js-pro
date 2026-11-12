@@ -53,6 +53,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -1284,9 +1285,17 @@ public final class Node24Images implements AutoCloseable {
     /** 等待并行任务结束，并把首个失败按原异常类型抛回（IllegalArgumentException 保持原样）。 */
     private static void awaitFutures(List<Future<?>> futures, AtomicReference<Throwable> failure,
             String what) throws Exception {
+        // task-153【7】①: 一次钉死「是否可能主线程」——主线程调用直接抛具名错误（同 Node24Client:118 的口径）。
+        if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            throw new IllegalStateException(what + "不能在主线程调用（会阻塞 UI）");
+        }
         for (Future<?> future : futures) {
             try {
-                future.get();
+                // task-153【7】②: 无上限等待改成有上限 + cancel(true)，超时给具名错误。
+                future.get(120, TimeUnit.SECONDS);
+            } catch (TimeoutException timedOut) {
+                future.cancel(true);
+                throw new IllegalStateException(what + "超时（>120s）：已取消并行任务", timedOut);
             } catch (InterruptedException interrupted) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException(what + "被中断", interrupted);

@@ -619,7 +619,14 @@ final class PocIntegration {
                 return false;
             }
         }
-        return mcpRunning() == expected;
+        // ④（源码复查）：同一上限（timeoutMs）不变，但超时要**可解释** —— 原来只 return false，
+        // 调用方只能看到「失败」，不知道是等超时还是状态真不对。
+        boolean finalState = mcpRunning() == expected;
+        if (!finalState) {
+            Log.w(TAG, "waitForMcpRunning 超时：expected=" + expected + " 实际=" + mcpRunning()
+                    + " 上限=" + timeoutMs + "ms（桥是同步调用：这次阻塞就是 " + timeoutMs + "ms 量级）");
+        }
+        return finalState;
     }
 
     // ---- 插件 -------------------------------------------------------------

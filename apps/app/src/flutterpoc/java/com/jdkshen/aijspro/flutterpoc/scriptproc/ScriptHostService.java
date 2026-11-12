@@ -301,7 +301,14 @@ public class ScriptHostService extends Service {
                     }, "pool-spike-cancel");
                     long t0 = android.os.SystemClock.elapsedRealtime();
                     longTask.start();
-                    Thread.sleep(1200L);
+                    // ④（源码复查）：原来是**固定 sleep 1200ms**（每次都白等满）⇒ 改成「有上限的早退轮询」：
+                    // 一旦评测结果出现就立刻继续；上限仍是 1200ms（不改变最坏情况，只缩短常见情况）。
+                    long waitUntil = t0 + 1200L;
+                    while (cancelResult[0] == null && android.os.SystemClock.elapsedRealtime() < waitUntil) {
+                        Thread.sleep(25L);
+                    }
+                    android.util.Log.i(TAG, "NODE_POOL_SPIKE_CANCEL wait="
+                            + (android.os.SystemClock.elapsedRealtime() - t0) + "ms（上限 1200ms，早退=结果已出现）");
                     boolean cancelSent = cancelClient.cancel(cancelId);
                     longTask.join(8000);
                     JSONObject cr = cancelResult[0];

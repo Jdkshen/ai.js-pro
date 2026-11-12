@@ -25,7 +25,23 @@ class BridgeCaseListPinTest {
     /** 只在 PocIntegration（MCP 有、Flutter 路由没登记）—— 目前冻结为这 5 个。 */
     private val integrationOnly = setOf("build", "buildProject", "import", "resetAll", "view")
 
-    /** 只在 PocBridge（Flutter 有、MCP 反射没登记）—— 冻结基线（待与 MCP 工具清单对表后再动）。 */
+    /**
+     * 只在 PocBridge（Flutter 有、MCP 反射没登记）—— **冻结基线**。
+     *
+     * 冻结于 2026-11-12（task-131 源码复查），基线值来自一次全量 case 名单 diff：
+     *   PocBridge 100 个 case / PocIntegration 50 个 ⇒ 差集 = 下面这 56 个 + 反向 5 个。
+     *
+     * **为什么它们现在算「Flutter-only」而不是「漏登记」**：这 56 个大多是**界面/会话态**类路由
+     * （appearance / theme / drawerPreferences / runtimePreferences / logs / liveLogs / fileClipboard /
+     * openWith / share* / sampleLibrary / workspaceContext / stopTasks / cancelTask …），
+     * MCP 侧另有等价工具或本来就不该暴露（例如剪贴板、抽屉偏好）。**但这是「现状判断」不是「已裁决」**：
+     * 到底该对 MCP 开放哪些，需要与 MCP 工具清单逐项对表（Lead 已另派一轮）。
+     *
+     * 使用方式（重要）：
+     *   · 新增桥方法**只在一边登记** ⇒ 本测试立刻红 ⇒ 请到两边都登记，或把名字加进本基线**并说明理由**；
+     *   · 某条已两边都登记 ⇒ 从本基线**删掉**它（测试会提示「基线里的方法已经两边都有」）；
+     *   · 对表完成后：把「确认要开放」的移出基线（⇒ 两边登记），「确认不开放」的加注释标注 keep-out。
+     */
     private val bridgeOnlyFrozen = setOf(
         "accessibilitySettings", "aceOpenFile", "appearance", "bootstrap", "browserPreferences",
         "cancelTask", "clearLiveLogs", "computerPluginState", "createFile", "createFolder",

@@ -148,7 +148,15 @@ public final class Node24Client implements AutoCloseable {
             // A visible UI is governed by its lifecycle and explicit stop, not elapsed time.
             long holdMillis=request.optLong("holdMillis",0L);
             long waitMillis=request.getLong("timeoutMillis")+holdMillis+15000L;
-            if(request.optBoolean("uiScript",false)) pending.done.await();
+            if(request.optBoolean("uiScript",false)) {
+                // task-153【1】: UI 脚本仍由生命周期/显式 stop 决定寿命，但服务挂了不能永久挂住 =>
+                // 加一个大上限（holdMillis + 12h）+ 具名错误，区分「服务没回包」与「脚本还在跑」。
+                long uiCapMillis = holdMillis + TimeUnit.HOURS.toMillis(12);
+                if(!pending.done.await(uiCapMillis, TimeUnit.MILLISECONDS)) {
+                    cancel(id);
+                    throw new IOException("Node service response timeout (uiScript, holdMillis=" + holdMillis + ")");
+                }
+            }
             else if(!pending.done.await(waitMillis,TimeUnit.MILLISECONDS)) {
                 cancel(id);throw new IOException("Node service response timeout");
             }

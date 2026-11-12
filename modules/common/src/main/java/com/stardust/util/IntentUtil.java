@@ -119,7 +119,7 @@ public class IntentUtil {
             context.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             return true;
         } catch (Exception exception) {
-            exception.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", exception);
             return false;
         }
     }
@@ -149,7 +149,7 @@ public class IntentUtil {
             context.startActivity(Intent.createChooser(intent, ""));
             return true;
         } catch (ActivityNotFoundException e) {
-            e.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", e);
             return false;
         }
     }
@@ -176,7 +176,7 @@ public class IntentUtil {
                     .setType("text/plain"));
             return true;
         } catch (ActivityNotFoundException e) {
-            e.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", e);
             return false;
         }
     }
@@ -216,7 +216,7 @@ public class IntentUtil {
         try {
             installApk(context, path, fileProviderAuthority);
         } catch (ActivityNotFoundException | IllegalArgumentException e) {
-            e.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", e);
             Toast.makeText(context, R.string.error_activity_not_found_for_apk_installing, Toast.LENGTH_SHORT).show();
         }
     }
@@ -254,7 +254,7 @@ public class IntentUtil {
                         .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
                 return true;
             } catch (Exception e) {
-                e.printStackTrace();
+                Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", e);
                 return false;
             }
         }
@@ -272,7 +272,7 @@ public class IntentUtil {
                     .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
             return true;
         } catch (ActivityNotFoundException e) {
-            e.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", e);
             return false;
         }
     }
@@ -326,7 +326,7 @@ public class IntentUtil {
                     .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
             return true;
         } catch (ActivityNotFoundException error) {
-            error.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", error);
             return false;
         }
     }
@@ -444,7 +444,7 @@ public class IntentUtil {
                     .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION));
             return true;
         } catch (ActivityNotFoundException e) {
-            e.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", e);
             return false;
         }
     }
@@ -456,7 +456,7 @@ public class IntentUtil {
         try {
             context.startActivity(intent);
         } catch (ActivityNotFoundException e) {
-            e.printStackTrace();
+            Log.w("IntentUtil", "IntentUtil 捕获异常（原 printStackTrace；堆栈即定位）", e);
         }
     }
 }

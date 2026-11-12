@@ -81,7 +81,7 @@ public class PFiles {
             try {
                 return file.createNewFile();
             } catch (IOException e) {
-                e.printStackTrace();
+                Log.w("PFiles", "PFiles 捕获异常（原 printStackTrace；堆栈即定位）", e);
             }
         }
         return false;
@@ -174,7 +174,7 @@ public class PFiles {
             write(is, fos);
             return true;
         } catch (IOException | UncheckedIOException e) {
-            e.printStackTrace();
+            Log.w("PFiles", "PFiles 捕获异常（原 printStackTrace；堆栈即定位）", e);
             return false;
         }
     }
@@ -286,7 +286,7 @@ public class PFiles {
         try {
             return copyStream(new FileInputStream(pathFrom), pathTo);
         } catch (FileNotFoundException e) {
-            e.printStackTrace();
+            Log.w("PFiles", "PFiles 捕获异常（原 printStackTrace；堆栈即定位）", e);
             return false;
         }
     }
@@ -295,7 +295,7 @@ public class PFiles {
         try {
             return copyStream(context.getAssets().open(assetFile), path);
         } catch (IOException e) {
-            e.printStackTrace();
+            Log.w("PFiles", "PFiles 捕获异常（原 printStackTrace；堆栈即定位）", e);
             return false;
         }
     }

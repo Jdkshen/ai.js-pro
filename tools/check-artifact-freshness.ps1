@@ -271,7 +271,13 @@ if (-not $SkipTemplate) {
                             }
                         }
                         if ($present.Count -gt 0 -and $absent.Count -gt 0) {
-                            $results.Add([pscustomobject]@{ kind = 'markers-registry'; state = 'WARN'; reason = '组 ' + $group.id + ' 里这些标记已不在源码：' + ($absent -join ',') + '（请同步 tools/artifact-markers.json）'; newest = ''; newestPath = ''; artifact = $registryFile })
+                            # Lead 2026-11-12：由 WARN 改 **STALE**（W3 漂移清单第 10 条）。
+                            # 理由：注册表是门禁自己的「要求清单」—— 某个标记**已不在源码**，说明它被改名/删了，
+                            # 而门禁仍在拿一个**不存在的名字**去要求模板 ⇒ 这条要求**永远满足不了**、也永远抓不到真回归
+                            #（dev-1459「假 FRESH」的同类）。WARN 不挡构建 ⇒ 没人会修 ⇒ 门禁会慢慢被掏空 ✗。
+                            # 实测当前注册表**无此漂移**（干净）⇒ 加严不会误伤现状 ✓。
+                            # 修法：同步 tools/artifact-markers.json（改名的同步改名、确实删掉的删条目）。
+                            $results.Add([pscustomobject]@{ kind = 'markers-registry'; state = 'STALE'; reason = '组 ' + $group.id + ' 里这些标记已不在源码：' + ($absent -join ',') + '（请同步 tools/artifact-markers.json：改名就改名、删了就删条目）'; newest = ''; newestPath = ''; artifact = $registryFile })
                         }
                         $groupNotes += ($group.id + '=>' + ($present -join '|'))
                     }

@@ -279,6 +279,17 @@ final class PluginBridge {
             @Override
             public void run() {
                 File target = new File(new File(activity.getCacheDir(), "plugins"), entry.getFile());
+        // 确认 ①：清理目前**只挂在 pluginCatalog 成功后**（用户不开插件页就不会清）⇒ 安装前再清一次：
+        // keep = 本次目标文件名（正在下的这份）+ 其它 .apk 一律视为旧版本（可重新下载）。
+        try {
+            java.util.List<String> stale = PluginInstallStateFiles.pruneDownloadedApks(
+                    target.getParentFile(), new java.util.HashSet<>(java.util.Collections.singletonList(target.getName())));
+            if (!stale.isEmpty()) {
+                Log.i(TAG, "pluginInstall 清理旧下载件 files=" + stale.size() + " : " + stale);
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "pluginInstall 清理旧下载件失败：" + error);
+        }
                 try {
                     download(activity, entry, target);
                     PluginVerifier.VerifyResult verified = PluginVerifier.verify(
