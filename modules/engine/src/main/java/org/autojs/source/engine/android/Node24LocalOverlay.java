@@ -65,7 +65,11 @@ public final class Node24LocalOverlay {
         if ("info".equals(action)) {
             Overlay last = latest();
             if (last == null) return null;
-            try { return last.info(); } catch (Throwable error) { return null; }
+            try { return last.info(); } catch (Throwable error) {
+                // task-161：读失败与「没有这个 overlay」都返回 null ⇒ 不留痕就无法排障（契约不变，只补日志）。
+                android.util.Log.w("Node24LocalOverlay", "overlay info failed id=" + request.optString("overlayId", ""), error);
+                return null;
+            }
         }
         if ("closeAll".equals(action)) {
             closeAll();

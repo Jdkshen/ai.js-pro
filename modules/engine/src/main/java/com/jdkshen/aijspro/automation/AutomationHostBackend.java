@@ -551,6 +551,25 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                 return target.getAbsolutePath();
             } catch (Throwable error) {
                 Log.w(TAG, "screenshot 失败", error);
+                // task-161：返回值保持 ""（可能有调用方依赖）⇒ 另给一条**用户可见**的点名提示，避免"空串当成功"。
+                final String hint = "截图失败（宿主返回空路径）：请检查屏幕捕获权限/无障碍服务是否可用。原因：" + error;
+                try {
+                    final android.content.Context ctx = getApplicationContext(); // 本类 extends ContextWrapper ⇒ 自身即 Context
+                    if (ctx != null) {
+                        final android.content.Context app = ctx.getApplicationContext();
+                        new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
+                            @Override public void run() {
+                                try {
+                                    android.widget.Toast.makeText(app, hint, android.widget.Toast.LENGTH_LONG).show();
+                                } catch (Throwable toastError) {
+                                    Log.w(TAG, "screenshot hint -> toast failed", toastError);
+                                }
+                            }
+                        });
+                    }
+                } catch (Throwable postError) {
+                    Log.w(TAG, "screenshot hint -> toast post failed", postError);
+                }
                 return "";
             }
         }
@@ -890,6 +909,8 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                     try {
                         return node.getChildCount();
                     } catch (Throwable error) {
+                        // task-161：读失败不能当成「没有子节点」（会让遍历静默少节点）⇒ 必须留痕。
+                        Log.w(TAG, "node.getChildCount failed", error);
                         return 0;
                     }
                 }
@@ -899,6 +920,8 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
                     try {
                         return node.getChild(index);
                     } catch (Throwable error) {
+                        // task-161：同 childCount —— 读失败与「没有该子节点」不可区分，必须留痕。
+                        Log.w(TAG, "node.getChild(" + index + ") failed", error);
                         return null;
                     }
                 }
@@ -1322,6 +1345,7 @@ final class AutomationHostBackend extends android.content.ContextWrapper {
         try {
             return Binder.getCallingUid() == Process.myUid();
         } catch (Throwable error) {
+            // 判定异常一律拒绝（fail-closed）——安全判定，属有意设计，不因此留日志噪音。
             return false;
         }
     }

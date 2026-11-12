@@ -29,6 +29,7 @@ final class RishGateway {
                 worker.setDaemon(true); worker.start();
             } catch (IOException failure) {
                 synchronized (RishGateway.class) { if (name.equals(address)) address = null; }
+                // 关闭失败可吞：上方 IOException 分支已表达失败并重置 address，关闭失败不影响结果。
                 try { server.close(); } catch (IOException ignored) { } return;
             }
         }, "aijs-rish-gateway");

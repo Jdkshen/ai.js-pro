@@ -43,6 +43,7 @@ final class ShizukuCompatConnector {
                     synchronized(LOCK) { old=cached;cached=null; }
                     if (old!=null) {
                         Thread cleanup=new Thread(() -> {
+                            // 可吞：该分支由 binder 死亡监听触发，对已死 binder 调 destroy 失败无实际后果。
                             try { old.service.destroy(); } catch(RemoteException ignored) { }
                             finally { old.close(); }
                         },"shizuku-compat-disconnect");
