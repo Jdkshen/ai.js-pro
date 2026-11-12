@@ -34,11 +34,21 @@ class ToolkitIoThreeStateTest {
         assertFalse("失败不得用 empty 表达", result.has("empty"))
     }
 
-    @Test fun emptyIsTheOnlyShapeForNoResult() {
-        val result = ToolkitIo.empty()
-        assertEquals("空结果仍是成功", true, result.get("ok").asBoolean)
-        assertEquals("判据只看 empty", true, result.get("empty").asBoolean)
-        assertTrue("data 可空或缺席", !result.has("data") || result.get("data").isJsonNull)
-        assertTrue("empty 不得携带 error", result.get("error").isJsonNull)
+    /**
+     * 第三态（**新口径，2026-11-12 更正**）：「成功但结果为空」由工具自身字段表达，empty 字段**当前未引入**。
+     *  · ok() 对空 data 必须正常返回（成功且结果为空 ⇒ 仍是成功）✓
+     *  · fail() 结果里**不得**出现 empty 字段（防后人把已删的 empty() 悄悄加回而不接线）✓
+     */
+    @Test fun noResultUsesToolOwnFieldsAndNeverTheRemovedEmptyFlag() {
+        val emptyPayload = JsonObject()
+        val success = ToolkitIo.ok(emptyPayload)
+        assertEquals("空结果仍是成功", true, success.get("ok").asBoolean)
+        assertTrue("空结果的成功仍带 data（工具自身字段表达空，如 hasMore/nextAfterId）", success.has("data"))
+        assertTrue("成功侧不得出现 empty 字段（该字段当前未引入）", !success.has("empty"))
+
+        val failure = ToolkitIo.fail("notFound", "没有匹配项")
+        assertEquals(false, failure.get("ok").asBoolean)
+        assertTrue("失败侧不得出现 empty 字段", !failure.has("empty"))
+        assertEquals("失败必须带码", "notFound", failure.get("reasonCode").asString)
     }
 }

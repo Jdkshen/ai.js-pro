@@ -39,11 +39,9 @@ class ToolkitIoContractPinTest {
             failBody.contains("\"reasonCode\" to reasonCode") && failBody.contains("\"errorCode\" to reasonCode"))
     }
 
-    @Test fun emptyIsTheOnlyShapeForNoResult() {
+    /** P3-1：empty() 因「零调用点 = 负债」被删除 ⇒ 钉住「它没有被悄悄加回来而不接线」。 */
+    @Test fun emptyHelperIsRemovedUntilItHasARealCallSite() {
         val text = io()
-        val emptyBody = text.substringAfter("fun empty(actions: JsonArray").substringBefore("fun ensureActive(")
-        assertTrue("empty() 必须 ok=true", emptyBody.contains("\"ok\" to true"))
-        assertTrue("empty() 必须 empty=true（唯一判据）", emptyBody.contains("\"empty\" to true"))
-        assertTrue("empty() 不得用 error 表达失败", emptyBody.contains("\"error\" to null"))
+        assertTrue("empty() 已删除（等真实调用点再加）", !text.contains("fun empty(actions: JsonArray"))
     }
 }

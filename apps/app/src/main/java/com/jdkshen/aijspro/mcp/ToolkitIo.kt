@@ -37,15 +37,11 @@ internal object ToolkitIo {
         "ok" to false, "reasonCode" to reasonCode, "errorCode" to reasonCode,
         "message" to message, "error" to message, "data" to data, "nextActions" to actions)
 
-    /**
-     * P3-1 契约 v1：**成功但无结果**（唯一形态）。
-     *
-     * 判据只看 empty=true（data 可空或缺席）—— 避免「data 空集合」与「字段缺失」混淆
-     * （Phase 1 复查第 1/8 条的病根）。失败**不得**用本方法表达。
-     */
-    fun empty(actions: JsonArray = JsonArray(), note: String? = null) = json(
-        "ok" to true, "empty" to true, "data" to null, "error" to null,
-        "message" to note, "nextActions" to actions)
+    // P3-1：empty(...) 已**删除**（Lead 裁决 + 实测）：既有工具的空结果本身就可判别 ——
+    // 例如 read_apk_logs 返回 logs 数组 + hasMore/nextAfterId（McpTools.kt:1046-1047），
+    // continue_result 返回 hasMore —— 都属于「成功且结果为空」且**不需要新字段**。
+    // 按「新增 API 必须立刻有真实调用点，否则就是负债」的口径 ⇒ 零调用点的 empty() 先删掉，
+    // 等第一个「自身字段无法表达空」的工具出现时再加（届时同时补钉子）。
     fun ensureActive() { if(Thread.currentThread().isInterrupted) throw InterruptedIOException("操作已取消") }
     fun sha(file: File): String = file.inputStream().use { input ->
         val digest = MessageDigest.getInstance("SHA-256")
