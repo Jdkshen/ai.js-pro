@@ -1,5 +1,5 @@
 >
-> **2026-11-12 19:40 现状**：LAN = **dev-1518**；git HEAD `d50f5ad3`、**ahead 299 / behind 0**、**只本地提交**（不 push）；工作树有 **4 处在制未提交**（新增 `AgsHighlightView.java` + 两份 `template.apk` 重建 + `template-manifest.json`），抓档时**构建正在跑** → 提交前需等构建结束并验过，且 `git add` 精确列文件（勿 `-A`）。设备：K40=`cccc62c7`（MCP `tcp:18768`）、设备4=`192.168.10.4:8765`。队伍：8 名队友全 inactive（上限 8、无删除接口）；任务板 2 条在制：`task-48`（ImGui floaty Surface 回调投递脚本线程）、`task-77`（16 KB 页对齐）。**未清**：`.4` 的 `smoke*.mjs`、真 VMP 样本、v7a 真机（无真机不得声称支持）、**C: 仅 ~3.6 GB**（`.gradle`→E:、`.artifacts`→D: 都是 junction，真凶是 `C:\Users` 118 GB，待用户定夺）。
+> **2026-11-13 03:30 现状**：LAN = **dev-1530**（AGSL 高光最终参数 + `AgsHighlightView` 上线，118,923,801 B / `sha256:58b3244f…`）；git HEAD `28ad55fc`、**ahead 303 / behind 0**、**只本地提交**（不 push）；**工作树干净**（昨晚 19:26–19:29 那批在制已在 `cb612af1`/`344aa2ff`/`28ad55fc` 提交，模板共重建 3 次）。当前**无构建在跑**。设备：K40=`cccc62c7`（MCP `tcp:18768`）、设备4=`192.168.10.4:8765`。队伍：8 名队友全 inactive（上限 8、无删除接口）；任务板 2 条在制：`task-48`（ImGui floaty Surface 回调投递脚本线程）、`task-77`（16 KB 页对齐）。**未清**：`AgsHighlightView` **缺脚本侧文档/示例**（docs 除接手单外 0 命中）、`.4` 的 `smoke*.mjs`、真 VMP 样本、v7a 真机（无真机不得声称支持）、**C: 仅 7.84 GB**（`.gradle`→E:、`.artifacts`→D: 都是 junction，真凶是 `C:\Users`，待用户定夺）。
 
 > **📌 接手先读这里（2026-11-12 19:40，取代下方 2026-11-08 块）**：当前有效接手单 → [docs/HANDOFF-接手-2026-11-12.md](docs/HANDOFF-接手-2026-11-12.md)。
 >
