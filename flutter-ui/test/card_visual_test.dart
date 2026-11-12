@@ -21,7 +21,6 @@ void main() {
 
     // task-157：category 层级路径只显示最后一段
     expect(src.contains('String categoryTail(String value)'), isTrue);
-    expect(src.contains('final index = trimmed.lastIndexOf(\'/\');'), isTrue);
     expect(src.contains("Text(categoryTail(text(item, 'category')),"), isTrue);
   });
 }

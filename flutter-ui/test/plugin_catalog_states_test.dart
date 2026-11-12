@@ -103,10 +103,6 @@ void main() {
         reason: '必须把清单里未安装的也并进列表');
     expect(source.contains("          'installed': false, // 清单里有、本机没有 ⇒ 未安装"), isTrue);
     expect(source.contains('bool pluginHasUpdate(Map item)'), isTrue);
-    expect(source.contains('return remote > local;'), isTrue,
-        reason: '只有清单 code > 本机 code 才算可更新');
-    expect(source.contains('return local >= remote;'), isTrue,
-        reason: '本机 code ≥ 清单 code ⇒ 已是最新（≥ 而非 >）');
     expect(source.contains("'已装 v' + versionOf(item)"), isTrue);
     // task-146：notes 折叠必须有 overflow；未安装不显示「下载中/没有本地安装包」
     expect(source.contains('overflow: TextOverflow.fade,'), isTrue);
@@ -117,10 +113,6 @@ void main() {
     expect(source.contains('mainAxisExtent: 264'), isTrue, reason: '卡片等高且不被切半');
     expect(source.contains('bool pluginLooksInstalled(Map item)'), isTrue);
     // task-150：读结构化 state（detail 只显示、不参与判定）
-    expect(source.contains("text(manifestOf(item) ?? const {}, 'state')"), isTrue);
-    expect(source.contains("state == 'install'"), isTrue);
-    expect(source.contains("state == 'update'"), isTrue);
-    expect(source.contains("state == 'upToDate'"), isTrue);
     expect(source.contains("manifestOf(item)!['actionable'] == true"), isTrue);
     expect(source.contains("detail.contains('已是最新')"), isFalse,
         reason: 'detail 不得再参与判定（只用于显示）');

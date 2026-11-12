@@ -308,12 +308,8 @@ class _CatalogPageState extends State<CatalogPage> {
     return null;
   }
 
-  String sizeLabel(Object? bytes) {
-    if (bytes is! num || bytes <= 0) return '';
-    final mib = bytes / (1024 * 1024);
-    return (mib >= 1 ? mib.toStringAsFixed(1) : (bytes / 1024).toStringAsFixed(0) + ' KB') +
-        (mib >= 1 ? ' MB' : '');
-  }
+  // P1-1（task-159）：规则搬进 lib/plugin_logic.dart（纯函数、可单测）⇒ 这里只做薄委托。
+  String sizeLabel(Object? bytes) => sizeTextOf(bytes);
 
   /// 四态判定（下载中 > 失败 > 可更新 > 已安装/未安装），三处渲染共用同一份判据。
   String pluginStateLabel(Map item, {bool detail = false}) {
@@ -516,45 +512,29 @@ class _CatalogPageState extends State<CatalogPage> {
   /// 本机 code ≥ 清单 code ⇒ 已是最新，不给更新按钮）。任一侧缺 code ⇒ 不作判定（不猜）。
   /// task-150：**读结构化字段**（`detail` 只用于显示，不参与判定 ✗）。
   /// 清单每条带 `state`：`install` = 未安装（可下载安装）/ `update` = 已装可更新 / 其它（如 upToDate）= 已装已最新。
-  String pluginManifestState(Map item) => text(manifestOf(item) ?? const {}, 'state');
+  String pluginManifestState(Map item) => manifestStateOf(manifestOf(item));
 
-  bool pluginLooksInstalled(Map item) {
-    if (installed(item) == true) return true;
-    final state = pluginManifestState(item);
-    if (state == 'install') return false; // 结构化判定：未安装
-    if (state == 'update') return true; // 已装（只是有更新）
-    if (state == 'upToDate' || state == 'uptodate') return true;
-    return false; // 没有结构信息就不猜
-  }
+  // P1-1（task-159）：薄委托 ⇒ 规则在 lib/plugin_logic.dart（可单测）
+  bool pluginLooksInstalled(Map item) => looksInstalledOf(
+      installed: installed(item) == true, state: pluginManifestState(item));
 
   bool pluginHasUpdate(Map item) {
     final manifest = manifestOf(item);
-    if (manifest == null) return false;
-    // 结构化 state 优先（原生 PluginUpdatePlanner 的判定，我们不覆盖）
-    final state = text(manifest, 'state');
-    if (state == 'update') return true;
-    if (state == 'install' || state == 'upToDate' || state == 'uptodate') {
-      return false;
-    }
-    if (installed(item) != true) return false;
-    final remote = manifest['versionCode'];
-    final local = item['versionCode'];
-    if (remote is! num || local is! num || local <= 0) return false;
-    return remote > local; // 兜底：两侧都有 code 才比
+    return hasUpdateOf(
+        installed: installed(item) == true,
+        state: manifestStateOf(manifest),
+        remoteCode: mapNumber(manifest, 'versionCode'),
+        localCode: mapNumber(item, 'versionCode'));
   }
 
   /// 已装且能可靠判断「已是最新」时，给一句明确文案（≥ ⇒ 最新）。
   bool pluginUpToDate(Map item) {
     final manifest = manifestOf(item);
-    if (manifest == null) return false;
-    final state = text(manifest, 'state');
-    if (state == 'upToDate' || state == 'uptodate') return true;
-    if (state == 'install' || state == 'update') return false;
-    if (installed(item) != true) return false;
-    final remote = manifest['versionCode'];
-    final local = item['versionCode'];
-    if (remote is! num || local is! num || local <= 0) return false;
-    return local >= remote;
+    return isUpToDateOf(
+        installed: installed(item) == true,
+        state: manifestStateOf(manifest),
+        remoteCode: mapNumber(manifest, 'versionCode'),
+        localCode: mapNumber(item, 'versionCode'));
   }
 
   String downloadButtonLabel(Map item) {
@@ -1033,31 +1013,16 @@ class _CatalogPageState extends State<CatalogPage> {
         ]));
   }
 
-  /// V3 补刀（task-157）：`category` 是**宿主运行时给的**层级路径
-  /// （如「Node 引擎/Node.js/Node.js中使用UI」✗ —— 源码里没有字面量，静态 grep 找不到 ✓）
-  /// ⇒ 只显示**最后一段**（没有 `/` 时原样），让元信息行回到单行。
-  String categoryTail(String value) {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return '';
-    final index = trimmed.lastIndexOf('/');
-    if (index < 0) return trimmed;
-    final tail = trimmed.substring(index + 1).trim();
-    return tail.isEmpty ? trimmed : tail;
-  }
+  /// V3 补刀（task-157）：`category` 是宿主运行时给的**层级路径**（源码里没有字面量 ⇒ grep 找不到）。
+  /// P1-1（task-159）：实现搬到 lib/plugin_logic.dart（纯函数、可单测）⇒ 这里只做薄委托。
+  String categoryTail(String value) => categoryTailOf(value);
 
-  /// V2（task-156）：卡片次级信息 = 引擎/语言（信息量 > 与区块标题重复的「本地示例工程」✓）。
-  /// 结构化字段优先；没有就用名称/分类的文字提示；都认不出就返回空（不留空行 ✓）。
-  String resourceEngineLabel(Map item) {
-    for (final key in ['engine', 'language', 'runtime']) {
-      final value = text(item, key);
-      if (value.isNotEmpty) return value;
-    }
-    final hint = ('${text(item, 'category')} ${name(item)}').toLowerCase();
-    if (hint.contains('node')) return 'Node.js';
-    if (hint.contains('quickjs')) return 'QuickJS';
-    if (hint.contains('rhino')) return 'Rhino';
-    return '';
-  }
+  /// V2（task-156）：卡片次级信息 = 引擎/语言（认不出返回空 ⇒ 不留空行）。
+  String resourceEngineLabel(Map item) => resourceEngineLabelOf(
+      engine: text(item, 'engine'),
+      language: text(item, 'language'),
+      runtime: text(item, 'runtime'),
+      hintText: text(item, 'category') + ' ' + name(item));
 
   /// task-151：示例/资源卡片图标按引擎或语言区分（减少视觉噪音；认不出就退回 <>）。
   IconData resourceIcon(Map item) {
