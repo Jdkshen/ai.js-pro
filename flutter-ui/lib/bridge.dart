@@ -88,12 +88,50 @@ class LocalBridge {
     String method, [
     Map<String, dynamic>? arguments,
   ]) async {
-    // 系统授权、导入和大目录分享需要等待；普通桥保持 20s。
+    final value = await _send(method, arguments);
+    if (value['ok'] != true) {
+      // P3-1（task-162）：message 是权威字段（error 只是兼容镜像）⇒ message 优先，
+      // 缺 message 再退回 error，最后才是「操作失败」。
+      throw StateError(value['message']?.toString() ??
+          value['error']?.toString() ??
+          '操作失败');
+    }
+    return value['data'];
+  }
+
+  /// P3-1（task-162）：返回整张信封（ok / reasonCode / message / data / empty / paging）。
+  ///
+  /// 与 call 的区别：不把失败折叠成异常、也不丢信封字段 —— 需要区分
+  /// 「失败（ok=false + reasonCode + message）」「空结果（ok=true + empty=true）」
+  /// 「成功（ok=true + data）」的调用点用它。纯新增：call 与既有调用点行为不变。
+  static Future<Map<String, dynamic>> callEnvelope(
+    String method, [
+    Map<String, dynamic>? arguments,
+  ]) async {
+    final value = await _send(method, arguments);
+    if (value['ok'] == null) {
+      // 缺 ok ⇒ 不是本契约的回包（老桥/异常实现）⇒ 按失败处理，但保留原始字段。
+      return <String, dynamic>{
+        ...value,
+        'ok': false,
+        'message': value['message']?.toString() ??
+            value['error']?.toString() ??
+            '操作失败',
+      };
+    }
+    return value;
+  }
+
+  /// 发一帧并解成 Map（call 与 callEnvelope 共用；行为与原来逐字一致）。
+  static Future<Map<String, dynamic>> _send(
+    String method, [
+    Map<String, dynamic>? arguments,
+  ]) async {
     final slow =
         method.startsWith('import') ||
         method == 'shizukuEnableAccessibility' ||
         method == 'toolkitCall' ||
-        // 示例包按需下载最大约 9MB，20s 默认超时不够。
+        // 示例包按需下载最大约 9MB，20s 默认超时不够（原注释，Lead 审阅时补回）。
         method == 'share' ||
         method == 'shareFile';
     final reply = await channel
@@ -102,10 +140,7 @@ class LocalBridge {
           slow ? const Duration(minutes: 5) : const Duration(seconds: 20),
         );
     if (reply == null) throw StateError('Android 功能接口尚未连接');
-    final value = jsonDecode(reply) as Map<String, dynamic>;
-    if (value['ok'] != true)
-      throw StateError(value['error']?.toString() ?? '操作失败');
-    return value['data'];
+    return jsonDecode(reply) as Map<String, dynamic>;
   }
 
   static Future<Map<String, dynamic>> bootstrap() async {
