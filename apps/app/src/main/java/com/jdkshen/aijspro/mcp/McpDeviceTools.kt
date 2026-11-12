@@ -308,13 +308,14 @@ internal object McpDeviceTools {
                 "message" to "stress 需要无障碍服务实例（当前进程没有 AccessibilityService.instance）：先开启 AI.js Pro 无障碍服务",
                 "argument" to "action"))
         }
-        val requested = count.coerceIn(1, 10000)
-        val timeout = timeoutSeconds.coerceIn(1, 600)
+        // P3-1 A 类归一（行为逐字不变：仍是 count.coerceIn(1, 10000)）：非空入参 ⇒ default 参数不生效，仅借用统一入口。
+        val requested = McpArgClamp.clampInt(count, count, 1, 10000).value
+        val timeout = McpArgClamp.clampInt(timeoutSeconds, timeoutSeconds, 1, 600).value
         val outcome = ToolkitGestureProbe.stress(
             count = requested,
             timeoutSeconds = timeout,
             withCallback = withCallback,
-            intervalMs = intervalMs.coerceIn(0, 2000),
+            intervalMs = McpArgClamp.clampInt(intervalMs, intervalMs, 0, 2000).value,
             probe = { ToolkitGestureProbe.snapshot(service) },
             dispatch = { withCb -> dispatchTinyGesture(service, withCb) },
         )
@@ -333,7 +334,7 @@ internal object McpDeviceTools {
             "dispatched" to outcome.dispatched,
             "failed" to outcome.failed,
             "withCallback" to outcome.withCallback,
-            "intervalMs" to intervalMs.coerceIn(0, 2000),
+            "intervalMs" to McpArgClamp.clampInt(intervalMs, intervalMs, 0, 2000).value,
             "timeoutSeconds" to timeout,
             "stoppedBy" to outcome.stoppedBy,
             "elapsedMs" to outcome.elapsedMs,
