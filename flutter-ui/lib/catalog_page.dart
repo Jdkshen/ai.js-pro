@@ -355,27 +355,11 @@ class _CatalogPageState extends State<CatalogPage> {
     return _pluginStatusFallback(item, detail: detail);
   }
 
-  /// 失败原因码 → 可读中文（W2 的结构化原因码；未知码不隐藏，原样带出来）。
-  String downloadReason(Map<String, dynamic> result) {
-    // 真实字段是 reasonCode（空串=成功/无原因）
-    final code = text(result, 'reasonCode', text(result, 'reason', text(result, 'code')));
-    switch (code) {
-      case 'network':
-        return '网络不可达（下载源连不上）';
-      case 'checksum':
-        return '校验不符（sha256 与清单不一致，未安装）';
-      case 'package':
-        return '安装包与清单不一致（包名不符，未安装）';
-      case 'permission':
-        return '系统未允许安装（请在系统里允许本应用安装未知来源应用）';
-      case 'missing':
-        return '清单未收录该插件';
-      default:
-        return code.isEmpty
-            ? BridgeCall.readable(StateError(text(result, 'message', '未知原因')))
-            : code;
-    }
-  }
+  /// 失败原因码 → 可读中文（P3-1）。
+  /// 读取顺序定死：`reasonCode ?? errorCode ?? reason ?? code`（过渡期可能只有 errorCode）；
+  /// **未知码回退 `message`**（强制条款，绝不隐藏 ✗）；表内文案逐字不变（见 reason_codes.dart）。
+  String downloadReason(Map<String, dynamic> result) =>
+      reasonTextFor(readReasonCode(result), message: text(result, 'message'));
 
   /// 下载安装/更新：真实契约 = `pluginInstall(id)` → `pluginInstallStatus(id)` 轮询到终态。
   /// URL 由原生侧解析（Dart 只传 id）；失败用 `reasonCode` 映射可读原因；成功按 `requiresRestart` 提示重启。
@@ -434,7 +418,7 @@ class _CatalogPageState extends State<CatalogPage> {
           }
           if ((state == 'failed' || state == 'error') && !progressed) {
             // task-144：区分「下载中断（网络）」与「长时间无进展」
-            final code = text(status, 'reasonCode');
+            final code = readReasonCode(status);
             final action = text(status, 'action');
             final message = text(status, 'message');
             // task-147/148：原生预检挡住安装 ⇒ code=permission 且带 action/actionLabel（用它的 message 最准）
@@ -445,7 +429,7 @@ class _CatalogPageState extends State<CatalogPage> {
                     ? message
                     : '系统未允许安装未知来源应用：请在 设置 → 应用 → AI.js Pro → 安装未知应用 里允许后重试')
                 : code == 'network'
-                    ? '下载中断（网络，可换网络或换源后重试）'
+                    ? networkInterruptedText
                     : downloadReason(status);
             if (needsSettings && mounted) {
               setState(() {
@@ -750,9 +734,20 @@ class _CatalogPageState extends State<CatalogPage> {
   /// 失败时优先使用宿主给的 {error: 中文}，否则给可读兜底文案（不再出现 SocketException）。
   Future<List<dynamic>> localCatalog(bool plugin) async {
     try {
-      final value = await BridgeCall.value('localCatalog', {'plugin': plugin});
-      if (value is! Map) throw StateError('内置目录数据格式异常');
-      final result = Map<String, dynamic>.from(value);
+      // P3-1（task-164/165）：改走 callEnvelope —— 用来读 reasonCode（以及将来的 clamped），
+      // 失败不折叠成异常，由这里自己判（文案与旧 BridgeCall.value 逐字一致）。
+      // 空结果口径：**由工具自身字段表达**（如 items=[]、hasMore=false）；`empty` 字段当前未引入。
+      final envelope = await LocalBridge.callEnvelope('localCatalog', {'plugin': plugin});
+      // TODO(P3-1)：原生信封顶层将新增 clamped/requested/effective（尚未落地）⇒ 落地后
+      // 在此消费：参数被夹紧时给一句「数量已按上限调整」。现在不依赖它。
+      if (envelope['ok'] != true) {
+        throw StateError(envelope['message']?.toString() ??
+            envelope['error']?.toString() ??
+            '操作失败');
+      }
+      final result = envelope['data'] is Map
+          ? Map<String, dynamic>.from(envelope['data'] as Map)
+          : <String, dynamic>{};
       final items = result['items'];
       final message = text(result, 'error');
       if (items is! List) {

@@ -21,7 +21,11 @@ void main() {
     // 状态驱动：success/failed + reasonCode + message
     expect(source.contains("state == 'success'"), isTrue);
     expect(source.contains("state == 'failed' || state == 'error'"), isTrue);
-    expect(source.contains("text(result, 'reasonCode'"), isTrue);
+    // P3-1（task-164）：读取顺序搬到 lib/reason_codes.dart 的 readReasonCode（定死四级回退）
+    final codes = File('lib/reason_codes.dart').readAsStringSync();
+    expect(codes.contains("const ['reasonCode', 'errorCode', 'reason', 'code']"), isTrue,
+        reason: '消费顺序必须定死（含 errorCode 兼容镜像）');
+    expect(source.contains('readReasonCode('), isTrue);
     // 只传 id / fileName（URL 由原生解析）
     expect(source.contains("'id': id,"), isTrue);
     expect(source.contains("'id': id});"), isTrue, reason: '安装只传 id');
@@ -42,10 +46,18 @@ void main() {
     expect(File('lib/degraded.dart').readAsStringSync().contains("downloadFailed = '下载失败：'"), isTrue);
     expect(source.contains('UiCopy.downloadFailed'), isTrue);
     // 四类可读原因码
-    for (final code in ["case 'network':", "case 'checksum':", "case 'package':", "case 'permission':"]) {
-      expect(source.contains(code), isTrue, reason: '缺少原因码映射：' + code);
+    // P3-1（task-164）：映射搬到常量表 ⇒ 改为断言「码已登记且文案非空」（逐码文案见 reason_codes_test）
+    final codeTable = File('lib/reason_codes.dart').readAsStringSync();
+    for (final code in ['network', 'checksum', 'package', 'permission', 'missing']) {
+      expect(codeTable.contains("'" + code + "':"), isTrue,
+          reason: '下载原因码未登记：' + code);
     }
-    expect(source.contains('校验不符（sha256 与清单不一致，未安装）'), isTrue);
+    expect(
+        File('lib/reason_codes.dart')
+            .readAsStringSync()
+            .contains("'checksum': '校验不符（sha256 与清单不一致，未安装）'"),
+        isTrue,
+        reason: '下载文案要登记在唯一常量表里（逐码断言见 reason_codes_test）');
     expect(source.contains('停用后仍占空间，卸载请到系统应用管理'), isTrue);
     // 清单拿不到要显式说
     expect(source.contains("ValueKey('plugin-manifest-error')"), isTrue);
@@ -95,7 +107,13 @@ void main() {
     expect(source.contains('const pollInterval = Duration(seconds: 2)'), isTrue);
     expect(source.contains('stalled = Duration.zero'), isTrue,
         reason: '有进展必须重新计时（不判失败）');
-    expect(source.contains('下载中断（网络，可换网络或换源后重试）'), isTrue);
+    // P3-1（task-164）：该文案搬到常量表（与表内 network 刻意不同 ⇒ 两个键都保留）
+    expect(
+        File('lib/reason_codes.dart')
+            .readAsStringSync()
+            .contains("networkInterruptedText = '下载中断（网络，可换网络或换源后重试）'"),
+        isTrue);
+    expect(source.contains('networkInterruptedText'), isTrue);
     expect(source.contains('安装状态轮询超时（长时间无进展，可重试）'), isTrue);
     expect(source.contains("ValueKey('plugin-detail-progress')"), isTrue);
     // task-145：列表 = 清单全部（含未安装）；≥ 判最新；清旧失败态

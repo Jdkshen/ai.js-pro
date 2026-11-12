@@ -99,10 +99,11 @@ class LocalBridge {
     return value['data'];
   }
 
-  /// P3-1（task-162）：返回整张信封（ok / reasonCode / message / data / empty / paging）。
+  /// P3-1（task-162）：返回整张信封（ok / reasonCode / errorCode / message / data / paging；
+/// `empty` 是**保留字段**，当前未引入 —— 空结果由工具自身字段表达，如 items=[]、hasMore=false）。
   ///
   /// 与 call 的区别：不把失败折叠成异常、也不丢信封字段 —— 需要区分
-  /// 「失败（ok=false + reasonCode + message）」「空结果（ok=true + empty=true）」
+  /// 「失败（ok=false + reasonCode + message）」「空结果（ok=true，由工具字段自描述）」
   /// 「成功（ok=true + data）」的调用点用它。纯新增：call 与既有调用点行为不变。
   static Future<Map<String, dynamic>> callEnvelope(
     String method, [
