@@ -11,6 +11,11 @@
  * 签名：设了 AIJSPRO_KEYSTORE/AIJSPRO_STORE_PASSWORD/AIJSPRO_KEY_ALIAS/AIJSPRO_KEY_PASSWORD 就用发布签名；
  *       没设则插件模块回退 debug 签名（**仅供本地/内测，勿对外**）。
  * 顺序：先三个 APK，最后 plugins.json（客户端按 file 字段名下载）。
+ *
+ * 唯一性口径（P0-4）：**plugins.json 只在这里生成**；仓库里唯一的持久副本是 plugin-release 分支上的
+ * plugin-release/plugins.json = 已发布产物（**不要手改/删除**）；output/** 下的同名文件是一次性演练产物。
+ * 本脚本 [3/5] 步的顺序是「先生成(--out) → 再校验(--check) → 才 push」，校验失败会中断发布。
+ * 详见 docs/reports/2026-11-12_plugins.json权威位置与生成门禁（P0-4）.md
  */
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';

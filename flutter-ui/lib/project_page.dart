@@ -1322,8 +1322,8 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                 if (failure != null) {
                   return Padding(
                       padding: const EdgeInsets.only(top: 6),
-                      child: Text('大小构成：暂不可用（' + failure + '）',
-                          style: const TextStyle(fontSize: 12)));
+                      child: DegradedLine(
+                          UiCopy.breakdownUnavailable + failure + '）'));
                 }
                 final buckets = data?['buckets'];
                 if (data == null || buckets is! List) return const SizedBox.shrink();
@@ -1395,7 +1395,8 @@ class _ProjectPageState extends State<ProjectPage> with WidgetsBindingObserver {
                 : const Padding(
                     padding: EdgeInsets.only(top: 6),
                     child: Text(
-                        '打包提示：不可用（桥上没返回 warnings 字段，请更新到带该字段的版本）',
+                        UiCopy.packagingWarningsUnavailable +
+              UiCopy.packagingWarningsUnavailableDetail,
                         style: TextStyle(fontSize: 12))),
         ExpansionTile(
             key: ValueKey('project-events-${current['id']}'),

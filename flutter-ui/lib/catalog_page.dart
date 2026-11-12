@@ -332,7 +332,7 @@ class _CatalogPageState extends State<CatalogPage> {
       return '下载中…';
     }
     final failure = downloadError[pkg];
-    if (failure != null) return '下载失败：' + failure;
+    if (failure != null) return UiCopy.downloadFailed + failure;
     if (canInstallDownloaded(item)) {
       return '已下载（待安装' + downloadedSizeLabel(item) + '）';
     }
@@ -457,13 +457,13 @@ class _CatalogPageState extends State<CatalogPage> {
               });
             }
             setState(() => downloadError[pkg] = reason);
-            notify('下载失败：' + reason);
+            notify(UiCopy.downloadFailed + reason);
             return;
           }
         }
         if (stalled >= stallLimit) {
           setState(() => downloadError[pkg] = '安装状态轮询超时（长时间无进展，可重试）');
-          notify('下载失败：安装状态轮询超时（长时间无进展，可点「重试」）');
+          notify(UiCopy.downloadFailed + '安装状态轮询超时（长时间无进展，可点「重试」）');
           return;
         }
       }
@@ -471,7 +471,7 @@ class _CatalogPageState extends State<CatalogPage> {
       if (mounted) {
         final reason = readable(e);
         setState(() => downloadError[pkg] = reason);
-        notify('下载失败：' + reason);
+        notify(UiCopy.downloadFailed + reason);
       }
     } finally {
       if (mounted) {
@@ -1117,9 +1117,10 @@ class _CatalogPageState extends State<CatalogPage> {
                           if (widget.plugin && pluginManifestError != null)
                             Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
-                                child: Text('插件目录不可用：' + pluginManifestError!,
-                                    key: const ValueKey('plugin-manifest-error'),
-                                    style: const TextStyle(fontSize: 12))),
+                                child: DegradedLine(
+                                    UiCopy.pluginCatalogUnavailable +
+                                        pluginManifestError!,
+                                    key: const ValueKey('plugin-manifest-error'))),
                           if (summary(item).isNotEmpty)
                             Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
@@ -1297,155 +1298,8 @@ class _CatalogPageState extends State<CatalogPage> {
   ///   包名 `12.sp`、分隔线缩进 `82.dp`、
   ///   圆标底色 已装 `#2196F3` / 未装 `#009688`。
   ///
-  /// ⚠️ 状态文案仍由 [pluginStatus] 产出且**保持为独立 Text**（`已安装` / `已停用` 等），
-  /// 不合并进「版本 xxx」那一行 —— `plugin_manager_test` 用 `find.text('已安装')`
-  /// 精确匹配，且详情对话框与行共用同一份状态。
-  /// 详情对话框仍走 [pluginCard]，本方法只用于列表。
-  Widget pluginRow(Map item) {
-    final isInstalled = installed(item) == true;
-    final identity = pluginIdentity(item);
-    // key 挂在整行根上：既有实现把它放在卡片根，测试用
-    // `ValueKey('plugin-<identity>')` 定位（含 catalog_test / catalog_sync_test）。
-    return Column(key: ValueKey('plugin-$identity'), children: [
-      InkWell(
-          onTap: () => details(item),
-          child: ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 78),
-              child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
-                  child: Row(children: [
-                    // 圆标：已装蓝 #2196F3 / 未装青 #009688（MiuixPluginFragment.kt:453）。
-                    // 已装时里面放插件自己的应用图标（AI.js Pro 的做法），
-                    // 取不到才回落成状态图标 —— 这也保留了原先「只对已装插件请求
-                    // pluginIcon」的行为（catalog_test 断言了这次调用）。
-                    Container(
-                        width: 50,
-                        height: 50,
-                        decoration: BoxDecoration(
-                            color: isInstalled
-                                ? const Color(0xff2196f3)
-                                : const Color(0xff009688),
-                            shape: BoxShape.circle),
-                        child: ClipOval(
-                            child: FutureBuilder<String?>(
-                                future: isInstalled
-                                    ? pluginIcon(package(item))
-                                    : Future<String?>.value(null),
-                                builder: (_, snapshot) {
-                                  if (snapshot.data != null) {
-                                    try {
-                                      return Image.memory(
-                                          base64Decode(snapshot.data!),
-                                          width: 28,
-                                          height: 28,
-                                          fit: BoxFit.contain,
-                                          errorBuilder: (_, __, ___) =>
-                                              pluginRowSymbol(item));
-                                    } catch (_) {
-                                      // 落到下面的状态图标
-                                    }
-                                  }
-                                  return Center(child: pluginRowSymbol(item));
-                                }))),
-                    const SizedBox(width: 14),
-                    Expanded(
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                          // 名称 18.sp（MiuixPluginFragment.kt:463）
-                          Text(name(item),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 18)),
-                          // 状态 14.sp（.kt:464）—— 保持独立 Text，测试按精确文案匹配
-                          Text(pluginStatus(item),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontSize: 14,
-                                  color: pluginDisabled(item)
-                                      ? Theme.of(context).disabledColor
-                                      : isInstalled
-                                          ? Theme.of(context).colorScheme.primary
-                                          : Theme.of(context)
-                                              .colorScheme
-                                              .onSurface
-                                              .withValues(alpha: .65))),
-                          // 包名 12.sp（.kt:467）
-                          Text(package(item),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.color)),
-                        ])),
-                    // task-138：卡片上直接给「下载安装 / 更新 / 安装已下载」（对齐 VS Code 扩展页）
-                    if (canDownloadPlugin(item) && !canInstallDownloaded(item))
-                      IconButton(
-                          key: const ValueKey('plugin-card-download'),
-                          tooltip: downloadButtonLabel(item) + '：' + name(item),
-                          padding: const EdgeInsets.all(6),
-                          constraints:
-                              const BoxConstraints(minWidth: 36, minHeight: 36),
-                          icon: const Icon(Icons.download_outlined, size: 20),
-                          onPressed: downloading.containsKey(package(item))
-                              ? null
-                              : () => downloadPlugin(item)),
-                    if (canInstallDownloaded(item))
-                      IconButton(
-                          key: const ValueKey('plugin-card-install'),
-                          tooltip: '安装已下载：' + name(item),
-                          padding: const EdgeInsets.all(6),
-                          constraints:
-                              const BoxConstraints(minWidth: 36, minHeight: 36),
-                          icon: const Icon(Icons.install_desktop_outlined,
-                              size: 20),
-                          onPressed: () => installDownloaded(item)),
-                    if (canRetryPlugin(item))
-                      IconButton(
-                          tooltip: '重新安装：${name(item)}',
-                          padding: const EdgeInsets.all(6),
-                          constraints:
-                              const BoxConstraints(minWidth: 36, minHeight: 36),
-                          icon: installing == identity
-                              ? const SizedBox(
-                                  width: 18,
-                                  height: 18,
-                                  child:
-                                      CircularProgressIndicator(strokeWidth: 2))
-                              : const Icon(Icons.install_mobile_outlined,
-                                  size: 20),
-                          onPressed: installing != null ||
-                                  importing ||
-                                  refreshing ||
-                                  error != null
-                              ? null
-                              : () => retryPlugin(item)),
-                    if (showPluginToggle(item))
-                      pluginToggle(item)
-                    else if (!canRetryPlugin(item))
-                      const Icon(Icons.chevron_right, size: 24),
-                  ])))),
-      // 分隔线缩进 82.dp（MiuixPluginFragment.kt:476）
-      const Divider(height: 1, thickness: .5, indent: 82)
-    ]);
-  }
 
-  /// 插件行圆标里的状态图标（取不到插件自身图标时用）。
-  /// 未装=下载图标、已停用=暂停、已装=勾（对齐 MiuixPluginFragment.kt:458 的 28dp）。
-  Widget pluginRowSymbol(Map item) => Icon(
-      pluginDisabled(item)
-          ? Icons.pause_circle_outline
-          : installed(item) == true
-              ? Icons.check_circle_outline
-              : Icons.install_mobile_outlined,
-      color: Colors.white,
-      size: 28);
-
-  /// 详情对话框顶部封面 + 卡片式呈现（列表已改为 [pluginRow]，此处只服务对话框）。
+  /// 详情对话框顶部封面 + 卡片式呈现（插件网格与对话框共用 [pluginCard]）。
   Widget pluginCard(Map item, double coverHeight) => GlassSurface(
       key: ValueKey('plugin-${pluginIdentity(item)}'),
       blur: false,
@@ -1505,7 +1359,7 @@ class _CatalogPageState extends State<CatalogPage> {
                                       return (received / total).clamp(0.0, 1.0);
                                     })())),
                           if (downloadError[package(item)] != null)
-                            Text('下载失败：' + downloadError[package(item)]!,
+                            Text(UiCopy.downloadFailed + downloadError[package(item)]!,
                                 key: const ValueKey('plugin-card-error'),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
@@ -1796,7 +1650,7 @@ class _CatalogPageState extends State<CatalogPage> {
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Expanded(
                     child: Text(
-                        '插件目录不可用：' +
+                        UiCopy.pluginCatalogUnavailable +
                             pluginManifestError! +
                             '（多半是更新源不可达 —— 换网络或换源后重试）',
                         key: const ValueKey('plugin-manifest-error-header'),

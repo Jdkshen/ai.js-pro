@@ -18,7 +18,9 @@ void main() {
     expect(source.contains('return const SizedBox.shrink();'), isTrue,
         reason: '拿不到数据必须整行不显示');
     // task-100：调用失败不许静默 —— 卡片要写「暂不可用（原因）」
-    expect(source.contains('大小构成：暂不可用（'), isTrue);
+    // P0-2（task-158）：文案在 lib/degraded.dart 的文案表里；调用点用 UiCopy ✓
+    expect(File('lib/degraded.dart').readAsStringSync().contains("breakdownUnavailable = '大小构成：暂不可用（'"), isTrue);
+    expect(source.contains('UiCopy.breakdownUnavailable'), isTrue);
     expect(source.contains("{'error': failure.toString()}"), isTrue);
 
     final start = source.indexOf('FutureBuilder<Map<String, dynamic>?>(');

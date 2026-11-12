@@ -16,6 +16,7 @@ import 'mono_font.dart';
 import 'app_theme.dart';
 import 'engine_diagnostics.dart';
 part 'browser.dart';
+part 'degraded.dart';
 part 'utility_pages.dart';
 part 'task_page.dart';
 part 'catalog_page.dart';

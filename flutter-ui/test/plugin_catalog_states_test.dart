@@ -38,7 +38,9 @@ void main() {
     expect(source.contains("'下载中 ' + percent + '%"), isTrue);
     expect(source.contains("'可更新到 v' + remote"), isTrue);
     expect(source.contains("'未安装 · 可下载 v'"), isTrue);
-    expect(source.contains("'下载失败：' + failure"), isTrue);
+    // P0-2（task-158）：文案抽到 lib/degraded.dart 的文案表；调用点改用 UiCopy ✓（文案逐字不变）
+    expect(File('lib/degraded.dart').readAsStringSync().contains("downloadFailed = '下载失败：'"), isTrue);
+    expect(source.contains('UiCopy.downloadFailed'), isTrue);
     // 四类可读原因码
     for (final code in ["case 'network':", "case 'checksum':", "case 'package':", "case 'permission':"]) {
       expect(source.contains(code), isTrue, reason: '缺少原因码映射：' + code);
@@ -156,7 +158,8 @@ void main() {
     expect(source.contains("data['timeoutMs']"), isTrue);
     expect(source.contains("throw StateError('清单读取超时（桥未响应）')"), isTrue,
         reason: '桥不响应必须落到可见降级，不能永远停在「加载中」');
-    expect(source.contains('插件目录不可用：'), isTrue);
+    expect(File('lib/degraded.dart').readAsStringSync().contains("pluginCatalogUnavailable = '插件目录不可用：'"), isTrue);
+    expect(source.contains('UiCopy.pluginCatalogUnavailable'), isTrue);
     // 下载按钮与重启提示
     expect(source.contains("ValueKey('plugin-download-action')"), isTrue);
     expect(source.contains("' · 需重启应用生效'"), isTrue);
