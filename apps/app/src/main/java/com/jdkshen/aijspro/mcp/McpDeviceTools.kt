@@ -101,7 +101,7 @@ internal object McpDeviceTools {
     fun screenshot(mode: String, format: String?, quality: Int?, dataUri: Boolean,
                    maxWidth: Int?, timeoutMillis: Int?, region: com.google.gson.JsonElement? = null,
                    savePath: String? = null, saveFormat: String? = null, organize: Boolean = true): JsonObject {
-        require(McpCapturePreset.isKnownMode(mode)) { "mode 必须是 fastest、fast、balanced 或 quality" }
+        if (!McpCapturePreset.isKnownMode(mode)) throw McpToolArgException("mode 必须是 fastest、fast、balanced 或 quality")
         val requestedRegion = McpCapturePreset.parseRegion(region)
         val requestedSaveTarget = McpCapturePreset.resolveSaveTarget(savePath)
         val (saveTarget, organized) = McpCapturePreset.organizeSaveTarget(requestedSaveTarget, organize)
@@ -115,8 +115,10 @@ internal object McpDeviceTools {
         }
         val effective = McpCapturePreset.resolve(mode, format ?: autoFormat, quality, maxWidth, timeoutMillis)
         val resolvedFormat = effective.format
-        require(resolvedFormat in setOf("png", "jpg", "jpeg")) { "format 必须是 png、jpg 或 jpeg" }
-        require(effective.quality in 1..100 && effective.maxWidth in 0..4096 && effective.timeoutMillis in 500..15000)
+        if (resolvedFormat !in setOf("png", "jpg", "jpeg")) throw McpToolArgException("format 必须是 png、jpg 或 jpeg")
+        if (effective.quality !in 1..100 || effective.maxWidth !in 0..4096 || effective.timeoutMillis !in 500..15000) {
+            throw McpToolArgException("quality 必须在 1～100、maxWidth 在 0～4096、timeoutMillis 在 500～15000")
+        }
         if (Build.VERSION.SDK_INT < 30) throw IllegalStateException("直接无障碍截图需要 Android 11+；旧系统请通过 run_script 使用 requestScreenCapture/captureScreen")
         val startedAt = System.currentTimeMillis()
         // W4 task-26：截图/裁剪/缩放抽成 captureFrame —— capture_screen 与 dev_screen_diff 共用同一条管线。
@@ -148,7 +150,7 @@ internal object McpDeviceTools {
                 FileOutputStream(saveTarget).use { it.write(bytes) }
                 writeMs = System.currentTimeMillis() - writeStartedAt
             }
-            check(bytes.size <= 16 * 1024 * 1024) { "截图过大，请使用 jpg 或 maxWidth 缩小尺寸" }
+            if (bytes.size > 16 * 1024 * 1024) throw McpToolArgException("截图过大，请使用 jpg 或 maxWidth 缩小尺寸")
             // W4 task-26：把这一帧记进进程内帧缓存（只留一帧），供 dev_screen_diff 的「上一帧」基线使用。
             val previousFrameRemembered = rememberFrame(output, "capture_screen", if (resolvedFormat == "png") "png" else "jpg")
             val encoded = if (saveTarget == null || dataUri) Base64.encodeToString(bytes, Base64.NO_WRAP) else ""

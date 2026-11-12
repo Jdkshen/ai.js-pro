@@ -26,6 +26,18 @@ class McpToolsStructuredCallPinTest {
         assertTrue("reasonCode 必须是 internal", body.contains("\"internal\""))
     }
 
+    /** P3-1：业务参数错（McpToolArgException）必须映射 invalidArg，且**不得**用宽 catch IllegalArgumentException。 */
+    @Test fun toolArgExceptionMapsToInvalidArgWithoutBroadCatch() {
+        val body = tools().substringAfter("private inline fun structuredCall").substringBefore("private fun workspaceJson")
+        val protocolAt = body.indexOf("catch (protocol: McpInvalidParamsException)")
+        val argAt = body.indexOf("catch (failure: McpToolArgException)")
+        val internalAt = body.indexOf("catch (failure: Throwable)")
+        assertTrue("顺序必须是 协议层 → invalidArg → internal", protocolAt in 1 until argAt && argAt < internalAt)
+        assertTrue("业务参数错必须映射 invalidArg", body.contains("\"invalidArg\""))
+        assertTrue("不得用宽 catch IllegalArgumentException（会把内部不变量误标成参数错）",
+            !body.contains("catch (failure: IllegalArgumentException)"))
+    }
+
     @Test fun protocolExceptionBubblesBeforeInternal() {
         val body = tools().substringAfter("private inline fun structuredCall").substringBefore("private fun workspaceJson")
         val protocolAt = body.indexOf("catch (protocol: McpInvalidParamsException)")

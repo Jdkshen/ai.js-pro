@@ -34,6 +34,9 @@ class ToolkitIoContractPinTest {
         assertTrue("fail() 必须写 message（权威字段）", failBody.contains("\"message\" to message"))
         assertTrue("fail() 必须**显式**写 error=message（兼容镜像，不许依赖隐含假设）",
             failBody.contains("\"error\" to message"))
+        // dev-1522 真机基线：既有消费方读 errorCode ⇒ 必须与 reasonCode 同值双写（同一语义两个名的唯一可接受形态）。
+        assertTrue("fail() 必须同时写 reasonCode 与 errorCode（值同）",
+            failBody.contains("\"reasonCode\" to reasonCode") && failBody.contains("\"errorCode\" to reasonCode"))
     }
 
     @Test fun emptyIsTheOnlyShapeForNoResult() {

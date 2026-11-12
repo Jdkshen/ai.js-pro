@@ -1405,6 +1405,9 @@ internal class McpTools(private val context: Context, private val event: (String
     } catch (protocol: McpInvalidParamsException) {
         // P3-1（Lead 裁决）：协议层「参数形状错」必须**原样冒泡**，不得被下面的 internal 改写。
         throw protocol
+    } catch (failure: McpToolArgException) {
+        // P3-1：工具层**业务参数**错 ⇒ invalidArg（只认自定义类型 ⇒ 不误伤内部不变量/IO 失败）。
+        toolFailure(failure.message ?: "参数不合法", "invalidArg")
     } catch (failure: Throwable) {
         // P3-1 契约 v1：未预期异常 ⇒ internal（点名 + Log.e，绝不静默）。
         // message 带异常类名是硬要求（否则等于掩盖可归因失败）；此处只兜「工具执行」这段（block 之内）。

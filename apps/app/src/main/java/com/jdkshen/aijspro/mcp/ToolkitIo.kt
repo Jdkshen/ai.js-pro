@@ -31,8 +31,11 @@ internal object ToolkitIo {
      *  · 失败判据沿用既有 isError=true（由调用方在外层按需设置，不新造第二个失败标志）。
      */
     fun fail(reasonCode: String, message: String, data: JsonElement? = null, actions: JsonArray = JsonArray()) = json(
-        "ok" to false, "reasonCode" to reasonCode, "message" to message,
-        "error" to message, "data" to data, "nextActions" to actions)
+        // 只增不删：reasonCode 是新契约的权威字段；errorCode 保留为**既有兼容字段**（dev-1522 真机基线：
+        // 协议层错误今天就用 errorCode=INVALID_ARGUMENT ⇒ 只写 reasonCode 会让既有消费方读不到码）。
+        // 两者**必须同值**（钉子 ToolkitIoContractPinTest 钉住，防将来漂移）。
+        "ok" to false, "reasonCode" to reasonCode, "errorCode" to reasonCode,
+        "message" to message, "error" to message, "data" to data, "nextActions" to actions)
 
     /**
      * P3-1 契约 v1：**成功但无结果**（唯一形态）。
