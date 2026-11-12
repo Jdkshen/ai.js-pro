@@ -436,7 +436,7 @@ class _CodeSourceFieldState extends State<CodeSourceField> {
   double textWidth(String text) {
     final painter = TextPainter(
         text: TextSpan(text: text, style: codeStyle),
-        textScaleFactor: MediaQuery.of(context).textScaleFactor,
+        textScaler: MediaQuery.textScalerOf(context),
         textDirection: TextDirection.ltr)
       ..layout();
     return painter.width;
@@ -471,7 +471,8 @@ class _CodeSourceFieldState extends State<CodeSourceField> {
 
   Widget buildField(BuildContext context) {
     final preferences = EditorPreferences.instance;
-    final scale = MediaQuery.of(context).textScaleFactor;
+    // 机械替换（原 textScaleFactor 已弃用）：线性缩放下与旧值相等；非线性缩放下取 1.0 处的比例。
+    final scale = MediaQuery.textScalerOf(context).scale(1.0);
     final source = widget.controller.text;
     if (measured != source ||
         measuredSize != widget.fontSize ||
@@ -545,7 +546,7 @@ class _CodeSourceFieldState extends State<CodeSourceField> {
                                         color: Theme.of(context)
                                             .colorScheme
                                             .onSurface
-                                            .withOpacity(.45)),
+                                            .withValues(alpha: .45)),
                                     scale: scale,
                                     accent: Theme.of(context)
                                         .colorScheme
@@ -571,7 +572,7 @@ class _CodeSourceFieldState extends State<CodeSourceField> {
                                             color: Theme.of(context)
                                                 .colorScheme
                                                 .onSurface
-                                                .withOpacity(.18))))),
+                                                .withValues(alpha: .18))))),
                           TextField(
                             key: widget.fieldKey,
                             controller: widget.controller,
@@ -652,14 +653,14 @@ class _LineNumbers extends CustomPainter {
     canvas.drawLine(
         Offset(size.width - 8, 0),
         Offset(size.width - 8, size.height),
-        Paint()..color = accent.withOpacity(.12));
+        Paint()..color = accent.withValues(alpha: .12));
     final first = math.max(0, (offset / height).floor());
     final last = math.min(count, ((offset + size.height) / height).ceil() + 1);
     final arrowPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.6
       ..strokeCap = StrokeCap.round
-      ..color = accent.withOpacity(.65);
+      ..color = accent.withValues(alpha: .65);
     for (final entry in arrows.entries) {
       final line = entry.key;
       if (line < first || line >= last) continue;
@@ -680,7 +681,7 @@ class _LineNumbers extends CustomPainter {
           path,
           isFolded
               ? (Paint()
-                ..color = accent.withOpacity(.85)
+                ..color = accent.withValues(alpha: .85)
                 ..style = PaintingStyle.fill)
               : arrowPaint);
     }
@@ -691,7 +692,7 @@ class _LineNumbers extends CustomPainter {
               style: style.copyWith(
                   color: line == current ? accent : style.color)),
           textDirection: TextDirection.ltr,
-          textScaleFactor: scale)
+          textScaler: TextScaler.linear(scale))
         ..layout();
       painter.paint(
           canvas,

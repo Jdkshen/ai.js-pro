@@ -364,7 +364,7 @@ class _GeneralSettingsPageState extends State<GeneralSettingsPage>
           style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w500,
-              color: Theme.of(context).colorScheme.onSurface.withOpacity(.6))));
+              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: .6))));
 
   @override
   Widget build(BuildContext context) => GlassBackground(
@@ -948,7 +948,7 @@ class _GlassAboutPageState extends State<GlassAboutPage> {
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).colorScheme.onSurface.withOpacity(.6);
+    final muted = Theme.of(context).colorScheme.onSurface.withValues(alpha: .6);
     final versionName = _text('versionName', '');
     final versionCode = _text('versionCode', '');
     final versionLabel = versionName.isEmpty

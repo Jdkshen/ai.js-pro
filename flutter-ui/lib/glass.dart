@@ -31,15 +31,15 @@ class GlassSurface extends StatelessWidget {
               end: Alignment.bottomRight,
               colors: dark
                   ? [
-                      Colors.white.withOpacity(.12),
-                      Colors.white.withOpacity(.035)
+                      Colors.white.withValues(alpha: .12),
+                      Colors.white.withValues(alpha: .035)
                     ]
                   : [
-                      Colors.white.withOpacity(.80),
-                      Colors.white.withOpacity(.38)
+                      Colors.white.withValues(alpha: .80),
+                      Colors.white.withValues(alpha: .38)
                     ]),
           border: border
-              ? Border.all(color: Colors.white.withOpacity(dark ? .19 : .9))
+              ? Border.all(color: Colors.white.withValues(alpha: dark ? .19 : .9))
               : null),
         child: child);
     return Container(
@@ -47,7 +47,7 @@ class GlassSurface extends StatelessWidget {
             borderRadius: BorderRadius.circular(radius),
             boxShadow: [
               BoxShadow(
-                  color: Colors.black.withOpacity(dark ? .10 : .035),
+                  color: Colors.black.withValues(alpha: dark ? .10 : .035),
                   blurRadius: 8,
                   offset: const Offset(0, 2))
             ]),

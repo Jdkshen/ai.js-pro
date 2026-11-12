@@ -423,7 +423,7 @@ class _LensPainter extends CustomPainter {
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 1
-          ..color = Colors.white.withOpacity(dark ? .20 : .8));
+          ..color = Colors.white.withValues(alpha: dark ? .20 : .8));
   }
 
   @override
