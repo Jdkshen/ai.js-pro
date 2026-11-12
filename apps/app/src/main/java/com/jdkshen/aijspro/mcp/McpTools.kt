@@ -1402,6 +1402,14 @@ internal class McpTools(private val context: Context, private val event: (String
         toolFailure(failure.message ?: "缺少手机权限", "PERMISSION_DENIED")
     } catch (failure: IOException) {
         toolFailure(failure.message ?: "文件操作失败", "IO_ERROR")
+    } catch (protocol: McpInvalidParamsException) {
+        // P3-1（Lead 裁决）：协议层「参数形状错」必须**原样冒泡**，不得被下面的 internal 改写。
+        throw protocol
+    } catch (failure: Throwable) {
+        // P3-1 契约 v1：未预期异常 ⇒ internal（点名 + Log.e，绝不静默）。
+        // message 带异常类名是硬要求（否则等于掩盖可归因失败）；此处只兜「工具执行」这段（block 之内）。
+        android.util.Log.e("McpTools", "structuredCall internal failure: " + failure.javaClass.name, failure)
+        toolFailure(failure.javaClass.simpleName + ": " + (failure.message ?: "无消息"), "internal")
     }
 
     private fun workspaceJson(ws: McpWorkspaceStore.Workspace) = JsonObject().apply {
