@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
+import { sha256Hex } from "../lib/sha256.mjs";
 import process from "node:process";
 
 const ROOT = process.cwd();
@@ -28,7 +29,7 @@ const warnings = [];
 const entries = [];
 let copied = 0, kept = 0, failed = 0, bytes = 0;
 
-const sha256 = (buf) => crypto.createHash("sha256").update(buf).digest("hex");
+const sha256 = (buf) => sha256Hex(buf);   // P2-4：唯一实现在 tools/lib/sha256.mjs
 const elfMachine = (buf) => {
   if (buf.length < 20 || buf[0] !== 0x7f || buf[1] !== 0x45) return "not-elf";
   const m = buf.readUInt16LE(18);

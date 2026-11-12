@@ -95,18 +95,23 @@
         }
     }
 
-    // task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致（三引擎同源）。
-    var OCR_NOT_PACKAGED = 'OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，或主程序已把 OCR 剥离成插件）；如需 OCR 请安装「OCR 插件」后重试。';
-
-    // task-107：只有「加载失败形状 + 我们的库名」才配得上那句点名文案；其它失败保留原文（别误导排障）。
-    function looksLikeAbilityMissing(value) {
-        var text = text(value);
-        return /libppocr|libmlkit/.test(text)
-            && /dlopen|couldn't find|not found|无法加载|loadLibrary|未随包/.test(text);
+// >>> OCR-AVAILABILITY-BLOCK v1
+// task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致（三引擎同源）。
+var OCR_NOT_PACKAGED = 'OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，或主程序已把 OCR 剥离成插件）；如需 OCR 请安装 OCR 插件（或关闭 optimization.removeOcr 重新打包）。';
+// task-107：只有「加载失败形状 + 我们的库名」才配得上那句点名文案；
+// 参数/用法类错误 **绝不**改写成「未随包」（排障会被误导）。
+function ocrLooksLikeAbilityMissing(value) {
+    var probe = String(value == undefined ? '' : value);
+    if (/不支持|参数|backend|非法|必须是/.test(probe)) {
+        return false;
     }
+    return /libppocr|libmlkit/.test(probe)
+        && /dlopen|couldn't find|not found|无法加载|loadLibrary|未随包/.test(probe);
+}
+// <<< OCR-AVAILABILITY-BLOCK
 
     function builtInOcrUnavailable(reason, ppocrError) {
-        var head = looksLikeAbilityMissing(ppocrError) ? OCR_NOT_PACKAGED + '（' : '内置 OCR 不可用（';
+        var head = ocrLooksLikeAbilityMissing(ppocrError) ? OCR_NOT_PACKAGED + '（' : '内置 OCR 不可用（';
         var failure = new Error(head + 'mlkit 原因=' + reason
             + '；ppocr 创建失败=' + text(ppocrError) + '）');
         failure.degraded = true;

@@ -254,7 +254,7 @@ class _CatalogPageState extends State<CatalogPage> {
     final pkg = package(item);
     try {
       final reply =
-          await LocalBridge.call('openInstallPermissionSettings', const {});
+          await BridgeCall.value('openInstallPermissionSettings', const {});
       final ok = reply is Map && reply['ok'] == true;
       final data = reply is Map && reply['data'] is Map
           ? Map<String, dynamic>.from(reply['data'] as Map)
@@ -280,7 +280,7 @@ class _CatalogPageState extends State<CatalogPage> {
     final path = record == null ? '' : (record['path'] ?? '').toString();
     if (path.isEmpty || package(item).isEmpty) return;
     try {
-      final result = await LocalBridge.call('installPlugin', {
+      final result = await BridgeCall.value('installPlugin', {
         'path': path,
         'packageName': package(item),
       });
@@ -371,7 +371,9 @@ class _CatalogPageState extends State<CatalogPage> {
       case 'missing':
         return '清单未收录该插件';
       default:
-        return code.isEmpty ? readable(StateError(text(result, 'message', '未知原因'))) : code;
+        return code.isEmpty
+            ? BridgeCall.readable(StateError(text(result, 'message', '未知原因')))
+            : code;
     }
   }
 
@@ -392,7 +394,7 @@ class _CatalogPageState extends State<CatalogPage> {
     });
     changed();
     try {
-      final started = await LocalBridge.call(pluginInstallMethod, {'id': id});
+      final started = await BridgeCall.value(pluginInstallMethod, {'id': id});
       if (started is Map && mounted) {
         setState(() => downloading[pkg] = Map<String, dynamic>.from(started));
       }
@@ -550,7 +552,7 @@ class _CatalogPageState extends State<CatalogPage> {
     if (!widget.plugin) return;
     final token = ++pluginStateRequestId;
     try {
-      final result = await LocalBridge.call('pluginStates');
+      final result = await BridgeCall.value('pluginStates');
       if (!mounted || token != pluginStateRequestId) return;
       if (result is! Map || result['disabled'] is! List) {
         // 状态未知时不冒充任何一侧：开关保持只读，计数沿用目录项数。
@@ -585,7 +587,7 @@ class _CatalogPageState extends State<CatalogPage> {
     setState(() => togglingPlugins.add(pkg));
     changed();
     try {
-      final result = await LocalBridge.call(
+      final result = await BridgeCall.value(
           'pluginSetEnabled', {'packageName': pkg, 'enabled': value});
       if (result is! Map || result['enabled'] != value) {
         throw StateError('插件启停状态未被确认');
@@ -653,7 +655,7 @@ class _CatalogPageState extends State<CatalogPage> {
     setState(() => installing = identity);
     changed();
     try {
-      final result = await LocalBridge.call('installPlugin', {
+      final result = await BridgeCall.value('installPlugin', {
         'path': text(item, 'path'),
         'packageName': package(item),
       });
@@ -748,7 +750,7 @@ class _CatalogPageState extends State<CatalogPage> {
   /// 失败时优先使用宿主给的 {error: 中文}，否则给可读兜底文案（不再出现 SocketException）。
   Future<List<dynamic>> localCatalog(bool plugin) async {
     try {
-      final value = await LocalBridge.call('localCatalog', {'plugin': plugin});
+      final value = await BridgeCall.value('localCatalog', {'plugin': plugin});
       if (value is! Map) throw StateError('内置目录数据格式异常');
       final result = Map<String, dynamic>.from(value);
       final items = result['items'];
@@ -762,7 +764,8 @@ class _CatalogPageState extends State<CatalogPage> {
     } on StateError {
       rethrow;
     } catch (error) {
-      throw StateError('内置目录读取失败：${readable(error)}');
+      // 注意：只换 helper，**不改 StateError 类型与前缀**（文案逐字不变）
+      throw StateError('内置目录读取失败：${BridgeCall.readable(error)}');
     }
   }
 
@@ -832,7 +835,7 @@ class _CatalogPageState extends State<CatalogPage> {
   Future<void> loadImports() async {
     final token = ++importRequestId;
     try {
-      final result = await LocalBridge.call('importRecords');
+      final result = await BridgeCall.value('importRecords');
       if (result is! List) throw StateError('导入记录格式异常');
       final records = result.whereType<Map>().where((item) {
         return item['kind'] != 'plugin';
@@ -865,7 +868,7 @@ class _CatalogPageState extends State<CatalogPage> {
     setState(() => importing = true);
     try {
       final result =
-          await LocalBridge.call(plugin ? 'importPlugin' : 'importResource');
+          await BridgeCall.value(plugin ? 'importPlugin' : 'importResource');
       if (!mounted || plugin != widget.plugin) return;
       if (result is Map && result['cancelled'] == true) return;
       if ((result is! String || result.trim().isEmpty) &&
@@ -896,7 +899,7 @@ class _CatalogPageState extends State<CatalogPage> {
     if (!canSave(item) || saving.contains(assetPath)) return;
     setState(() => saving.add(assetPath));
     try {
-      final result = await LocalBridge.call('importCatalogResource', {
+      final result = await BridgeCall.value('importCatalogResource', {
         'assetPath': assetPath,
         'name': name(item),
       });

@@ -21,6 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { rawBase } from './lib/update-source.mjs';
 
 const args = new Set(process.argv.slice(2));
 const getArg = (name, def) => { const a = process.argv.find(x => x.startsWith('--' + name + '=')); return a ? a.split('=')[1] : def; };
@@ -84,7 +85,7 @@ function publish() {
 
 async function verify() {
   console.log('[5/5] 校验公网 URL（可能需要几十秒生效）…');
-  const prefix = 'https://raw.githubusercontent.com/Jdkshen/ai.js-pro/' + branch + '/plugin-release/';
+  const prefix = rawBase('Jdkshen', 'ai.js-pro', branch);
   for (const f of files) {
     let ok = false;
     for (let i = 0; i < 6 && !ok; i++) {

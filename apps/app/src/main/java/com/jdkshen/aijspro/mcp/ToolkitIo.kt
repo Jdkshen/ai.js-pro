@@ -19,6 +19,30 @@ internal object ToolkitIo {
     }
     fun ok(data: JsonElement, actions: JsonArray = JsonArray()) = json(
         "ok" to true, "data" to data, "error" to null, "nextActions" to actions)
+
+    /**
+     * P3-1 契约 v1：失败信封（与 ok() 对称）。
+     *
+     * 约定（Lead 冻结 + W4 消费方反馈）：
+     *  · message 是**权威**字段；error **显式**镜像 message（兼容过渡：现有 Dart 读 error）——
+     *    这里刻意不依赖「ok() 反正写了 error=null」这种隐含假设，显式写死并加断言钉住；
+     *  · reasonCode 用骨架/通用码（invalidArg/internal/notFound/permission/unsupported/busy/timeout/network）
+     *    或工具领域码（checksum/package/missing/source/manifest…须登记+单测）；
+     *  · 失败判据沿用既有 isError=true（由调用方在外层按需设置，不新造第二个失败标志）。
+     */
+    fun fail(reasonCode: String, message: String, data: JsonElement? = null, actions: JsonArray = JsonArray()) = json(
+        "ok" to false, "reasonCode" to reasonCode, "message" to message,
+        "error" to message, "data" to data, "nextActions" to actions)
+
+    /**
+     * P3-1 契约 v1：**成功但无结果**（唯一形态）。
+     *
+     * 判据只看 empty=true（data 可空或缺席）—— 避免「data 空集合」与「字段缺失」混淆
+     * （Phase 1 复查第 1/8 条的病根）。失败**不得**用本方法表达。
+     */
+    fun empty(actions: JsonArray = JsonArray(), note: String? = null) = json(
+        "ok" to true, "empty" to true, "data" to null, "error" to null,
+        "message" to note, "nextActions" to actions)
     fun ensureActive() { if(Thread.currentThread().isInterrupted) throw InterruptedIOException("操作已取消") }
     fun sha(file: File): String = file.inputStream().use { input ->
         val digest = MessageDigest.getInstance("SHA-256")

@@ -26,7 +26,7 @@ void main() {
     expect(source.contains("'id': id,"), isTrue);
     expect(source.contains("'id': id});"), isTrue, reason: '安装只传 id');
     // 只查**下载调用这一段**不得出现 url（页面上别处可能有 url 字段，那是既有逻辑）
-    final callStart = source.indexOf('LocalBridge.call(pluginInstallMethod');
+    final callStart = source.indexOf('BridgeCall.value(pluginInstallMethod');
     expect(callStart > 0, isTrue);
     final callEnd = source.indexOf('});', callStart);
     final callBlock = source.substring(callStart, callEnd);
@@ -60,7 +60,7 @@ void main() {
     // task-138：已下载（待安装）态 + 详情（大小/需重启/说明）+ 安装复用既有 installPlugin
     expect(source.contains("'已下载（待安装'"), isTrue);
     expect(source.contains("ValueKey('plugin-install-downloaded')"), isTrue);
-    expect(source.contains("LocalBridge.call('installPlugin', {"), isTrue,
+    expect(source.contains("BridgeCall.value('installPlugin', {"), isTrue,
         reason: '安装必须复用既有 installPlugin 桥（交系统安装器），不新增静默安装路径');
     // 卡片态也要有「下载/更新」与「安装已下载」入口（不只是详情里）
     expect(source.contains("ValueKey('plugin-card-download')"), isTrue,
@@ -123,7 +123,7 @@ void main() {
     expect(source.contains("code == 'permission'"), isTrue);
     expect(source.contains('系统未允许安装未知来源应用'), isTrue);
     expect(source.contains("ValueKey('plugin-open-install-settings')"), isTrue);
-    expect(source.contains("LocalBridge.call('openInstallPermissionSettings'"), isTrue);
+    expect(source.contains("BridgeCall.value('openInstallPermissionSettings'"), isTrue);
     expect(source.contains("'去设置'"), isTrue);
     // task-148：用原生 message/actionLabel；action 也能触发；ok=false 要提示
     expect(source.contains("text(status, 'action')"), isTrue);
@@ -142,6 +142,7 @@ void main() {
     expect(source.contains('当前更新源：'), isTrue);
     expect(source.contains('多半是更新源不可达'), isTrue);
     expect(source.contains('要公网下载请在「设置 → 更新源」'), isTrue);
+    // 该处是**有意静默**的 catch (_) 站点（首启/读源失败给「（更新源读取失败）」）⇒ 未改管道 ✓
     expect(source.contains("LocalBridge.call('updateSource')"), isTrue,
         reason: '源必须复用既有 updateSource 桥，不另造');
     // task-143：兜底超时 25s（原生预算 ~18–20s ⇒ 不抢先）；有原生 timeoutMs 就按它 + 5s

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 /**
@@ -110,8 +111,8 @@ public class OcrAbilityMissingTest {
         assertTrue("Node24 只在点名句或加载形状上统一", node.contains("未随包"));
         // QuickJS：形状判据（库名 + 加载形状），不是任意文案匹配。
         String quickjs = read("src/main/assets/modules/qjs-plugins.js");
-        assertTrue("QuickJS 有 looksLikeAbilityMissing 形状判据", quickjs.contains("function looksLikeAbilityMissing(value)"));
-        assertTrue("QuickJS 只在形状命中时加点名句", quickjs.contains("looksLikeAbilityMissing(ppocrError) ?"));
+        assertTrue("QuickJS 有共享形状判据（task-157 改名）", quickjs.contains("function ocrLooksLikeAbilityMissing(value)"));
+        assertTrue("QuickJS 只在形状命中时加点名句", quickjs.contains("ocrLooksLikeAbilityMissing(ppocrError) ?"));
         // Rhino：断言**本意**——早退必须是「能力探针」，**不得**靠异常文案判错；字面形式可随实现演进。
         String rhino = read("src/main/assets/modules/__ocr__.js");
         assertTrue("Rhino 必须用能力探针（ppocrIsAvailable 或 nativeLibPresent）",
@@ -119,6 +120,75 @@ public class OcrAbilityMissingTest {
         assertTrue("Rhino 不得靠异常文案判错",
                 !(rhino.contains("catch") && rhino.contains("indexOf(") && rhino.contains("未随包")));
     }
+
+    /** task-157 (P2-2 方案A)：共享块必须逐字相同（按标记切片），且常量行三处一致。 */
+    @Test
+    public void ocrAvailabilitySharedBlockIsIdentical() throws Exception {
+        String rhino = read("src/main/assets/modules/__ocr__.js");
+        String quickjs = read("src/main/assets/modules/qjs-plugins.js");
+        String node = read("src/main/assets/node24/modules/ocr.js");
+        String qBlock = sharedBlock(quickjs);
+        String nBlock = sharedBlock(node);
+        assertTrue("qjs 必须带共享块", qBlock.length() > 0);
+        assertTrue("node24 必须带共享块", nBlock.length() > 0);
+        assertEquals("两份带形状判据的共享块必须逐字相同", qBlock, nBlock);
+        String qConst = constantLine(qBlock);
+        assertEquals("常量行与 node24 不一致", qConst, constantLine(nBlock));
+        assertEquals("常量行与 Rhino 不一致", qConst, constantLine(sharedBlock(rhino)));
+    }
+
+    /** task-157：防新增副本 —— 全仓含共享判据定义的文件数必须恰好 2（多一份即红）。 */
+    @Test
+    public void onlyTwoFilesDefineTheSharedPredicate() throws Exception {
+        final String needle = "function ocrLooksLikeAbilityMissing";
+        final int[] files = { 0 };
+        final java.util.List<String> hits = new java.util.ArrayList<>();
+        try (java.util.stream.Stream<java.nio.file.Path> walk = java.nio.file.Files.walk(
+                java.nio.file.Paths.get("src/main/assets"))) {
+            walk.filter(java.nio.file.Files::isRegularFile)
+                    .filter(path -> path.toString().endsWith(".js"))
+                    .filter(path -> {
+                        try {
+                            return java.nio.file.Files.size(path) < 4L * 1024L * 1024L;
+                        } catch (Exception ignored) {
+                            return false;
+                        }
+                    })
+                    .forEach(path -> {
+                        try {
+                            String content = new String(java.nio.file.Files.readAllBytes(path),
+                                    java.nio.charset.StandardCharsets.UTF_8);
+                            if (content.contains(needle)) {
+                                files[0]++;
+                                hits.add(path.toString());
+                            }
+                        } catch (Exception ignored) {
+                        }
+                    });
+        }        // task-157 覆盖边界（W2 复审建议）：本钉只扫 "src/main/assets" 下的 *.js（且跳过 >4MB 的文件）
+        // ⇒ 若将来有人在**别的目录**新增第四份副本，这条断言**不会红**（属于已知边界，不是缺陷）。
+        assertEquals("共享判据必须恰好被 2 个文件定义（扫描范围：src/main/assets/**/*.js，>4MB 跳过），多了就是新副本："
+                + hits, 2, files[0]);
+    }
+
+    private static String sharedBlock(String source) {
+        int start = source.indexOf("// >>> OCR-AVAILABILITY-BLOCK");
+        int end = source.indexOf("// <<< OCR-AVAILABILITY-BLOCK");
+        if (start < 0 || end < 0) {
+            return "";
+        }
+        return source.substring(start, end + "// <<< OCR-AVAILABILITY-BLOCK".length());
+    }
+
+    private static String constantLine(String block) {
+        for (String line : block.split("\n")) {
+            if (line.contains("var OCR_NOT_PACKAGED =")) {
+                return line.trim();
+            }
+        }
+        return "";
+    }
+
     private static String read(String relativePath) throws Exception {
         return new String(Files.readAllBytes(Paths.get(relativePath)), StandardCharsets.UTF_8);
     }

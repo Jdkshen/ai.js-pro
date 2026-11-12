@@ -27,9 +27,10 @@ Future<void> showPermissionGuideIfNeeded(BuildContext context) async {
   if (await _permissionGuidePrompted()) return;
   final Map<String, dynamic> state;
   try {
-    final reply = await LocalBridge.call('deviceState');
-    if (reply is! Map) return;
-    state = Map<String, dynamic>.from(reply);
+    // P2-3（task-160）：走 BridgeCall 管道（异常已收敛成 ok=false + 可读原因）
+    final reply = await BridgeCall.run('deviceState');
+    if (!reply.ok || reply.raw is! Map) return;
+    state = reply.data;
   } catch (_) {
     // 状态读不到就不打扰用户、也不写标记（下次启动再试）。
     return;
@@ -58,9 +59,9 @@ Future<void> showPermissionGuideIfNeeded(BuildContext context) async {
 Future<bool> _permissionGuidePrompted() async {
   for (final profile in const ['scripts', 'samples']) {
     try {
-      final reply =
-          await LocalBridge.call('browserPreferences', {'profile': profile});
-      if (reply is Map && reply[_permissionGuidePrefKey] == true) return true;
+      final reply = await BridgeCall.run(
+          'browserPreferences', {'profile': profile});
+      if (reply.data[_permissionGuidePrefKey] == true) return true;
     } catch (_) {
       // 桥不可用（旧构建/单测环境）按「未提示」处理，绝不因标记读取失败阻塞启动。
     }
@@ -72,12 +73,11 @@ Future<bool> _permissionGuidePrompted() async {
 Future<void> _rememberPermissionGuidePrompted() async {
   for (final profile in const ['scripts', 'samples']) {
     try {
-      final reply =
-          await LocalBridge.call('browserPreferences', {'profile': profile});
-      final value =
-          reply is Map ? Map<String, dynamic>.from(reply) : <String, dynamic>{};
+      final reply = await BridgeCall.run(
+          'browserPreferences', {'profile': profile});
+      final value = reply.data;
       value[_permissionGuidePrefKey] = true;
-      await LocalBridge.call(
+      await BridgeCall.run(
           'browserPreferences', {'profile': profile, 'value': value});
     } catch (_) {
       // 标记写失败不打扰用户；最坏下次启动再提示一次。
@@ -133,9 +133,9 @@ class _PermissionGuideDialogState extends State<_PermissionGuideDialog>
 
   Future<void> refresh() async {
     try {
-      final reply = await LocalBridge.call('deviceState');
-      if (!mounted || reply is! Map) return;
-      setState(() => state = Map<String, dynamic>.from(reply));
+      final reply = await BridgeCall.run('deviceState');
+      if (!mounted || reply.raw is! Map) return;
+      setState(() => state = reply.data);
     } catch (_) {
       // 状态刷新失败保留上一次结果，不影响关闭弹窗。
     }
@@ -153,7 +153,8 @@ class _PermissionGuideDialogState extends State<_PermissionGuideDialog>
           : kind == 'overlay'
               ? 'overlaySettings'
               : 'accessibilitySettings';
-      await LocalBridge.call(method);
+      final reply = await BridgeCall.run(method);
+      if (!reply.ok) throw StateError(reply.error);
       await refresh();
     } catch (e) {
       if (mounted) setState(() => error = '打开系统设置失败：${_readableError(e)}');
@@ -198,7 +199,7 @@ class _PermissionGuideDialogState extends State<_PermissionGuideDialog>
                 const SizedBox(height: 2),
                 Text(hint,
                     style: TextStyle(
-                        fontSize: 12, color: onSurface.withOpacity(.65))),
+                        fontSize: 12, color: onSurface.withValues(alpha: .65))),
               ])),
           const SizedBox(width: 8),
           if (ready)
@@ -250,7 +251,7 @@ class _PermissionGuideDialogState extends State<_PermissionGuideDialog>
                       '这些权限分别用于读写脚本目录、显示悬浮控制条、执行自动点击与控件读取。'
                       '本引导只自动提示一次，之后可在「设置 → 设备连接」里随时调整。',
                       style: TextStyle(
-                          fontSize: 12, color: onSurface.withOpacity(.65))),
+                          fontSize: 12, color: onSurface.withValues(alpha: .65))),
                   _row(
                       kind: 'storage',
                       icon: Icons.folder_outlined,

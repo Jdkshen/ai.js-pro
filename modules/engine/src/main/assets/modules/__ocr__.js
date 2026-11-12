@@ -244,8 +244,10 @@ function pluginOcrCreateOrNull(options) {
 var pluginLibsLoaded = false;
 var pluginDescriptor = null;
 var PPOcr = com.stardust.autojs.runtime.api.PPOcr;
-// task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致的共用文案（三引擎同源）。
-var OCR_NOT_PACKAGED = 'OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，或主程序已把 OCR 剥离成插件）；如需 OCR 请安装「OCR 插件」后重试。';
+// >>> OCR-AVAILABILITY-BLOCK v1 (const only)
+// task-105：与 Java OcrAvailability.NOT_PACKAGED_MESSAGE 逐字一致（三引擎同源）。
+var OCR_NOT_PACKAGED = 'OCR 能力未随包：libppocr.so / libmlkit* 与识别模型不在包内（optimization.removeOcr=true，或主程序已把 OCR 剥离成插件）；如需 OCR 请安装 OCR 插件（或关闭 optimization.removeOcr 重新打包）。';
+// <<< OCR-AVAILABILITY-BLOCK
     var ocr = {};
 
     // 探针用：当前进程内未释放的 OCR 会话数（脚本忘 release() 时应该在下个脚本里看到 0）

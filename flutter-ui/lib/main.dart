@@ -11,6 +11,7 @@ import 'glass.dart';
 import 'glass_navigation.dart';
 import 'workspace_models.dart';
 import 'plugin_logic.dart';
+import 'bridge_call.dart';
 import 'workspace_visuals.dart';
 import 'code_editing.dart';
 import 'mono_font.dart';

@@ -19,6 +19,9 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import process from "node:process";
+// P2-4：公共纯函数库（sha256 / 路径 / 读 JSON 不再各脚本各写一遍）
+import { sha256File, shortHex } from "./lib/sha256.mjs";
+import { readJson as readJsonLib } from "./lib/paths.mjs";
 
 const SCHEMA = 1;
 const ROOT = process.cwd();
@@ -43,14 +46,14 @@ function hasFlag(name) {
 function readJson(file) {
   if (!fs.existsSync(file)) fail("找不到文件：" + file);
   try {
-    return JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    return readJsonLib(file);
   } catch (error) {
     fail("JSON 解析失败 " + file + "：" + error.message);
   }
 }
 
 function sha256(file) {
-  return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  return sha256File(file);
 }
 
 function versionFor(versions, id, suffix) {

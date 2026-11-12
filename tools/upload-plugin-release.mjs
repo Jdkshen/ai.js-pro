@@ -9,7 +9,7 @@
  * 顺序照约定：先三个 APK，最后 plugins.json（客户端按 file 字段名下载）。
  */
 import { readFileSync, existsSync, statSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { sha256Hex } from './lib/sha256.mjs';
 import { basename, join } from 'node:path';
 
 const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '';
@@ -43,7 +43,7 @@ async function main() {
     const path = join(dir, name);
     if (!existsSync(path)) { console.error('缺文件：' + path); process.exit(1); }
     const bytes = readFileSync(path);
-    const sha = createHash('sha256').update(bytes).digest('hex');
+    const sha = sha256Hex(bytes);   // P2-4：唯一实现在 tools/lib/sha256.mjs
     const existing = await apiFetch(`${api}/releases/${rel.json.id}/assets?per_page=100`);
     const dup = (existing.json || []).find(a => a.name === name);
     if (dup) { await apiFetch(`${api}/releases/assets/${dup.id}`, { method: 'DELETE' }); console.log('删除旧资产 ' + name); }
@@ -58,7 +58,7 @@ async function main() {
   }
   console.log('全部完成 ✓  校验：');
   for (const name of files) {
-    const url = `https://github.com/${owner}/${repoName}/releases/latest/download/${name}`;
+    const url = releaseBase(owner, repoName) + name;
     const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
     console.log(`  ${res.status}  ${url}`);
   }
