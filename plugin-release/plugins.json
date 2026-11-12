@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generatedAt": "2026-11-11T23:07:55.545Z",
+  "generatedAt": "2026-11-12T04:53:05.073Z",
   "plugins": [
     {
       "id": "apkbuilder",
@@ -10,8 +10,8 @@
       "versionCode": 1,
       "minAppVersion": 465,
       "file": "apkbuilder-plugin.apk",
-      "sizeBytes": 77939780,
-      "sha256": "4edd9a4a7814a0c2390109f433a1cf5eb677ac10dbdccab6943e040d218c683f",
+      "sizeBytes": 77941313,
+      "sha256": "4fc412dce47638e23423a8b63de652a9e556c7f5bdf0e282583a988e98f7c19e",
       "requiresRestart": true,
       "abis": [
         "arm64-v8a"
@@ -26,8 +26,8 @@
       "versionCode": 1,
       "minAppVersion": 465,
       "file": "ocr-plugin.apk",
-      "sizeBytes": 17535398,
-      "sha256": "6115648afffe05ee2680331b2a348f9d9cc68e3a5dc0ed0c0868af753552937e",
+      "sizeBytes": 17535396,
+      "sha256": "49b98e6d390e83cdffef85380a17854dfb997aa3cfcb1dd7eda5e8a79730f5cc",
       "requiresRestart": true,
       "abis": [
         "arm64-v8a"
@@ -42,8 +42,8 @@
       "versionCode": 7,
       "minAppVersion": 465,
       "file": "xiangqi-plugin.apk",
-      "sizeBytes": 63388219,
-      "sha256": "9f0c19f7a45570d6cfbb7690a5a39b88306b8a1f1780cd1b7b5ccf213689d5bf",
+      "sizeBytes": 63388199,
+      "sha256": "25ce7f427900fcb14ecf5539029bbd939a529e2b1212f599777eb5ba72513bd0",
       "requiresRestart": true,
       "abis": [
         "arm64-v8a"
