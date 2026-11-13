@@ -243,11 +243,9 @@ internal class McpApkToolkit(
                             val producer: String = "apk_page", val at: Long = System.currentTimeMillis())
     private val gson = Gson()
     /** #5：locator 前缀清单与跨 DEX uniqueLocator 的统一提示；错误和 inputSchema 共用。 */
-    private val locatorHint = "locator 前缀：zip_entry:（如 zip_entry:assets/project/main.js）、" +
-        "dex_class:（如 dex_class:Lcom/example/Foo;）、" +
-        "dex_method:（如 dex_method:Lcom/example/Foo;->bar()V）、" +
-        "resource:（如 resource:0x7f010001）；" +
-        "跨 DEX 同名类请使用搜索结果返回的 uniqueLocator（格式 dex_entry:classes.dex!dex_class:Lcom/example/Foo;）。"
+    // 省 token：这段会被追加到 22 个含 locator 的工具上，原来 330 字符 ⇒ 累计 6.8KB。
+// 现在只留一句「怎么拿到它 + 有哪些前缀」，完整格式示例搬进 learn_autojs_skill（AIjs-MCP-Guide.md）。
+private val locatorHint = "locator 取自列表/搜索的返回（前缀 zip_entry: / dex_class: / dex_method: / resource:；跨 DEX 同名类用返回的 uniqueLocator）。完整格式见 learn_autojs_skill。"
     init { require(store.isDirectory || store.mkdirs()) { "无法创建 APK 工作区目录" } }
     fun definitions(): JsonArray = JsonArray().apply {
         schemas.entrySet().forEach { (name, schema) -> add(ToolkitIo.json("name" to name, "category" to "toolkit", "categoryTitle" to "文件与APK工具",
@@ -287,7 +285,8 @@ internal class McpApkToolkit(
         val locator = obj.getAsJsonObject("properties")?.get("locator")?.takeIf { it.isJsonObject }?.asJsonObject ?: return copy
         val old = locator.get("description")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: ""
         if (!old.contains("uniqueLocator")) locator.addProperty("description", if (old.isBlank()) locatorHint else old + "；" + locatorHint)
-        if (!obj.has("description")) obj.addProperty("description", locatorHint)
+        // 工具级 description 不再追加同一份 locator 说明：那会让每个 APK 工具的描述都多 300 字符，
+        // 而参数级已经有指向，读的人顺着看即可。
         return copy
     }
     fun call(name: String, args: JsonObject): JsonObject {

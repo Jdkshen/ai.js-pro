@@ -1074,3 +1074,19 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 - `timeoutSeconds` 是 **MCP 等待上限**（1..600 秒，默认 60），**不是脚本生命周期**：`path` 脚本在 Node 宿主最长 1 小时；超过 600 秒请 `wait=false` 后轮询 `wait_execution`/`get_execution`。
 - **Node 执行池并发上限 3 个**、最多排队 5 个/30 秒，超过会返回带「并发上限 3 个」的启动失败，请串行或错峰。
 - 示例：`{"engine":"quickjs","source":"console.log(1)","wait":true,"timeoutSeconds":30}`
+
+## locator 参数完整说明（APK / DEX / 资源族工具通用）
+
+`locator` 一律**取自列表/搜索类工具的返回**，不要自己拼。支持四种前缀：
+
+| 前缀 | 示例 | 指向 |
+|---|---|---|
+| `zip_entry:` | `zip_entry:assets/project/main.js` | APK 里的普通条目 |
+| `dex_class:` | `dex_class:Lcom/example/Foo;` | DEX 类 |
+| `dex_method:` | `dex_method:Lcom/example/Foo;->bar()V` | DEX 方法（精确签名）|
+| `resource:` | `resource:0x7f010001` | 资源表条目 |
+
+**跨 DEX 同名类**：请使用搜索结果返回的 `uniqueLocator`，格式为
+`dex_entry:classes.dex!dex_class:Lcom/example/Foo;` —— 单纯的 `dex_class:` 在多 DEX 里会有歧义。
+
+典型来源工具：`apk_search` / `apk_dex_list_classes` / `apk_dex_list_methods` / `apk_resource_list` / `apk_job_list`。
