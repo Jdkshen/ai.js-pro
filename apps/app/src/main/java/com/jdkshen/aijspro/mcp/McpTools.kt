@@ -305,7 +305,9 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("dev_gesture_probe", "手势回调表泄漏探针（诊断用）：action=report 读当前进程框架隐藏字段的手势回调表尺寸 + 跨进程派发计数；action=stress 真派发 count 次 1px/1ms 手势再对比 tableDelta。**完整说明（反射跨版本脆性/诚实边界①~④/reset 语义）见 learn_autojs_skill（或 resources/read mcp://guide/dev_gesture_probe）**。", objSchema("action", "count", "timeoutSeconds", "withCallback", "intervalMs", "reset")))
             add(tool("coordinate_convert", "截图/显示/浮窗三套坐标系换算与标定：action=state 给三套尺寸与仿射系数；calibrate 存两组对应点；convert 做 point/rect 换算；clear 清标定。**完整说明（坐标系语义、持久化行为、示例）见 learn_autojs_skill（或 resources/read mcp://guide/coordinate_convert）**。", objSchema("action", "measureScreenshot", "windowPoint1", "screenshotPoint1", "windowPoint2", "screenshotPoint2", "from", "to", "point", "rect")))
             add(tool("check_syntax", "按 Rhino/QuickJS/Node.js 只编译检查源码，不执行任何脚本；Node 使用同版本真实编译器；示例：{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}", objSchema("code", "engine", "name", required = arrayOf("code"))))
-            add(tool("learn_autojs_skill", "读取 AI.js Pro MCP 完整使用说明、三引擎规则、权限和实际支持范围；首次连接或调用报错前先调用一次。返回纯文本正文（content[0].text）；同一份正文也在 structuredContent.data.text"))
+            add(tool("learn_autojs_skill", "读 AI.js Pro MCP 使用说明。**默认只返回章节目录+每节一句话摘要**（约 6KB）——原先一次性返回全文 331KB（≈10万 token），是最大的上下文杀手。" +
+    "要用某节时传 section=<标题关键词>（如 section=截屏 / section=权限 / section=终端）取该节全文（单节 ≤12KB）；" +
+    "传 section=all 才拿全文（慎用）。返回纯文本在 content[0].text，同一份也在 structuredContent.data.text。", objSchema("section")))
             add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本）；普通任务应使用 stop_script"))
             add(tool("get_mcp_log", "读取脚本日志尾部或 MCP 服务请求记录；executionId 可限制为指定任务；maxChars 默认 20000，最大 200000", objSchema("maxChars", "executionId", "channel")))
             add(tool("list_engines", "列出三个引擎与 MCP 支持的运行、查询、调用及语法检查能力"))
@@ -629,7 +631,10 @@ internal class McpTools(private val context: Context, private val event: (String
                 toolJson(if (engine == "nodejs") McpNodeSyntax.check(context, code, name)
                     else McpSyntaxChecker.check(code, engine, name))
             }
-            "learn_autojs_skill" -> structuredCall { McpToolResultShapes.textResult("text", helpText()) }
+            "learn_autojs_skill" -> structuredCall {
+                    val section = args.tString("section").trim()
+                    McpToolResultShapes.textResult("text", helpText(section))
+                }
             "stop_all_scripts" -> stopAllScripts()
             "get_mcp_log" -> toolJson(getMcpLog(args))
             "terminal_exec" -> {
@@ -1444,7 +1449,65 @@ internal class McpTools(private val context: Context, private val event: (String
     }
     /** task-118：MCP 服务开启即授权读写/运行。 */
     private fun requireWrite() { /* no-op：不再要求额外写入授权 */ }
-    private fun helpText(): String {
+    /** 章节标题（## 开头）；用于目录与按节取。 */
+    private fun guideSections(text: String): List<Pair<String, IntRange>> {
+        val lines = text.split("\n")
+        val starts = lines.indices.filter { lines[it].startsWith("## ") }
+        return starts.mapIndexed { i, start ->
+            val end = if (i + 1 < starts.size) starts[i + 1] - 1 else lines.size - 1
+            lines[start].removePrefix("## ").trim() to (start..end)
+        }
+    }
+
+    /**
+     * task-196（省上下文）：原来一次性返回 331KB（Guide 121KB + Playbook + 终端说明）≈ 10 万 token，
+     * 是「调一次就烧 5 万 token」的头号原因。现在：
+     *  · section 为空 ⇒ 只给**目录**（34 个标题 + 每节首句摘要，约 6KB）；
+     *  · section=<关键词> ⇒ 只给**匹配到的那一节全文**（单节 ≤12KB）；
+     *  · section=all ⇒ 全文（保留旧行为，但明确提示慎用）。
+     * 全文仍可通过 resources/read 取（不丢信息）。
+     */
+    private fun helpText(section: String = ""): String {
+        val guide = context.assets.open("mcp/AIjs-MCP-Guide.md")
+            .bufferedReader(Charsets.UTF_8).use { it.readText() }
+        val sections = guideSections(guide)
+        when {
+            section.equals("all", true) -> return legacyHelpText()
+            section.isBlank() -> {
+                val sb = StringBuilder()
+                sb.append("AI.js Pro MCP 使用说明——**章节目录**（共 ").append(sections.size).append(" 节）\n")
+                sb.append("按需取全文：learn_autojs_skill{section=\"<标题关键词>\"}；全文 resources/read mcp://guide。\n")
+                sb.append("（不要一次要全量：全文 331KB≈10万 token，会吃掉整个上下文。）\n\n")
+                val lines = guide.split("\n")
+                sections.forEach { (title, range) ->
+                    val first = range.drop(1).map { lines[it].trim() }
+                        .firstOrNull { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("|") && !it.startsWith("```") } ?: ""
+                    sb.append("- ").append(title)
+                    if (first.isNotEmpty()) sb.append("：").append(first.take(60))
+                    sb.append('\n')
+                }
+                return sb.toString()
+            }
+            else -> {
+                val hit = sections.firstOrNull { it.first.contains(section, true) }
+                    ?: sections.firstOrNull { it.first.replace(" ", "").contains(section.replace(" ", ""), true) }
+                if (hit == null) {
+                    val titles = sections.joinToString("、") { it.first }
+                    return "没有标题包含「" + section + "」的章节。可用的章节：" + titles +
+                        "\n（也可以不带 section 拿目录，或 section=all 拿全文——慎用，全文约 10 万 token。）"
+                }
+                val lines = guide.split("\n")
+                val body = hit.second.map { lines[it] }.joinToString("\n")
+                // 单节超 12KB 时截断并提示用 resources/read
+                return if (body.length > 12000)
+                    body.take(12000) + "\n\n…（本节已截断：完整内容请 resources/read mcp://guide，或换更细的 section 关键词）"
+                else body
+            }
+        }
+    }
+
+    /** 旧行为：全文（Guide + 终端说明 + Playbook）。只给 section=all 用。 */
+    private fun legacyHelpText(): String {
         val base = context.assets.open("mcp/AIjs-MCP-Guide.md")
             .bufferedReader(Charsets.UTF_8).use { it.readText() }
         // 实战要点（冷进程/dlopen、terminal 大输出、借壳解密流程等）单独成篇，
