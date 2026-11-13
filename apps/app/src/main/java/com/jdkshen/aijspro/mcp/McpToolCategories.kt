@@ -57,7 +57,7 @@ internal object McpToolCategories {
             "shell_capabilities", "shell_classify_failure", "node_script_command", "crash_buffer_semantics",
         ).forEach { put(it, "terminal") }
         listOf("list_overlays", "close_overlays").forEach { put(it, "overlay") }
-        listOf("list_samples", "read_sample", "learn_autojs_skill", "search_api_docs", "read_api_doc").forEach { put(it, "asset") }
+        listOf("list_samples", "read_sample", "learn_aijspro_skill", "search_api_docs", "read_api_doc").forEach { put(it, "asset") }
     }
 
     /**
@@ -65,7 +65,7 @@ internal object McpToolCategories {
      * 这是**主观白名单**（不是自动推导），目的是让客户端在 token 紧张时只拉一小撮工具；完整集仍可 `groups` 或不过滤。
      */
     val coreToolNames: Set<String> = setOf(
-        "get_status", "learn_autojs_skill", "reverse_guide",
+        "get_status", "learn_aijspro_skill", "reverse_guide",
         "list_scripts", "read_script", "search_scripts", "run_script", "check_syntax", "stop_script",
         "file_list", "file_read_text", "file_write_bytes", "file_edit_text", "file_move", "file_stat",
         "project_folder", "capture_screen",

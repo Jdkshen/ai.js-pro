@@ -22,7 +22,7 @@ internal object McpToolResultShapes {
         add("structuredContent", ToolkitIo.ok(data))
     }
 
-    /** 裸文本类（workspace_diff / learn_autojs_skill）：旧文本放 content，文本同时放 data 字段。 */
+    /** 裸文本类（workspace_diff / learn_aijspro_skill）：旧文本放 content，文本同时放 data 字段。 */
     fun textResult(field: String, text: String): JsonObject =
         success(ToolkitIo.json(field to text), legacyText = text)
 

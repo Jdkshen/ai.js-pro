@@ -8,7 +8,9 @@ class McpToolCatalogTest {
     @Test
     fun publicToolContractContainsCanonicalToolsAndAllProAliases() {
         assertEquals(217, McpToolCatalog.canonicalNames.size)
-        assertEquals(226, McpToolCatalog.names.size)
+        // 2026-11-13 改名兼容钉子：旧的 snake_case 名必须仍能调到新工具（老客户端/老 prompt 不断）
+        assertEquals("learn_aijspro_skill", McpToolCatalog.canonicalName("learn_autojs_skill"))
+        assertEquals(227, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
         assertTrue(McpToolCatalog.names.all { it.matches(Regex("[a-zA-Z][a-zA-Z0-9_]*")) })
         assertEquals("get_status", McpToolCatalog.names.first())
@@ -17,7 +19,7 @@ class McpToolCatalogTest {
         assertTrue("shell_rish" in McpToolCatalog.canonicalNames)
         assertEquals("shellRish", McpToolCatalog.dispatchAliases.getValue("shell_rish"))
         assertTrue("shellRish" !in McpToolCatalog.names)
-        assertEquals(setOf("getUiLayout", "captureScreen", "checkSyntax", "runScript", "learnAutoJsSkill", "stopAllScripts", "getMcpLog", "listOverlays", "closeOverlays"), McpToolCatalog.aliases.keys)
+        assertEquals(setOf("getUiLayout", "captureScreen", "checkSyntax", "runScript", "learnAutoJsSkill", "learn_autojs_skill", "learnAutojsSkill", "stopAllScripts", "getMcpLog", "listOverlays", "closeOverlays"), McpToolCatalog.aliases.keys)
         McpToolCatalog.aliases.forEach { (alias, canonical) ->
             assertTrue(canonical in McpToolCatalog.canonicalNames)
             assertEquals(canonical, McpToolCatalog.canonicalName(alias))
@@ -26,11 +28,11 @@ class McpToolCatalogTest {
 
     @Test
     fun learnAutoJsSkillKeepsProSpellingAndAlsoAcceptsDeterministicCamelCase() {
-        assertEquals("learn_autojs_skill", McpToolCatalog.canonicalName("learnAutoJsSkill"))
-        assertEquals("learn_autojs_skill", McpToolCatalog.canonicalName("learnAutojsSkill"))
+        assertEquals("learn_aijspro_skill", McpToolCatalog.canonicalName("learnAutoJsSkill"))
+        assertEquals("learn_aijspro_skill", McpToolCatalog.canonicalName("learnAutojsSkill"))
         assertTrue("learnAutoJsSkill" in McpToolCatalog.names)
         assertTrue("learnAutojsSkill" !in McpToolCatalog.names)
-        assertEquals(226, McpToolCatalog.names.size)
+        assertEquals(227, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
     }
 

@@ -39,7 +39,7 @@ internal object McpToolCatalog {
         // P1-6（.4 反馈「三套坐标系没有换算工具」）：截图/显示/浮窗三套空间的换算与标定
         "coordinate_convert",
         "check_syntax",
-        "learn_autojs_skill",
+        "learn_aijspro_skill",
         "stop_all_scripts",
         "get_mcp_log",
         "list_engines",
@@ -100,7 +100,10 @@ internal object McpToolCatalog {
         "captureScreen" to "capture_screen",
         "checkSyntax" to "check_syntax",
         "runScript" to "run_script",
-        "learnAutoJsSkill" to "learn_autojs_skill",
+        "learnAutoJsSkill" to "learn_aijspro_skill",
+        // 2026-11-13：产品早已不是 Auto.js（现为 AI.js Pro）⇒ 工具名改成 learn_aijspro_skill。
+        // 旧名保留为兼容别名，老客户端/老 prompt 照旧能调，不会断。
+        "learn_autojs_skill" to "learn_aijspro_skill",
         "stopAllScripts" to "stop_all_scripts",
         "getMcpLog" to "get_mcp_log",
         "listOverlays" to "list_overlays",

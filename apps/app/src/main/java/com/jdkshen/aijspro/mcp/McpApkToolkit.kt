@@ -244,8 +244,8 @@ internal class McpApkToolkit(
     private val gson = Gson()
     /** #5：locator 前缀清单与跨 DEX uniqueLocator 的统一提示；错误和 inputSchema 共用。 */
     // 省 token：这段会被追加到 22 个含 locator 的工具上，原来 330 字符 ⇒ 累计 6.8KB。
-// 现在只留一句「怎么拿到它 + 有哪些前缀」，完整格式示例搬进 learn_autojs_skill（AIjs-MCP-Guide.md）。
-private val locatorHint = "locator 取自列表/搜索的返回（前缀 zip_entry: / dex_class: / dex_method: / resource:；跨 DEX 同名类用返回的 uniqueLocator）。完整格式见 learn_autojs_skill。"
+// 现在只留一句「怎么拿到它 + 有哪些前缀」，完整格式示例搬进 learn_aijspro_skill（AIjs-MCP-Guide.md）。
+private val locatorHint = "locator 取自列表/搜索的返回（前缀 zip_entry: / dex_class: / dex_method: / resource:；跨 DEX 同名类用返回的 uniqueLocator）。完整格式见 learn_aijspro_skill。"
     init { require(store.isDirectory || store.mkdirs()) { "无法创建 APK 工作区目录" } }
     fun definitions(): JsonArray = JsonArray().apply {
         schemas.entrySet().forEach { (name, schema) -> add(ToolkitIo.json("name" to name, "category" to "toolkit", "categoryTitle" to "文件与APK工具",

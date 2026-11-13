@@ -191,7 +191,7 @@ internal class McpTools(private val context: Context, private val event: (String
         add("serverInfo", McpServerMetadata.toJson())
 
         addProperty("instructions", listOf(
-            "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
+            "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_aijspro_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
             McpOutputConventions.INSTRUCTION,
             "逆向任务首次连接：reverse_guide({topic:index}) → reverse_capabilities({}) → reverse_plan({goal:inspect|decode|rebuild|native|dynamic|fingerprint|emulate|compare})。指南与步骤也可通过 resources/list/read、prompts/list/get 发现；URI aijs://reverse/guide、aijs://reverse/workflows。",
             "逆向组件按需安装，工具注册不代表已安装；apk_component_status查询后显式apk_component_install。后台返回jobId后apk_job_status到终态，再apk_job_result按nextOffset读完；失败保留error.code，不要把排队/启动当成功。免Root Frida先apk_inject_gadget生成重签APK，安装打开后用返回的endpoint/token连接；无需Root/Server。",
@@ -211,7 +211,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "- 手机终端：terminal_exec（backend 默认 app，可选 shizuku）→ terminal_read(offset=nextOffset) → terminal_write/terminal_stop；shell_rish 是 Shizuku 后端的异步兼容入口，同样返回 jobId，不阻塞等待。app 为普通应用 UID，shizuku 需服务已运行并授权且不回退；两者共用同一任务表。先 get_build_tools 确认工具链，非 PTY。",
             "- 冷进程：换 .so / 做对照实验前先停止自己拥有的执行；全部停止需用户任务范围包含其他运行任务。脚本进程会复用，已 dlopen 的库和 isAvailable() 结果会粘住；不要在其他任务运行时擅自重启整个应用。",
             "- terminal 大输出：按 terminal_read(offset=上次 nextOffset, maxChars≤65536) 轮询到 running=false 且 nextOffset==outputEnd；二进制/特殊后缀文件用 base64 分块写入，workspace 只收部分文本类型。",
-            "- 借目标 App 的解密/校验函数时优先选无状态自包含入口；长度/字节序等关键数字先实测再信旧文档；两次结果不同先怀疑进程复用与 native 全局状态。更多实战要点与坑表见 learn_autojs_skill 末尾「MCP 实战要点」。",
+            "- 借目标 App 的解密/校验函数时优先选无状态自包含入口；长度/字节序等关键数字先实测再信旧文档；两次结果不同先怀疑进程复用与 native 全局状态。更多实战要点与坑表见 learn_aijspro_skill 末尾「MCP 实战要点」。",
             "",
             "常用示例：",
             "run_script 内存脚本：{\"name\":\"run_script\",\"arguments\":{\"engine\":\"quickjs\",\"source\":\"console.log(1)\",\"wait\":true,\"timeoutSeconds\":30}}",
@@ -221,7 +221,7 @@ internal class McpTools(private val context: Context, private val event: (String
             "",
             "重分析（native_analyze/native_functions/native_compare/yara_scan 等）占 30s 级后台槽位，连续调用前先 apk_job_list；frida_status/frida_processes 是只读快路径，不占槽。",
             "分页游标只对产生它的工具（同工具、同 revision）有效：拿 A 工具的 nextCursor 去调 apk_continue 会报错，请用原工具继续翻页。",
-            "调用失败时先看错误指出的参数名/类型，再调用 learn_autojs_skill 查对应章节；不要猜字段。",
+            "调用失败时先看错误指出的参数名/类型，再调用 learn_aijspro_skill 查对应章节；不要猜字段。",
             "族前缀别名（长期共存、只派发）：dex_* = apk_dex_*（例 dex_xref = apk_dex_xref、dex_list_classes = apk_dex_list_classes）、so_* = apk_native_*（例 so_list_items = apk_native_list_items、so_xref = apk_native_xref）；新旧名等价都接受，别名不出现在 tools/list（省上下文），参数用 tool_schema{tool:\"dex_xref\"} 查。",
         ).joinToString("\n"))
 
@@ -269,7 +269,7 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun listTools(params: JsonObject? = null) = JsonObject().apply {
         add("tools", JsonArray().apply {
             add(tool("get_status", "读取 MCP、脚本目录、任务和工作区状态"))
-            add(tool("get_baseline", "运行时就绪基线（只读自检）：root/currentProject、workspaces、toolchain、jobs 缺什么给最短 recovery；数字与 get_status / apk_workspace_inventory / toolkit_status 同源，15s 内复用缓存，内容不变时 version 不变。**返回结构（≤512B 与裁剪规则、三处同值语义、refresh）见 learn_autojs_skill（或 resources/read mcp://guide/get_baseline）**。", objSchema("refresh")))
+            add(tool("get_baseline", "运行时就绪基线（只读自检）：root/currentProject、workspaces、toolchain、jobs 缺什么给最短 recovery；数字与 get_status / apk_workspace_inventory / toolkit_status 同源，15s 内复用缓存，内容不变时 version 不变。**成功路径以 structuredContent(ok/data) 与结果顶层为准，content[0].text 不保证包含 baseline**（`get_status` 的扁平 text 会含、普通工具文本镜像不含）；失败路径三处同值。**返回结构（≤512B 与裁剪规则、refresh）见 learn_aijspro_skill（或 resources/read mcp://guide/get_baseline）**。", objSchema("refresh")))
             add(tool("list_scripts", "列出脚本目录中的文件；recursive=true 时递归子目录（与 search_scripts 同一数据源）；示例：{\"path\":\"\",\"recursive\":true}", objSchema("path", "offset", "limit", "recursive")))
             add(tool("read_script", "分块读取脚本目录中的文本文件；示例：{\"path\":\"main.js\",\"maxBytes\":65536}", objSchema("path", "offset", "maxBytes", required = arrayOf("path"))))
             add(tool("search_scripts", "递归搜索脚本文件名与内容；截断时返回 scanCursor（可传回本工具继续扫描）和分页 cursor（用于继续分页取出已返回的 items）", objSchema("query", "path", "limit", "scanCursor", "resumeCursor", "cursor", required = arrayOf("query")).apply {
@@ -284,7 +284,7 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("get_execution", "读取任务状态、结果、异常或运行日志", objSchema("executionId", required = arrayOf("executionId"))))
             add(tool("wait_execution", "等待任务结束（最长 timeoutSeconds 秒）并返回最终状态、结果、异常与运行日志；脚本报错时用这个拿错误数据；示例：{\"executionId\":\"mcp-1\",\"timeoutSeconds\":60}", objSchema("executionId", "timeoutSeconds", required = arrayOf("executionId"))))
             add(tool("read_apk_logs", "读取 AI.js Pro 全局控制台日志", objSchema("afterId", "limit")))
-            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一）；要结果/日志用 wait=true。timeoutSeconds 只是**MCP 等待上限**（1..600，默认 60），不是脚本生命周期（path 脚本在 Node 宿主最长 1 小时；超 600 秒请 wait=false 后轮询 wait_execution/get_execution）。**Node 执行池并发/排队规则与报错形态见 learn_autojs_skill（或 resources/read mcp://guide/run_script）**。", McpToolSchema.runSchema()))
+            add(tool("run_script", "运行现有文件或内存源码（path/file/source 三选一）；要结果/日志用 wait=true。timeoutSeconds 只是**MCP 等待上限**（1..600，默认 60），不是脚本生命周期（path 脚本在 Node 宿主最长 1 小时；超 600 秒请 wait=false 后轮询 wait_execution/get_execution）。**Node 执行池并发/排队规则与报错形态见 learn_aijspro_skill（或 resources/read mcp://guide/run_script）**。", McpToolSchema.runSchema()))
             add(tool("list_engine_api", "枚举三引擎实际全局或 require(module) 的 API；Node 同时返回实际内置模块目录。**每项还会给出 documented 对账**：原 items 保持不变，另附 documentedItems[{name,documented}] 与 documentedCount/undocumentedCount/build/note（文档是否提到该导出；文档落后于构建时这里会直接暴露）", objSchema("engine", "module")))
             add(tool("probe_engine_api", "按 descriptor/shape 探测三引擎 API 的 present/accessor/missing/unverified、成员和函数 arity；module 可选，includeInherited 默认 true；探针不执行 getter（call_engine_api 才真实求值与调用）", objSchema("engine", "module", "name", "includeInherited", required = arrayOf("engine", "name"))))
             add(tool("engine_api_diff", "对比三个引擎的全局 API；保留旧 Rhino/QuickJS 字段，增加 Node 与三引擎交集"))
@@ -300,12 +300,12 @@ internal class McpTools(private val context: Context, private val event: (String
             add(tool("workspace_cancel", "取消待确认的应用请求，把工作区恢复为可编辑状态", objSchema("workspaceId", required = arrayOf("workspaceId"))))
             add(tool("workspace_cleanup", "策略式清理工作区私有副本：默认 dryRun=true 只预览不动手；keepLatest 保留最近 N 个，olderThanHours 只清理更旧的，protectApplied 默认保护已应用（可在历史页回退）。只删除无修改的 OPEN 与已回退；applied/saved/被引用/未知 owner 一律保护并列出原因。旧参数 applied/keepAppliedHours 仍兼容。示例：{\"dryRun\":false,\"keepLatest\":20,\"olderThanHours\":24,\"protectApplied\":true}", objSchema("dryRun", "keepLatest", "olderThanHours", "protectApplied", "applied", "keepAppliedHours")))
             add(tool("get_ui_layout", "读取当前应用窗口或指定窗口的 XML、节点属性和空树诊断；需无障碍服务；windows[] 另含 id/type/active/focused/layer/packageName/rawChildren/title（窗口标题，仅 Android 7.0/API 24 及以上可得，低版本为 null）；示例：{\"maxNodes\":300,\"maxDepth\":64}", objSchema("windowId", "maxNodes", "maxDepth", "timeoutMillis")))
-            add(tool("capture_screen", "截屏并返回图像（本地工具，不需要电脑）。默认 mode=balanced（540 宽 JPEG60，约 40KB）；要原图无损用 mode=quality；只要文件不要图像用 savePath(+saveFormat)；只截一块用 region。**完整参数说明（四种预设的实测耗时/字节、region 坐标语义、saveFormat=raw 的逐帧 CV 用法、savePath 归置规则）请调 learn_autojs_skill（或在 MCP 里 resources/read mcp://guide/capture_screen）** —— 那些细节不放进 tags 以免每次 tools/list 都白占上下文。", objSchema("mode", "format", "quality", "dataUri", "maxWidth", "timeoutMillis", "region", "savePath", "saveFormat")))
-            add(tool("dev_screen_diff", "逐帧像素级差异（与 capture_screen 同一管线，支持 region/captureMode/maxDims）。**第一次调用会返回 NO_BASELINE 并把当帧记为基线**，同参数再调一次即得 ratio；尺寸不一致直接 SIZE_MISMATCH（不裁剪不缩放），nextActions 会给可抄的参数。**完整说明（baseline/mode=mask/tolerance/尺寸一致性语义/诚实边界）见 learn_autojs_skill（或 resources/read mcp://guide/dev_screen_diff）**。", objSchema("baseline", "region", "mode", "tolerance", "saveDiffTo", "maxDims", "captureMode")))
-            add(tool("dev_gesture_probe", "手势回调表泄漏探针（诊断用）：action=report 读当前进程框架隐藏字段的手势回调表尺寸 + 跨进程派发计数；action=stress 真派发 count 次 1px/1ms 手势再对比 tableDelta。**完整说明（反射跨版本脆性/诚实边界①~④/reset 语义）见 learn_autojs_skill（或 resources/read mcp://guide/dev_gesture_probe）**。", objSchema("action", "count", "timeoutSeconds", "withCallback", "intervalMs", "reset")))
-            add(tool("coordinate_convert", "截图/显示/浮窗三套坐标系换算与标定：action=state 给三套尺寸与仿射系数；calibrate 存两组对应点；convert 做 point/rect 换算；clear 清标定。**完整说明（坐标系语义、持久化行为、示例）见 learn_autojs_skill（或 resources/read mcp://guide/coordinate_convert）**。", objSchema("action", "measureScreenshot", "windowPoint1", "screenshotPoint1", "windowPoint2", "screenshotPoint2", "from", "to", "point", "rect")))
+            add(tool("capture_screen", "截屏并返回图像（本地工具，不需要电脑）。默认 mode=balanced（540 宽 JPEG60，约 40KB）；要原图无损用 mode=quality；只要文件不要图像用 savePath(+saveFormat)；只截一块用 region。**完整参数说明（四种预设的实测耗时/字节、region 坐标语义、saveFormat=raw 的逐帧 CV 用法、savePath 归置规则）请调 learn_aijspro_skill（或在 MCP 里 resources/read mcp://guide/capture_screen）** —— 那些细节不放进 tags 以免每次 tools/list 都白占上下文。", objSchema("mode", "format", "quality", "dataUri", "maxWidth", "timeoutMillis", "region", "savePath", "saveFormat")))
+            add(tool("dev_screen_diff", "逐帧像素级差异（与 capture_screen 同一管线，支持 region/captureMode/maxDims）。**第一次调用会返回 NO_BASELINE 并把当帧记为基线**，同参数再调一次即得 ratio；尺寸不一致直接 SIZE_MISMATCH（不裁剪不缩放），nextActions 会给可抄的参数。**完整说明（baseline/mode=mask/tolerance/尺寸一致性语义/诚实边界）见 learn_aijspro_skill（或 resources/read mcp://guide/dev_screen_diff）**。", objSchema("baseline", "region", "mode", "tolerance", "saveDiffTo", "maxDims", "captureMode")))
+            add(tool("dev_gesture_probe", "手势回调表泄漏探针（诊断用）：action=report 读当前进程框架隐藏字段的手势回调表尺寸 + 跨进程派发计数；action=stress 真派发 count 次 1px/1ms 手势再对比 tableDelta。**完整说明（反射跨版本脆性/诚实边界①~④/reset 语义）见 learn_aijspro_skill（或 resources/read mcp://guide/dev_gesture_probe）**。", objSchema("action", "count", "timeoutSeconds", "withCallback", "intervalMs", "reset")))
+            add(tool("coordinate_convert", "截图/显示/浮窗三套坐标系换算与标定：action=state 给三套尺寸与仿射系数；calibrate 存两组对应点；convert 做 point/rect 换算；clear 清标定。**完整说明（坐标系语义、持久化行为、示例）见 learn_aijspro_skill（或 resources/read mcp://guide/coordinate_convert）**。", objSchema("action", "measureScreenshot", "windowPoint1", "screenshotPoint1", "windowPoint2", "screenshotPoint2", "from", "to", "point", "rect")))
             add(tool("check_syntax", "按 Rhino/QuickJS/Node.js 只编译检查源码，不执行任何脚本；Node 使用同版本真实编译器；示例：{\"engine\":\"nodejs\",\"code\":\"console.log(1)\"}", objSchema("code", "engine", "name", required = arrayOf("code"))))
-            add(tool("learn_autojs_skill", "读 AI.js Pro MCP 使用说明。**默认只返回章节目录+每节一句话摘要**（约 6KB）——原先一次性返回全文 331KB（≈10万 token），是最大的上下文杀手。" +
+            add(tool("learn_aijspro_skill", "读 AI.js Pro MCP 使用说明。**默认只返回章节目录+每节一句话摘要**（约 6KB）——原先一次性返回全文 331KB（≈10万 token），是最大的上下文杀手。" +
     "要用某节时传 section=<标题关键词>（如 section=截屏 / section=权限 / section=终端）取该节全文（单节 ≤12KB）；" +
     "传 section=all 才拿全文（慎用）。返回纯文本在 content[0].text，同一份也在 structuredContent.data.text。", objSchema("section")))
             add(tool("stop_all_scripts", "停止应用全部脚本（包括非 MCP 脚本）；普通任务应使用 stop_script"))
@@ -631,7 +631,7 @@ internal class McpTools(private val context: Context, private val event: (String
                 toolJson(if (engine == "nodejs") McpNodeSyntax.check(context, code, name)
                     else McpSyntaxChecker.check(code, engine, name))
             }
-            "learn_autojs_skill" -> structuredCall {
+            "learn_aijspro_skill" -> structuredCall {
                     val section = args.tString("section").trim()
                     McpToolResultShapes.textResult("text", helpText(section))
                 }
@@ -1476,7 +1476,7 @@ internal class McpTools(private val context: Context, private val event: (String
             section.isBlank() -> {
                 val sb = StringBuilder()
                 sb.append("AI.js Pro MCP 使用说明——**章节目录**（共 ").append(sections.size).append(" 节）\n")
-                sb.append("按需取全文：learn_autojs_skill{section=\"<标题关键词>\"}；全文 resources/read mcp://guide。\n")
+                sb.append("按需取全文：learn_aijspro_skill{section=\"<标题关键词>\"}；全文 resources/read mcp://guide。\n")
                 sb.append("（不要一次要全量：全文 331KB≈10万 token，会吃掉整个上下文。）\n\n")
                 val lines = guide.split("\n")
                 sections.forEach { (title, range) ->
@@ -1511,7 +1511,7 @@ internal class McpTools(private val context: Context, private val event: (String
         val base = context.assets.open("mcp/AIjs-MCP-Guide.md")
             .bufferedReader(Charsets.UTF_8).use { it.readText() }
         // 实战要点（冷进程/dlopen、terminal 大输出、借壳解密流程等）单独成篇，
-        // 追加在完整说明之后；缺资源时不能让 learn_autojs_skill 整体失败。
+        // 追加在完整说明之后；缺资源时不能让 learn_aijspro_skill 整体失败。
         val playbook = runCatching {
             context.assets.open("mcp/AIjs-MCP-Playbook.md")
                 .bufferedReader(Charsets.UTF_8).use { it.readText() }
