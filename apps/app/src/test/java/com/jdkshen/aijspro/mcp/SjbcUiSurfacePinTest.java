@@ -37,7 +37,13 @@ public class SjbcUiSurfacePinTest {
         if (!dart.contains("sjbcRow")) {
             dart = readDart("flutter-ui/lib/project_page.dart");
         }
-        assertTrue("调用点必须判 sjbc 字段存在才显示", dart.contains("if (loaded?['sjbc'] is Map) sjbcRow()"));
+        // 2026-11-13 更正：sjbc 在 loaded['config']['sjbc'] 下，不在顶层。
+        // project_page.dart:1021 有注释记着「原来判 loaded['sjbc'] 会让这一行永远不显示」——
+        // 现在统一走 sjbcConfig()，调用点判它非空。断言跟着钉这个口径。
+        assertTrue("调用点必须判 sjbcConfig() 非空才显示", dart.contains("if (sjbcConfig() != null) sjbcRow()"));
+        assertTrue("sjbcConfig() 从 config['sjbc'] 取（不是顶层 loaded['sjbc']）",
+                dart.contains("config['sjbc']")
+                        && dart.contains("原来判 `loaded['sjbc']` 会让这一行**永远不显示**"));
         assertTrue(dart.contains("SJBC 资源目录："));
         assertTrue(dart.contains("期望指纹："));
         assertTrue(dart.contains("只读，真值在 project.json"));

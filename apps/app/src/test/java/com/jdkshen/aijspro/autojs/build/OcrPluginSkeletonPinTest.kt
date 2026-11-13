@@ -48,7 +48,11 @@ class OcrPluginSkeletonPinTest {
         assertTrue("锁文件必须存在（脚本生成）", lock.isFile)
         val text = lock.readText()
         assertTrue("锁文件要记 sha256 与来源", text.contains("\"sha256\"") && text.contains("\"source\""))
-        assertTrue("mlkit 来源要记 Gradle 坐标", text.contains("text-recognition-bundled-common:17.0.0"))
+        // 2026-11-13 更正：mlkit 已改为「仍随宿主」，插件不再带 libmlkit_google_ocr_pipeline.so
+        // （见 payload-sources.json 的 mlkitLibExcluded）⇒ "来源记 Gradle 坐标" 这条断言已过时。
+        // 改为钉住「为什么排除 mlkit」这个决策本身没被悄悄改掉。
+        assertTrue("锁文件要写明为什么排除 mlkit（决策可追溯）",
+            text.contains("mlkitLibExcluded") && text.contains("mlkit 仍随宿主"))
         assertTrue("libc++ 来源要记仓库内 AAR", text.contains("opencv-5.0.0-16kb-page-fix.aar"))
     }
 }

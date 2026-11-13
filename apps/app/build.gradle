@@ -153,6 +153,11 @@ if (flutterPocEnabled && !flutterPocPayload.isDirectory()) {
 }
 
 android {
+    testOptions {
+        unitTests {
+            returnDefaultValues = true   // android.util.Log 等桩方法返回默认值（NativeProjectStagingTest 需要）
+        }
+    }
     namespace 'com.jdkshen.aijspro'
     compileSdkVersion versions.compile
     buildToolsVersion versions.buildTool

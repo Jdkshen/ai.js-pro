@@ -91,7 +91,9 @@ class PluginDownloadCoreTest {
 
     @Test fun failureReasonCodesAreTheAgreedFive() {
         assertEquals(
-            listOf("network", "checksum", "package", "permission", "missing"),
+            // source / manifest 是后来新增的两类（来源不可信 / manifest 非法），
+            // 顺序即协议顺序；改动这里等于改客户端契约，请同步 reason_codes.dart 的文案表。
+            listOf("network", "checksum", "package", "permission", "missing", "source", "manifest"),
             PluginFailureReason.values().map { it.code }
         )
     }

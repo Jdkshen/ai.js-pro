@@ -38,7 +38,12 @@ public class PackagingWarningsSurfacePinTest {
     @Test
     public void apkBuilderStillPublishesWarningsInTheReport() throws Exception {
         String source = read("src/main/java/com/jdkshen/aijspro/autojs/build/ApkBuilder.java");
+        // 2026-11-13 更新：打包器改用常量键（PackagingReportFields.PACKAGING_WARNINGS）而不是字面量，
+        // 避免「写端改名、读端还按字符串找」的漂移。断言跟着钉常量用法。
         assertTrue("报告里的 packagingWarnings 由打包器写入（这里只读消费）",
-                source.contains("report(\"packagingWarnings\""));
+                source.contains("report(PackagingReportFields.PACKAGING_WARNINGS"));
+        assertTrue("常量本身要等于 packagingWarnings（读端 Dart 按这个键取）",
+                read("src/main/java/com/jdkshen/aijspro/autojs/build/PackagingReportFields.kt")
+                        .contains("PACKAGING_WARNINGS"));
     }
 }

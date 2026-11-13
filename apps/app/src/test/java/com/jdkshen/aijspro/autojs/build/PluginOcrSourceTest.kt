@@ -119,7 +119,11 @@ class PluginOcrSourceTest {
         val callAt = builder.indexOf("copyOcrFromPluginIfNeeded();")
         assertTrue("两处都要在", enforceAt > 0 && callAt > 0)
         assertTrue("插件取回必须在 enforcePackagingPolicy 之后", callAt > enforceAt)
-        assertTrue("默认必须早退（removeOcr=false 不进这条路）", builder.contains("mAppConfig.removeOcr"))
+        // 2026-11-13 更正：mAppConfig 是 AppConfig、**没有** removeOcr 访问器（见 ApkBuilder:548 注释），
+        // 实际口径是「直接从工程 project.json 读 optimization.removeOcr」。原断言钉错了对象。
+        assertTrue("从 project.json 读 optimization.removeOcr（不是 mAppConfig）",
+            builder.contains("optimization.optBoolean(\"removeOcr\"") &&
+            builder.contains("mAppConfig 是"))
         assertTrue("日志要能看出时机", builder.contains("after=enforcePackagingPolicy"))
     }
 }
