@@ -23,6 +23,17 @@
     <style name="ScriptTheme.AppBarOverlay" parent="ThemeOverlay.AppCompat.Dark.ActionBar"/>
 
 
+    <!-- Node UI 的透明主题：不 floating（Activity 仍是全屏窗口），但 windowBackground 透明，
+         这样脚本的 ui 根视图下面能透出宿主 App 的内容（液态玻璃「透」的前提）。
+         起因：NodeUiLocalActivity$Slot1/2/3 原来用 Theme.Material3.DayNight.NoActionBar（实色背景）
+         ⇒ 脚本把宿主 App 整屏盖住，玻璃再怎么调也透不出来（像素实测：栏上方被涂成 [3,3,3]）。 -->
+    <style name="ScriptTheme.Translucent" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
     <style name="ScriptTheme.Transparent" parent="ScriptTheme">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
