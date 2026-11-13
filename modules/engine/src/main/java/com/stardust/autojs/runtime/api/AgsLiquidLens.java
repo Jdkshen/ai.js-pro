@@ -164,7 +164,6 @@ public class AgsLiquidLens extends View {
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                removeCallbacks(hideRunnable);
                 // 透镜消费了触摸 ⇒ 下层 tab 收不到点击。若这一下几乎没移动，就按坐标把点击转发下去。
                 if (ev.getActionMasked() == MotionEvent.ACTION_UP && !dragged && hostView != null) {
                     View target = findClickableAt(hostView, ev.getX(), ev.getY(), this);
@@ -182,11 +181,6 @@ public class AgsLiquidLens extends View {
     }
 
     /**
-     * 兜底自动隐藏：onTouchEvent 返回 false（为了不吞 tab 点击）⇒ 系统只把 DOWN 派给我们，
-     * MOVE/UP 收不到 ⇒ 原来松开后透镜会一直停在按下位置。
-     * 这里在 DOWN 时挂一个短定时器，到点无条件隐藏；每次 DOWN/MOVE 都重置。
-     */
-    /**
      * 抓屏线程：capture() 走无障碍通道 + 跨进程，阻塞 0.3~0.5s；
      * 原来在 onTouchEvent 里**同步**调，直接把 UI 线程堵住（按住那一下必然卡 ✗）。
      * 现在挪到单线程后台；抓完再 post 回 UI invalidate。
@@ -198,19 +192,6 @@ public class AgsLiquidLens extends View {
                 return t;
             });
     private volatile boolean captureInFlight;
-
-    private final Runnable hideRunnable = new Runnable() {
-        @Override public void run() {
-            cx = -1f; cy = -1f;
-            invalidate();
-            android.util.Log.i("AgsLiquidLens", "auto-hide (no further touch events)");
-        }
-    };
-
-    private void scheduleAutoHide() {
-        removeCallbacks(hideRunnable);
-        postDelayed(hideRunnable, 5000L);   // 按住不动 5s 内都可见；松开后最长 5s 消失（收不到 UP 的妥协）
-    }
 
     /**
      * 在 host 的子树里找「坐标 (x,y) 处的可点击 View」—— 用于把点击数转发给下层 tab。
@@ -232,6 +213,27 @@ public class AgsLiquidLens extends View {
         return group.isClickable() ? group : null;
     }
 
+    /**
+     * 从窗口摘掉时回收资源 —— 这是本类唯一能保证被调到的生命周期点：
+     *  · captureExecutor 不 shutdown 会漏线程（脚本反复 new 时越攒越多）；
+     *  · screenBitmap 是全屏 RGBA（1080×2400×4 ≈ 10 MB），不 recycle 会漏内存 ⇒ OOM。
+     */
+    @Override
+    protected void onDetachedFromWindow() {
+        try {
+            removeCallbacks(null);
+            captureExecutor.shutdownNow();
+            if (screenBitmap != null) {
+                screenBitmap.recycle();
+                screenBitmap = null;
+            }
+            paint.setShader(null);
+        } catch (Throwable e) {
+            android.util.Log.w("AgsLiquidLens", "cleanup failed", e);
+        } finally {
+            super.onDetachedFromWindow();
+        }
+    }
     /** 抓一张整屏（无障碍通道，Android 11+、无需授权）。失败不崩，只降级为不画透镜。 */
     private void captureScreen() {
         if (failed || captureInFlight) return;   // 已经在抓就别重复投递（限频）

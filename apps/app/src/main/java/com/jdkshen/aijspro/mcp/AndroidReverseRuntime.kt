@@ -651,7 +651,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         when(name){
             "apk_decode_project"->{val input=stage(file(args,limit=ToolkitIo.MAX_APK),temp,"input.apk");validateArchive(input)
                 outputOrganized=outputOrganizer.organize(ToolkitIo.resolve(root,args.tString("outDir")),args)
-                projectTarget=outputOrganized!!.path;require(!projectTarget.exists()&&projectTarget.parentFile?.isDirectory==true){"outDir 必须是父目录存在的新目录"}
+                projectTarget=(outputOrganized?:throw ToolkitException("ORGANIZE_FAILED","输出目录归置失败（outputOrganizer 返回空），请检查 outDir 是否可写且不是脚本根直下文件","outDir")).path;require(!projectTarget.exists()&&projectTarget.parentFile?.isDirectory==true){"outDir 必须是父目录存在的新目录"}
                 output=File(temp,"decoded");subcommand+=listOf("d",input.path,"-o",output.path,"-p",framework.path,"-j","1")
                 if(!args.tBool("decodeResources",true))subcommand+="-r"
             }
@@ -699,10 +699,14 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
         }catch(failure:Throwable){
             executionFailure=failure
         }finally{
-            if(stagingMode=="in_place")inPlaceCleanupOk=cleanupInPlaceGenerated(inPlaceProject!!)
+            // 这里在 finally 里：若前面已经抛异常、且 inPlaceProject 还没赋值，
+            // 直接 !! 会让 finally 抛 NPE **把原始异常掩盖掉**（清理代码吃掉真实错误 ✗）。
+            // 改成安全调用：拿不到就跳过清理，绝不覆盖原异常。
+            if(stagingMode=="in_place"){ val ip=inPlaceProject; if(ip!=null) inPlaceCleanupOk=runCatching{cleanupInPlaceGenerated(ip)}.getOrElse{ok-> false.also{ android.util.Log.w("McpReverse","in_place cleanup failed: "+(ok.message?:"?")) }} }
         }
         if(stagingMode=="in_place"){
-            val project=inPlaceProject!!
+            // 同上：stagingMode=in_place 但前面失败时可能仍未赋值 ⇒ 不要用 !! 直接炸
+            val project=(inPlaceProject ?: throw ToolkitException("IN_PLACE_NOT_STARTED","in_place 模式下工程未成功暂存（前一步可能已失败），请查看上层异常或改用 buildInPlace=false 复制模式","inPlace"))
             sourceHashAfter=runCatching{ToolkitReverseFiles.sourceTreeSha256(project)}.getOrElse{failure->
                 throw ToolkitException("IN_PLACE_SOURCE_HASH_FAILED","in_place 构建后无法计算工程树 SHA-256：${failure.message}; 请用 buildInPlace=false 复制模式重试","projectDir")}
             sourceTreeUnchanged=sourceHashBefore?.let{it==sourceHashAfter}==true
@@ -727,7 +731,7 @@ internal class AndroidReverseRuntime(private val context:Context,private val roo
             require(verification.getAsJsonObject("signature").tBool("verified")){"回编译APK验签失败"}
         }
         outputOrganized=outputOrganizer.organize(ToolkitIo.resolve(root,args.tString("outPath")),args)
-        val destination=outputOrganized!!.path
+        val destination=(outputOrganized?:throw ToolkitException("ORGANIZE_FAILED","输出文件归置失败（outputOrganizer 返回空），请检查 outPath 是否可写","outPath")).path
         ToolkitIo.withFileLocks(listOf(destination)){require(!destination.exists()){"outPath 已存在，请使用新文件名"};ToolkitIo.atomic(destination){output.copyTo(it,true)}}
         return ToolkitIo.json(
             "path" to destination.path,
