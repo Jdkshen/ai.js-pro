@@ -11,7 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Auto.js Pro 的 `$files.observe(path)`：用 {@link FileObserver} 监听目录/文件变化，
+ * AI.js Pro 的 `$files.observe(path)`：用 {@link FileObserver} 监听目录/文件变化，
  * 事件按 `watcher.on("any"|"create"|"delete"|"modify"|"move"|"attrib", function(event, path){})`
  * 派发给脚本，回调在线程池事件后投递到脚本线程执行。
  *
@@ -51,7 +51,7 @@ public class ScriptFileObserver extends EventEmitter {
     }
 
     /**
-     * 与 Auto.js Pro 的 {@code Files.fileEventToString} 同一套事件名（inotify 位到名字）。
+     * 与 AI.js Pro 的 {@code Files.fileEventToString} 同一套事件名（inotify 位到名字）。
      * QuickJS 的 `files.observe` 也复用这张表，保证两个引擎事件名一致。
      */
     public static String[] eventNames(int event) {

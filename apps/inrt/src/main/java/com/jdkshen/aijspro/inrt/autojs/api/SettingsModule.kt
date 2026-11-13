@@ -5,7 +5,7 @@ import com.jdkshen.aijspro.inrt.Pref
 import java.util.Locale
 
 /**
- * PDF §2.28 `$settings`：Auto.js 内部设置开关（打包版实现）。
+ * PDF §2.28 `$settings`：AI.js Pro 内部设置开关（打包版实现）。
  *
  * 打包版只有部分设置项（音量上键停止脚本、启动时隐藏日志、用 root 启用无障碍服务），
  * 没有的 key 统一报错，避免静默骗脚本。

@@ -3,7 +3,7 @@ package com.stardust.autojs.project;
 /**
  * 打包脚本保护等级，对应 {@code project.json} 的 {@code encryptLevel} 字段。
  *
- * <p>等级语义对齐 Auto.js / Auto.js Pro 的工程格式，并在高等级上扩展我们自己的实现：
+ * <p>等级语义对齐 AI.js Pro / AI.js Pro 的工程格式，并在高等级上扩展我们自己的实现：
  * <ul>
  *   <li>{@link #LEVEL_NONE}：不加密，脚本以原始文本写入 {@code assets/project/}；</li>
  *   <li>{@link #LEVEL_ENCRYPT}：AES/CBC + 8 字节文件头（默认值，等价于历史行为）；</li>

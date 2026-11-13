@@ -403,7 +403,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
 
         // Invisible shield over the editor while the log console is open: it consumes
         // all touches so the code above cannot be edited/scrolled, but stays transparent
-        // like Auto.js Pro (the editor strip above remains clearly visible).
+        // like AI.js Pro (the editor strip above remains clearly visible).
         mEditorShield = new View(this);
         mEditorShield.setBackgroundColor(Color.TRANSPARENT);
         mEditorShield.setClickable(true);
@@ -413,7 +413,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
 
         mLogPanel = buildLogPanel();
         mLogPanel.setVisibility(View.GONE);
-        // Auto.js Pro shows the log console in a large bottom panel (~45% of the screen).
+        // AI.js Pro shows the log console in a large bottom panel (~45% of the screen).
         int logPanelHeight = (int) (getResources().getDisplayMetrics().heightPixels * 0.45f);
         mMainLayout.addView(mLogPanel, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, logPanelHeight));
@@ -960,7 +960,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
         view.setMinWidth(dp(40));
         view.setOnClickListener(v -> onShortcut(label));
         if ("TAB".equals(label)) {
-            // 对齐 Auto.js Pro：长按 TAB 格式化代码（首次弹说明，可"不再提示"）。
+            // 对齐 AI.js Pro：长按 TAB 格式化代码（首次弹说明，可"不再提示"）。
             view.setOnLongClickListener(v -> {
                 onTabLongPress();
                 return true;
@@ -2302,7 +2302,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
             else flushUnifiedLogOnShow(mUnifiedLogFollowOnOpen);
         }
         // While the log console is open, block all interaction with the editor above
-        // (like Auto.js Pro): a translucent shield consumes touches over the editor area.
+        // (like AI.js Pro): a translucent shield consumes touches over the editor area.
         if (mEditorShield.getParent() == null && mEditorContainer != null) {
             mEditorContainer.addView(mEditorShield, new FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -2648,7 +2648,7 @@ public final class ProCodeEditorActivity extends ComponentActivity
 
     /**
      * 长按 TAB：首次弹一次说明（可勾选“不再提示”），随后格式化代码。
-     * 与 Auto.js Pro 的 "Long press TAB to format code" 行为对齐。
+     * 与 AI.js Pro 的 "Long press TAB to format code" 行为对齐。
      */
     private void onTabLongPress() {
         AceCodeEditor editor = activeEditor();

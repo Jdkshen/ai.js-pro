@@ -102,7 +102,7 @@ object Scripts {
 
 
     fun edit(context: Context, file: ScriptFile) {
-        // Unified editor entry: open the Auto.js Pro-style editor (file tree + tabs + log panel)
+        // Unified editor entry: open the AI.js Pro-style editor (file tree + tabs + log panel)
         // for all "open script for editing" paths (file list, new-file, external edits).
         context.startActivity(ProCodeEditorActivity.intent(context, File(file.path)))
     }

@@ -126,7 +126,7 @@ public class Images {
     }
 
     /**
-     * 与 Auto.js Pro 9.3.11 的 `images.requestScreenCapture(options)` / `(width, height)` 同形：
+     * 与 AI.js Pro 9.3.11 的 `images.requestScreenCapture(options)` / `(width, height)` 同形：
      * `width`/`height` &gt; 0 时按请求尺寸创建捕获面；`async` 时帧走
      * {@link #setImageCaptureCallback(Object)} 的逐帧回调（对应 `images.on("screen_capture")`）。
      */
@@ -969,7 +969,7 @@ public class Images {
     }
 
     /**
-     * 与 Auto.js Pro 9.3.11 一致：`images.matchTemplate(..., {transparentMask: true})` 开启透明掩膜，
+     * 与 AI.js Pro 9.3.11 一致：`images.matchTemplate(..., {transparentMask: true})` 开启透明掩膜，
      * 模板中全透明（alpha &lt;= 127）的像素不参与匹配；默认算法相应切换为 TM_CCORR_NORMED。
      */
     public List<TemplateMatching.Match> matchTemplate(ImageWrapper image, ImageWrapper template, float weakThreshold, float threshold, Rect rect, int maxLevel, int limit, boolean useTransparentMask) {

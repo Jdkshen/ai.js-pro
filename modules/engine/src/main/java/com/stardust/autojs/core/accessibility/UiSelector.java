@@ -169,7 +169,7 @@ public class UiSelector extends UiGlobalSelector {
     }
 
     /**
-     * Auto.js Pro 的 {@code untilFind(timeout)}：超时后返回（可能为空的）集合。
+     * AI.js Pro 的 {@code untilFind(timeout)}：超时后返回（可能为空的）集合。
      */
     @ScriptInterface
     @NonNull
@@ -178,7 +178,7 @@ public class UiSelector extends UiGlobalSelector {
     }
 
     /**
-     * Auto.js Pro 的 {@code untilFind(timeout, interval)}：timeout<=0 表示一直等待；
+     * AI.js Pro 的 {@code untilFind(timeout, interval)}：timeout<=0 表示一直等待；
      * interval 为无障碍缓存刷新间隔；查询仍按 50ms 轮询。
      */
     @ScriptInterface
@@ -245,7 +245,7 @@ public class UiSelector extends UiGlobalSelector {
     }
 
     /**
-     * Auto.js Pro 的 {@code findOne(timeout, interval)}：timeout<=0 表示一直等待，超时返回 null。
+     * AI.js Pro 的 {@code findOne(timeout, interval)}：timeout<=0 表示一直等待，超时返回 null。
      */
     @ScriptInterface
     public UiObject findOne(long timeout, long interval) {

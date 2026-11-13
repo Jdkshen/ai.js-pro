@@ -12,7 +12,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Dedicated :inspector renderer. It never reaches the main process's AutoJs singleton. */
+/** Dedicated :inspector renderer. It never reaches the main process's AI.js Pro singleton. */
 public final class InspectorHostService extends FloatyService {
     private static final String TAG = "InspectorRenderer";
     private static final Handler MAIN = new Handler(Looper.getMainLooper());

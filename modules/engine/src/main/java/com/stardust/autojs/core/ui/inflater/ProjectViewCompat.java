@@ -12,7 +12,7 @@ import java.util.Map;
 /**
  * Pro 工程布局里的「宿主类」兼容层（只在 inflater 内使用）。
  *
- * <p>Auto.js Pro 的示例工程 {@code res/layout} 会引用 Pro 自带的宿主控件；本仓库没有的那几个
+ * <p>AI.js Pro 的示例工程 {@code res/layout} 会引用 Pro 自带的宿主控件；本仓库没有的那几个
  * （最典型的是 Node UI 示例 {@code page_console.xml} 里的
  * {@code com.stardust.autojs.core.console.FileConsoleView}）会让 {@code Class.forName} 抛
  * ClassNotFoundException，整个 activity_main inflate 失败（dev-988）。

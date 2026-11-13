@@ -298,13 +298,13 @@ public class Device {
                 .setStreamVolume(AudioManager.STREAM_NOTIFICATION, i, 0);
     }
 
-    /** Auto.js Pro 的 `device.getScreenOrientation()`：返回 "portrait"/"landscape"。 */
+    /** AI.js Pro 的 `device.getScreenOrientation()`：返回 "portrait"/"landscape"。 */
     public String getScreenOrientation() {
         int rotation = getScreenRotation();
         return (rotation == 0 || rotation == 180) ? "portrait" : "landscape";
     }
 
-    /** Auto.js Pro 的 `device.getScreenRotation()`：返回 0/90/180/270，未知为 -1。 */
+    /** AI.js Pro 的 `device.getScreenRotation()`：返回 0/90/180/270，未知为 -1。 */
     public int getScreenRotation() {
         WindowManager windowManager = getSystemService(Context.WINDOW_SERVICE);
         if (windowManager == null) {

@@ -85,7 +85,7 @@ public class QuickJsInjectableWebClient extends WebViewClient {
     private final class PageBridge {
 
         /**
-         * 页面里的 `rhino.call('fnName', ...args)`（与 Auto.js 传统写法一致）。
+         * 页面里的 `rhino.call('fnName', ...args)`（与 AI.js Pro 传统写法一致）。
          * <p>
          * 老实现把第二个参数直接当 JSON 数组字符串，于是 `rhino.call('f', '文本')` 会在脚本侧
          * 报 `SyntaxError: unexpected token`；而 Android 的 JS 桥不支持可变参数方法，

@@ -39,7 +39,7 @@ public class Debug {
                 // 引擎已退出时 console 可能不可用，忽略即可
             }
         });
-        // 文档：「在 Auto.js Pro 运行时，此功能默认开启；在打包软件中，此功能默认关闭」——
+        // 文档：「在 AI.js Pro 运行时，此功能默认开启；在打包软件中，此功能默认关闭」——
         // 打包产物是 inrt 模板应用（包名/类名里带 inrt），据此区分。
         MemoryLeakDetector.setEnabled(!isPackagedApp());
     }

@@ -6,7 +6,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * 把 Auto.js 那套 XML 字面量写法改写成字符串，让**没有 E4X 的 QuickJS** 也能跑：
+ * 把 AI.js Pro 那套 XML 字面量写法改写成字符串，让**没有 E4X 的 QuickJS** 也能跑：
  *
  * <pre>
  * ui.layout(                 ui.layout(`

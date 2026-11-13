@@ -99,7 +99,7 @@ public class Database implements AutoCloseable {
         writable().execSQL(sql, bindArgs);
     }
 
-    /** Auto.js compatible alias for {@link #executeSql(String)}.
+    /** AI.js Pro compatible alias for {@link #executeSql(String)}.
      *  Query statements (SELECT/PRAGMA/EXPLAIN/WITH) are routed to select(). */
     public Object exec(String sql) {
         String trimmed = sql == null ? "" : sql.trim().toLowerCase();

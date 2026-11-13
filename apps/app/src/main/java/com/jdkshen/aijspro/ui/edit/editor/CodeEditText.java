@@ -83,7 +83,7 @@ public class CodeEditText extends AppCompatEditText {
     private int[] mMatchingBrackets = {-1, -1};
     private int mUnmatchedBracket = -1;
 
-    // Code folding (Auto.js Pro style): foldable regions detected from bracket pairs,
+    // Code folding (AI.js Pro style): foldable regions detected from bracket pairs,
     // their collapsed state, and a dirty flag to rebuild after text changes.
     private final List<FoldRegion> mFoldRegions = new ArrayList<>();
     private final Set<Integer> mFoldedStarts = new HashSet<>();
@@ -639,7 +639,7 @@ public class CodeEditText extends AppCompatEditText {
         if (indentCols > 0) {
             mGuidePaint.setColor(mTheme.getLineNumberColor());
             mGuidePaint.setAlpha(64);
-            // Auto.js Pro (and VS Code) style: dotted indent guides.
+            // AI.js Pro (and VS Code) style: dotted indent guides.
             float density = getResources().getDisplayMetrics().density;
             mGuidePaint.setPathEffect(new android.graphics.DashPathEffect(
                     new float[]{1.5f * density, 2.5f * density}, 0));

@@ -5,7 +5,7 @@ import android.content.SharedPreferences;
 import android.preference.PreferenceManager;
 
 /**
- * 「Pro 扩展调试服务器」（VS Code 的 Auto.js Pro 扩展连的 9317 端口）开关的持久化。
+ * 「Pro 扩展调试服务器」（VS Code 的 AI.js Pro 扩展连的 9317 端口）开关的持久化。
  *
  * <p>以前这个开关只有内存状态：应用一重启（或进程被系统回收后再打开），服务就没了，
  * 用户必须重新进抽屉把开关再点一次。这里把用户的选择落到默认 SharedPreferences，

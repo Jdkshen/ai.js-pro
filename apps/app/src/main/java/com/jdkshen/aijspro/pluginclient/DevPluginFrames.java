@@ -11,7 +11,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.zip.GZIPInputStream;
 
 /**
- * Frame codec for the Auto.js Pro 9 "legacy" VSCode debug protocol (device side).
+ * Frame codec for the AI.js Pro 9 "legacy" VSCode debug protocol (device side).
  *
  * <p>Wire format, both directions:
  * <pre>[int32 BE payload length][int32 BE frame type][payload]</pre>

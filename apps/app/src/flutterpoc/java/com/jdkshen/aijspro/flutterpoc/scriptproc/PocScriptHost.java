@@ -37,7 +37,7 @@ import java.util.Map;
  * native 项目、UI 模式脚本都走 :script。Phase0 的 :native 路径保留不删，作为可回退的兜底。
  *
  * <p>为什么隔离：脚本把宿主进程跑崩（native 段错误、OOM 等）只死 :script 进程，主界面
- * （Flutter/原生页）以及 AutoJs 引擎本身不受影响；主进程通过 binder death 感知崩溃、清任务、
+ * （Flutter/原生页）以及 AI.js Pro 引擎本身不受影响；主进程通过 binder death 感知崩溃、清任务、
  * 提示一次，再重新绑定即可继续跑。
  *
  * <p>协议（与 {@code ScriptHostService} 逐字一致，服务在 AndroidManifest 里声明为

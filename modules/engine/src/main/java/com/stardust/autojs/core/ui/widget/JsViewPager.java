@@ -29,7 +29,7 @@ public class JsViewPager extends ViewPager implements ShouldCallOnFinishInflate 
     }
 
     /**
-     * Auto.js Pro 的 {@code ui.viewPager.initAdapterFromChildren()}：把子 View 当作各页。
+     * AI.js Pro 的 {@code ui.viewPager.initAdapterFromChildren()}：把子 View 当作各页。
      *
      * <p>动态 inflate 完已经调过 {@link #onFinishDynamicInflate()}（内部就是 {@link #setAdapter}），
      * 这里必须**幂等**：{@code ViewPager.setAdapter()} 里有 {@code removeNonDecorViews()}，

@@ -35,7 +35,7 @@ object PermissionCatalog {
     )
 
     /**
-     * 打开页面时的初始勾选：保持模板自带的权限集（= Auto.js Pro 产物的 17 条）不变。
+     * 打开页面时的初始勾选：保持模板自带的权限集（= AI.js Pro 产物的 17 条）不变。
      *
      * 历史的教训：曾在这里提供过“Pro 推荐（ 59 条）”一键预设，结果用户一点就产出 61 条
      * 权限的包（含短信/联系人/通话/相机），被 MIUI 安装器报 RiskWare。Pro 界面上确实勾了
@@ -46,7 +46,7 @@ object PermissionCatalog {
 
     /**
      * 打包产物在启动时自动申请的运行时权限（“启动时自动申请权限” 页的默认值）。
-     * 与 Auto.js Pro 一致，默认只申请存储权限；用户可自行增删。
+     * 与 AI.js Pro 一致，默认只申请存储权限；用户可自行增删。
      */
     val DEFAULT_REQUEST: List<String> = listOf(
         "android.permission.WRITE_EXTERNAL_STORAGE"

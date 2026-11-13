@@ -655,7 +655,7 @@ public class DynamicLayoutInflater {
     /**
      * dev-1016：按「构造器候选链」创建 View，命中即用，全部失败再回退系统 LayoutInflater。
      *
-     * <p>背景：Auto.js Pro 的原生 res/ 布局大量使用 M3 控件（MaterialButton / MaterialCardView /
+     * <p>背景：AI.js Pro 的原生 res/ 布局大量使用 M3 控件（MaterialButton / MaterialCardView /
      * ShapeableImageView / MaterialToolbar / TextInputLayout / MaterialSwitch…），这些类通常只有
      * {@code (Context, AttributeSet, int)} / {@code (Context, AttributeSet)} / {@code (Context)} 三种构造器，
      * <b>没有</b> 4 参 {@code (Context, AttributeSet, int, int)}。旧实现只要布局里带 {@code style=...}

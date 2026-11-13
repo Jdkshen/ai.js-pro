@@ -5,7 +5,7 @@ import com.jdkshen.aijspro.Pref;
 import java.util.Locale;
 
 /**
- * PDF §2.28 `$settings`：Auto.js 内部设置开关。
+ * PDF §2.28 `$settings`：AI.js Pro 内部设置开关。
  *
  * <p>由 App 侧通过 {@code runtime.putProperty("settings", ...)} 注册，引擎的 `init.js`
  * 再把它暴露成全局 `$settings`（本模块不依赖引擎，所以两边各自实现）。

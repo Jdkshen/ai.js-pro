@@ -265,7 +265,7 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
         return DevPluginService.getInstance().isConnected();
     }
 
-    /** 本机是否已开启给 VS Code「Auto.js Pro 扩展」用的 9317 调试服务器。 */
+    /** 本机是否已开启给 VS Code「AI.js Pro 扩展」用的 9317 调试服务器。 */
     public boolean isDevPluginServerRunning() {
         return DevPluginServer.getInstance().isRunning();
     }
@@ -302,7 +302,7 @@ public class DrawerFragment extends androidx.fragment.app.Fragment {
     }
 
     /**
-     * USB 自动发现要求本应用声明与真 Auto.js Pro 相同的 provider authority；
+     * USB 自动发现要求本应用声明与真 AI.js Pro 相同的 provider authority；
      * 去掉 provider 的构建（发布包）里这返回 false，UI 仍然提供 LAN 引导。
      */
     public boolean isDevPluginUsbDiscoveryAvailable() {

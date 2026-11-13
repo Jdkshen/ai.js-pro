@@ -86,7 +86,7 @@ public class ProjectConfig {
     private String mProjectType;
 
     /**
-     * Auto.js Pro 工程模式的 Android 资源声明：
+     * AI.js Pro 工程模式的 Android 资源声明：
      *
      * <pre>
      * "androidResources": { "resDir": "res", "manifest": "AndroidManifest.xml" }
@@ -99,7 +99,7 @@ public class ProjectConfig {
     private AndroidResources mAndroidResources;
 
     /**
-     * 工程声明的权限清单（Auto.js Pro 的工程字段）：
+     * 工程声明的权限清单（AI.js Pro 的工程字段）：
      *
      * <pre>
      * "permissionConfig": { "manifestPermissions": ["android.permission.INTERNET", ...] }
@@ -121,7 +121,7 @@ public class ProjectConfig {
     private PermissionConfig mPermissionConfig;
 
     /**
-     * 脚本保护等级（Auto.js / Auto.js Pro 工程格式里的 {@code encryptLevel}）。
+     * 脚本保护等级（AI.js Pro / AI.js Pro 工程格式里的 {@code encryptLevel}）。
      *
      * <p>缺省 {@link ScriptProtection#DEFAULT_LEVEL}（加密）：老工程没有这个字段时行为不变；
      * 显式写 0 才会产出明文脚本，写 2 则编译后再加密。
@@ -564,7 +564,7 @@ public class ProjectConfig {
     }
 
     /**
-     * 工程模式（Auto.js Pro 的「主题/资源」特性）的资源声明。
+     * 工程模式（AI.js Pro 的「主题/资源」特性）的资源声明。
      *
      * <p>字段名与 Pro 的 {@code project.json} 一致（{@code resDir} / {@code manifest}），
      * 目的是让工程配置能原样读写不丢字段；真正用到的是 {@code resDir}。

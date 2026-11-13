@@ -742,7 +742,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     // ---- 多指手势 / 文本输入 ----
 
     /**
-     * 单指手势路径（Auto.js 的 `gesture(duration, [x, y], ...)`）：
+     * 单指手势路径（AI.js Pro 的 `gesture(duration, [x, y], ...)`）：
      * 点坐标交给 Automator，它会按 ScreenMetrics 缩放（与 Rhino 一致）。
      */
     public boolean gesture(int start, int duration, String pointsJson, boolean async) throws JSONException {
@@ -755,7 +755,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     /**
-     * 多指手势（Auto.js 的 `gestures([start, duration, [x, y], ...], ...)`）：
+     * 多指手势（AI.js Pro 的 `gestures([start, duration, [x, y], ...], ...)`）：
      * Rhino 在 JS 层拼 StrokeDescription；白名单桥不给脚本 Java 类，改由宿主拼。
      */
     public boolean gestures(String strokesJson, boolean async) throws JSONException {
@@ -767,7 +767,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         return mRuntime.automator.gestures(strokes);
     }
 
-    /** Auto.js 的 input(text)：向当前聚焦的输入框追加文本（无障碍 ACTION_APPEND_TEXT）。 */
+    /** AI.js Pro 的 input(text)：向当前聚焦的输入框追加文本（无障碍 ACTION_APPEND_TEXT）。 */
     public boolean inputText(String text) {
         return mRuntime.automator.appendText(mRuntime.automator.editable(-1), text == null ? "" : text);
     }
@@ -4016,7 +4016,7 @@ final class QuickJsHostBridge implements AutoCloseable,
         private volatile int mRequestedWidth;
         private volatile int mRequestedHeight;
         private volatile int mContentVisibility = android.view.View.VISIBLE;
-        /** 是否能接收触摸（false = FLAG_NOT_TOUCHABLE，触摸穿透到下层，与 Auto.js 语义一致）。 */
+        /** 是否能接收触摸（false = FLAG_NOT_TOUCHABLE，触摸穿透到下层，与 AI.js Pro 语义一致）。 */
         private volatile boolean mTouchable;
         /** 是否可按住拖动窗口（setAdjustEnabled(true) 会打开）。 */
         private volatile boolean mDraggable;
@@ -4841,7 +4841,7 @@ final class QuickJsHostBridge implements AutoCloseable,
             OverlayRegistry.unregister(mRoot);
         }
 
-        // ---- view access (Auto.js-style window.<id> proxies) ----
+        // ---- view access (AI.js Pro-style window.<id> proxies) ----
 
         private View findViewById(String id) {
             try {
@@ -7053,7 +7053,7 @@ final class QuickJsHostBridge implements AutoCloseable,
     }
 
     // ------------------------------------------------------------------
-    // 控件选择器 / UiObject（Auto.js 4.x 兼容）
+    // 控件选择器 / UiObject（AI.js Pro 4.x 兼容）
     //
     // 复用 modules/automator 的同一套实现，find / waitFor / 控件动作的语义与 Rhino 完全一致。
     // 选择器、UiObject、UiObjectCollection 在 Java 侧各对应一个 long 句柄，JS 侧拿到的也只是

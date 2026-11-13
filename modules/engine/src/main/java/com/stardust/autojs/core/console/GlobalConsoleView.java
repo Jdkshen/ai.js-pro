@@ -10,7 +10,7 @@ import androidx.annotation.Nullable;
 import java.lang.ref.WeakReference;
 
 /**
- * {@code <globalconsole/>}：Auto.js 的全局控制台组件 —— 把**所有脚本共用**的那份日志
+ * {@code <globalconsole/>}：AI.js Pro 的全局控制台组件 —— 把**所有脚本共用**的那份日志
  * （{@code ScriptEngineService.getGlobalConsole()}）显示在脚本界面里。
  *
  * <p>与控制台实现的连接靠 {@link #setGlobalConsole}：{@code ScriptEngineService} 构造时把

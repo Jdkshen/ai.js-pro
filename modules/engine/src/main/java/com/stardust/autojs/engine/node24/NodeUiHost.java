@@ -1156,10 +1156,10 @@ public final class NodeUiHost {
     // ------------------------------------------------------------------
 
     /**
-     * inflate Auto.js 字符串布局（{@code Activity.layoutXml}）。
+     * inflate AI.js Pro 字符串布局（{@code Activity.layoutXml}）。
      *
      * <p>入口不加载 project.json/res/project-res.apk，因此工程资源引用（@drawable/@color…）
-     * 不可用；基础框架控件、material 控件与 Auto.js 简称（column/row/text/button/input…）可用。
+     * 不可用；基础框架控件、material 控件与 AI.js Pro 简称（column/row/text/button/input…）可用。
      * grid/list/canvas 使用不依赖 ScriptRuntime 的 NodeUi* 真实控件（RecyclerView/View），
      * item 数据由 Node 侧 setItemTemplate/setDataSource 填充。
      */
@@ -1258,7 +1258,7 @@ public final class NodeUiHost {
     }
 
     /**
-     * Auto.js 简称 → XmlConverter 认识的标签。grid/list/canvas 换成 Node 的轻量真实控件
+     * AI.js Pro 简称 → XmlConverter 认识的标签。grid/list/canvas 换成 Node 的轻量真实控件
      * （NodeUiGridView/NodeUiListView/NodeUiCanvasView），不再用 Text 占位。
      */
     static String normalizeInlineLayoutXml(String xml) {

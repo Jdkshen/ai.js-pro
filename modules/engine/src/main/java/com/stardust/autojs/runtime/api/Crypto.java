@@ -16,7 +16,7 @@ import org.mozilla.javascript.ScriptableObject;
 
 /**
  * Crypto helpers: MD5 / SHA-1 / SHA-256 / HMAC-SHA256 / Base64.
- * Aligns with the Auto.js Pro "消息处理(加密、摘要、编码)" sample category.
+ * Aligns with the AI.js Pro "消息处理(加密、摘要、编码)" sample category.
  */
 public class Crypto {
 
@@ -46,7 +46,7 @@ public class Crypto {
     }
 
     public String digest(String algorithm, String data) {
-        // Auto.js Pro 的写法是 digest(data, algorithm)，本引擎原来的是 digest(algorithm, data)：
+        // AI.js Pro 的写法是 digest(data, algorithm)，本引擎原来的是 digest(algorithm, data)：
         // 两个参数里只有一个是算法名，按这个特征自动识别顺序，两种写法都能用。
         if (!isAlgorithm(algorithm) && isAlgorithm(data)) {
             return digestInternal(data, algorithm);
@@ -55,7 +55,7 @@ public class Crypto {
     }
 
     /**
-     * Auto.js Pro 的 `digest(data, algorithm, {output: 'base64'|'hex'})`。
+     * AI.js Pro 的 `digest(data, algorithm, {output: 'base64'|'hex'})`。
      */
     public String digest(String data, String algorithm, Scriptable options) {
         String output = getOption(options, "output");
@@ -134,7 +134,7 @@ public class Crypto {
     }
 
     // ------------------------------------------------------------------
-    // Auto.js Pro 9.3.11 的 `Crypto.toHex/fromHex`（原实现见 core/cypto/Crypto.java）：
+    // AI.js Pro 9.3.11 的 `Crypto.toHex/fromHex`（原实现见 core/cypto/Crypto.java）：
     //   fromHex(value): 要求偶数长度（否则 IllegalArgumentException "input array length must even."），
     //                   非法字符抛 "char: x"
     //   toHex(value):   输出小写十六进制
@@ -191,7 +191,7 @@ public class Crypto {
     }
 
     // ------------------------------------------------------------------
-    // Auto.js Pro 风格：$crypto.encrypt / $crypto.decrypt / $crypto.generateKeyPair
+    // AI.js Pro 风格：$crypto.encrypt / $crypto.decrypt / $crypto.generateKeyPair
     //
     // 契约取自 335 页第一代 API 文档 2.8（第 73~80 页）：
     //   encrypt(data, key, algorithm[, options]) -> any

@@ -11,7 +11,7 @@ import java.io.IOException;
 
 /**
  * {@code :script} 进程的暂存策略：<b>项目脚本</b>执行前复制到应用私有目录，<b>普通单文件脚本</b>
- * 直接在原路径执行（保持 Auto.js 的 cwd=脚本父目录语义）。
+ * 直接在原路径执行（保持 AI.js Pro 的 cwd=脚本父目录语义）。
  *
  * <p>为什么项目要暂存：从 {@code /sdcard/...} 直接执行项目会有两类问题 ——
  * <ul>
@@ -122,7 +122,7 @@ public final class ScriptHostStaging {
         File projectDir = resolveProjectDir(script, workDir);
         if (!isProjectExecution(script, workDir, projectDir)) {
             // 普通单文件脚本：不复制（避免把 /sdcard/脚本 这种超大目录整棵搬进私有目录），
-            // cwd 保持 Auto.js 语义 = 脚本父目录。
+            // cwd 保持 AI.js Pro 语义 = 脚本父目录。
             File parent = script.getParentFile();
             File workingDirectory = parent == null ? projectDir : parent.getCanonicalFile();
             Log.i(TAG, "单文件脚本不暂存，按原路径执行：" + script.getPath()

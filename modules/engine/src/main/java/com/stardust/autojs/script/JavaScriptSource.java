@@ -114,7 +114,7 @@ public abstract class JavaScriptSource extends ScriptSource {
     }
 
     /**
-     * Auto.js Pro 风格的首行字符串引擎指令：
+     * AI.js Pro 风格的首行字符串引擎指令：
      * {@code "nodejs";}、{@code "nodejs ui";}、{@code "quickjs";}。
      * 只认「整行就是一个字符串表达式」；{@code "ui";}/{@code "auto";} 返回 null 交给调用方继续扫。
      */

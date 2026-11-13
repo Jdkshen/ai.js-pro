@@ -34,7 +34,7 @@ import javax.xml.parsers.DocumentBuilderFactory;
 /**
  * 工程模式（{@code project.json} 的 {@code androidResources}）的资源表。
  *
- * <p>Auto.js Pro 会把工程的 {@code res/} 交给 aapt2 编译成真正的 Android 资源，脚本里因此能写
+ * <p>AI.js Pro 会把工程的 {@code res/} 交给 aapt2 编译成真正的 Android 资源，脚本里因此能写
  * {@code ui.R.xxx}，布局里能写 {@code @color/xxx}。本引擎**没有资源编译器**（打包链只是改写模板
  * APK 的二进制清单，见 {@code third-party/ApkBuilder}；设备上也没有可执行的 aapt2），所以这里走另一条路：
  *

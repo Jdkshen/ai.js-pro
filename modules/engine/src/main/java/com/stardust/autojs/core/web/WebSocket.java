@@ -12,7 +12,7 @@ import okhttp3.WebSocketListener;
 import okio.ByteString;
 
 /**
- * Auto.js Pro 的 {@code web.newWebSocket(url)} 返回对象（对齐 Pro 的 core/web/WebSocket）。
+ * AI.js Pro 的 {@code web.newWebSocket(url)} 返回对象（对齐 Pro 的 core/web/WebSocket）。
  *
  * <p>事件名与回调参数与 Pro 一致（参数末尾附加本对象）：
  * <pre>

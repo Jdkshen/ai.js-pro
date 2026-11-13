@@ -172,7 +172,7 @@ public class ScriptRuntime {
     @ScriptVariable
     public final UI ui;
 
-    /** Auto.js Pro exposes the UI module also as {@code $ui}; mirror that alias. */
+    /** AI.js Pro exposes the UI module also as {@code $ui}; mirror that alias. */
     @ScriptVariable
     public final UI $ui;
 

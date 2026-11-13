@@ -90,7 +90,7 @@ public class JsListView extends RecyclerView {
     }
 
     /**
-     * 兼容 Auto.js Pro 的两参写法：{@code setDataSource(data, false)} 表示「不自动监听数组变化，
+     * 兼容 AI.js Pro 的两参写法：{@code setDataSource(data, false)} 表示「不自动监听数组变化，
      * 改完数据自己调 {@code adapter.notifyItemXxx()}」，示例 {@code 复杂界面/高性能列表.js} 就是这种用法。
      *
      * <p>这个开关很要緊：开启时 `__ui__.js` 会用 object-observe polyfill 把数组包起来（`Array.observe`），

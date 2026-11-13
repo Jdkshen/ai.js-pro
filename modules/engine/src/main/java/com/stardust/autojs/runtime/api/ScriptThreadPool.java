@@ -7,7 +7,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Auto.js Pro 的 {@code $threads.pool(...)} 对应实现。
+ * AI.js Pro 的 {@code $threads.pool(...)} 对应实现。
  *
  * <p>任务在脚本线程（{@link com.stardust.autojs.core.looper.TimerThread}）上执行，因此任务里可以直接用
  * {@code log}、{@code sleep}、{@code threads.currentThread()} 等脚本 API。

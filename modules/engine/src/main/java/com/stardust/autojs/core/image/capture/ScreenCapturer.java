@@ -41,7 +41,7 @@ public class ScreenCapturer {
     public static final int ORIENTATION_LANDSCAPE = Configuration.ORIENTATION_LANDSCAPE ;
     public static final int ORIENTATION_PORTRAIT = Configuration.ORIENTATION_PORTRAIT ;
 
-    /** The requested capture configuration, matching Auto.js Pro's Options. */
+    /** The requested capture configuration, matching AI.js Pro's Options. */
     public static final class Options {
         public final int width;
         public final int height;

@@ -60,12 +60,12 @@ public final class RemoteUiObjectCollection implements Iterable<RemoteUiObject> 
         return mNodes.isEmpty();
     }
 
-    /** Auto.js 的 UiObjectCollection.empty() 同名兼容。 */
+    /** AI.js Pro 的 UiObjectCollection.empty() 同名兼容。 */
     public boolean empty() {
         return mNodes.isEmpty();
     }
 
-    /** Auto.js 的 UiObjectCollection.nonEmpty() 同名兼容。 */
+    /** AI.js Pro 的 UiObjectCollection.nonEmpty() 同名兼容。 */
     public boolean nonEmpty() {
         return !mNodes.isEmpty();
     }

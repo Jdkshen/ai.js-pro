@@ -550,7 +550,7 @@ public class Events extends EventEmitter implements OnKeyListener, TouchObserver
     }
 
     // ------------------------------------------------------------------
-    // clip_changed（对齐 Auto.js Pro 9.3.11 的 Events）：脚本订阅 clip_changed
+    // clip_changed（对齐 AI.js Pro 9.3.11 的 Events）：脚本订阅 clip_changed
     // 时自动挂上剪贴板监听，监听被删空/脚本结束时自动移除。
     // ------------------------------------------------------------------
 

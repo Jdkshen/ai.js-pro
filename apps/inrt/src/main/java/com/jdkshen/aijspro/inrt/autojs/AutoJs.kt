@@ -100,7 +100,7 @@ class AutoJs private constructor(application: Application) : com.stardust.autojs
         val runtime = super.createRuntime()
         runtime.putProperty("class.settings", SettingsActivity::class.java)
         runtime.putProperty("class.console", LogActivity::class.java)
-        // Auto.js Pro 的 $settings（应用设置开关，PDF §2.28）：引擎 init.js 负责暴露成全局
+        // AI.js Pro 的 $settings（应用设置开关，PDF §2.28）：引擎 init.js 负责暴露成全局
         runtime.putProperty("settings", SettingsModule())
         // task-160：打包运行时的 $work_manager（inrt 自己的 SharedPreferences + AlarmManager）
         runtime.putProperty("work_manager", InrtWorkManagerModule())

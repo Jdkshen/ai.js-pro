@@ -30,7 +30,7 @@ import java.nio.charset.Charset;
 import java.util.Map;
 
 /**
- * 脚本里的 {@code <webview>} 控件（Auto.js 经典 {@code ui.web} / Pro {@code $ui.web}）。
+ * 脚本里的 {@code <webview>} 控件（AI.js Pro 经典 {@code ui.web} / Pro {@code $ui.web}）。
  *
  * <p>在原有「只是个支持宽视口/缩放/JS 的 WebView」基础上补齐 Pro 的 {@code $ui.web} 兼容层：
  * <ul>

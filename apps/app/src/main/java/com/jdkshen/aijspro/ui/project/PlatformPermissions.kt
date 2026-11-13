@@ -6,7 +6,7 @@ import android.content.pm.PermissionInfo
 
 /**
  * 从系统读取权限的保护级别与官方（已本地化）描述，
- * 用于在打包页上与 Auto.js Pro 一样展示「危险 / 特权 / 签名」徽章和系统解释文案。
+ * 用于在打包页上与 AI.js Pro 一样展示「危险 / 特权 / 签名」徽章和系统解释文案。
  * 第三方或系统未安装的权限拿不到信息时返回 null，界面回退到目录里的自写说明。
  */
 internal class PermissionDetails(context: Context) {
@@ -43,7 +43,7 @@ internal class PermissionDetails(context: Context) {
  * Packaged-app permission catalogue supplied by the Android platform.
  *
  * Generated from `platform/frameworks/base/core/res/AndroidManifest.xml` and kept here so
- * the packaging page can offer the same breadth as Auto.js Pro without hand-maintaining
+ * the packaging page can offer the same breadth as AI.js Pro without hand-maintaining
  * hundreds of entries:
  *  - [DANGEROUS]: `android:protectionLevel="dangerous"` → user must grant at runtime.
  *  - [NORMAL]: `android:protectionLevel="normal"` → granted at install time.

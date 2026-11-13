@@ -136,7 +136,7 @@ public class MainActivity extends BaseActivity implements OnActivityResultDelega
         setUpViews();
         // task-177：Miuix 顶部导航/FAB 宿主已从构建排除，主界面保留原生 Toolbar + FAB 作为
         // 历史兜底（Flutter 才是唯一入口，正常不会被走到）。
-        // Match the familiar Auto.js Pro startup flow: scripts are the primary
+        // Match the familiar AI.js Pro startup flow: scripts are the primary
         // workspace. The service dashboard remains available from the drawer.
         showPage(0);
     }

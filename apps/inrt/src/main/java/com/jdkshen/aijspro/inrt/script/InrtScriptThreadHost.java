@@ -36,7 +36,7 @@ import dalvik.system.DexClassLoader;
  * inrt :script 进程的「主线程 Looper 引擎宿主」（task-113 B）。
  *
  * <p>目标：让脚本引擎、工程 dex/so 解压与 native 初始化、脚本执行全部落在 :script 进程的
- * 主线程 Looper 上，和 Auto.js Pro 打包运行时的模型一致（Pro 真机证据：ImGuiBridge 的
+ * 主线程 Looper 上，和 AI.js Pro 打包运行时的模型一致（Pro 真机证据：ImGuiBridge 的
  * EGL pid==tid==main，nativeInit/控件调用/脚本都在 :script 进程主线程）。这样第三方
  * libImGuiBridge.so 的 JNI_OnLoad / ImGui context 创建线程与后续 nativeNewFrame/nativeButton
  * 调用线程一致，GImGui 上下文不会跨线程。
@@ -438,7 +438,7 @@ public final class InrtScriptThreadHost {
         } catch (Throwable error) {
             Log.e(TAG, "C-INRT: script task failed mode=" + mode, error);
             // task-156 P0.5：这条失败原来只进 logcat（用户 LogActivity 列表全空）。三通道投递：
-            // ① logcat（上面这行）；② 既有「可见启动提示」通道（AutoJs console -> LogActivity）；③ 主线程 Toast。
+            // ① logcat（上面这行）；② 既有「可见启动提示」通道（AI.js Pro console -> LogActivity）；③ 主线程 Toast。
             // 注意：logcat 会把 TAG 渲染成 `C-INRT  :`（冒号前有空格），grep 要搜 `script task failed` 这类正文，别搜 `C-INRT:`。
             final String failureText = "脚本无法启动：密钥初始化失败（可能是签名证书/包名/加密盐与产物不一致）。"
                     + "请用与当前安装包一致的证书重新打包。原因：" + error;
@@ -488,8 +488,8 @@ public final class InrtScriptThreadHost {
     }
 
     /**
-     * 确保 inrt 的进程内单例 AutoJs 已创建（App.onCreate 正常会做；这里只兜底）。
-     * 用反射访问，避免 host 对 inrt AutoJs 的编译期依赖（A 的类可能持续改动）。
+     * 确保 inrt 的进程内单例 AI.js Pro 已创建（App.onCreate 正常会做；这里只兜底）。
+     * 用反射访问，避免 host 对 inrt AI.js Pro 的编译期依赖（A 的类可能持续改动）。
      */
     private static void ensureInrtAutoJs(Context context) throws Exception {
         try {
@@ -498,7 +498,7 @@ public final class InrtScriptThreadHost {
                 return;
             }
         } catch (Throwable ignored) {
-            // getInstance 不存在/非静态时忽略，继续反射 inrt AutoJs
+            // getInstance 不存在/非静态时忽略，继续反射 inrt AI.js Pro
         }
         Class<?> autoJsClass;
         try {

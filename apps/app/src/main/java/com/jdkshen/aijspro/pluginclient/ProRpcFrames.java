@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Frame codec for the Auto.js Pro 9 "ws-rpc" debug protocol (device side).
+ * Frame codec for the AI.js Pro 9 "ws-rpc" debug protocol (device side).
  *
  * <p>这个协议是 Pro 9.3.11 的「电脑连接」通道（{@code okhttp3/internal/io} 假包里的
  * {@code RpcService.WebSocketJsonRpcConnection}）。和自研扩展的

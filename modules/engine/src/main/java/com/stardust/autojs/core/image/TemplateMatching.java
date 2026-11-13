@@ -75,7 +75,7 @@ public class TemplateMatching {
     }
 
     /**
-     * 与 Auto.js Pro 9.3.11 的 `TemplateMatching.Options.useTransparentMask` 同语义：
+     * 与 AI.js Pro 9.3.11 的 `TemplateMatching.Options.useTransparentMask` 同语义：
      * 模板带 alpha 通道时，全透明（alpha <= 127）的像素不参与匹配。
      * 开启掩膜时若传入默认算法（TM_CCOEFF_NORMED），与 Pro 一样切换为 OpenCV 支持掩膜的 TM_CCORR_NORMED。
      */

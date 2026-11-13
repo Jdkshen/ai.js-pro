@@ -33,7 +33,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Temporary engineering harness: runs a batch of the complete Auto.js Pro bundled-sample set
+ * Temporary engineering harness: runs a batch of the complete AI.js Pro bundled-sample set
  * imported into assets/sample (Rhino 引擎 / Node 引擎) and records per-sample results as JSON for offline triage.
  *
  * <p>Not part of the product surface: launched explicitly via
@@ -117,7 +117,7 @@ public class ProSampleSweepActivity extends Activity {
         "English/Application/Automatically rename all apk files.js",
         "中文/应用/自动重命名所有apk文件.js",
 };
-    /** React/Vue/webpack support files that are not Auto.js samples. */
+    /** React/Vue/webpack support files that are not AI.js Pro samples. */
     private static final String[] NON_AUTOJS = {
         "English/Node.js/UI/React/src/App.js",
         "English/Node.js/UI/React/src/App.test.js",

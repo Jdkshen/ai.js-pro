@@ -10,7 +10,7 @@ import com.stardust.autojs.core.ui.inflater.util.Colors;
 /**
  * {@code androidx.appcompat.widget.Toolbar} 的属性。
  *
- * <p>以前只有 Auto.js 自己的 {@code <toolbar>}（{@code JsToolbar}）有 setter 表，appcompat 的 Toolbar
+ * <p>以前只有 AI.js Pro 自己的 {@code <toolbar>}（{@code JsToolbar}）有 setter 表，appcompat 的 Toolbar
  * 走的是空的 {@link ViewAttributes}，于是 {@code res/layout} 里原生布局写的
  * {@code app:title} / {@code app:subtitle} 全被忽略 —— Toolbar 出来是空白的。
  */

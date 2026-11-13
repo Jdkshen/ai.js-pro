@@ -114,7 +114,7 @@ public class NativeView extends NativeJavaObjectWithPrototype {
      * <p>
      * 现代 Chromium WebView 只在「文档开始」时注入 addJavascriptInterface 注册的对象，
      * 而历史上这个桥是在 onPageFinished 才注册的，于是页面里 `window.rhino` 一直是 undefined、
-     * 页面回调脚本的能力失效（Auto.js 经典写法就是「先 setWebViewClient 再 loadUrl」）。
+     * 页面回调脚本的能力失效（AI.js Pro 经典写法就是「先 setWebViewClient 再 loadUrl」）。
      */
     public static class SetWebViewClientFunction extends BaseFunction {
 

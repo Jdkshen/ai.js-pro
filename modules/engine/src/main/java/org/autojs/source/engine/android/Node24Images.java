@@ -3519,7 +3519,7 @@ public final class Node24Images implements AutoCloseable {
     static OffsetColor[] parseOffsetColors(JSONObject request) {
         JSONArray array = request.optJSONArray("offsetColors");
         if (array == null) {
-            // 兼容 JS 侧按 Auto.js 习惯传 colors 的写法；协议字段仍以 offsetColors 为准。
+            // 兼容 JS 侧按 AI.js Pro 习惯传 colors 的写法；协议字段仍以 offsetColors 为准。
             array = request.optJSONArray("colors");
         }
         if (array == null || array.length() == 0) {

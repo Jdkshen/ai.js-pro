@@ -14,7 +14,7 @@ import java.util.Map;
 
 /**
  * QuickJS-backed engine for opt-in scripts. Rhino remains the compatibility
- * engine and continues to own the complete legacy Auto.js API surface.
+ * engine and continues to own the complete legacy AI.js Pro API surface.
  */
 public class QuickJsJavaScriptEngine extends JavaScriptEngine {
 
@@ -133,7 +133,7 @@ public class QuickJsJavaScriptEngine extends JavaScriptEngine {
                         ((QuickJsBytecodeSource) scriptSource).getBytecode(),
                         scriptSource.toString());
             }
-            // QuickJS 没有 E4X：Auto.js 那套 ui.layout(<xml>) 写法在它这里是语法错
+            // QuickJS 没有 E4X：AI.js Pro 那套 ui.layout(<xml>) 写法在它这里是语法错
             // （unexpected token in expression: '<'）。交给引擎之前先把 XML 字面量包成
             // 模板字符串 —— 改写保留换行，所以行号、报错位置都不变。
             return QuickJsNativeBridge.evaluate(handle,

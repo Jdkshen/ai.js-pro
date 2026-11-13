@@ -19,7 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
-/** Loads installed Auto.js SDK APKs. Java values use the existing HostBridge codec. */
+/** Loads installed AI.js Pro SDK APKs. Java values use the existing HostBridge codec. */
 public final class Node24PluginLoader {
     public static final String KEY_REGISTRY = "org.autojs.plugin.sdk.registry";
     private static final String TAG = "Node24PluginLoader";

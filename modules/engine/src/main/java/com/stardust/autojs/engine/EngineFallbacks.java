@@ -12,7 +12,7 @@ import org.mozilla.javascript.Context;
  *   <li>Rhino 1.7.14.1 已原生支持模板字符串（反引号）；这条兜底仍保留：含反引号的脚本
  *       若在 Rhino 下编译不过（通常意味着另有它不支持的语法，如 class / 展开 / for-of），
  *       交给 QuickJS 试跑。</li>
- *   <li>QuickJS 没有 E4X：XML 字面量（{@code ui.layout(<frame/>)} 这种 Auto.js 经典写法）
+ *   <li>QuickJS 没有 E4X：XML 字面量（{@code ui.layout(<frame/>)} 这种 AI.js Pro 经典写法）
  *       在它那里是语法错误（{@code unexpected token in expression: '<'}），Rhino 支持。</li>
  * </ol>
  *

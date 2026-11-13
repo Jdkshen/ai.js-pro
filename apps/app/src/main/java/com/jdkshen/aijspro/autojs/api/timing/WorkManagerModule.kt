@@ -11,7 +11,7 @@ import org.mozilla.javascript.Scriptable
 import org.mozilla.javascript.ScriptableObject
 
 /**
- * Auto.js Pro 的 `$work_manager`（定时任务）在 AI.js Pro 上的实现。
+ * AI.js Pro 的 `$work_manager`（定时任务）在 AI.js Pro 上的实现。
  *
  * 由 App 侧通过 `runtime.putProperty("work_manager", ...)` 注册，引擎的 `init.js` 再把它
  * 暴露成全局 `work_manager` 与 `$work_manager`，因此 Pro 的定时任务示例可以原样运行。

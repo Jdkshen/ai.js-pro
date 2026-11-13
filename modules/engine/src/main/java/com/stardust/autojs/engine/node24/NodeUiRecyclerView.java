@@ -238,7 +238,7 @@ public abstract class NodeUiRecyclerView extends RecyclerView {
     }
 
     /**
-     * Auto.js Pro {@code initAdapterFromChildren()} 的 list/grid 版本：把当前已经 inflate 出来的
+     * AI.js Pro {@code initAdapterFromChildren()} 的 list/grid 版本：把当前已经 inflate 出来的
      * 子 View 当作 adapter 的 item。
      *
      * <p>{@code <include>} 已经在 inflater 阶段展开成真实子 View 并挂到本控件上，所以每个 include

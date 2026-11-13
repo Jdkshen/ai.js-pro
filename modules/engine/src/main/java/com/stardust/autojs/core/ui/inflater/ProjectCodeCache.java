@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 工程 build 产物里的动态 dex（Auto.js Pro 的 {@code .codecache/*.dex}）。
+ * 工程 build 产物里的动态 dex（AI.js Pro 的 {@code .codecache/*.dex}）。
  *
  * <p>Pro 会把 Node UI / 原生界面工程里「JS 里声明、但要编译成 Java 类」的类（示例的
  * {@code MyAdapter} / {@code MyViewHolder}）预编译成 dex，放到工程目录的 {@code .codecache/} 下，

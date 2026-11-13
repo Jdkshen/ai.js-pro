@@ -68,7 +68,7 @@ import io.reactivex.schedulers.Schedulers;
  */
 public final class DevPluginServer {
 
-    /** Auto.js Pro 9 legacy debug server port (also what the extension's USB forward targets). */
+    /** AI.js Pro 9 legacy debug server port (also what the extension's USB forward targets). */
     public static final int PORT = 9317;
 
     /**

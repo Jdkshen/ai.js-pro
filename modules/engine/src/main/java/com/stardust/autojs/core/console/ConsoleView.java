@@ -169,7 +169,7 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
     }
 
     /**
-     * Auto.js 的 {@code ui.console.setConsole(runtime.console)}。
+     * AI.js Pro 的 {@code ui.console.setConsole(runtime.console)}。
      *
      * <p>形参写成接口 {@link Console} 而不是实现类：Rhino / QuickJS 拿到的 Java 对象
      * （{@code runtime.console}）能按声明类型正确转换过来。注意脚本里那个全局 {@code console}
@@ -182,18 +182,18 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
         }
     }
 
-    /** Auto.js 的 {@code ui.console.input}：底部那个输入框。 */
+    /** AI.js Pro 的 {@code ui.console.input}：底部那个输入框。 */
     public EditText getInput() {
         return mEditText;
     }
 
-    /** Auto.js 的 {@code setInputEnabled(false)}：只用来看日志时把输入区收起来。 */
+    /** AI.js Pro 的 {@code setInputEnabled(false)}：只用来看日志时把输入区收起来。 */
     public void setInputEnabled(final boolean enabled) {
         post(() -> mInputContainer.setVisibility(enabled ? VISIBLE : GONE));
     }
 
     /**
-     * Auto.js 的 {@code ui.console.clear()} / {@code ui.globalconsole.clear()}：
+     * AI.js Pro 的 {@code ui.console.clear()} / {@code ui.globalconsole.clear()}：
      * 清掉这块控制台绑定的那份日志（列表随之清空）。
      *
      * <p>两块控制台绑的不是同一份日志：{@code <console>} 绑脚本自己的 {@code runtime.console}，
@@ -205,7 +205,7 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
         }
     }
 
-    /** Auto.js 的 {@code setColor("V", "#bdbdbd")}：按日志级别改颜色。 */
+    /** AI.js Pro 的 {@code setColor("V", "#bdbdbd")}：按日志级别改颜色。 */
     public void setColor(String level, String color) {
         Integer logLevel = logLevelOf(level);
         if (logLevel == null || android.text.TextUtils.isEmpty(color)) {
@@ -225,7 +225,7 @@ public class ConsoleView extends FrameLayout implements ConsoleImpl.LogListener 
         });
     }
 
-    /** Auto.js 的 {@code setTextSize(12)}（单位 sp）；≤0 表示不管。 */
+    /** AI.js Pro 的 {@code setTextSize(12)}（单位 sp）；≤0 表示不管。 */
     public void setTextSize(float sizeSp) {
         mTextSizeSp = sizeSp > 0 ? sizeSp : 0f;
         post(() -> {

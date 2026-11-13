@@ -9,7 +9,7 @@ import java.util.List;
  *
  * 只做归一化与校验，不碰 Android：
  *  - action/category/scheme 去首尾空白、丢空串、按原顺序去重；
- *  - 至少要有一个 action（Pro/老版 Auto.js 的 registerBroadcastReceiver 也是按 action 收）。
+ *  - 至少要有一个 action（Pro/老版 AI.js Pro 的 registerBroadcastReceiver 也是按 action 收）。
  *  - Android 13（API 33）起 Context.registerReceiver 必须显式给 RECEIVER_EXPORTED / RECEIVER_NOT_EXPORTED，
  *    否则 SecurityException；这里把「按 API 级别算 flags」做成纯函数，便于单测与复用。
  */

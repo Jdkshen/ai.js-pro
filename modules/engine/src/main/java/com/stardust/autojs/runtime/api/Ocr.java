@@ -90,7 +90,7 @@ public class Ocr implements AutoCloseable, OcrSession {
      * @param region       识别区域，0/2/4 个元素（[left, top, width, height] 或 [left, top]）
      */
     /**
-     * 兼容「插件式」调用：Auto.js Pro 的第三方/官方 OCR 插件文档里传的是 android.graphics.Bitmap，
+     * 兼容「插件式」调用：AI.js Pro 的第三方/官方 OCR 插件文档里传的是 android.graphics.Bitmap，
      * 而本类内部要 ImageWrapper。真实脚本（华仔部落_佣兵战纪）就是 ocr.detect(image.getBitmap(), 1)，
      * 旧签名会让 Rhino 找不到方法直接失败，所以这里收 Object 再做一次显式转换，并给出可读错误。
      */

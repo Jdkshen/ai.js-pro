@@ -33,8 +33,8 @@ public class AppUtils {
     private Context mContext;
     private volatile WeakReference<Activity> mCurrentActivity = new WeakReference<>(null);
     /**
-     * Auto.js Pro 的 top activity：与 currentActivity 不同——它在重叠 Activity 切换时不被
-     * pause 清空，只在被记录的 Activity 被销毁时置空（见 AutoJs 的生命周期回调）。
+     * AI.js Pro 的 top activity：与 currentActivity 不同——它在重叠 Activity 切换时不被
+     * pause 清空，只在被记录的 Activity 被销毁时置空（见 AI.js Pro 的生命周期回调）。
      */
     private volatile WeakReference<Activity> mTopActivity = new WeakReference<>(null);
     private final String mFileProviderAuthority;
@@ -116,7 +116,7 @@ public class AppUtils {
     }
 
     /**
-     * Auto.js Pro 的 `app.getApkInfo(path)`：解析 APK 文件返回 PackageInfo。
+     * AI.js Pro 的 `app.getApkInfo(path)`：解析 APK 文件返回 PackageInfo。
      * 已补上 sourceDir/publicSourceDir，因此 `apkInfo.applicationInfo.label`、
      * `apkInfo.applicationInfo.loadIcon(pm)` 都能直接拿到。
      *
@@ -136,7 +136,7 @@ public class AppUtils {
     }
 
     /**
-     * Android 的 ApplicationInfo 只有 `loadLabel(pm)`，而 Auto.js Pro 的脚本习惯直接读
+     * Android 的 ApplicationInfo 只有 `loadLabel(pm)`，而 AI.js Pro 的脚本习惯直接读
      * `applicationInfo.label`；这里给 applicationInfo 挂上一个带 `getLabel()` 的子类。
      */
     public static class LabeledApplicationInfo extends ApplicationInfo {
@@ -192,7 +192,7 @@ public class AppUtils {
     }
 
     /**
-     * Auto.js Pro 的同名方法：返回当前 top Activity（无则为 null）。
+     * AI.js Pro 的同名方法：返回当前 top Activity（无则为 null）。
      * 语义与 Pro 一致：created/resumed/started 时更新，仅在其被销毁时清空。
      */
     @ScriptInterface
@@ -201,14 +201,14 @@ public class AppUtils {
     }
 
     /**
-     * Auto.js Pro 的同名方法（内部注入用，脚本可调）。
+     * AI.js Pro 的同名方法（内部注入用，脚本可调）。
      */
     public void setTopActivity(Activity activity) {
         mTopActivity = new WeakReference<>(activity);
     }
 
     /**
-     * Auto.js Pro 的 app.getPathFromUri(uri)：把 content:// 等 Uri 解析为文件路径（失败为 null）。
+     * AI.js Pro 的 app.getPathFromUri(uri)：把 content:// 等 Uri 解析为文件路径（失败为 null）。
      */
     @Nullable
     @ScriptInterface

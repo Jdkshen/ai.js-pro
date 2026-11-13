@@ -30,7 +30,7 @@ import java.util.Map;
  * 主进程侧的「:native 隔离进程」客户端：把自带 .so/.dex 的脚本项目交给独立进程执行。
  *
  * <p>Phase0 的安全目标：需要加载原生库的脚本放进 {@code :native} 进程跑，脚本把原生库跑崩时
- * 只死脚本进程，主界面（以及 AutoJs 引擎本身）不受影响；主进程通过 binder death 感知到崩溃，
+ * 只死脚本进程，主界面（以及 AI.js Pro 引擎本身）不受影响；主进程通过 binder death 感知到崩溃，
  * 清掉任务列表、提示一次，然后重新绑定，下一次运行照常可用。
  *
  * <p>协议（与 {@code NativeScriptService} 逐字一致，服务在 AndroidManifest 里声明为

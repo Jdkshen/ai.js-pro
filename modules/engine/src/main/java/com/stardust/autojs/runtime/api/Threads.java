@@ -80,7 +80,7 @@ public class Threads {
     }
 
     /**
-     * Auto.js Pro 的 {@code $threads.pool({corePoolSize, maxPoolSize})}。
+     * AI.js Pro 的 {@code $threads.pool({corePoolSize, maxPoolSize})}。
      *
      * @param corePoolSize 核心线程数
      * @param maxPoolSize  最大线程数（小于核心线程数时按核心线程数处理）

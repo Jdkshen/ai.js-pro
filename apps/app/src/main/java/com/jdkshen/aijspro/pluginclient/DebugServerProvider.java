@@ -9,7 +9,7 @@ import android.net.Uri;
 import androidx.annotation.Nullable;
 
 /**
- * Lets the Auto.js Pro VS Code extension discover the debug server over USB.
+ * Lets the AI.js Pro VS Code extension discover the debug server over USB.
  *
  * <p>The extension runs
  * {@code adb shell content query --uri content://org.autojs.autojspro.debug.provider/debug-server}

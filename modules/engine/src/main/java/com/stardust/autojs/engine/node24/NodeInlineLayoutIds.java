@@ -3,7 +3,7 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-/** Both Auto.js id="name" and Android id="@+id/name" declare a binding. */
+/** Both AI.js Pro id="name" and Android id="@+id/name" declare a binding. */
 public final class NodeInlineLayoutIds {
  private static final Pattern ID = Pattern.compile("(?:\\s|^)(?:android:)?id\\s*=\\s*[\"'](?:@\\+?id/)?([A-Za-z_][A-Za-z0-9_]*)[\"']");
  private NodeInlineLayoutIds() {}

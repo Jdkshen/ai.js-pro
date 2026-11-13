@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class WebJsBridge {
 
     private static final String TAG = "WebJsBridge";
-    /** 与页面 SDK 约定的内部协议事件名（与 Auto.js Pro 的 jsBridge 一致）。 */
+    /** 与页面 SDK 约定的内部协议事件名（与 AI.js Pro 的 jsBridge 一致）。 */
     static final String EVENT_REQUEST = "$autojs:internal:request";
     static final String EVENT_RESPONSE_PREFIX = "$autojs:internal:response:";
     private static final long HANDLER_TIMEOUT_MS = 5000L;

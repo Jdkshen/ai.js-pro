@@ -19,7 +19,7 @@ import java.io.IOException;
 public class Files {
 
     /**
-     * Auto.js Pro 的 `files.stat(path)` 返回对象（只读快照）。
+     * AI.js Pro 的 `files.stat(path)` 返回对象（只读快照）。
      * Rhino 下 getter 会映射为 `stat.size` / `stat.path` / `stat.lastModified` 属性。
      */
     public static class FileStat {
@@ -89,7 +89,7 @@ public class Files {
     }
 
     /**
-     * Auto.js Pro 的 `files.observe(path)`：监听目录/文件变化。
+     * AI.js Pro 的 `files.observe(path)`：监听目录/文件变化。
      *
      * @return 支持 `on(event, callback)` / `stopWatching()` / `startWatching()` 的监听对象
      */
@@ -123,7 +123,7 @@ public class Files {
     }
 
     /**
-     * Auto.js Pro 的 `files.dirname(path)`：返回父目录（与 Pro 一致：不做 path() 归一化，
+     * AI.js Pro 的 `files.dirname(path)`：返回父目录（与 Pro 一致：不做 path() 归一化，
      * 相对路径时行为等价于 `new File(path).getParent()`）。
      */
     public String dirname(String path) {
@@ -131,7 +131,7 @@ public class Files {
     }
 
     /**
-     * Auto.js Pro 的 `files.stat(path)`：路径经 `path()` 归一化后取 canonicalPath（失败为 null）。
+     * AI.js Pro 的 `files.stat(path)`：路径经 `path()` 归一化后取 canonicalPath（失败为 null）。
      */
     public FileStat stat(String path) {
         String canonicalPath;

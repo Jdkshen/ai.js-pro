@@ -25,7 +25,7 @@ import java.util.Locale;
  */
 public final class PluginRegistry {
 
-    /** Auto.js 插件 SDK 约定的注册键名；官方 Auto.js Pro 与本仓库都用它找注册类。 */
+    /** AI.js Pro 插件 SDK 约定的注册键名；官方 AI.js Pro 与本仓库都用它找注册类。 */
     public static final String REGISTRY_KEY = "org.autojs.plugin.sdk.registry";
 
     /** 插件页列表里那一行「安装本地插件 APK」的包名占位。 */
