@@ -314,13 +314,17 @@ internal object McpDeviceTools {
                 "argument" to "action"))
         }
         // P3-1 A 类归一（行为逐字不变：仍是 count.coerceIn(1, 10000)）：非空入参 ⇒ default 参数不生效，仅借用统一入口。
-        val requested = McpArgClamp.clampInt(count, count, 1, 10000).value
-        val timeout = McpArgClamp.clampInt(timeoutSeconds, timeoutSeconds, 1, 600).value
+        // P3-1 余项：保留完整 ClampResult，把「发生过夹紧」带进信封顶层（消费方看不到日志，必须进结构化返回）。
+        val countClamp = McpArgClamp.clampInt(count, count, 1, 10000)
+        val timeoutClamp = McpArgClamp.clampInt(timeoutSeconds, timeoutSeconds, 1, 600)
+        val intervalClamp = McpArgClamp.clampInt(intervalMs, intervalMs, 0, 2000)
+        val requested = countClamp.value
+        val timeout = timeoutClamp.value
         val outcome = ToolkitGestureProbe.stress(
             count = requested,
             timeoutSeconds = timeout,
             withCallback = withCallback,
-            intervalMs = McpArgClamp.clampInt(intervalMs, intervalMs, 0, 2000).value,
+            intervalMs = intervalClamp.value,
             probe = { ToolkitGestureProbe.snapshot(service) },
             dispatch = { withCb -> dispatchTinyGesture(service, withCb) },
         )
@@ -339,7 +343,17 @@ internal object McpDeviceTools {
             "dispatched" to outcome.dispatched,
             "failed" to outcome.failed,
             "withCallback" to outcome.withCallback,
-            "intervalMs" to McpArgClamp.clampInt(intervalMs, intervalMs, 0, 2000).value,
+            "intervalMs" to intervalClamp.value,
+            "clamped" to (countClamp.clamped || timeoutClamp.clamped || intervalClamp.clamped),
+            "clamps" to JsonArray().apply {
+                listOf(
+                    "count" to countClamp,
+                    "timeoutSeconds" to timeoutClamp,
+                    "intervalMs" to intervalClamp,
+                ).filter { it.second.clamped }.forEach { (name, r) ->
+                    add(ToolkitIo.json("argument" to name, "requested" to r.requested, "effective" to r.effective))
+                }
+            },
             "timeoutSeconds" to timeout,
             "stoppedBy" to outcome.stoppedBy,
             "elapsedMs" to outcome.elapsedMs,

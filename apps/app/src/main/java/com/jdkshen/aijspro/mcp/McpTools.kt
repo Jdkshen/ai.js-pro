@@ -905,11 +905,19 @@ internal class McpTools(private val context: Context, private val event: (String
         require(engine.isNotEmpty()) { "engine 不能为空" }
         requireRhinoCompat(engine)
         val parameters = args.get("args")?.also { require(it.isJsonArray) { "args 必须是数组" } }?.asJsonArray ?: JsonArray()
+        // P3-1 A 类归一：边界照抄原处（缺省 30、1..600）。
+        val timeoutClamp = McpArgClamp.clampInt(args.intOr("timeoutSeconds", 30), 30, 1, 600)
         val result = com.google.gson.JsonParser().parse(engineProbe(engine,
             McpEngineApi.call(args.stringOr("module", ""), args.string("name"), parameters),
-            args.intOr("timeoutSeconds", 30).coerceIn(1, 600))).asJsonObject
+            timeoutClamp.value)).asJsonObject
         result.addProperty("engine", engine)
-        return toolJson(result).apply { if (!result.get("ok").asBoolean) addProperty("isError", true) }
+        return toolJson(result).apply {
+            if (!result.get("ok").asBoolean) addProperty("isError", true)
+            addProperty("clamped", timeoutClamp.clamped)
+            if (timeoutClamp.clamped) add("clamps", JsonArray().apply {
+                add(ToolkitIo.json("argument" to "timeoutSeconds", "requested" to timeoutClamp.requested, "effective" to timeoutClamp.effective))
+            })
+        }
     }
 
     /** 对比两引擎的全局 API：一次调用就能看出迁移缺口（lite 版无 Rhino 时只返回 QuickJS）。 */
@@ -998,12 +1006,20 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun isInterrupt(error: Throwable): Boolean = McpRunOutcome.isInterrupt(error)
 
     private fun waitFor(record: RunRecord, timeoutSeconds: Int): JsonObject {
-        val timeout = timeoutSeconds.coerceIn(1, 600)
+        // P3-1 A 类归一：边界照抄原处（1..600），行为逐字不变；夹紧事实带进信封顶层。
+        val timeoutClamp = McpArgClamp.clampInt(timeoutSeconds, timeoutSeconds, 1, 600)
+        val timeout = timeoutClamp.value
         val deadline = System.currentTimeMillis() + timeout * 1000L
         while (record.status in ACTIVE_STATES && System.currentTimeMillis() < deadline) {
             try { Thread.sleep(200) } catch (_: InterruptedException) { break }
         }
-        return runJson(record, true).apply { addProperty("timedOut", record.status in ACTIVE_STATES) }
+        return runJson(record, true).apply {
+            addProperty("timedOut", record.status in ACTIVE_STATES)
+            addProperty("clamped", timeoutClamp.clamped)
+            if (timeoutClamp.clamped) add("clamps", JsonArray().apply {
+                add(ToolkitIo.json("argument" to "timeoutSeconds", "requested" to timeoutClamp.requested, "effective" to timeoutClamp.effective))
+            })
+        }
     }
 
     private fun runJson(run: RunRecord, includeLogs: Boolean = false) = JsonObject().apply {
@@ -1037,7 +1053,9 @@ internal class McpTools(private val context: Context, private val event: (String
     private fun readApkLogs(afterId: Int, limit: Int): JsonObject {
         val console = console() ?: throw ToolError("全局日志不可用")
         val all = console.allLogs
-        val snapshot = synchronized(all) { all.filter { it.id > afterId }.take(limit.coerceIn(1, 500)) }
+        // P3-1 A 类归一：边界照抄原处（1..500）。
+        val limitClamp = McpArgClamp.clampInt(limit, limit, 1, 500)
+        val snapshot = synchronized(all) { all.filter { it.id > afterId }.take(limitClamp.value) }
         return JsonObject().apply {
             add("items", JsonArray().apply { snapshot.forEach { entry -> add(JsonObject().apply {
                 addProperty("id", entry.id); addProperty("level", logLevel(entry.level))
@@ -1045,6 +1063,10 @@ internal class McpTools(private val context: Context, private val event: (String
             }) } })
             addProperty("nextAfterId", snapshot.lastOrNull()?.id ?: afterId)
             addProperty("hasMore", synchronized(all) { all.lastOrNull()?.id?.let { it > (snapshot.lastOrNull()?.id ?: afterId) } == true })
+            addProperty("clamped", limitClamp.clamped)
+            if (limitClamp.clamped) add("clamps", JsonArray().apply {
+                add(ToolkitIo.json("argument" to "limit", "requested" to limitClamp.requested, "effective" to limitClamp.effective))
+            })
         }
     }
 
