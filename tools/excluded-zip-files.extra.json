@@ -1,0 +1,16 @@
+{
+    "note": "模板重建时**不可从 :inrt APK 推导**的排除条目（v7a 组 + arm64 的 mlkit/ppocr）。build-slim-template.ps1 每次重建都会用 inrt APK 的 lib/* 重算 general/opencv/v8，因此任何只存在于宿主/其它 ABI 的条目必须写在这里，否则会被覆盖丢失（task-135）。",
+    "general": [
+        "lib/arm64-v8a/libmlkit_google_ocr_pipeline.so",
+        "lib/arm64-v8a/libppocr.so",
+        "lib/armeabi-v7a/libaijscrypto.so",
+        "lib/armeabi-v7a/libc++_shared.so",
+        "lib/armeabi-v7a/libmlkit_google_ocr_pipeline.so",
+        "lib/armeabi-v7a/libquickjs_jni.so",
+        "lib/armeabi-v7a/libquickjs.so"
+    ],
+    "opencv": [
+        "lib/armeabi-v7a/libopencv_java5.so"
+    ],
+    "v8": []
+}

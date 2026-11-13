@@ -147,14 +147,16 @@ try {
         Move-Item -Force $tmpTemplate $templateApk
         $shaAfter = (Get-FileHash $templateApk -Algorithm SHA256).Hash
 
-        $json = [ordered]@{
-            general = @($general.ToArray())
-            opencv = @($opencv.ToArray())
-            v8 = @($v8.ToArray())
+        # task-135 (root cause): the buckets above are recomputed from the :inrt release APK lib/* only
+        # (arm64 today), so every rebuild used to overwrite and lose the v7a group plus the arm64
+        # mlkit/ppocr entries -- the real reason TemplateLibCompletionTest stayed red for so long.
+        # Fix: union with a PERSISTENT extra list and assert those entries survive (throw if not).
+        $extraJson = Join-Path $repoRoot 'tools/excluded-zip-files.extra.json'
+        $libsCsv = ($libNames -join ',')
+        node (Join-Path $repoRoot 'tools/lib/excluded-zip-files.mjs') --libs $libsCsv --extra $extraJson --out $excludedJson
+        if ($LASTEXITCODE -ne 0) {
+            throw 'excluded-zip-files merge failed: extra entries may be lost after a rebuild (see tools/lib/excluded-zip-files.mjs)'
         }
-        $jsonText = ($json | ConvertTo-Json -Depth 3)
-        [System.IO.File]::WriteAllText($excludedJson, $jsonText,
-            (New-Object System.Text.UTF8Encoding($false)))
 
         # 产物自检（与 :app:verifySlimPackagingTemplate 的硬条件保持一致）。
         $checkZip = [System.IO.Compression.ZipFile]::OpenRead($templateApk)
