@@ -130,7 +130,10 @@ public class AgsLiquidLens extends View {
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
         handleTouch(ev);
-        return false;   // 不消费 ⇒ 事件继续派发给下层 tab
+        // 必须**消费**（返回 true）：Android 只有在 onTouchEvent 返回 true 时才会把后续
+        // 的 MOVE/UP 继续派给这个 View。返回 false 时只拿到 DOWN ⇒ 透镜卡在按下位置不跟手（真机实测）。
+        // 代价：栏上的 tab 点击会被本层吞掉（后续若要恢复点击，需要在 UP 时按位置转发给 host）。
+        return true;
     }
 
     private boolean onHostTouch(View v, MotionEvent ev) {
@@ -144,12 +147,10 @@ public class AgsLiquidLens extends View {
                 cx = ev.getX(); cy = ev.getY();
                 captureScreen();
                 invalidate();
-                scheduleAutoHide();
                 break;
             case MotionEvent.ACTION_MOVE:
                 cx = ev.getX(); cy = ev.getY();
                 invalidate();
-                scheduleAutoHide();
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
@@ -167,6 +168,19 @@ public class AgsLiquidLens extends View {
      * MOVE/UP 收不到 ⇒ 原来松开后透镜会一直停在按下位置。
      * 这里在 DOWN 时挂一个短定时器，到点无条件隐藏；每次 DOWN/MOVE 都重置。
      */
+    /**
+     * 抓屏线程：capture() 走无障碍通道 + 跨进程，阻塞 0.3~0.5s；
+     * 原来在 onTouchEvent 里**同步**调，直接把 UI 线程堵住（按住那一下必然卡 ✗）。
+     * 现在挪到单线程后台；抓完再 post 回 UI invalidate。
+     */
+    private final java.util.concurrent.ExecutorService captureExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "ags-lens-capture");
+                t.setDaemon(true);
+                return t;
+            });
+    private volatile boolean captureInFlight;
+
     private final Runnable hideRunnable = new Runnable() {
         @Override public void run() {
             cx = -1f; cy = -1f;
@@ -182,6 +196,14 @@ public class AgsLiquidLens extends View {
 
     /** 抓一张整屏（无障碍通道，Android 11+、无需授权）。失败不崩，只降级为不画透镜。 */
     private void captureScreen() {
+        if (failed || captureInFlight) return;   // 已经在抓就别重复投递（限频）
+        captureInFlight = true;
+        captureExecutor.execute(() -> {
+            try { captureScreenNow(); } finally { captureInFlight = false; }
+        });
+    }
+
+    private void captureScreenNow() {
         if (failed) return;
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) { failed = true; return; }
         try {
@@ -192,6 +214,7 @@ public class AgsLiquidLens extends View {
             if (screenBitmap != null && screenBitmap != shot) screenBitmap.recycle();
             screenBitmap = shot;
             screenW = shot.getWidth(); screenH = shot.getHeight();
+            post(this::invalidate);   // 回 UI 线程重绘（后台线程不能直接 invalidate）
             android.util.Log.i("AgsLiquidLens", "capture size " + screenW + "x" + screenH);
             if (!loggedOnce) {
                 loggedOnce = true;
