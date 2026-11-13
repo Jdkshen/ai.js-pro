@@ -18,13 +18,13 @@ tools/list 的每项都带 category/categoryTitle，description 也以 [分类] 
 | 设备与无障碍 | get_ui_layout、capture_screen、**dev_screen_diff**、ui_find/click/long_click/node_action/input/swipe/global/wait/scroll、app_list/info/launch/open_settings/open_url、apk_install/uninstall |
 | 终端与构建 | terminal_exec/read/write/stop/list、shell_rish、get_build_tools |
 | 悬浮窗 | list_overlays、close_overlays |
-| 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_autojs_skill |
+| 示例与帮助 | search_api_docs、read_api_doc、list_samples、read_sample、learn_aijspro_skill |
 | 文件与 APK 工具 | toolkit_status、file_*、zip_*、apk_*（工作区/会话/列表/读取/编辑/搜索/DEX/Smali/资源/ELF/打包/签名元数据；签名元数据不是密码学验签）、**vm_survey**、**chain_resume**、**crypto_** |
 | 逆向分析 | reverse_guide/capabilities/plan、**entry_**、Apktool 工程解包/回编译、native_*、yara_scan、native_emulate、frida_*；按需组件状态以 apk_component_status 为准 |
 
 ## 快速开始（AI 客户端必读）
 
-1. 先调用一次 learn_autojs_skill，再调用 get_status / list_scripts / list_engines 了解现场。
+1. 先调用一次 learn_aijspro_skill，再调用 get_status / list_scripts / list_engines 了解现场。
 2. 只读：list_scripts → read_script / search_scripts；不要猜文件是否存在。
 3. 运行：run_script 的 path/file/source 三选一；需要结果与错误日志必须 wait:true（timeoutSeconds 建议 30~120）。
 4. 改真实文件：workspace_open → workspace_read/write/delete → workspace_diff → workspace_request_apply（workspace_write 本身不落盘）。
@@ -129,7 +129,7 @@ INVALID_ARGUMENT 或缺参数时，人类可读的 message 仍会给「可用参
 | captureScreen | capture_screen | 可选 format=png/jpg、quality=1..100、dataUri、maxWidth、timeoutMillis；返回 MCP image 和尺寸信息 |
 | checkSyntax | check_syntax | code 必填；可选 engine=rhino/quickjs/nodejs、name；只编译，返回 valid、errors、executed=false |
 | runScript | run_script | path/file/source 三选一；可选 engine、wait、timeoutSeconds、name、workingDirectory、config |
-| learnAutoJsSkill | learn_autojs_skill | 返回本说明 |
+| learnAutoJsSkill | learn_aijspro_skill | 返回本说明 |
 | stopAllScripts | stop_all_scripts | 停止整个应用的脚本，包括非 MCP 启动的脚本 |
 | getMcpLog | get_mcp_log | 可选 maxChars（默认 20000，最大 200000）、executionId、channel=script/service/all |
 
@@ -970,7 +970,7 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 
 ## 给 AI 客户端的接入提示（可复制）
 
-> 你已连接 AI.js Pro MCP。首次先调用 learn_autojs_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。JSON 布尔/数字用原生类型；path 用相对操作目录；run_script 的 path/file/source 三选一；要结果必须 wait:true；修改真实文件必须走 workspace_open→write→diff→request_apply；失败先看 error 再调用 get_execution/wait_execution/get_mcp_log，禁止猜字段和猜文件路径。
+> 你已连接 AI.js Pro MCP。首次先调用 learn_aijspro_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。JSON 布尔/数字用原生类型；path 用相对操作目录；run_script 的 path/file/source 三选一；要结果必须 wait:true；修改真实文件必须走 workspace_open→write→diff→request_apply；失败先看 error 再调用 get_execution/wait_execution/get_mcp_log，禁止猜字段和猜文件路径。
 
 
 ## APK 深入分析与可选资源编译

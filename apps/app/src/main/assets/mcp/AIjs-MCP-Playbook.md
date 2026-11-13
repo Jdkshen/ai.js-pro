@@ -1,7 +1,7 @@
 # MCP 实战要点（操作手册补充）
 
 > 来源：2026-11-02 在 192.168.10.4（Android 16 / arm64 / 无 root / MIUI）的实战记录。文件/APK 工具说明于2026-11-03更新，参数与预算以当前设备返回为准。
-> 本文件随 APK 打包，`learn_autojs_skill` 会把它追加在完整说明后面；参数仍以 `tools/list` 的 inputSchema 为准。
+> 本文件随 APK 打包，`learn_aijspro_skill` 会把它追加在完整说明后面；参数仍以 `tools/list` 的 inputSchema 为准。
 
 ## 冷进程与库状态（最容易浪费时间，先读）
 

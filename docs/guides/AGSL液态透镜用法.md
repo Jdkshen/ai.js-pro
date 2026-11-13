@@ -118,6 +118,7 @@ AgsLiquidLens: click forwarded to JsLinearLayout     ← 日志可验证
 1. **质感与真品有差距** ✗：真品采样的是 **App 自己的 RenderNode（无损）**，本类只能采样**整屏截图** ⇒ 放大后必然有损，色散/边缘立体感做不到一模一样。
 2. **截图限频 ~340ms** ⇒ 拖动时透镜里的内容是「按下那一刻」的画面；若背后内容在动会有滞后。
 3. **无障碍服务必须开着**：关掉后降级为不画透镜（不崩）。
+4. **生命周期会回收全屏 Bitmap 与抓屏线程**：`onDetachedFromWindow` 里会 `captureExecutor.shutdownNow()` 并 `screenBitmap.recycle()`（全屏 RGBA 1080×2400×4 ≈ **10 MB**）；**不回收会漏内存/漏线程**（脚本反复 `new` 时线程会越攒越多）⇒ 用完请让 View 正常 detach（别把 View 一直挂着还反复新建）。实现与注释见 `modules/engine/src/main/java/com/stardust/autojs/runtime/api/AgsLiquidLens.java:218-234`。
 
 ## 10. 参考
 

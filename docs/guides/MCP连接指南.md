@@ -6,7 +6,7 @@
 
 **dev-1257 起**：MCP 新增 `search_api_docs` / `read_api_doc`，与 App「API 文档」共用离线索引。更新后在客户端重新连接/刷新工具列表，即可让 AI 先查接口、参数和示例再写代码。
 
-**dev-1294 起**：Node 节点 API 增加快照完整性/分页与跨布局身份（`accessibility.snapshotInfo()`、`accessibility.treePage(limit[,cursor][,{signal}])`、`select(...).findPage(...)`、`node.token/generation/isStale()`），Java 反射 varargs 与 QuickJS `ui.inflate` 亦有变化。这些是脚本侧 API，**没有新增 MCP 工具**；`ui_find` / `ui_node_action` / `ui_input` 仍是固定定位子集，要分页/身份请用 `run_script`（engine=nodejs）。详见 [Node24 控件选择器 API](Node24控件选择器API.md)「dev-1294 新增」、[API 参考](API_REFERENCE.md) §9.1 与 App 内 `learn_autojs_skill` 返回的 MCP 使用说明「dev-1294 后的节点 API 变化」。
+**dev-1294 起**：Node 节点 API 增加快照完整性/分页与跨布局身份（`accessibility.snapshotInfo()`、`accessibility.treePage(limit[,cursor][,{signal}])`、`select(...).findPage(...)`、`node.token/generation/isStale()`），Java 反射 varargs 与 QuickJS `ui.inflate` 亦有变化。这些是脚本侧 API，**没有新增 MCP 工具**；`ui_find` / `ui_node_action` / `ui_input` 仍是固定定位子集，要分页/身份请用 `run_script`（engine=nodejs）。详见 [Node24 控件选择器 API](Node24控件选择器API.md)「dev-1294 新增」、[API 参考](API_REFERENCE.md) §9.1 与 App 内 `learn_aijspro_skill` 返回的 MCP 使用说明「dev-1294 后的节点 API 变化」。
 
 > **2026-11-02 在设备 dev-1314 上实测 `tools/list`：共 128 个名称（119 个规范工具 + 9 个高级版别名）**，新增「文件与 APK 工具」60 个（`toolkit_status`、`file_*`、`zip_*`、`apk_*`），全部由 AI.js Pro 本地实现、不依赖 MT；早先 dev-1294 记录为 69（60+9）。**数量以客户端实际 `tools/list` 为准**。工具进程与主/脚本进程隔离；ELF 指令分析在原生库可用时用 Capstone 5.0.6 覆盖 AArch64/ARM/Thumb/x86/x86-64，原生库不可用时只回退有界 AArch64 子集。附带说明：Node UI 仍有多项已知边界，见 [API 参考的 Node UI 已知问题表](API_REFERENCE.md)。
 >
@@ -129,14 +129,14 @@ http://127.0.0.1:8765/mcp
 
 ### 使用链接
 
-- 在 Rikkahub 中调用 `learn_autojs_skill` 获取完整工具说明；其末尾附带「MCP 实战要点」（冷进程/dlopen 粘住、terminal 大输出轮询、借目标 App 解密函数的外部进程流程、坑表），逆向/解密类任务先读这一节；
+- 在 Rikkahub 中调用 `learn_aijspro_skill` 获取工具说明目录（**旧名 `learn_autojs_skill` / `learnAutoJsSkill` 仍兼容**；默认只回目录，见下一节）；其末尾附带「MCP 实战要点」（冷进程/dlopen 粘住、terminal 大输出轮询、借目标 App 解密函数的外部进程流程、坑表），逆向/解密类任务先读这一节；
 - 调 `get_status` / `list_engines` 检查手机端状态；
 - 用 `run_script` 时加 `wait: true` 获取真实输出和错误；
 - 设备工具（`get_ui_layout` / `capture_screen` / `ui_*` / `app_*`）需要 AI.js Pro 无障碍服务。
 
 ## 六、确认连接成功
 
-客户端连接后，先调用 `learn_autojs_skill`，再调用：
+客户端连接后，先调用 `learn_aijspro_skill`，再调用：
 
 - `get_status`：确认 `scriptRoot`、MCP 服务、当前任务状态；
 - `list_engines`：确认 Rhino / QuickJS / Node24 可用；
@@ -147,6 +147,15 @@ http://127.0.0.1:8765/mcp
 
 连接正常时 `tools/list` 会返回当前公开工具（2026-11-02 在 dev-1314 实测为 119 个规范工具 + 9 别名 = 128 个名称，实际以客户端显示为准；本轮未重新计数），分为：状态与诊断、脚本与执行、工作区、引擎与 API、设备与无障碍、终端与构建、悬浮窗、示例与帮助、文件与 APK 工具。文件/APK 工具在独立 `:tools` 进程执行，APK 采用不可变快照 + 编辑会话；ELF 指令分析和补丁的当前源码行为见下文第九节，完整说明见 App 内 MCP 指南「文件与 APK 工具」一节。
 
+### 省上下文：`learn_aijspro_skill` 默认只回目录，按 `section` 取单节
+
+`learn_aijspro_skill` **默认只返回「章节目录 + 每节一句话摘要」（约 6KB）**；完整说明**全文 331KB（≈10 万 token）**，一次全要会把会话上下文吃光。
+
+- **取单节**：传 `section=<标题关键词>`（例：`section=截屏` / `section=权限` / `section=终端`）⇒ 只回该节全文，**单节 ≤12KB**；
+- **取全文**：确实需要时才 `section=all`（**慎用**）；
+- 返回的纯文本在 `content[0].text`，同一份也在 `structuredContent.data.text`；
+- 逆向任务走另一条同源入口：`reverse_guide({topic:"index"})` 取章节清单 → `topic=<section-id>` 逐节读（分页用 `nextOffset`）；
+- **旧名兼容**：`learn_autojs_skill` 与 `learnAutoJsSkill` **仍可用**（服务端按别名映射到 `learn_aijspro_skill`），新连接请用新名。
 ## 七、常见问题
 
 ### 电脑打不开地址
@@ -183,7 +192,7 @@ MCP 当前免令牌，任何能访问该端口的设备都能控制脚本和部�
 | 设备与无障碍 | `get_ui_layout`、`capture_screen`、`ui_*`、`app_*`、`apk_install`、`apk_uninstall` |
 | 终端与构建 | `terminal_exec/read/write/stop/list`、`shell_rish`、`get_build_tools` |
 | 悬浮窗 | `list_overlays`、`close_overlays` |
-| 示例与帮助 | `search_api_docs`、`read_api_doc`、`list_samples`、`read_sample`、`learn_autojs_skill` |
+| 示例与帮助 | `search_api_docs`、`read_api_doc`、`list_samples`、`read_sample`、`learn_aijspro_skill`（旧名 `learn_autojs_skill`/`learnAutoJsSkill` 兼容） |
 | 文件与 APK 工具 | `toolkit_status`、`file_*`、`zip_*`、APK 快照/会话/读取/编辑/搜索/DEX/资源/ELF/构建/签名元数据（`apk_workspace_*` 等；`apk_install/uninstall` 属设备类） |
 
 ## 九、文件与 APK 工具（dev-1326）
