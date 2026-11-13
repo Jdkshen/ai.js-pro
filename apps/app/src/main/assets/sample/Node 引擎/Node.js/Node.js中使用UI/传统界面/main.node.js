@@ -18,7 +18,7 @@ class MainActivity extends ui.Activity {
         this.listData = [
             { text: 'Hello', enabled: true },
             { text: 'World', enabled: true },
-            { text: 'Auto.js', enabled: true },
+            { text: 'AI.js Pro', enabled: true },
             { text: 'Pro', enabled: true },
         ];
     }
@@ -79,7 +79,7 @@ class MainActivity extends ui.Activity {
     onOptionsItemSelected(item) {
         switch (item.getTitle()) {
             case "Abouts":
-                this._showMaterial3Alert("Abouts", "UI Demo\nAuto.js Pro V9 With Node.js");
+                this._showMaterial3Alert("Abouts", "UI Demo\nAI.js Pro V9 With Node.js");
                 break;
             case "Settings":
                 app.startActivity("settings");

@@ -392,7 +392,7 @@ class MainActivity extends ui.Activity {
     onOptionsItemSelected(item) {
         switch (item.getItemId()) {
             case ui.R.id.action_abouts: {
-                this._showMaterial3Alert("Abouts", "Node.js M3 Demo\nAuto.js Pro V9 With Node.js");
+                this._showMaterial3Alert("Abouts", "Node.js M3 Demo\nAI.js Pro V9 With Node.js");
                 break;
             }
             default:

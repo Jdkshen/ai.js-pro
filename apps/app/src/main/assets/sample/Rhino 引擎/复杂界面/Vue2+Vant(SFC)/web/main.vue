@@ -30,7 +30,7 @@
       <van-tab title="关于">
         <van-cell
           value="运行环境"
-          title="Auto.js Pro"
+          title="AI.js Pro"
           label="Node.js + WebView + Android"
         />
         <van-cell

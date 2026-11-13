@@ -5,7 +5,7 @@
   "launchConfig": {
     "displaySplash": true,
     "hideLogs": false,
-    "splashText": "Powered by Auto.js Pro",
+    "splashText": "Powered by AI.js Pro",
     "stableMode": false
   },
   "main": "特征匹配(全分辨率找图).js",

@@ -46,7 +46,7 @@ var todoList = storage.get("items", [{
         done: false
     },
     {
-        title: "发布Auto.js 5.0.0正式版",
+        title: "发布 AI.js Pro 正式版",
         summary: "2019年1月",
         color: "#4caf50",
         done: false

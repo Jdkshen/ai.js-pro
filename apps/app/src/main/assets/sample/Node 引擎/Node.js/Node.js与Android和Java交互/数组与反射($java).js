@@ -19,10 +19,10 @@ try {
     assert.strictEqual(method.invoke(null, [$java.boxInt(56)]), '56');
     const List = $java.findClass('java.util.ArrayList');
     const list = new List();
-    list.add('Auto.js');
+    list.add('AI.js Pro');
     list.add('Node24');
     assert.strictEqual(list.size(), 2);
-    assert.strictEqual(list.get(0), 'Auto.js');
+    assert.strictEqual(list.get(0), 'AI.js Pro');
     out.arrayNewInstance = {supported: true, length: array.length,
         className: array.getClass().getName(), values: Array.from(array)};
     out.arrayList = {size: list.size(), first: list.get(0)};

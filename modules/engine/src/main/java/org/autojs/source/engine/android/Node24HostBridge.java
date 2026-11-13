@@ -2568,7 +2568,7 @@ public final class Node24HostBridge implements Node24Engine.Host {
                     android.content.ClipboardManager manager = (android.content.ClipboardManager)
                             mContext.getSystemService(Context.CLIPBOARD_SERVICE);
                     if (manager != null) manager.setPrimaryClip(
-                            android.content.ClipData.newPlainText("Auto.js", text));
+                            android.content.ClipData.newPlainText("AI.js Pro", text));
                 });
                 return true;
             }

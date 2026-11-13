@@ -5,7 +5,7 @@
   "launchConfig": {
     "displaySplash": true,
     "hideLogs": true,
-    "splashText": "Powered by Auto.js Pro",
+    "splashText": "Powered by AI.js Pro",
     "stableMode": false
   },
   "main": "main.js",

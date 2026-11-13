@@ -9,7 +9,7 @@ ui.layout(
         <input id="content" h="*" gravity="top"/>
     </vertical>
 );
-var storage = storages.create("Auto.js例子:随手记");
+var storage = storages.create("AI.js Pro 例子:随手记");
 var content = storage.get("content");
 if (content != null) {
     ui.content.setText(content);

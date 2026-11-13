@@ -9,7 +9,7 @@ clipboardManager.on('clip_changed', () => {
     console.log('监听到剪贴板变化:', getClip());
 });
 
-setClip('Hello, Auto.js');
+setClip('Hello, AI.js Pro');
 
 console.log('是否有剪贴板内容: ', hasClip());
 console.log('剪贴板内容: ', getClip());

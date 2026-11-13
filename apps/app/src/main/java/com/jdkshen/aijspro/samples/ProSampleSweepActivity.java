@@ -146,7 +146,7 @@ public class ProSampleSweepActivity extends Activity {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         final TextView text = new TextView(this);
-        text.setText("Auto.js Pro sample sweep…");
+        text.setText("AI.js Pro 示例扫描…");
         setContentView(text);
         final int from = getIntent().getIntExtra("from", 0);
         final int size = getIntent().getIntExtra("size", 60);

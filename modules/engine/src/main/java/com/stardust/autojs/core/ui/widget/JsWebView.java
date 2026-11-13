@@ -57,7 +57,7 @@ public class JsWebView extends WebView {
      * 页面 SDK：{@code window.$autojs} + 与 {@link WebJsBridge} 的请求/事件协议。
      * 页面最简用法见内置示例 {@code web/index.html}。
      */
-    private static final String AUTOJS_SDK_JS = "(function () {\n"
+    private static final String AIJSPRO_SDK_JS = "(function () {\n"
             + "    if (window.$autojs) { return; }\n"
             + "    var RESP = '$autojs:internal:response:';\n"
             + "    var nextId = 1;\n"
@@ -184,7 +184,7 @@ public class JsWebView extends WebView {
                 super.onPageStarted(view, url, favicon);
                 // 兜底注入页面 SDK：个别 WebView 版本不会为自定义 scheme 的 <script src> 走
                 // shouldInterceptRequest。SDK 自带 window.$autojs 判重，重复注入无害。
-                evaluatePageScript(AUTOJS_SDK_JS);
+                evaluatePageScript(AIJSPRO_SDK_JS);
             }
 
             @Override
@@ -192,7 +192,7 @@ public class JsWebView extends WebView {
                 super.onPageFinished(view, url);
                 // 页面加载后再补一次：工程示例的 inline script 在 loadModule 异步链里才用 $autojs，
                 // 这里能覆盖「SDK <script> 被 WebView 拒绝加载」的极端情况。
-                evaluatePageScript(AUTOJS_SDK_JS);
+                evaluatePageScript(AIJSPRO_SDK_JS);
             }
 
             @Override
@@ -331,7 +331,7 @@ public class JsWebView extends WebView {
     }
 
     private static String injectSdk(String html) {
-        String script = "<script>" + AUTOJS_SDK_JS + "</script>";
+        String script = "<script>" + AIJSPRO_SDK_JS + "</script>";
         int index = html.indexOf("<script");
         if (index < 0) {
             index = html.indexOf("<body");
@@ -375,7 +375,7 @@ public class JsWebView extends WebView {
         }
         Log.d(TAG, "inject autojs sdk: " + url);
         return new WebResourceResponse("application/javascript", "UTF-8",
-                new ByteArrayInputStream(AUTOJS_SDK_JS.getBytes(UTF_8)));
+                new ByteArrayInputStream(AIJSPRO_SDK_JS.getBytes(UTF_8)));
     }
 
     /**
