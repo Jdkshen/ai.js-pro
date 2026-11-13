@@ -54,6 +54,10 @@ param(
     # 它们不是主程序安装包，列进 assets 会让「检查更新」把它们当成可选安装包。
     [string[]]$Extra = @(),
     [ValidateRange(0, 2147483647)][int]$HistoryLimit = 0,
+    # 清单（update.json）里 oldVersions 只镜像最近 N 条；0 = 全部。
+    # 完整历史始终保存在 update-history.json（那里不受此参数影响）。
+    # 起因：753 条历史把清单撑到 488KB，手机每次「检查更新」都要下这一坨，而真正用的只有顶部几个字段。
+    [ValidateRange(0, 2147483647)][int]$ManifestHistoryLimit = 30,
     [switch]$HardLink,
     [switch]$NoServe
 )
@@ -194,8 +198,15 @@ $historyJson = if ($history.Count -eq 1) {
     ConvertTo-Json -InputObject $history -Depth 4
 }
 [System.IO.File]::WriteAllText($historyPath, $historyJson, (New-Object System.Text.UTF8Encoding($false)))
+# 清单体积：update-history.json 是持久化 changelog（保留全部），但 update.json 里的 oldVersions
+# 是给客户端看的更新历史 —— 753 条会把清单撑到 488KB。所以清单只镜像最近 $ManifestHistoryLimit 条。
+$manifestHistory = $history
+if ($ManifestHistoryLimit -gt 0 -and $history.Count -gt $ManifestHistoryLimit) {
+    $manifestHistory = @($history[0..($ManifestHistoryLimit - 1)])
+    Write-Host ("Manifest      : oldVersions 只镜像最近 {0} 条（完整 {1} 条在 update-history.json）" -f $manifestHistory.Count, $history.Count)
+}
 $oldVersions = @()
-foreach ($entry in $history) {
+foreach ($entry in $manifestHistory) {
     if (-not $entry.versionCode) { continue }
     $oldVersions += [ordered]@{
         versionCode = [int]$entry.versionCode
