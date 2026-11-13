@@ -71,9 +71,15 @@ function Get-NewestFile {
         # （:inrt 产物没变 ⇒ Gradle UP-TO-DATE ⇒ 模板 mtime 不刷新 ⇒ mtime 判据永远追不上）。
         # 只排 .ps1 / .md（都不进模板）；.json/.xml/.gradle 等**保留**（它们可能真进包）。
         $notPackaged = @('.ps1', '.md')
-        $skipDir = '[\\/](build|\.gradle|\.git|node_modules|\.dart_tool|test|integration_test)[\\/]'
-        $items = @(Get-ChildItem -LiteralPath $p -Recurse -File -Include $Include -ErrorAction SilentlyContinue |
-                   Where-Object { ($_.FullName -notmatch $skipDir) -and ($notPackaged -notcontains $_.Extension.ToLowerInvariant()) })
+        # output/.artifacts 也排除：它们是临时产出/构建产物目录，永远不进模板（Lead 2026-11-14）。
+        $skipDir = '[\\/](build|\.gradle|\.git|node_modules|\.dart_tool|test|integration_test|output|\.artifacts)[\\/]'
+        # Lead 2026-11-14：**不要用 -Include 过滤**——`Get-ChildItem -LiteralPath … -Include @(...)` 会把 -Include
+        # **静默忽略**（实测：本想只扫 build.gradle，实际返回全仓 10,336 个文件），于是任何新写的日志/截图
+        # （如 output/build-inrt-*.log）都会被当成「源码比构件新」⇒ 门禁假阳性，而 build-release-candidate.ps1
+        # 遇 STALE 直接 throw ⇒ 会**无故挡住构建**。改为显式 -like 通配匹配文件名。
+        $items = @(Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue |
+                   Where-Object { ($_.FullName -notmatch $skipDir) -and ($notPackaged -notcontains $_.Extension.ToLowerInvariant()) } |
+                   Where-Object { $name = $_.Name; ($Include | Where-Object { $name -like $_ }).Count -gt 0 })
         foreach ($item in $items) {
             if ($null -eq $newest -or $item.LastWriteTimeUtc -gt $newest.LastWriteTimeUtc) { $newest = $item }
         }
