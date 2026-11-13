@@ -51,12 +51,15 @@ public class AgsLiquidLens extends View {
             + "  float m = mix(magnification, 1.0, smoothstep(0.0, 1.0, t));\n"
             + "  float2 c = lensCenter + d / m + screenOffset;\n"
             + "  if (coordDebug > 0.5) { return half4(c.x / max(screenSize.x,1.0), c.y / max(screenSize.y,1.0), 0.5, 1.0); }\n"
-            + "  half r = content.eval(c * screenScale + d / m * (aberration)).r;\n"
+            // 色散：三个通道在同一坐标系里做微小偏移（不要用 screenScale —— 截图与屏幕本就 1:1，
+            // 而 screenScale.y = 2400/158 = 15.19 会把 R/B 采样点推出屏幕外，表现为"偏红"）
+            + "  float2 dc = d / m;\n"
+            + "  half r = content.eval(c + dc * aberration).r;\n"
             + "  half g = content.eval(c).g;\n"
-            + "  half b = content.eval(c - d / m * (aberration)).b;\n"
-            + "  float alpha = 1.0 - smoothstep(0.82, 1.0, t);\n"
+            + "  half b = content.eval(c - dc * aberration).b;\n"
+            + "  float alpha = 1.0 - smoothstep(0.88, 1.0, t);\n"
             + "  float edge = smoothstep(0.72, 1.0, t) * (1.0 - smoothstep(0.90, 1.0, t));\n"
-            + "  return half4(half3(r, g, b) + edge * 0.30, alpha);\n"
+            + "  return half4(half3(r, g, b) * 1.45 + edge * 0.55, alpha);\n"
             + "}\n";
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -141,19 +144,40 @@ public class AgsLiquidLens extends View {
                 cx = ev.getX(); cy = ev.getY();
                 captureScreen();
                 invalidate();
+                scheduleAutoHide();
                 break;
             case MotionEvent.ACTION_MOVE:
                 cx = ev.getX(); cy = ev.getY();
                 invalidate();
+                scheduleAutoHide();
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                removeCallbacks(hideRunnable);
                 cx = -1f; cy = -1f;
                 invalidate();
                 break;
             default:
                 break;
         }
+    }
+
+    /**
+     * 兜底自动隐藏：onTouchEvent 返回 false（为了不吞 tab 点击）⇒ 系统只把 DOWN 派给我们，
+     * MOVE/UP 收不到 ⇒ 原来松开后透镜会一直停在按下位置。
+     * 这里在 DOWN 时挂一个短定时器，到点无条件隐藏；每次 DOWN/MOVE 都重置。
+     */
+    private final Runnable hideRunnable = new Runnable() {
+        @Override public void run() {
+            cx = -1f; cy = -1f;
+            invalidate();
+            android.util.Log.i("AgsLiquidLens", "auto-hide (no further touch events)");
+        }
+    };
+
+    private void scheduleAutoHide() {
+        removeCallbacks(hideRunnable);
+        postDelayed(hideRunnable, 5000L);   // 按住不动 5s 内都可见；松开后最长 5s 消失（收不到 UP 的妥协）
     }
 
     /** 抓一张整屏（无障碍通道，Android 11+、无需授权）。失败不崩，只降级为不画透镜。 */
