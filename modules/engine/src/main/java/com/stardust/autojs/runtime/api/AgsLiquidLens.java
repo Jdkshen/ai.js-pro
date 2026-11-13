@@ -70,6 +70,10 @@ public class AgsLiquidLens extends View {
     private Bitmap screenBitmap;
     private boolean failed;
     private boolean loggedOnce;
+    /** DOWN 的位置与「是否拖动过」：UP 时若几乎没移动 ⇒ 当作点击，按坐标转发给下层 tab。 */
+    private float downX, downY;
+    private boolean dragged;
+    private int touchSlop;
     /** 调试：1 = 透镜里把「采样坐标」画成颜色（红=X/宽, 绿=Y/高），用来定位坐标系错位。 */
     private float coordDebug = 0f;
     /** 脚本可显式指定本 View 在屏幕上的左上角（比 getLocationOnScreen 可靠：收口窗口下它可能返回窗口内坐标）。 */
@@ -103,6 +107,7 @@ public class AgsLiquidLens extends View {
         super(context);
         this.radiusPx = Math.max(24f, radiusPx);
         setWillNotDraw(false);
+        touchSlop = android.view.ViewConfiguration.get(context).getScaledTouchSlop();
         // 自己收触摸：本类作为 bar 的最上层子 View，天然能收到触摸；
         // onTouchEvent 返回 false 表示「不消费」，事件继续派发给下层 tab（点击照旧有效）。
         setClickable(true);
@@ -122,7 +127,10 @@ public class AgsLiquidLens extends View {
     }
 
     /** 把自己挂到容器的触摸上（这样不必当子 View 也能收事件；addView 后同样有效）。 */
+    private View hostView;
+
     public void attachTo(View host) {
+        this.hostView = host;
         if (host == null) return;
         host.setOnTouchListener((v, ev) -> onHostTouch(v, ev));
     }
@@ -144,17 +152,27 @@ public class AgsLiquidLens extends View {
     private void handleTouch(MotionEvent ev) {
         switch (ev.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                downX = ev.getX(); downY = ev.getY(); dragged = false;
                 cx = ev.getX(); cy = ev.getY();
                 captureScreen();
                 invalidate();
                 break;
             case MotionEvent.ACTION_MOVE:
+                if (Math.hypot(ev.getX() - downX, ev.getY() - downY) > touchSlop) dragged = true;
                 cx = ev.getX(); cy = ev.getY();
                 invalidate();
                 break;
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
                 removeCallbacks(hideRunnable);
+                // 透镜消费了触摸 ⇒ 下层 tab 收不到点击。若这一下几乎没移动，就按坐标把点击转发下去。
+                if (ev.getActionMasked() == MotionEvent.ACTION_UP && !dragged && hostView != null) {
+                    View target = findClickableAt(hostView, ev.getX(), ev.getY(), this);
+                    if (target != null) {
+                        target.performClick();
+                        android.util.Log.i("AgsLiquidLens", "click forwarded to " + target.getClass().getSimpleName());
+                    }
+                }
                 cx = -1f; cy = -1f;
                 invalidate();
                 break;
@@ -192,6 +210,26 @@ public class AgsLiquidLens extends View {
     private void scheduleAutoHide() {
         removeCallbacks(hideRunnable);
         postDelayed(hideRunnable, 5000L);   // 按住不动 5s 内都可见；松开后最长 5s 消失（收不到 UP 的妥协）
+    }
+
+    /**
+     * 在 host 的子树里找「坐标 (x,y) 处的可点击 View」—— 用于把点击数转发给下层 tab。
+     * 坐标从 host 的坐标系开始（本 View 与 host 同宽、顶部对齐，所以 ev 的坐标可直接用）。
+     */
+    private static View findClickableAt(View view, float x, float y, View exclude) {
+        if (view == null || view == exclude) return null;
+        if (!(view instanceof android.view.ViewGroup)) return view.isClickable() ? view : null;
+        android.view.ViewGroup group = (android.view.ViewGroup) view;
+        for (int i = group.getChildCount() - 1; i >= 0; i--) {   // 后加的在上层，先查
+            View child = group.getChildAt(i);
+            if (child == exclude || child.getVisibility() != View.VISIBLE) continue;
+            float cx = x - child.getLeft() - child.getTranslationX();
+            float cy = y - child.getTop() - child.getTranslationY();
+            if (cx < 0 || cy < 0 || cx >= child.getWidth() || cy >= child.getHeight()) continue;
+            View hit = findClickableAt(child, cx, cy, exclude);
+            if (hit != null) return hit;
+        }
+        return group.isClickable() ? group : null;
     }
 
     /** 抓一张整屏（无障碍通道，Android 11+、无需授权）。失败不崩，只降级为不画透镜。 */
