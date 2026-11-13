@@ -1001,3 +1001,42 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 ```
 
 上例调用 apk_dex_call_graph。先从列表/搜索得到真实 locator，不照抄示例中的类名。
+
+## capture_screen 完整参数说明（工具描述里的长文已搬到这里，省 tools/list 上下文）
+
+截屏并返回 MCP 图像内容。本地工具，不需要连电脑。
+
+### mode 四种预设（MI8 1080×2160 实测）
+| mode | 宽度 | 格式 | 质量 | 超时 | 实测 | 用途 |
+|---|---|---|---|---|---|---|
+| `fastest` | 360 | JPEG | 40 | 1500ms | 约 23KB | 只够看有没有/大概在哪 |
+| `fast` | 540 | JPEG | 60 | 2000ms | 约 0.22~0.28s / 36KB | 定位、轮询、先看一眼 |
+| `balanced`（缺省）| 540 | JPEG | 60 | 3000ms | 约 40KB | 日常；2026-11-13 起改为此值 |
+| `quality` | 原尺寸 | PNG | 100 | 6000ms | 约 0.63~0.65s / 217KB | 存档、像素级比对 |
+
+耗时主因是 **PNG 编码（约 550ms）**；`fast` 靠缩小 + JPEG 把它省掉。
+显式传的 `format` / `quality` / `maxWidth` / `timeoutMillis` **始终覆盖**预设。
+
+### region（只截一块）
+支持三种写法：`[left,top,right,bottom]` · `"[l,t][r,b]"` · `{x,y,width,height}`；越界自动夹取。
+**只截一块时先裁后缩** ⇒ 编码成本极低且保留 1:1 像素，比整屏缩小更清楚。
+缩小或裁剪后：**块内坐标 = 屏幕坐标 − 区域左上角，再乘 scale**（返回里给 `region`/`scale`/`regionNote`）。
+
+### savePath（逐帧 CV 的关键）
+只要路径不要图像 —— 写入脚本目录内文件，只返回 `{path,width,height,bytes,captureMs/encodeMs/writeMs/totalMs}`，**不回传 base64/JSON**。
+- `saveFormat=raw`：直接写 **RGBA8888 原始像素**（`stride=width*4`、无文件头，与 `image.exportPixels` 布局一致），省掉约 550ms 的 PNG 编码 ⇒ 适合逐帧循环。
+- `saveFormat` 也可 `auto`（按扩展名）/ `png` / `jpg`。
+
+### 返回字段
+含 `captureMs` / `encodeMs` / `totalMs` / `bytes` / `scale` / `effective`，便于自己权衡质量与速度。
+`effective` 是**自检抓手**：它回填最终生效的 format/quality/maxWidth/timeout，改错立刻能看出来。
+
+### 示例
+```json
+{"mode":"fastest"}
+{"savePath":"poker-recog/calib/live-6.png","saveFormat":"raw"}
+{"mode":"quality","maxWidth":1080}
+{"mode":"fast","region":[0,1000,1080,1400]}
+```
+
+需要 Android 11+ 无障碍截图权限。
