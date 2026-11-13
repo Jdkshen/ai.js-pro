@@ -63,6 +63,36 @@ try {
 1. `Canvas` / `Paint` 这两个短名**全局已存在**（`init.js:223` 的 `importClass(android.graphics.Paint)` 等）⇒ 脚本里**再 `const Paint = ...` 会 `redeclaration of var Paint`** ✗ ⇒ 直接用全局名，或换别名。
 2. `activity` 是 `with(scope)` 注入的 ⇒ **函数体内拿不到** ✗ ⇒ 需要时在顶层先 `var act = activity;` 再传进函数。
 
+### 在真实底栏上完整跑起来（最小可运行骨架）
+
+上面两段只是「怎么 new 出来」。真正把它跑在一条自绘栏上，至少要这三步 —— 顺序错了就会**看不到高光** ✗：
+
+```js
+"ui nodejs";
+// ① 栏必须真的被画出来（有非零尺寸），否则 W/H 取到 0，shader 的 SDF 直接退化成空
+var bar = ...;                       // 你的栏（FrameLayout / View）
+bar.post(function () {               // post 等到布局完成再量尺寸
+  var W = Math.max(1, bar.getWidth());
+  var H = Math.max(1, bar.getHeight());
+
+  // ② 高光层必须 addView 进栏，否则它不在视图树里、永远不画（这一点最容易漏 ✗）
+  //    用 index 0 让它垫在图标/文字**下面**（真机：高光属于玻璃底，不属于内容层）
+  var HL = Packages.com.stardust.autojs.runtime.api.AgsHighlightView;
+  var hl = new HL(ctx, W, H, Math.min(H / 2, 90), 2.0);
+  hl.setIntensity(0.12);
+  hl.setThicknessPx(0);              // 0 = 自适应（H/60 夹到 2~6px）
+  bar.addView(hl, 0, new Packages.android.widget.FrameLayout.LayoutParams(W, H));
+
+  // ③ 不要在外面再给 bar 画一圈描边 —— 描边 + AGSL 边缘光叠加会变成很粗的白边 ✗（真机踩过）
+  console.log('AGSL 高光 ready supported=' + hl.isSupported() + ' ' + W + 'x' + H);
+});
+```
+
+**排查顺序**（看到问题先按这个走）：
+1. 日志里 `supported=false` ⇒ 系统 < Android 13，类会静默降级 ⇒ 放弃 ✗
+2. 日志里根本没有 `AgsHighlightView` ⇒ **没 addView** ✗ 或 `post` 没跑到 ✗
+3. 有日志但画面没变化 ⇒ `intensity` 太小（< 0.02 肉眼不可见）✗
+4. 一圈很粗的白边 ⇒ `thickness` > 10px，或**外面又套了一层描边** ✗
 ## 4. 平台要求
 
 | 项 | 说明 |
