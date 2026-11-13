@@ -191,7 +191,10 @@ internal class McpTools(private val context: Context, private val event: (String
         add("serverInfo", McpServerMetadata.toJson())
 
         addProperty("instructions", listOf(
-            "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_aijspro_skill 读取完整说明；参数以 tools/list 的 inputSchema 为准。",
+            "AI.js Pro MCP（Rhino / QuickJS / Node24）。首次连接先调用 learn_aijspro_skill 只拿**章节目录**（不要 section=all，全文 331KB≈10万 token），要用哪节再 section=<标题关键词> 取。参数以 tools/list 的 inputSchema 为准。",
+            // 省上下文（2026-11-13 实测）：tools/list 全量 226 个工具 ≈ 68k token，是绝大多数客户端「一次就烧几万 token」的根源。
+            // 服务端早就支持过滤，只是没人知道 —— 这里在 initialize 的 instructions 里明说（客户端必然读这一段）。
+            "**省上下文（建议默认这么做）**：tools/list 支持 params.tier=\"core\"（只返回 29 个常用工具，约 10k token，省 85%）或 params.groups=[组id]（如 groups:[\"device\"]，28 个工具约 5.3k token）；都不传才会返回全部 226 个工具（约 68k token）。**不认识这些参数的客户端会自动拿到全量，不会报错**，所以可以放心加。组 id 与工具清单一并见 get_status.toolCategories。",
             McpOutputConventions.INSTRUCTION,
             "逆向任务首次连接：reverse_guide({topic:index}) → reverse_capabilities({}) → reverse_plan({goal:inspect|decode|rebuild|native|dynamic|fingerprint|emulate|compare})。指南与步骤也可通过 resources/list/read、prompts/list/get 发现；URI aijs://reverse/guide、aijs://reverse/workflows。",
             "逆向组件按需安装，工具注册不代表已安装；apk_component_status查询后显式apk_component_install。后台返回jobId后apk_job_status到终态，再apk_job_result按nextOffset读完；失败保留error.code，不要把排队/启动当成功。免Root Frida先apk_inject_gadget生成重签APK，安装打开后用返回的endpoint/token连接；无需Root/Server。",
