@@ -1040,3 +1040,37 @@ apk_inject_gadget 的 preloadMode 有三个取值：**provider（默认）、dt_
 ```
 
 需要 Android 11+ 无障碍截图权限。
+
+## dev_screen_diff 完整说明（长文已搬到此处）
+逐帧像素级差异，与 `capture_screen` **同一条管线**，支持 `region`；`captureMode` 与 capture_screen 的 `mode` 是同一套预设（fastest/fast/balanced/quality，默认 balanced=540 宽 JPEG60）。
+- `maxDims`＝最大宽度；显式给了以你为准，**省略时沿用上一帧宽度**（这样 `capture_screen{mode:fast}` 之后再调本工具不会因 540 vs 720 而 SIZE_MISMATCH），都没有才用预设默认。
+- `baseline` 可给脚本目录内的 PNG/JPEG 路径；不给则与进程内上一帧比。**第一次调用会明确失败 NO_BASELINE，但会把这一帧记为上一帧**，所以用同样参数再调一次就能拿到 ratio；不会拿黑图当基线。
+- 输出：`changedPixels/ratio/bbox{x,y,w,h}/comparedPixels/frameSha256/baselineSha256/baselineSource/maxChannelDelta/tolerance`。
+- `mode=mask` 另生成掩码（变化=白/不变=黑）；`saveDiffTo` 落盘 PNG（走既有 organize 归置），不传则内联返回。
+- `tolerance` 是每通道灰度容差（基线是 JPEG 时默认 8，否则 0），用来吸收 JPEG 压缩噪声。
+- **诚实边界**：这是像素级差异，不做语义/模板匹配（模板匹配用 matchTemplate 系列）；`ratio=变化像素/比较像素`，不等于界面变化程度；两次调用的 region/captureMode/maxDims 要一致，尺寸不一致直接 SIZE_MISMATCH（不裁剪、不缩放），等比时 nextActions 会给出可抄的参数。
+
+## get_baseline 完整说明
+运行时就绪基线（自检，只读）：`root/currentProject`、`workspaces{script,apk{used,quota,temporary,ttlHint}}`、`toolchain{ready,missing,present}`、`jobs{retention,advice}`，有缺失时给一条最短 recovery。
+- 数字与 `get_build_tools` / `apk_workspace_inventory` / `toolkit_status` **同源**（不另算一份），15s 内复用同一份缓存；内容不变时 `version` 不变（可去重）。
+- 总量 ≤512 字节，超了按「先丢统计、保 version/missing/recovery」裁剪并标注 `trimmed`。
+- 同一条 baseline 也会**自动出现在**首个 `tools/call`（或 `get_status`）与所有失败信封里；`tools/list` 与普通工具返回**不带**（省上下文）。`refresh:true` 强制重建。
+- 口径：成功路径**以 structuredContent(ok/data)/结果顶层为准**，`content[0].text` 不保证包含 baseline（`get_status` 的扁平 text 会含，普通工具的文本镜像不含）；**失败路径三处同值**（顶层 / structuredContent / content[0].text）。
+
+## dev_gesture_probe 完整说明
+手势回调表泄漏探针（诊断用）：`action=report` 只读当前进程 AccessibilityService 的框架隐藏字段 `mGestureStatusCallbackInfos`（SparseArray.size()）与 `mGestureStatusCallbackSequence`，并给跨进程派发计数（dispatched/withCallback/withoutCallback + bySite）。
+- `action=stress` 真派发 `count` 次 1px/1ms 手势（默认 100，上限 10000；`withCallback` 默认 true = 会进框架回调表的那条路径，正是可能泄漏的路径），返回 before/after 表读数、dispatched/failed/elapsedMs/stoppedBy 与 tableDelta。
+- **诚实边界**：① 反射隐藏字段跨版本脆——字段改名/被裁/被 OEM 改过就读不到，此时给 `supported=false` + reason（含异常类名），**绝不伪造数字**、也绝不影响手势路径；② 表条目数不等于内存泄漏的完整证明（还要结合 Java heap/PSS 与长跑前后对比）；③ stress 会真的动屏幕，不要在业务关键路径上跑（建议 ≤2000 次）；④ 计数器跨进程汇总（每进程一个 `gesture-dispatch-pid.txt`），未 init 时显示 0 不代表没有派发。
+- `reset=true` 只清计数文件，不影响手势。
+
+## coordinate_convert 完整说明
+截图/显示/浮窗三套坐标系的换算与标定。
+- `action=state`：给 `panel`（物理面板≈截图尺寸）、`appDisplay`（无障碍与浮窗同一套）、可选 `measureScreenshot` 实测截图尺寸，并给仿射 `dst=src*(scaleX,scaleY)+(offsetX,offsetY)`。
+- `action=calibrate`：传两组对应点（`windowPoint1`/`screenshotPoint1`[/2]）持久化标定值。
+- `action=convert`：传 `from`/`to`/`point|rect` 换算。`action=clear` 清除标定。
+
+## run_script 完整说明
+运行现有文件或内存源码（`path`/`file`/`source` 三选一；`source` 传源码字符串）；需要结果/错误日志时 `wait=true`。
+- `timeoutSeconds` 是 **MCP 等待上限**（1..600 秒，默认 60），**不是脚本生命周期**：`path` 脚本在 Node 宿主最长 1 小时；超过 600 秒请 `wait=false` 后轮询 `wait_execution`/`get_execution`。
+- **Node 执行池并发上限 3 个**、最多排队 5 个/30 秒，超过会返回带「并发上限 3 个」的启动失败，请串行或错峰。
+- 示例：`{"engine":"quickjs","source":"console.log(1)","wait":true,"timeoutSeconds":30}`
