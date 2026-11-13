@@ -246,6 +246,14 @@
 
 > 指南也需注意时效：`ENGINE_API_AND_PERFORMANCE.md` 只覆盖 Rhino/QuickJS（2026-10-19，Node24 未纳入）；`API_REFERENCE`/`NODE_UI_API` 以最新生成索引为准；`REPO_CONVENTIONS.md` 是 2026-11-06 新规范（提到尚未出现的 `ARCHITECTURE.md`）。
 
+- 2026-11-09 | 目录与产出规范 | 临时产出进 `output/<任务>-<日期>/`、构建产物进 `.artifacts/<任务>-<日期>/`、一任务一目录、收尾就清；含 5 条红线（不删 `updates/**`、不删 `src/test/**`、构建中不删 `build/`…）。配套自检 `tools/check-dir-hygiene.ps1`。 | [原文](<guides/DIRECTORY_CONVENTIONS.md>)
+- 2026-11-12（W3 汇总） | 工程纪律与踩坑清单 | 本轮多会话协作里反复踩到的坑汇总（构建/测试/文档/脚本）。**出包前扫一眼能省一轮返工**。 | [原文](<guides/工程纪律与踩坑清单.md>)
+- — | Flutter ↔ 原生本地桥 API 契约 | `LocalBridge.call(action, args)` 的完整动作表 + 每个动作的 Dart 调用点与原生实现，标注「不需动 / 要补实现 / 已废弃」。含 `sampleDownload` 这类「原生无此 case ⇒ 走 default 抛错」的清单。 | [原文](<guides/Flutter本地桥API.md>)
+- 2026-11-10 | 打包产物构成与瘦身清单 | 产物里到底有什么（用户工程只占 ~1 MB，98% 是引擎+OpenCV+内建 OCR+我方资源）、四个瘦身开关各自能省多少（`removeOcr` 实测 −8.13 MB / −7.76 MiB）、以及**改动前后必须 A/B 逐条 diff** 的方法。 | [原文](<guides/打包产物构成与瘦身清单.md>)
+- 冻结版 | OCR 插件「落盘加载」契约（v1，冻结） | 插件包如何落盘、宿主如何加载、失败如何点名报错的**冻结契约**；实现方直接照抄，不要再自创一套。 | [原文](<guides/OCR插件落盘加载契约.md>)
+- 2026-11-10 | SJBC 脚本保护挂载（L3 自定义指令集 VM） | 自研 VM + v5 容器的端到端挂载：容器格式、VM 语义、密钥主根=本包签名证书 SHA-256 → HKDF、三引擎入口口径表、`sjbc.debug()` 排障三步。含**安全口径**（属防呆式保护，不防有动机攻击者）。 | [原文](<guides/SJBC脚本保护挂载.md>)
+- 2026-11-12（W3） | 源集与同名类索引（P1-4） | `:app` / `:engine` / `:inrt` 各源集里同名类的分布索引 —— 改代码前先查这里，避免改错一份。 | [原文](<guides/源集与同名类索引.md>)
+
 ### 4.3 架构与 API 对照（architecture/，10 篇 Markdown + 契约数据）
 
 - — | 第一代 Pro API 逐函数对照（Auto.js Pro 官方 API 文档 PDF） | 对照日期：2026-09-15（§4 / §5.4~§5.8 / §6 / §7 为 $crypto、$zip、$debug、$power_manager、floaty 权限、$settings 补齐后重跑）。对象： | [原文](<architecture/第一代API逐函数对照.md>)
