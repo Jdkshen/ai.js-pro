@@ -100,5 +100,6 @@ try {
 
 - 实现：[modules/engine/src/main/java/com/stardust/autojs/runtime/api/AgsHighlightView.java](../../modules/engine/src/main/java/com/stardust/autojs/runtime/api/AgsHighlightView.java)
 - 同类范式：[apps/app/src/main/java/com/jdkshen/aijspro/ui/widget/GlassTabLayout.java](../../apps/app/src/main/java/com/jdkshen/aijspro/ui/widget/GlassTabLayout.java)（`@RequiresApi(33)` 隔离 + 低版本降级）
+- **姊妹篇**（液态透镜 / 折射，不是高光）：[AGSL液态透镜用法.md](AGSL液态透镜用法.md)
 - 用户脚本：`/storage/emulated/0/脚本/酷安底栏/coolapk_bar.js`（nodejs 版）· `coolapk_bar.rhino.js`（Rhino 版）
 - 原改法文档：`/storage/emulated/0/脚本/酷安底栏/NODE-AGSL-改法.md`（该文档的「改法 A/B」实测均不可行，见本文 §1）

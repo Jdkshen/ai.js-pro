@@ -211,7 +211,9 @@ class _CatalogPageState extends State<CatalogPage> {
       setState(() {
         pluginManifest = next;
         pluginManifestLoaded = true;
-        pluginManifestError = next.isEmpty ? '清单为空' : null;
+        // 契约：空结果是**正常空态**，不是错误（MCP 侧已删 ToolkitIo.empty()，空由工具自身字段表达）。
+        // 所以这里 error 只放真失败；「清单为空」交给下面的空态提示，别混进错误通道。
+        pluginManifestError = null;
         // task-145：重新拉到清单 ⇒ 清掉旧失败态（否则旧版本留下的「下载失败」会一直挂着误导 ✗）
         downloadError.clear();
         downloading.clear();
@@ -230,6 +232,10 @@ class _CatalogPageState extends State<CatalogPage> {
       }
     }
   }
+
+  /// 清单已加载成功但内容为空 —— **正常空态**，不是错误（契约见 fetchPluginManifest 处注释）。
+  bool get pluginManifestEmpty =>
+      widget.plugin && pluginManifestLoaded && pluginManifestError == null && pluginManifest.isEmpty;
 
   /// 是否「已下载、待安装」（原生返回下载完成但未安装时记录）。
   bool canInstallDownloaded(Map item) {
@@ -1084,6 +1090,12 @@ class _CatalogPageState extends State<CatalogPage> {
                                     UiCopy.pluginCatalogUnavailable +
                                         pluginManifestError!,
                                     key: const ValueKey('plugin-manifest-error'))),
+                          // 空清单是**正常空态**（契约：空结果不是错误）⇒ 中性提示，不用「不可用/失败」措辞。
+                          if (pluginManifestEmpty)
+                            const Padding(
+                                padding: EdgeInsets.only(bottom: 12),
+                                child: DegradedLine('插件源清单为空（源可达，但没有条目）',
+                                    key: ValueKey('plugin-manifest-empty'))),
                           if (summary(item).isNotEmpty)
                             Padding(
                                 padding: const EdgeInsets.only(bottom: 12),
@@ -1606,6 +1618,11 @@ class _CatalogPageState extends State<CatalogPage> {
     final disabledInList = all.where(pluginDisabled).length;
     return Column(children: [
       // task-136/137：清单提示**独占整行**；失败态 = 原因 + 「多半是源不可达」+ 当前更新源 + 怎么办 + **重试**按钮
+      if (pluginManifestEmpty)
+        const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: DegradedLine('插件源清单为空（源可达，但没有条目）',
+                key: ValueKey('plugin-manifest-empty-banner'))),
       if (widget.plugin && pluginManifestError != null)
         Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
