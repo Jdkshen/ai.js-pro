@@ -203,7 +203,7 @@
 
 > 根文档状态提示：`README.md`（旧索引，最新只到 dev-1299）、`PROJECT_STATUS.md`（dev-1259）、`HANDOVER.md`（dev-1112）已旧；`HANDOFF_AI.md` 架构与流程仍权威但 §4 状态写 dev-1177；`MCP_SCRIPT_SERVICE.md` 文首自述工具数量已过期。详见 §5.3。
 
-### 4.2 长期指南（guides/，24 篇 Markdown）
+### 4.2 长期指南（guides/，33 篇 Markdown）
 
 **核心架构与规范**
 
@@ -230,6 +230,8 @@
 - — | 悬浮窗开发踩坑与性能数据（脚本作者视角） | 引擎侧对应修复见 docs/guides/悬浮窗触摸穿透说明.md 与需求清单「批 E/F」。 | [原文](<guides/悬浮窗开发踩坑与性能.md>)
 - — | 悬浮窗触摸穿透与圆形形状说明 | 结论先说：「按区域接收触摸」（圆内可点、圆外穿透）在 Android 上做不到， clipToOutline 只裁剪本窗口的绘制，不会改变窗口对系统的输入区域。 本文给出实测数据与真正可行的替代方案。 | [原文](<guides/悬浮窗触摸穿透说明.md>)
 - — | 液态玻璃导航：实现、接入与优化 | 本文介绍 AI.js Pro 顶部图标栏的液态玻璃选中胶囊。完整 Java 组件源码附在文末，可以复制到其他 Android 项目；接入本项目时直接使用已有组件。 | [原文](<guides/液态玻璃导航_实现接入与优化.md>)
+- — | AGSL 液态透镜：脚本用法（AgsLiquidLens） | 按住容器浮起圆形折射透镜（背后真实内容放大 + 色散）。核心取舍：脚本是独立 Activity，`RuntimeShader` 的 content 采不到宿主 App ⇒ 只能用**无障碍整屏截图**当 shader 输入（Android 11+、无需授权）。三个必踩坑：`onTouchEvent` 必须返回 true 否则只收 DOWN（透镜不跟手/松手不消失）；消费后要自己转发点击；`AccessibilityScreenCapturer.isAvailable()` 是进程内单例、绝不能做前置拦截否则跨进程分支被拦死。 | [原文](<guides/AGSL液态透镜用法.md>)
+- — | AGSL 高光层：脚本用法（AgsHighlightView） | 玻璃栏的**边缘高光**（不是折射）。重点：必须在 `post` 里量尺寸、必须 `addView` 进栏（最容易漏，不在视图树里就永远不画）、外面不要再套一层描边（叠加会变成很粗的白边）。含 nodejs/Rhino 两版示例、参数对照表（>10px 会像白边）、4 条排查顺序。 | [原文](<guides/AGSL高光层用法.md>)
 
 **MCP 与工具**
 
