@@ -106,12 +106,17 @@ internal object McpDeviceTools {
         val requestedSaveTarget = McpCapturePreset.resolveSaveTarget(savePath)
         val (saveTarget, organized) = McpCapturePreset.organizeSaveTarget(requestedSaveTarget, organize)
         val resolvedSaveFormat = McpCapturePreset.resolveSaveFormat(saveFormat, saveTarget != null)
-        // saveFormat=auto 时按 savePath 扩展名决定编码；raw 表示写原始像素（不看 format）。
+        // saveFormat 是**落盘格式**：只有真要写文件时才参与 inline 编码格式的决策。
+        // ★ 之前它在「没给 savePath」时也返回 png（resolveSaveFormat 的缺省分支），
+        //   于是 format ?: autoFormat 永远拿到 "png"，把 mode 预设想给的 jpg 覆盖掉
+        //   ⇒ 表现为「quality/maxWidth 生效、format 不生效」（2026-11-13 真机 7 条验收暴露）。
+        //   raw 仍独立（不看 format）；auto 仍按扩展名；没落盘目标时交给 preset。
         val autoFormat = when {
-            resolvedSaveFormat != "auto" && resolvedSaveFormat != "raw" -> resolvedSaveFormat
-            resolvedSaveFormat == "auto" && saveTarget != null ->
+            saveTarget == null -> null
+            resolvedSaveFormat == "raw" -> null
+            resolvedSaveFormat == "auto" ->
                 if (saveTarget.extension.lowercase() in setOf("jpg", "jpeg")) "jpg" else "png"
-            else -> null
+            else -> resolvedSaveFormat
         }
         val effective = McpCapturePreset.resolve(mode, format ?: autoFormat, quality, maxWidth, timeoutMillis)
         val resolvedFormat = effective.format

@@ -5,7 +5,7 @@ import com.stardust.app.GlobalAppContext
 import com.jdkshen.aijspro.Pref
 
 /**
- * `capture_screen` 的三种预设：一个**质量好**、一个**快速**，外加保持现状的 balanced。
+ * `capture_screen` 的四种预设：fastest / fast / balanced（缺省，540 宽 JPEG60）/ quality（唯一的原图 PNG）。
  *
  * 纯逻辑（可 JVM 单测）：调用方显式传的 format/quality/maxWidth/timeoutMillis **始终覆盖**预设，
  * 所以老调用不受影响；预设只决定「没传的那些参数」。
@@ -45,9 +45,12 @@ internal object McpCapturePreset {
             // 质量：原图 + PNG（无损）+ 更长超时，适合存档/取证/像素级比对。
             MODE_QUALITY -> Resolved(normalized, "png", 100, 0, 6000,
                 "quality：原图 PNG 无损，最清晰也最大最慢（16MiB 上限，必要时自己加 maxWidth）")
-            else -> Resolved(normalized, "png", 100, 0, 3000,
-                "balanced：原图 PNG ——**与历史默认完全一致**（兼容保留）；要快要小用 mode=fast，" +
-                    "要更长超时/更明确的质量语义用 mode=quality（输出同样是原图 PNG）")
+            // balanced = 缺省档。2026-11-13 起改成「540 宽 + JPEG60」（原来与原图 PNG 一致）：
+            // ① 默认输出 PNG 让每张截图 30k~90k token，是上下文体积的主要来源；
+            // ② 原来 quality 缺省 100，单独传 format:jpg 反而比 PNG 还大（空转的 quality）。
+            // 要原尺寸无损请显式 mode=quality（那是唯一仍出 PNG 的入口）。
+            else -> Resolved(normalized, "jpg", 60, 540, 3000,
+                "balanced：540 宽 + JPEG60 ——缺省档（要原尺寸无损请用 mode=quality；要更快用 mode=fast）")
         }
         return preset.copy(
             format = format?.lowercase() ?: preset.format,
