@@ -1667,7 +1667,9 @@ internal class McpTools(private val context: Context, private val event: (String
         addProperty("name", name)
         addProperty("category", category.id)
         addProperty("categoryTitle", category.title)
-        addProperty("description", "[" + category.title + "] " + description)
+        // 省 token：描述前缀 "[分类] " 与下面的 category/categoryTitle 字段**完全重复**，
+        // list 一次要返回 226 个工具，这个前缀白占约 2.3KB（约 700 token）。
+        addProperty("description", description)
         add("inputSchema", schema)
     }
     private fun objSchema(vararg names: String, required: Array<String> = emptyArray()) =
