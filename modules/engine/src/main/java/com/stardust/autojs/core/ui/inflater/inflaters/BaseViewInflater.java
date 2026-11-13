@@ -637,7 +637,8 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
             field.set(layoutParams, gravity);
             return true;
         } catch (Exception e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+            android.util.Log.w("BaseViewInflater", "public boolean setLayoutGravity(ViewGrou failed", e);
             return false;
         }
     }
@@ -747,7 +748,8 @@ public class BaseViewInflater<V extends View> implements ViewInflater<V> {
             setGravity.invoke(view, Gravities.parse(g));
             return true;
         } catch (Exception e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+            android.util.Log.w("BaseViewInflater", "private boolean setGravity(V view, Strin failed", e);
             return false;
         }
     }

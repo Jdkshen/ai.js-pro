@@ -34,7 +34,8 @@ public class FloatingPermission {
             sCheckOp = SettingsCompat.class.getDeclaredMethod("checkOp", Context.class, int.class);
             sCheckOp.setAccessible(true);
         } catch (NoSuchMethodException e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout（设备上常常看不到）⇒ 改 Log.w，保留异常链。
+            android.util.Log.w("FloatingPermission", "? failed", e);
         }
     }
 
@@ -100,7 +101,8 @@ public class FloatingPermission {
         try {
             return (boolean) sCheckOp.invoke(null, context, op);
         } catch (Exception e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout（设备上常常看不到）⇒ 改 Log.w，保留异常链。
+            android.util.Log.w("FloatingPermission", "private static boolean checkOp(Context c failed", e);
             return false;
         }
     }

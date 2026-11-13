@@ -36,7 +36,8 @@ public class Plugin {
         } catch (PackageManager.NameNotFoundException e) {
             return null;
         } catch (Throwable e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout（设备上常常看不到）⇒ 改 Log.w，保留异常链。
+            android.util.Log.w("Plugin", "public static Plugin load(Context contex failed", e);
             throw new PluginLoadException(e);
         }
     }
@@ -62,12 +63,14 @@ public class Plugin {
         try {
             mGetVersion = pluginClass.getMethod("getVersion");
         } catch (NoSuchMethodException e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout（设备上常常看不到）⇒ 改 Log.w，保留异常链。
+            android.util.Log.w("Plugin", "private void findMethods(Class pluginCla failed", e);
         }
         try {
             mGetScriptDir = pluginClass.getMethod("getAssetsScriptDir");
         } catch (NoSuchMethodException e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout（设备上常常看不到）⇒ 改 Log.w，保留异常链。
+            android.util.Log.w("Plugin", "private void findMethods(Class pluginCla failed", e);
         }
     }
 

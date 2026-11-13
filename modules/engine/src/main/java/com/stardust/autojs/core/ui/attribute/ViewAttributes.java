@@ -416,7 +416,8 @@ public class ViewAttributes {
             setGravity.invoke(mView, g);
             return true;
         } catch (Exception e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+            android.util.Log.w("ViewAttributes", "protected boolean setGravity(int g) failed", e);
             return false;
         }
     }
@@ -544,7 +545,8 @@ public class ViewAttributes {
                 field.set(layoutParams, gravity);
                 mView.setLayoutParams(layoutParams);
             } catch (Exception e) {
-                e.printStackTrace();
+                // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+                android.util.Log.w("ViewAttributes", "protected void setLayoutGravity(int grav failed", e);
                 //TODO throw or ?
             }
         }

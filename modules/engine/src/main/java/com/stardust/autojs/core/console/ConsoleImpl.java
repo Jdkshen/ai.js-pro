@@ -236,7 +236,8 @@ public class ConsoleImpl extends AbstractConsole {
                 FloatyService.addWindow(mFloatyWindow);
                 // SecurityException: https://github.com/hyb1996-guest/AutoJsIssueReport/issues/4781
             } catch (WindowManager.BadTokenException | SecurityException e) {
-                e.printStackTrace();
+                // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+                android.util.Log.w("ConsoleImpl", "public void show() failed", e);
                 mUiHandler.toast(R.string.text_no_floating_window_permission);
             }
         });

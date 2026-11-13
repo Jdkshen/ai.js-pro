@@ -58,7 +58,8 @@ public class InputEventToAutoFileRecorder extends InputEventRecorder {
             convertEventOrThrow(event);
             Log.d(LOG_TAG, "recordInputEvent: " + event);
         } catch (IOException e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+            android.util.Log.w("InputEventToAutoFileRecorder", "public void recordInputEvent(@NonNull In failed", e);
         }
 
     }
@@ -133,7 +134,8 @@ public class InputEventToAutoFileRecorder extends InputEventRecorder {
         try {
             mDataOutputStream.close();
         } catch (IOException e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+            android.util.Log.w("InputEventToAutoFileRecorder", "public void stop() failed", e);
         }
     }
 }

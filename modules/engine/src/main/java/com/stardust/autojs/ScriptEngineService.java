@@ -136,7 +136,8 @@ public class ScriptEngineService {
         public void onException(ScriptExecution execution, Throwable e) {
             // task-191 P1：先打结束行，再打错误堆栈（Pro 顺序），用户停止也走这里但不会打 error。
             onFinish(execution);
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+            android.util.Log.w("ScriptEngineService", "public void onException(ScriptExecution  failed", e);
             String message = null;
             if (!causedByInterrupted(e)) {
                 message = e.getMessage();

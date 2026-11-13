@@ -20,7 +20,8 @@ public class Mat extends org.opencv.core.Mat implements ResourceMonitor.Resource
             nClone = org.opencv.core.Mat.class.getDeclaredMethod("n_clone", long.class);
             nClone.setAccessible(true);
         } catch (NoSuchMethodException e) {
-            e.printStackTrace();
+            // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+            android.util.Log.w("Mat", "? failed", e);
         }
     }
 

@@ -178,7 +178,8 @@ public class ScreenCapturer {
                     try {
                         refreshVirtualDisplay(orientation);
                     }catch (Exception e){
-                        e.printStackTrace();
+                        // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+                        android.util.Log.w("ScreenCapturer", "public void onOrientationChanged(int o) failed", e);
                         mException = e;
                     }
                 }

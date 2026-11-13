@@ -55,7 +55,8 @@ public class VMBridge_custom extends VMBridge_jdk18 {
                 } catch (ContinuationPending pending) {
                     return defaultValue(method.getReturnType());
                 } catch (Exception e) {
-                    e.printStackTrace();
+                    // task-134：裸 printStackTrace 在 release 里只进 stdout ⇒ 改 Log.w，保留异常链（不改控制流）。
+                    android.util.Log.w("VMBridge_custom", "protected Object newInterfaceProxy(Objec failed", e);
                     // notify the script thread to exit
                     com.stardust.autojs.runtime.ScriptRuntime runtime = engine.getRuntime();
                     Log.d(LOG_TAG, "runtime = " + runtime);
