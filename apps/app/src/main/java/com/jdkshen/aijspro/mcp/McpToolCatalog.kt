@@ -101,9 +101,11 @@ internal object McpToolCatalog {
         "checkSyntax" to "check_syntax",
         "runScript" to "run_script",
         "learnAutoJsSkill" to "learn_aijspro_skill",
-        // 2026-11-13：产品早已不是 AI.js Pro（现为 AI.js Pro）⇒ 工具名改成 learn_aijspro_skill。
+        // 2026-11-13：产品早已不是 Auto.js（现为 AI.js Pro）⇒ 工具名改成 learn_aijspro_skill。
         // 旧名保留为兼容别名，老客户端/老 prompt 照旧能调，不会断。
         "learn_autojs_skill" to "learn_aijspro_skill",
+        // 旧 camelCase 写法（与 Pro 拼写 learnAutoJsSkill 只差大小写）：老 prompt 里很常见，必须能调。
+        "learnAutojsSkill" to "learn_aijspro_skill",
         "stopAllScripts" to "stop_all_scripts",
         "getMcpLog" to "get_mcp_log",
         "listOverlays" to "list_overlays",

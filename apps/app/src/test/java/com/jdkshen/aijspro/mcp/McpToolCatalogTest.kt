@@ -10,7 +10,7 @@ class McpToolCatalogTest {
         assertEquals(217, McpToolCatalog.canonicalNames.size)
         // 2026-11-13 改名兼容钉子：旧的 snake_case 名必须仍能调到新工具（老客户端/老 prompt 不断）
         assertEquals("learn_aijspro_skill", McpToolCatalog.canonicalName("learn_autojs_skill"))
-        assertEquals(227, McpToolCatalog.names.size)
+        assertEquals(228, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
         assertTrue(McpToolCatalog.names.all { it.matches(Regex("[a-zA-Z][a-zA-Z0-9_]*")) })
         assertEquals("get_status", McpToolCatalog.names.first())
@@ -31,8 +31,10 @@ class McpToolCatalogTest {
         assertEquals("learn_aijspro_skill", McpToolCatalog.canonicalName("learnAutoJsSkill"))
         assertEquals("learn_aijspro_skill", McpToolCatalog.canonicalName("learnAutojsSkill"))
         assertTrue("learnAutoJsSkill" in McpToolCatalog.names)
-        assertTrue("learnAutojsSkill" !in McpToolCatalog.names)
-        assertEquals(227, McpToolCatalog.names.size)
+        // 2026-11-13：learnAutojsSkill 现在是**正式兼容别名**（进 aliases ⇒ 会出现在 names/tools/list），
+        // 不再是「只派发不广播的 dispatch 别名」⇒ 断言从 !in 改成 in。
+        assertTrue("learnAutojsSkill" in McpToolCatalog.names)
+        assertEquals(228, McpToolCatalog.names.size)
         assertEquals(McpToolCatalog.names.size, McpToolCatalog.names.toSet().size)
     }
 

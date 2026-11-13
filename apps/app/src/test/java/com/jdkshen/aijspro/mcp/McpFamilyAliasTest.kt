@@ -63,7 +63,7 @@ class McpFamilyAliasTest {
         McpToolCatalog.familyAliases.keys.forEach { alias ->
             assertFalse(alias + " 不能进 tools/list（advertised 必须仍是 225）", alias in McpToolCatalog.names)
         }
-        assertEquals("advertised 数量不能被族前缀别名改变", 227, McpToolCatalog.names.size)
+        assertEquals("advertised 数量不能被族前缀别名改变", 228, McpToolCatalog.names.size)
         assertEquals("canonical 数量不变", 217, McpToolCatalog.canonicalNames.size)
         assertEquals(McpToolCatalog.canonicalNames.size + McpToolCatalog.aliases.size, McpToolCatalog.names.size)
         // 每个别名都能走真实的 tools/call 解析（McpRpcValidation → canonicalName）
