@@ -1,4 +1,16 @@
 >
+> **2026-11-14 08:4x 现状（本块取代下面 11-13 22:2x 那块）**：LAN = **dev-1552**（118,940,445 B / `sha256:4e701a2a…`；清单 `update.json` 只 17KB —— 已把 oldVersions 改为只镜像最近 30 条，完整历史仍在 `update-history.json` 754 条）。
+> git HEAD `b0a0fd55`、**ahead 337 / behind 0**、**工作树干净**、**只本地提交**（backup 分支已推）。当前**无构建在跑**。
+> **注意：有另一个会话/也在提交**（`2a2fc62c`/`dc0037c1`/`f9d2c4c0`/`b0a0fd55` 四个 commit 非本会话产出，含「修 artifact-freshness 的 -Include 静默失效」这个真 bug）⇒ 接手前先 `git log` 看有没有新提交。
+> **dev-1552 大更新内容（团队模式，4 名队友 + Lead 并行）**：
+> ① **MCP 上下文根治**：`initialize` 的 instructions 明说 `tools/list` 支持 `params.tier=core`（**29 个常用工具、约 10k token、省 85%**）或 `params.groups=[组id]`（如 device，28 个约 5.3k）；不传仍是全量 226 个 ≈68k token；**不认识的客户端自动拿全量、不报错**（`applyToolFilter` 的 `else->true`）。真机实测过。
+> ② **`learn_autojs_skill` → `learn_aijspro_skill`**（三条旧名兼容：`learnAutoJsSkill`/`learnAutojsSkill`/`learn_autojs_skill`），且改为**默认只回章节目录**（约 6KB）、`section=<关键词>` 取单节（≤12KB）、`section=all` 才拿全文（331KB≈10万 token，别一次要）。
+> ③ 引擎 **21 处裸 `printStackTrace` → `Log.w`**（保留异常链；`synchronized(this)` 43 处候选 0、`new Thread` 49 处净需改 0，均有判据）；engine 单测 **137 套件 / 784 项 / 0 失败**。
+> ④ **根治 `excluded-zip-files.json` 被模板重建覆盖**：新增 `tools/excluded-zip-files.extra.json`（8 条持久清单）+ `tools/lib/excluded-zip-files.mjs`（合并 + assertExtraSurvives）；`build-slim-template.ps1` 改调合并模块并 throw。**Lead 实跑重建验证：重建前 v7a 6 行 → 重建后仍 6 行** ✓。
+> ⑤ 品牌统一：注释 121 行 / 71 文件、内置示例文案 33 处 → AI.js Pro。**包名 `com.stardust.autojs` / `org.autojs` 与 `AutoJs*` 类名不动**（493 package + 1,144 import + 482 类名引用 ⇒ 改了脚本与插件全失效）。
+> ⑥ 文档：新增 [docs/guides/AGSL液态透镜用法.md](docs/guides/AGSL液态透镜用法.md)、[docs/plans/2026-11-13_tools-list分级暴露设计与收益测算（task-137）.md](docs/plans/2026-11-13_tools-list分级暴露设计与收益测算（task-137）.md)。
+> **顺手清理**：`output/` 根 91 个散落文件（31.3MB）归档到 `output/_archive-20261114-0825/`；`.artifacts` 旧日志 1625 个（29MB）删除，留最新 20 个。
+>
 > **2026-11-13 22:2x 现状（本块取代下面 03:30 那块）**：LAN = **dev-1549**（118,931,833 B / `sha256:61cabc44…`；内容见下「酷安底栏」条）；git HEAD `f2008e63`、**ahead 315 / behind 0**、**只本地提交**（不 push main，backup 分支已推）；工作树 dirty=4（模板重建产物）。当前**无构建在跑**。设备：K40=`cccc62c7`（MCP `tcp:18768`，跑 **dev-1549**）、MI8=`ce4d2bdb`（`.6`，也装了 dev-1530/1532）、设备4=`192.168.10.4:8765`（在线，跑 **dev-1424**；**注意它没有 `$java.defineClass`**，那是 dev-1530 起才有的 ⇒ 想在 .4 上跑酷安底栏必须先升级）。**本轮（dev-1533→1549）新增的类**：`AgsLiquidLens`（按住折射透镜：无障碍整屏截图当 `uniform shader` 输入；`onTouchEvent` 必须返回 true 才能收 MOVE/UP；消费后自己把点击转发给下层）。**文档**：新 [docs/guides/AGSL液态透镜用法.md](docs/guides/AGSL液态透镜用法.md)。**测试**：`:app:testMiuixCompatDebugUnitTest` **206 类 / 1399 项 / 0 失败**（原 9 个既有失败已全修，含一个真 bug：`excluded-zip-files.json` 被模板重建覆盖成只有 arm64 5 条）。
 >
 > **2026-11-13 03:30 现状**：LAN = **dev-1530**（AGSL 高光最终参数 + `AgsHighlightView` 上线，118,923,801 B / `sha256:58b3244f…`）；git HEAD `28ad55fc`、**ahead 303 / behind 0**、**只本地提交**（不 push）；**工作树干净**（昨晚 19:26–19:29 那批在制已在 `cb612af1`/`344aa2ff`/`28ad55fc` 提交，模板共重建 3 次）。当前**无构建在跑**。设备：K40=`cccc62c7`（MCP `tcp:18768`）、设备4=`192.168.10.4:8765`。队伍：8 名队友全 inactive（上限 8、无删除接口）；任务板 2 条在制：`task-48`（ImGui floaty Surface 回调投递脚本线程）、`task-77`（16 KB 页对齐）。**未清**：`AgsHighlightView` **缺脚本侧文档/示例**（docs 除接手单外 0 命中）、`.4` 的 `smoke*.mjs`、真 VMP 样本、v7a 真机（无真机不得声称支持）、**C: 仅 7.84 GB**（`.gradle`→E:、`.artifacts`→D: 都是 junction，真凶是 `C:\Users`，待用户定夺）。
