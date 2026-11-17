@@ -31,3 +31,12 @@ Frida 客户端连接目标应用中的 Gadget；此页不提供或要求 Root F
 来源故障不会关闭另一条更新路径，跨源切换不能混用不同载荷的 SHA 或断点。
 
 各工具的上游来源、固定版本及许可证随其 ZIP 的 SOURCE-NOTICE / licenses / upstream-lock 文件提供。
+
+## 删除可选组件（dev-1623 起）
+
+组件页中已安装或有旧版本的可选组件提供“删除”，需要确认；“停用”仅取消激活并保留文件。
+MCP 对应 `file_component_remove {"id":"..."}` 与 `apk_component_remove {"component":"..."}`。
+成功检查 `installed=false`，再刷新清单；占用返回 COMPONENT_IN_USE，下载/安装冲突返回 COMPONENT_BUSY。
+先结束脚本、编译任务和常驻分析；文件组件已加载时需完全退出应用并重开后再删。
+源 ZIP、脚本、工程和其它组件保留；身份不明的断点通过 warnings 说明，锁和管理状态保留用于安全复装。
+内建 D8、Smali、apksig 是主 APK 能力，不能单独删除。APK 打包组件最新1.0.10最低宿主1623；旧兼容包继续保留。

@@ -1,7 +1,22 @@
 {
   "schema": 1,
-  "generatedAt": "2026-11-17T13:38:48+08:00",
+  "generatedAt": "2026-11-17T11:03:01.802447+00:00",
   "components": [
+    {
+      "id": "apkbuilder",
+      "version": "1.0.10",
+      "versionCode": 11,
+      "minAppVersion": 1623,
+      "name": "APK 打包组件",
+      "abi": "arm64-v8a",
+      "sizeBytes": 75973321,
+      "sha256": "e77ce7cfb02e287480083ac468aaffbf5e3ece2b9a988e56ac51610e6c469e34",
+      "notes": "dev-1623 打包运行时；包含跨进程组件锁修复，保留 Node/npm 与三引擎。",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.10.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.10.zip"
+      ]
+    },
     {
       "id": "apkbuilder",
       "name": "APK 打包组件",
