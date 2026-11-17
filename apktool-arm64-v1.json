@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "apktool",
+  "version": "v1",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apktool-arm64-v1.zip",
+  "size": 5290644,
+  "sha256": "3b1b196269817863dbf16cccb2120183ca327f25677030d2befccd3d39a7a6d4",
+  "unpackedSize": 5336010,
+  "executables": [],
+  "license": "Apache-2.0 and dependency licenses",
+  "source": "https://github.com/iBotPeaches/Apktool (Termux Android packaging)",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apktool-arm64-v1.zip"
+  ]
+}

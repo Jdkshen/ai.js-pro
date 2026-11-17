@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "frida",
+  "version": "v2-token",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-arm64-v2-token.zip",
+  "size": 36216506,
+  "sha256": "4939da9aec38609d5d541b2c3a8a89dd9ddbcaee3b903e066c6e98379b0ff2b2",
+  "unpackedSize": 92422009,
+  "executables": [
+    "bin/aijs-frida"
+  ],
+  "license": "LGPL-2.1-or-later and bundled GLib/json-glib licenses; relink object/source included",
+  "source": "https://github.com/frida/frida/releases/download/17.25.2/frida-core-devkit-17.25.2-android-arm64.tar.xz",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-arm64-v2-token.zip"
+  ]
+}

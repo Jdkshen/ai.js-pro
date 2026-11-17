@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "components": [
+    {
+      "id": "apk-resources",
+      "version": "v1",
+      "size": 30058485,
+      "sha256": "61116bb637d183af3576c74bbeee270ff4530b9b58edacb71b471712cdcd98ef",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/apk-resources-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apk-resources-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apk-resources-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "Apache-2.0 and upstream dependency licenses (included)"
+    },
+    {
+      "id": "apktool",
+      "version": "v1",
+      "size": 5290644,
+      "sha256": "3b1b196269817863dbf16cccb2120183ca327f25677030d2befccd3d39a7a6d4",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/apktool-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apktool-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apktool-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "Apache-2.0 and dependency licenses"
+    },
+    {
+      "id": "frida",
+      "version": "v2-token",
+      "size": 36216506,
+      "sha256": "4939da9aec38609d5d541b2c3a8a89dd9ddbcaee3b903e066c6e98379b0ff2b2",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/frida-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-arm64-v2-token.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-arm64-v2-token.zip"
+      ],
+      "requiresRoot": false,
+      "license": "LGPL-2.1-or-later and bundled GLib/json-glib licenses; relink object/source included"
+    },
+    {
+      "id": "frida-gadget",
+      "version": "v1",
+      "size": 55207283,
+      "sha256": "ae345aa9329d8a417944287cb7eaad20431c03f123fc56ffae091bc7026231c7",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/frida-gadget-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-gadget-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-gadget-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "LGPL-2.1-or-later (unmodified official Gadget libraries; pinned corresponding source at upstream tag)"
+    },
+    {
+      "id": "jadx",
+      "version": "v1",
+      "size": 2921068,
+      "sha256": "7858e6b8df6ca43841ce3d15a25c4a222d956dc5435b6d2c993243eaced68d0d",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/jadx-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/jadx-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/jadx-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "Apache-2.0 and upstream dependency licenses (included)"
+    },
+    {
+      "id": "r2ghidra",
+      "version": "v1",
+      "size": 12776200,
+      "sha256": "f3923eee2ab62869a1c17ab02041609a9270f3ce9909c83e43ca9f1cedd136da",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/r2ghidra-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/r2ghidra-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/r2ghidra-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "LGPL-3.0, Apache-2.0 Ghidra, LLVM libc++ and dependency licenses"
+    },
+    {
+      "id": "radare2",
+      "version": "v1",
+      "size": 27303949,
+      "sha256": "ece3efea17e77838024cb666619d334a771f48d3e8bab727a434b34a92e8da8c",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/radare2-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/radare2-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/radare2-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "LGPL-3.0 / GPL plugins and dependency licenses"
+    },
+    {
+      "id": "unicorn",
+      "version": "v1",
+      "size": 5928679,
+      "sha256": "89a54a6db447f0c0ab9ed4759e1eff5e1c3b71a6a3287745d333748acaa552f1",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/unicorn-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/unicorn-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/unicorn-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "GPL-2.0 and dependency licenses"
+    },
+    {
+      "id": "yara",
+      "version": "v1",
+      "size": 6174863,
+      "sha256": "0b8590a3cced5082c21be952f99e7d4631dca0a72535a506b5fe65ea9a17b666",
+      "abi": "arm64-v8a",
+      "minSdk": 26,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/yara-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/yara-arm64-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/yara-arm64-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": "BSD-3-Clause and dependency licenses"
+    },
+    {
+      "id": "cpp",
+      "version": "r29-arm64-api26-v1",
+      "size": 79139111,
+      "sha256": "cfecc3be3cdc5a0c0a18297f67b743ae71b6706de89f2435735e3a71fd9a9cff",
+      "abi": "arm64-v8a",
+      "minSdk": 28,
+      "manifestUrl": "https://raw.githubusercontent.com/Jdkshen/ai.js-pro/component-release/cpp-arm64-v1.json",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-r29-arm64-api26-v1.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-r29-arm64-api26-v1.zip"
+      ],
+      "requiresRoot": false,
+      "license": null
+    }
+  ]
+}

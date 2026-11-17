@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- task-177「去掉 Miuix，统一 Flutter 界面」：本源集已从构建排除（见 app/build.gradle sourceSets）。
-     UI 页面源码仍留在磁盘上，先排除不物理删，回退方式见
-     docs/reports/2026-10-19_去Miuix统一Flutter.md。
-     这里只保留空 <application/>，避免 manifest merger 引用已排除的 Activity/Service；
-     原先声明的 MCP 服务（McpService）与前台服务权限已搬到 src/main/AndroidManifest.xml。 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <application />
-</manifest>

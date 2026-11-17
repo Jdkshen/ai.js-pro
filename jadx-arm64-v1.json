@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "jadx",
+  "version": "v1",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/jadx-arm64-v1.zip",
+  "size": 2921068,
+  "sha256": "7858e6b8df6ca43841ce3d15a25c4a222d956dc5435b6d2c993243eaced68d0d",
+  "unpackedSize": 2942367,
+  "executables": [],
+  "license": "Apache-2.0 and upstream dependency licenses (included)",
+  "source": "https://github.com/skylot/jadx/tree/v1.5.6",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/jadx-arm64-v1.zip"
+  ]
+}

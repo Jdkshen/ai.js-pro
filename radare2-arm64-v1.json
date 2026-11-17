@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "radare2",
+  "version": "v1",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/radare2-arm64-v1.zip",
+  "size": 27303949,
+  "sha256": "ece3efea17e77838024cb666619d334a771f48d3e8bab727a434b34a92e8da8c",
+  "unpackedSize": 105016284,
+  "executables": [
+    "bin/r2",
+    "bin/rabin2",
+    "bin/radare2",
+    "bin/radiff2",
+    "bin/rasm2",
+    "bin/rax2"
+  ],
+  "license": "LGPL-3.0 / GPL plugins and dependency licenses",
+  "source": "Termux official packages; dependency versions/hashes in upstream-lock.json",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/radare2-arm64-v1.zip"
+  ]
+}

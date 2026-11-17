@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "apk-resources",
+  "version": "v1",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apk-resources-arm64-v1.zip",
+  "size": 30058485,
+  "sha256": "61116bb637d183af3576c74bbeee270ff4530b9b58edacb71b471712cdcd98ef",
+  "unpackedSize": 40116310,
+  "executables": [
+    "bin/aapt2"
+  ],
+  "license": "Apache-2.0 and upstream dependency licenses (included)",
+  "source": "https://github.com/termux/android-build-tools + Android SDK platform C:/Android/platforms/android-35/android.jar",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apk-resources-arm64-v1.zip"
+  ]
+}

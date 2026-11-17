@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "frida-gadget",
+  "version": "v1",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-gadget-arm64-v1.zip",
+  "size": 55207283,
+  "sha256": "ae345aa9329d8a417944287cb7eaad20431c03f123fc56ffae091bc7026231c7",
+  "unpackedSize": 149252067,
+  "executables": [],
+  "license": "LGPL-2.1-or-later (unmodified official Gadget libraries; pinned corresponding source at upstream tag)",
+  "source": "https://github.com/frida/frida/releases/tag/17.25.2",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/frida-gadget-arm64-v1.zip"
+  ]
+}

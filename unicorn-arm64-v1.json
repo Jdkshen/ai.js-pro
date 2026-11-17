@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "unicorn",
+  "version": "v1",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/unicorn-arm64-v1.zip",
+  "size": 5928679,
+  "sha256": "89a54a6db447f0c0ab9ed4759e1eff5e1c3b71a6a3287745d333748acaa552f1",
+  "unpackedSize": 19885655,
+  "executables": [
+    "bin/aijs-unicorn"
+  ],
+  "license": "GPL-2.0 and dependency licenses",
+  "source": "Termux official packages; dependency versions/hashes in upstream-lock.json",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/unicorn-arm64-v1.zip"
+  ]
+}

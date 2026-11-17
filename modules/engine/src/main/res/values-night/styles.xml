@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!--
-      ScriptTheme 的状态栏颜色与图标明暗统一由 values/styles.xml 决定：
-      跟随主题 colorPrimary，windowLightStatusBar=false 保持白色系统图标。
-      夜间沿用同一规则；此前夜间同样是白色系统图标，这里不再覆盖为 Miuix 宿主的黑色状态栏。
-    -->
-</resources>

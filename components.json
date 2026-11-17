@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-11-17T10:25:24+08:00",
+  "components": [
+    {
+      "id": "apkbuilder",
+      "name": "APK 打包组件",
+      "version": "1.0.7",
+      "versionCode": 8,
+      "minAppVersion": 1620,
+      "abi": "arm64-v8a",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.7.zip",
+      "sha256": "17b18b2ee28a172829267c8e0670ce89f1f4634f39882e6937ef50381753b6d5",
+      "sizeBytes": 75970140,
+      "notes": "仅在「内置打包模板损坏」时作为最后手段；默认打包路径不依赖它（内置瘦身模板 + 宿主 lib 合成）。",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.7.zip"
+      ]
+    },
+    {
+      "id": "ocr",
+      "name": "OCR 组件",
+      "version": "1.0.2",
+      "versionCode": 3,
+      "minAppVersion": 1620,
+      "abi": "arm64-v8a",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/ocr-component-1.0.2.zip",
+      "sha256": "deb3796619291e312f9189016860c86a2f5a2fbbf637b13185f0ca7140265a9c",
+      "sizeBytes": 21119547,
+      "notes": "把内建 OCR（PP-OCR 模型 + libppocr + $ocr 桥）从主程序剥离；加载契约 org.autojs.plugin.sdk.registry -> org.autojs.autojspro.plugin.ocr.Registry；主路径 = 宿主直连工厂（PluginNativeLoader.createOcrSession）。",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/ocr-component-1.0.2.zip"
+      ]
+    },
+    {
+      "id": "xiangqi",
+      "name": "象棋引擎组件",
+      "version": "1.2.2",
+      "versionCode": 10,
+      "minAppVersion": 1620,
+      "abi": "arm64-v8a",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/xiangqi-component-1.2.2.zip",
+      "sha256": "af34ac6e03f550525ae66ccd3afb08f73d14d48b108fa407de73177fdb0e4eb0",
+      "sizeBytes": 63592490,
+      "notes": "文件组件：Pikafish JNI、Node UCI、NNUE 与完整棋盘识别工程；不需安装组件 APK。只支持 arm64-v8a。",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/xiangqi-component-1.2.2.zip"
+      ]
+    }
+  ]
+}

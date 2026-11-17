@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "yara",
+  "version": "v1",
+  "abi": "arm64-v8a",
+  "minSdk": 26,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/yara-arm64-v1.zip",
+  "size": 6174863,
+  "sha256": "0b8590a3cced5082c21be952f99e7d4631dca0a72535a506b5fe65ea9a17b666",
+  "unpackedSize": 13691934,
+  "executables": [
+    "bin/aijs-yara",
+    "bin/yara",
+    "bin/yarac"
+  ],
+  "license": "BSD-3-Clause and dependency licenses",
+  "source": "Termux official packages; dependency versions/hashes in upstream-lock.json",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/components/yara-arm64-v1.zip"
+  ]
+}

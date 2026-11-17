@@ -1,2 +1,0 @@
-"rhino";
-engines.stopAllAndToast();

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "cpp",
+  "version": "r29-arm64-api26-v1",
+  "abi": "arm64-v8a",
+  "minSdk": 28,
+  "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-r29-arm64-api26-v1.zip",
+  "sha256": "cfecc3be3cdc5a0c0a18297f67b743ae71b6706de89f2435735e3a71fd9a9cff",
+  "size": 79139111,
+  "unpackedSize": 237838722,
+  "executables": [
+    "libexec/clang",
+    "libexec/ld.lld",
+    "bin/llvm-ar",
+    "bin/clang",
+    "bin/clang++"
+  ],
+  "source": "https://github.com/lzhiyong/termux-ndk/releases/download/android-ndk/android-ndk-r29-aarch64.tar.xz",
+  "sourceSha256": "02e10e4ddfe8deaeb0bd0cf29d04c981ed5bc8a5d6b560ebb9e7661f472d684b",
+  "licenseNotices": "licenses/",
+  "target": "aarch64-linux-android26",
+  "scope": "C/C++ ELF and shared libraries; native ARM64 only",
+  "mirrors": [
+    "https://github.com/Jdkshen/ai.js-pro/releases/download/toolchains-cpp-r29-v1/cpp-r29-arm64-api26-v1.zip"
+  ]
+}
