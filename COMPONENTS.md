@@ -5,7 +5,8 @@
 新版主程序同时查询设置中的自定义源与默认 GitHub 源；两路不互相覆盖。默认 GitHub 地址长期保留。
 组件只在用户下载或功能需要时安装，不把所有大型组件默认塞进 APK。
 
-默认目录从 GitHub 官方 raw 的 component-release 分支读取。附件使用项目既有加速通道，
+默认目录由 GitHub 官方 component-release 分支提供；主程序通过官方 Contents API 的原始 JSON
+接口请求，逻辑来源保留 raw 地址，自定义源地址原样使用。附件使用项目既有加速通道，
 同时保留 GitHub 直连 mirrors；附件必须匹配官方目录的 SHA-256，切换地址不降低校验。
 
 ## 组件清单

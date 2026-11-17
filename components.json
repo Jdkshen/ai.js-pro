@@ -1,20 +1,20 @@
 {
   "schema": 1,
-  "generatedAt": "2026-11-17T13:14:32+08:00",
+  "generatedAt": "2026-11-17T13:38:48+08:00",
   "components": [
     {
       "id": "apkbuilder",
       "name": "APK 打包组件",
-      "version": "1.0.8",
-      "versionCode": 9,
+      "version": "1.0.9",
+      "versionCode": 10,
       "minAppVersion": 1621,
       "abi": "arm64-v8a",
-      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.8.zip",
-      "sha256": "d9fa1cea9a007bbd91c6982c6dc4ae7056d1b5029928b98c131bea9961dc1b01",
-      "sizeBytes": 75971611,
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.9.zip",
+      "sha256": "9c6c735f76ee47343dde5314b5d6cda96db2b818bde4c6139041a6c60dbb6a75",
+      "sizeBytes": 75971889,
       "notes": "仅在「内置打包模板损坏」时作为最后手段；默认打包路径不依赖它（内置瘦身模板 + 宿主 lib 合成）。",
       "mirrors": [
-        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.8.zip"
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.9.zip"
       ]
     },
     {
