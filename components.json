@@ -1,7 +1,37 @@
 {
   "schema": 1,
-  "generatedAt": "2026-11-17T11:03:01.802447+00:00",
+  "generatedAt": "2026-11-17T18:11:00.732486+00:00",
   "components": [
+    {
+      "id": "apkbuilder",
+      "name": "APK 打包组件",
+      "version": "1.0.11",
+      "versionCode": 12,
+      "minAppVersion": 1627,
+      "abi": "arm64-v8a",
+      "sizeBytes": 75982479,
+      "sha256": "fc2d131239b6994a3f2f27ece4b8d30416ad74d07b6be9741281f8f516ef9ba5",
+      "notes": "dev1627 打包运行时；三引擎公共执行接口新增内部ADB提供者，独立APK不继承宿主授权。",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.11.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/apkbuilder-component-1.0.11.zip"
+      ]
+    },
+    {
+      "id": "privilege-adb",
+      "name": "内置 ADB 组件",
+      "version": "1.0.1",
+      "versionCode": 2,
+      "minAppVersion": 1627,
+      "abi": "arm64-v8a",
+      "sizeBytes": 529417,
+      "sha256": "78bdc6e5bcdf91538db21a7c8fa1f79fc7fc7aae11c4f7e2fe56e5eb8f77864f",
+      "notes": "dev1627 内置ADB组件及应用自用执行后端；首次配对需手动确认。",
+      "url": "https://gh-proxy.com/https://github.com/Jdkshen/ai.js-pro/releases/download/components/privilege-adb-1.0.1-arm64-v8a.zip",
+      "mirrors": [
+        "https://github.com/Jdkshen/ai.js-pro/releases/download/components/privilege-adb-1.0.1-arm64-v8a.zip"
+      ]
+    },
     {
       "id": "apkbuilder",
       "version": "1.0.10",
