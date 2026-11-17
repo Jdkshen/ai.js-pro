@@ -19,7 +19,7 @@ Frida 客户端连接目标应用中的 Gadget；此页不提供或要求 Root F
 ## MCP 使用
 
 先调用 `apk_component_status` 查看工具组件与内建能力。显式检查远端版本用
-`apk_component_status {"refresh":true}`，安装使用 `apk_component_install {"component":"jadx","async":true}`。
+`apk_component_status {"refresh":true}`，安装使用 `apk_component_install {"component":"jadx","background":true}`。
 后台任务通过返回的 jobId 使用 `apk_job_status` / `apk_job_result` / `apk_job_cancel` 跟进。
 
 脚本组件使用 `file_component_list`。`file_component_download {"id":"ocr","retry":true}` 是主动修复入口，
